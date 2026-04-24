@@ -1,0 +1,8 @@
+customtkinter>=5.2.2
+matplotlib>=3.10
+numpy>=2.0
+scipy>=1.14
+pillow>=10.0
+
+# WindPy 需从 Wind 金融终端的"插件管理"里安装到当前 .venv 对应的 Python,
+# 不通过 pip 发布. 参考 CB.py 中 _ensure_wind() 的报错提示.
