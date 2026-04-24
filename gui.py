@@ -17,6 +17,10 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+# 解决 Matplotlib 中文显示和负号问题
+matplotlib.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'sans-serif']
+matplotlib.rcParams['axes.unicode_minus'] = False
+
 from CB import (
     UniversalCBPricer, _ensure_wind, _to_date, _parse_coupon, _hist_vol,
     _fetch_cashflow, backtest_theoretical_price,
@@ -231,6 +235,7 @@ class CBPricerApp(ctk.CTk):
         def make_vol(p):
             self.vol_window_menu = ctk.CTkOptionMenu(p, variable=self.v_vol_window, values=list(VOL_WINDOW_MAP.keys()), 
                                                      width=80, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER, 
+                                                     text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
                                                      command=self._on_vol_window_change)
             return self.vol_window_menu
         _form_row(sec2, "波动率 σ (%)", self.v_sigma, 0, wind=True, width=100, extra_widget=make_vol)
@@ -309,7 +314,8 @@ class CBPricerApp(ctk.CTk):
 
         ctk.CTkLabel(bt_ctrl, text="频率", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
         ctk.CTkOptionMenu(bt_ctrl, variable=self.v_bt_freq, values=["日", "周", "月"],
-                          width=70, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER).pack(side="left", padx=(0, 12))
+                          width=70, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
+                          text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT).pack(side="left", padx=(0, 12))
 
         self.btn_backtest = ctk.CTkButton(bt_ctrl, text="运行回测", command=self._run_backtest,
                                           fg_color=ACCENT, hover_color="#74c7ec", text_color=("#ffffff", "#11111b"),
