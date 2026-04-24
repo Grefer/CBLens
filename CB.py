@@ -1,6 +1,30 @@
+import logging
 import numpy as np
 from scipy.linalg import solve_banded
 from datetime import date, datetime, timedelta
+from typing import Optional, Tuple, Dict, Any, Callable
+
+logger = logging.getLogger(__name__)
+
+# ── 默认常量 ─────────────────────────────────────────────
+DEFAULT_COUPON_RATES: Tuple[float, ...] = (0.003, 0.004, 0.008, 0.015, 0.018, 0.02)
+DEFAULT_FACE_VALUE: float = 100.0
+DEFAULT_REDEMPTION_PRICE: float = 107.0
+
+__all__ = [
+    "UniversalCBPricer",
+    "price_from_wind",
+    "backtest_theoretical_price",
+    "ensure_wind",
+    "to_date",
+    "parse_coupon",
+    "fetch_cashflow",
+    "hist_vol",
+    "DEFAULT_COUPON_RATES",
+    "DEFAULT_FACE_VALUE",
+    "DEFAULT_REDEMPTION_PRICE",
+]
+
 
 class UniversalCBPricer:
     """
@@ -13,14 +37,14 @@ class UniversalCBPricer:
     - 最后两个计息年度允许回售
     - 支持按公告公式调整转股价
     """
-    def __init__(self, S0, K, current_date, maturity_date,
-                 face_value=100.0, redemption_price=107.0,
-                 issue_date=None, conversion_start_date=None,
-                 call_start_date=None,
-                 coupon_rates=None, call_trigger_ratio=1.3,
-                 put_trigger_ratio=0.7,
-                 put_active_years=2,
-                 down_reset_premium=1.02):
+    def __init__(self, S0: float, K: float, current_date: date, maturity_date: date,
+                 face_value: float = 100.0, redemption_price: float = 107.0,
+                 issue_date: Optional[date] = None, conversion_start_date: Optional[date] = None,
+                 call_start_date: Optional[date] = None,
+                 coupon_rates: Optional[Tuple[float, ...]] = None, call_trigger_ratio: float = 1.3,
+                 put_trigger_ratio: float = 0.7,
+                 put_active_years: int = 2,
+                 down_reset_premium: float = 1.02):
         self._validate_inputs(S0, K, current_date, maturity_date, face_value)
         self.S0 = S0
         self.K = K
@@ -34,7 +58,7 @@ class UniversalCBPricer:
         self.put_trigger_ratio = put_trigger_ratio
         self.put_active_years = put_active_years
         self.down_reset_premium = down_reset_premium
-        self.coupon_rates = tuple(coupon_rates or (0.003, 0.004, 0.008, 0.015, 0.018, 0.02))
+        self.coupon_rates = tuple(coupon_rates or DEFAULT_COUPON_RATES)
 
         self.T = (maturity_date - current_date).days / 365.0
         self.current_date = current_date
@@ -54,11 +78,14 @@ class UniversalCBPricer:
             raise ValueError("maturity_date must be after current_date")
 
     @staticmethod
-    def _add_years(dt_value, years):
+    def _add_years(dt_value: date, years: int) -> date:
+        new_year = dt_value.year + years
+        if new_year < 1:
+            raise ValueError(f"Cannot add {years} years to {dt_value}: resulting year {new_year} < 1")
         try:
-            return dt_value.replace(year=dt_value.year + years)
+            return dt_value.replace(year=new_year)
         except ValueError:
-            return dt_value.replace(month=2, day=28, year=dt_value.year + years)
+            return dt_value.replace(month=2, day=28, year=new_year)
 
     def _build_coupon_periods(self):
         periods = []
@@ -94,7 +121,12 @@ class UniversalCBPricer:
                 return self.face_value * period["rate"] * accrual_days / 365.0
         return 0.0
 
-    def discrete_coupon_amount(self, interval_start, interval_end):
+    def discrete_coupon_amount(self, interval_start: date, interval_end: date) -> float:
+        """计算 (interval_start, interval_end] 区间内的离散票息支付额.
+        
+        注意: 使用半开区间 (start, end], 当 interval_start 恰好等于付息日时,
+        该笔票息不计入当前区间, 避免与前一区间重复计数.
+        """
         cash = 0.0
         for period in self.coupon_periods:
             payment_date = period["end"]
@@ -128,10 +160,10 @@ class UniversalCBPricer:
         self.ratio = self.face_value / self.K
         return self.K
 
-    def price(self, sigma, r, base_spread, 
-              p_down=0.1,        # 下修博弈概率
-              distress_k=0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
-              M=500, N=2000):
+    def price(self, sigma: float, r: float, base_spread: float, 
+              p_down: float = 0.1,        # 下修博弈概率
+              distress_k: float = 0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
+              M: int = 500, N: int = 2000) -> float:
         if sigma < 0 or r < 0 or base_spread < 0:
             raise ValueError("sigma, r and base_spread must be non-negative")
         if M < 3 or N < 1:
@@ -159,6 +191,9 @@ class UniversalCBPricer:
             j = np.arange(1, M)
             r_mid = r_total[1:M]
             
+            # 设计决策: alpha/gamma 的漂移项使用无风险利率 r (风险中性漂移),
+            # 而 beta 的折现项使用 r_total = r + credit_spread.
+            # 即: 信用利差仅影响折现 ("额外折现" 模型), 不影响标的的风险中性漂移率.
             alpha = 0.25 * dt * (sigma**2 * j**2 - r * j)
             beta  = -0.5 * dt * (sigma**2 * j**2 + r_mid)
             gamma = 0.25 * dt * (sigma**2 * j**2 + r * j)
@@ -196,15 +231,17 @@ class UniversalCBPricer:
                         np.maximum(call_price, S_grid[mask_call] * self.ratio),
                     )
 
-                # 下修博弈: 每步以概率 p_down 将 K 重置为 S/down_reset_premium.
-                # 用齐次性近似 post-reset 的延续价值: 同一 CB 网格上 moneyness=premium 处的 V,
-                # 下限为立即转股价值 face*premium. 全网格应用 max(V, reset): 深度 ITM 处 V>reset
-                # 故不受影响, OTM 处被拉升, 天然单调连续.
+                # 下修博弈: S < K 时才可能触发下修, 概率随 OTM 程度线性递增.
+                # 下修后 K_new = S / down_reset_premium, 用齐次性近似 post-reset 延续价值:
+                # 同一 CB 网格上 moneyness=premium 处的 V, 下限为 face*premium.
+                # ITM 区域 (S>K) p_reset=0 不受影响; OTM 区域被适度拉升, 天然单调连续.
                 if p_down > 0:
+                    # S-dependent 下修概率: S>=K → 0, S=0 → p_down
+                    p_reset = p_down * np.clip(1.0 - S_grid / self.K, 0.0, 1.0)
                     V_post_reset = float(np.interp(self.K * self.down_reset_premium, S_grid, V))
                     conv_floor = self.face_value * self.down_reset_premium
                     reset_value = max(V_post_reset, conv_floor)
-                    V = (1 - p_down) * V + p_down * np.maximum(V, reset_value)
+                    V = (1 - p_reset) * V + p_reset * np.maximum(V, reset_value)
 
             if step_date >= self.put_start_date:
                 mask_put = S_grid <= self.K * self.put_trigger_ratio
@@ -419,7 +456,7 @@ def price_from_wind(bond_code,
     put_obs_months = data.get("clause_putoption_putbackperiodobs")
     if put_obs_months is not None and issue_dt and maturity_dt:
         total_months = (maturity_dt - issue_dt).days / 30.4375
-        active_years = max(0, round(total_months - float(put_obs_months)) / 12)
+        active_years = max(0, (total_months - float(put_obs_months)) / 12)
         pricer_kwargs["put_active_years"] = int(round(active_years))
 
     pricer_kwargs.update(pricer_overrides)
@@ -527,7 +564,7 @@ def backtest_theoretical_price(
     put_obs_months = data.get("clause_putoption_putbackperiodobs")
     if put_obs_months is not None and issue_dt and maturity_dt:
         total_months = (maturity_dt - issue_dt).days / 30.4375
-        active_years = max(0, round(total_months - float(put_obs_months)) / 12)
+        active_years = max(0, (total_months - float(put_obs_months)) / 12)
         common_kwargs["put_active_years"] = int(round(active_years))
     common_kwargs.update(pricer_overrides)
 
@@ -608,7 +645,8 @@ def backtest_theoretical_price(
                 S0=S0, current_date=val_date, **common_kwargs)  # type: ignore[arg-type]
             theo = pricer.price(sigma=sigma, r=r, base_spread=base_spread,
                                 distress_k=distress_k, p_down=p_down, M=M, N=N)
-        except Exception:
+        except Exception as exc:
+            logger.debug("回测采样日 %s 定价失败: %s", val_date, exc)
             continue
 
         dates_out.append(val_date)
@@ -628,6 +666,16 @@ def backtest_theoretical_price(
         "bond_code": bond_code,
         "stock_code": stock_code,
     }
+
+
+# ==========================================
+# 公有 API 别名 (供 GUI 及外部调用)
+# ==========================================
+ensure_wind = _ensure_wind
+to_date = _to_date
+parse_coupon = _parse_coupon
+fetch_cashflow = _fetch_cashflow
+hist_vol = _hist_vol
 
 
 # ==========================================

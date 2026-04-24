@@ -6,7 +6,6 @@
 """
 
 import customtkinter as ctk
-import tkinter as tk
 from tkinter import messagebox
 from datetime import date, datetime, timedelta
 import threading
@@ -22,8 +21,9 @@ matplotlib.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti TC', 'Arial Unic
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 from CB import (
-    UniversalCBPricer, _ensure_wind, _to_date, _parse_coupon, _hist_vol,
-    _fetch_cashflow, backtest_theoretical_price,
+    UniversalCBPricer, ensure_wind, to_date, parse_coupon, hist_vol,
+    fetch_cashflow, backtest_theoretical_price,
+    DEFAULT_COUPON_RATES,
 )
 
 # ── 颜色与主题 ──────────────────────────────────────────────
@@ -375,7 +375,7 @@ class CBPricerApp(ctk.CTk):
 
     def _fetch_wind_worker(self, code):
         try:
-            w = _ensure_wind()
+            w = ensure_wind()
             val_date = date.today()
             val_str = val_date.strftime("%Y%m%d")
 
@@ -406,7 +406,7 @@ class CBPricerApp(ctk.CTk):
 
             vol_win_days = VOL_WINDOW_MAP.get(self.v_vol_window.get(), 126)
             try:
-                sigma = _hist_vol(w, stock_code, val_date, vol_win_days)
+                sigma = hist_vol(w, stock_code, val_date, vol_win_days)
             except Exception:
                 sigma = None
 
@@ -423,18 +423,18 @@ class CBPricerApp(ctk.CTk):
             except Exception:
                 shibor_rate = None
 
-            iss_dt = _to_date(data["ipo_date"])
+            iss_dt = to_date(data["ipo_date"])
             conv_dt = iss_dt + timedelta(days=180) if iss_dt else None
 
-            cf = _fetch_cashflow(w, code)
+            cf = fetch_cashflow(w, code)
             if cf and cf["coupon_rates"]:
                 coupons_tuple = cf["coupon_rates"]
                 coupon_src = "cashflow"
             else:
-                coupons_tuple = _parse_coupon(data.get("couponrate"))
+                coupons_tuple = parse_coupon(data.get("couponrate"))
                 coupon_src = "couponrate"
 
-            mat_dt = (cf["maturity_date"] if cf and cf["maturity_date"] else _to_date(data["maturitydate"]))
+            mat_dt = (cf["maturity_date"] if cf and cf["maturity_date"] else to_date(data["maturitydate"]))
 
             if cf and cf["redemption_price"] is not None:
                 redemp = float(cf["redemption_price"])
@@ -447,7 +447,7 @@ class CBPricerApp(ctk.CTk):
             put_years = None
             if put_obs_months is not None and iss_dt and mat_dt:
                 total_months = (mat_dt - iss_dt).days / 30.4375
-                put_years = int(round(max(0, round(total_months - float(put_obs_months)) / 12)))
+                put_years = int(round(max(0, (total_months - float(put_obs_months)) / 12)))
 
             self.after(0, self._fill_wind_data, {
                 "S0": S0,
@@ -539,8 +539,8 @@ class CBPricerApp(ctk.CTk):
 
     def _recompute_vol_worker(self, stock_code, days):
         try:
-            w = _ensure_wind()
-            sigma = _hist_vol(w, stock_code, date.today(), days)
+            w = ensure_wind()
+            sigma = hist_vol(w, stock_code, date.today(), days)
             self.after(0, lambda: self.v_sigma.set(f"{sigma * 100:.2f}"))
             self.after(0, lambda: self.v_status.set(
                 f"已按 {self.v_vol_window.get()} 窗口重算 σ = {sigma*100:.2f}%"
@@ -559,7 +559,7 @@ class CBPricerApp(ctk.CTk):
 
     def _fetch_shibor_worker(self):
         try:
-            w = _ensure_wind()
+            w = ensure_wind()
             r = w.edb("SHIBOR1Y.IR",
                       (date.today() - timedelta(days=10)).isoformat(),
                       date.today().isoformat())
@@ -740,6 +740,14 @@ class CBPricerApp(ctk.CTk):
             self.v_bt_status.set("❌ 无有效采样点")
             return
 
+        # 释放旧图表资源，防止内存泄漏
+        if self._bt_figure is not None:
+            self._bt_figure.clf()
+            import matplotlib.pyplot as plt
+            plt.close(self._bt_figure)
+            self._bt_figure = None
+            self._bt_canvas = None
+
         for child in self.bt_chart_frame.winfo_children():
             child.destroy()
 
@@ -762,7 +770,7 @@ class CBPricerApp(ctk.CTk):
         ax.plot(dates, mkt, color=orange_color, linewidth=2.0, marker="s", markersize=4,
                 label="市价(收盘)", zorder=2)
 
-        import numpy as np
+        # numpy already imported at module level
         theo_arr = np.array(theo)
         mkt_arr = np.array(mkt)
         ax.fill_between(dates, theo_arr, mkt_arr,
