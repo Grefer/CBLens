@@ -1,8 +1,9 @@
 import logging
 import numpy as np
 from scipy.linalg import solve_banded
+from scipy.optimize import brentq
 from datetime import date, datetime, timedelta
-from typing import Optional, Tuple, Dict, Any, Callable
+from typing import Optional, Tuple, Dict, Any, Callable, Literal, Union, overload
 
 logger = logging.getLogger(__name__)
 
@@ -160,15 +161,10 @@ class UniversalCBPricer:
         self.ratio = self.face_value / self.K
         return self.K
 
-    def price(self, sigma: float, r: float, base_spread: float, 
-              p_down: float = 0.1,        # 下修博弈概率
-              distress_k: float = 0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
-              M: int = 500, N: int = 2000) -> float:
-        if sigma < 0 or r < 0 or base_spread < 0:
-            raise ValueError("sigma, r and base_spread must be non-negative")
-        if M < 3 or N < 1:
-            raise ValueError("M must be >= 3 and N must be >= 1")
-
+    def _price_grid(self, sigma: float, r: float, base_spread: float,
+                    p_down: float, distress_k: float,
+                    M: int, N: int) -> Tuple[np.ndarray, np.ndarray]:
+        """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心."""
         S_max_ref = max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))) * self.K
         S_max = max(S_max_ref, 1.5 * self.S0)
         dt = self.T / N
@@ -190,7 +186,7 @@ class UniversalCBPricer:
 
             j = np.arange(1, M)
             r_mid = r_total[1:M]
-            
+
             # 设计决策: alpha/gamma 的漂移项使用无风险利率 r (风险中性漂移),
             # 而 beta 的折现项使用 r_total = r + credit_spread.
             # 即: 信用利差仅影响折现 ("额外折现" 模型), 不影响标的的风险中性漂移率.
@@ -214,7 +210,7 @@ class UniversalCBPricer:
             rhs[-1] += gamma[-1] * V[-1]
 
             V[1:M] = solve_banded((1, 1), A, rhs)
-            
+
             accrued = self.accrued_interest(step_date)
             call_price = self.face_value + accrued
             put_price = self.face_value + accrued
@@ -225,6 +221,10 @@ class UniversalCBPricer:
                 V = np.maximum(V, S_grid * self.ratio)
 
                 if can_call:
+                    # 强赎边界: 假定 "理性发行人 + 立即行权". S ≥ 1.3K 处把 V 压到
+                    # max(call_price, parity), 教科书 CB 模型标准简化. 实务里有"30 个交易日
+                    # 中 15 个满足触发条件 + 董事会决议窗口 + 摘牌前转股期"等宽限, 故深度
+                    # 实值的转债市价通常仍含 5-10% 转股溢价 — 当前模型不建该宽限期.
                     mask_call = S_grid >= self.K * self.call_trigger_ratio
                     V[mask_call] = np.minimum(
                         V[mask_call],
@@ -250,7 +250,124 @@ class UniversalCBPricer:
 
             V[-1] = max(V[-1], S_grid[-1] * self.ratio)
 
-        return np.interp(self.S0, S_grid, V)
+        return S_grid, V
+
+    @overload
+    def price(self, sigma: float, r: float, base_spread: float,
+              p_down: float = ..., distress_k: float = ...,
+              M: int = ..., N: int = ...,
+              return_greeks: Literal[False] = ...) -> float: ...
+    @overload
+    def price(self, sigma: float, r: float, base_spread: float,
+              p_down: float = ..., distress_k: float = ...,
+              M: int = ..., N: int = ...,
+              *, return_greeks: Literal[True]) -> Dict[str, float]: ...
+
+    def price(self, sigma: float, r: float, base_spread: float,
+              p_down: float = 0.1,        # 下修博弈概率
+              distress_k: float = 0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
+              M: int = 500, N: int = 2000,
+              return_greeks: bool = False) -> Union[float, Dict[str, float]]:
+        """求解理论价. return_greeks=True 时返回 dict (含 Δ/Γ/ν/Θ + 价值分解)."""
+        if sigma < 0 or r < 0 or base_spread < 0:
+            raise ValueError("sigma, r and base_spread must be non-negative")
+        if M < 3 or N < 1:
+            raise ValueError("M must be >= 3 and N must be >= 1")
+
+        S_grid, V = self._price_grid(sigma, r, base_spread, p_down, distress_k, M, N)
+        theo = float(np.interp(self.S0, S_grid, V))
+
+        if not return_greeks:
+            return theo
+
+        S0 = self.S0
+        S_max = float(S_grid[-1])
+        dS = max(0.01 * S0, 0.001 * self.K)
+
+        if S0 - dS > 0 and S0 + dS < S_max:
+            v_up = float(np.interp(S0 + dS, S_grid, V))
+            v_dn = float(np.interp(S0 - dS, S_grid, V))
+            v_mid = float(np.interp(S0, S_grid, V))
+            delta = (v_up - v_dn) / (2 * dS)
+            gamma = (v_up - 2 * v_mid + v_dn) / (dS * dS)
+        else:
+            delta = float("nan")
+            gamma = float("nan")
+
+        # Vega: σ +1pp 整局重算; 单位为 "理论价 / 1pp σ"
+        d_sigma = 0.01
+        S_grid_v, V_v = self._price_grid(sigma + d_sigma, r, base_spread,
+                                         p_down, distress_k, M, N)
+        theo_vol = float(np.interp(S0, S_grid_v, V_v))
+        vega = (theo_vol - theo)  # / d_sigma * 0.01 = / 1, 即每 1pp σ 的价格变化
+
+        # Theta: current_date + 1 日 重算; 单位 "理论价 / 天"
+        if (self.maturity_date - self.current_date).days > 1:
+            tomorrow_pricer = UniversalCBPricer(
+                S0=self.S0, K=self.K,
+                current_date=self.current_date + timedelta(days=1),
+                maturity_date=self.maturity_date,
+                face_value=self.face_value,
+                redemption_price=self.redemption_price,
+                issue_date=self.issue_date,
+                conversion_start_date=self.conversion_start_date,
+                call_start_date=self.call_start_date,
+                coupon_rates=self.coupon_rates,
+                call_trigger_ratio=self.call_trigger_ratio,
+                put_trigger_ratio=self.put_trigger_ratio,
+                put_active_years=self.put_active_years,
+                down_reset_premium=self.down_reset_premium,
+            )
+            S_grid_t, V_t = tomorrow_pricer._price_grid(
+                sigma, r, base_spread, p_down, distress_k, M, N)
+            theo_tomorrow = float(np.interp(S0, S_grid_t, V_t))
+            theta = theo_tomorrow - theo
+        else:
+            theta = float("nan")
+
+        bond_floor = float(self.bond_floor_value(self.current_date, r + base_spread))
+        parity = float(self.S0 * self.ratio)
+        # 深度实值 + 已过强赎窗口时, PDE 把 V 顶到 max(call_price, parity) ≈ parity,
+        # 期权溢价数学上即为 0 — 模型假定理性发行人会立即强赎, 不是 bug.
+        # 实务市场仍贴 5–10% 转股溢价反映的是 "强赎触发→公告→摘牌" 的窗口期 stock
+        # optionality, 当前模型未建该宽限期. 若需贴市价, 可调高 call_trigger_ratio
+        # (例如 1.5) 或推迟 call_start_date.
+        option_premium = theo - max(bond_floor, parity)
+
+        return {
+            "price": theo,
+            "delta": delta,
+            "gamma": gamma,
+            "vega": vega,
+            "theta": theta,
+            "bond_floor": bond_floor,
+            "parity": parity,
+            "option_premium": float(option_premium),
+        }
+
+    def solve_implied_vol(self, target_price: float, r: float, base_spread: float,
+                          p_down: float = 0.0, distress_k: float = 0.0,
+                          M: int = 300, N: int = 1000,
+                          sigma_lo: float = 0.05, sigma_hi: float = 2.0,
+                          tol: float = 1e-3) -> float:
+        """反解使理论价 == target_price 的隐含波动率 (年化, 小数). 失败返回 NaN."""
+        def diff(s: float) -> float:
+            return float(self.price(sigma=s, r=r, base_spread=base_spread,
+                                    p_down=p_down, distress_k=distress_k,
+                                    M=M, N=N)) - target_price
+
+        try:
+            f_lo = diff(sigma_lo)
+            f_hi = diff(sigma_hi)
+        except Exception:
+            return float("nan")
+        if f_lo * f_hi > 0:
+            # 目标价超出可达区间 (低于 σ_lo 价或高于 σ_hi 价), 无解
+            return float("nan")
+        try:
+            return float(brentq(diff, sigma_lo, sigma_hi, xtol=tol, maxiter=40))
+        except Exception:
+            return float("nan")
 
 
 # ==========================================
@@ -713,3 +830,14 @@ if __name__ == "__main__":
         print(f"当前票面利率: {pricer.get_coupon_rate(today):.4%}")
         print(f"当前应计利息: {pricer.accrued_interest(today):.4f}")
         print(f"通用模型估算价: {result:.3f}")
+
+        full = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                            distress_k=0.05, p_down=0.0, return_greeks=True)
+        print()
+        print(f"--- 希腊值 & 价值分解 ---")
+        print(f"理论价: {full['price']:.3f}")
+        print(f"  纯债价值: {full['bond_floor']:.3f}    "
+              f"转股价值: {full['parity']:.3f}    "
+              f"期权溢价: {full['option_premium']:.3f}")
+        print(f"  Δ={full['delta']:.4f}  Γ={full['gamma']:.6f}  "
+              f"ν={full['vega']:.4f}  Θ={full['theta']:.4f}")

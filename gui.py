@@ -6,8 +6,10 @@
 """
 
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from datetime import date, datetime, timedelta
+import csv
+import json
 import threading
 import numpy as np
 
@@ -49,7 +51,7 @@ FONT_MONO = "SF Mono"
 
 # 历史波动率窗口选项 (交易日数)
 VOL_WINDOW_MAP = {"1M": 21, "2M": 42, "3M": 63, "6M": 126, "1Y": 252}
-VOL_WINDOW_DEFAULT = "6M"
+VOL_WINDOW_DEFAULT = "1M"
 
 # 同评级信用利差经验值 (%)
 CREDIT_SPREAD_TABLE = {
@@ -157,6 +159,19 @@ class CBPricerApp(ctk.CTk):
         self.v_bt_freq   = ctk.StringVar(value="周")
         self.v_bt_status = ctk.StringVar(value="输入转债代码 → 拉取参数 → 运行回测")
 
+        # 价值分解 & 希腊值
+        self.v_bond_floor   = ctk.StringVar(value="—")
+        self.v_parity       = ctk.StringVar(value="—")
+        self.v_option_prem  = ctk.StringVar(value="—")
+        self.v_delta        = ctk.StringVar(value="—")
+        self.v_gamma        = ctk.StringVar(value="—")
+        self.v_vega         = ctk.StringVar(value="—")
+        self.v_theta        = ctk.StringVar(value="—")
+
+        # 隐含波动率反解 — 市价输入 & 反解结果
+        self.v_market_price = ctk.StringVar(value="")
+        self.v_iv           = ctk.StringVar(value="—")
+
         self._last_stock_code = None
         self._last_credit = None
         self._bt_canvas = None
@@ -200,6 +215,15 @@ class CBPricerApp(ctk.CTk):
                                       fg_color=ACCENT, hover_color="#74c7ec", text_color="#11111b",
                                       font=(FONT_FAMILY, 14, "bold"), width=140, height=36, corner_radius=8)
         self.btn_wind.pack(side="left")
+
+        self.btn_save = ctk.CTkButton(search_frame, text="保存", command=self._save_preset,
+                                      fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
+                                      font=(FONT_FAMILY, 13), width=60, height=36, corner_radius=8)
+        self.btn_save.pack(side="left", padx=(8, 0))
+        self.btn_load = ctk.CTkButton(search_frame, text="加载", command=self._load_preset,
+                                      fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
+                                      font=(FONT_FAMILY, 13), width=60, height=36, corner_radius=8)
+        self.btn_load.pack(side="left", padx=(6, 0))
 
         ref_frame = ctk.CTkFrame(wind_card, fg_color="transparent")
         ref_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=25, pady=(0, 20))
@@ -288,11 +312,68 @@ class CBPricerApp(ctk.CTk):
         self.lbl_result.pack(side="top", anchor="e", pady=(0, 5))
         
         self.lbl_status = ctk.CTkLabel(res_card, textvariable=self.v_status, font=(FONT_FAMILY, 13), text_color=TEXT_DIM)
-        self.lbl_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 20))
+        self.lbl_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 8))
+
+        # 工具栏: 解 IV + 收敛诊断
+        tools_box = ctk.CTkFrame(res_card, fg_color="transparent")
+        tools_box.grid(row=2, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 20))
+
+        ctk.CTkLabel(tools_box, text="市价 ¥", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkEntry(tools_box, textvariable=self.v_market_price, width=80,
+                     font=(FONT_MONO, 13), fg_color=BG_INPUT, border_color=BORDER,
+                     border_width=1, corner_radius=6,
+                     placeholder_text="如 110.5").pack(side="left", padx=(0, 6))
+        self.btn_iv = ctk.CTkButton(tools_box, text="解 IV", command=self._solve_iv,
+                                    fg_color=BORDER, hover_color="#45475a", text_color=ORANGE,
+                                    font=(FONT_FAMILY, 12, "bold"),
+                                    width=80, height=28, corner_radius=6)
+        self.btn_iv.pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(tools_box, text="IV =", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 2))
+        ctk.CTkLabel(tools_box, textvariable=self.v_iv, text_color=ORANGE,
+                     font=(FONT_MONO, 13, "bold"), width=60).pack(side="left", padx=(0, 12))
+
+        self.btn_conv = ctk.CTkButton(tools_box, text="收敛诊断", command=self._convergence_check,
+                                      fg_color=BORDER, hover_color="#45475a", text_color=TEXT_DIM,
+                                      font=(FONT_FAMILY, 12, "bold"),
+                                      width=90, height=28, corner_radius=6)
+        self.btn_conv.pack(side="left")
+
+        # ── 价值分解 & 希腊值卡片 ──
+        decomp_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
+        decomp_card.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 20))
+        decomp_card.grid_columnconfigure(0, weight=1)
+
+        dh = ctk.CTkFrame(decomp_card, fg_color="transparent")
+        dh.grid(row=0, column=0, sticky="ew", padx=25, pady=(20, 8))
+        ctk.CTkLabel(dh, text="价值分解 & 希腊值", font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
+
+        dbody = ctk.CTkFrame(decomp_card, fg_color="transparent")
+        dbody.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 22))
+        dbody.grid_columnconfigure(0, weight=1, uniform="dec")
+        dbody.grid_columnconfigure(1, weight=1, uniform="dec")
+
+        def _decomp_row(parent, row, col, label_text, var):
+            f = ctk.CTkFrame(parent, fg_color="transparent")
+            f.grid(row=row, column=col, sticky="ew", padx=8, pady=4)
+            f.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(f, text=label_text, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 13)).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(f, textvariable=var, text_color=TEXT,
+                         font=(FONT_MONO, 14, "bold")).grid(row=0, column=1, sticky="e")
+
+        _decomp_row(dbody, 0, 0, "纯债价值",          self.v_bond_floor)
+        _decomp_row(dbody, 1, 0, "转股价值 (parity)", self.v_parity)
+        _decomp_row(dbody, 2, 0, "期权溢价",          self.v_option_prem)
+        _decomp_row(dbody, 0, 1, "Δ Delta", self.v_delta)
+        _decomp_row(dbody, 1, 1, "Γ Gamma", self.v_gamma)
+        _decomp_row(dbody, 2, 1, "ν Vega",  self.v_vega)
+        _decomp_row(dbody, 3, 1, "Θ Theta", self.v_theta)
 
         # ── 历史回测卡片 ──
         bt_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
-        bt_card.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 20))
+        bt_card.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 20))
         bt_card.grid_columnconfigure(0, weight=1)
 
         bt_header = ctk.CTkFrame(bt_card, fg_color="transparent")
@@ -321,6 +402,17 @@ class CBPricerApp(ctk.CTk):
                                           fg_color=ACCENT, hover_color="#74c7ec", text_color=("#ffffff", "#11111b"),
                                           font=(FONT_FAMILY, 13, "bold"), width=100, height=30, corner_radius=6)
         self.btn_backtest.pack(side="left")
+
+        self.btn_bt_png = ctk.CTkButton(bt_ctrl, text="导出 PNG", command=self._export_bt_png,
+                                        fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
+                                        font=(FONT_FAMILY, 12), width=80, height=30, corner_radius=6,
+                                        state="disabled")
+        self.btn_bt_png.pack(side="left", padx=(8, 0))
+        self.btn_bt_csv = ctk.CTkButton(bt_ctrl, text="导出 CSV", command=self._export_bt_csv,
+                                        fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
+                                        font=(FONT_FAMILY, 12), width=80, height=30, corner_radius=6,
+                                        state="disabled")
+        self.btn_bt_csv.pack(side="left", padx=(6, 0))
 
         self.lbl_bt_status = ctk.CTkLabel(bt_card, textvariable=self.v_bt_status,
                                           font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
@@ -507,6 +599,9 @@ class CBPricerApp(ctk.CTk):
         if d.get("credit") and d["credit"] in CREDIT_SPREAD_TABLE:
             self.v_spread.set(f"{CREDIT_SPREAD_TABLE[d['credit']]:.1f}")
 
+        if d.get("close") is not None:
+            self.v_market_price.set(f"{float(d['close']):.2f}")
+
         ref_parts = []
         if d.get("sec_name"):
             ref_parts.append(str(d["sec_name"]))
@@ -605,8 +700,8 @@ class CBPricerApp(ctk.CTk):
         try:
             params = self._collect_params()
             pricer = UniversalCBPricer(**params["pricer"])
-            theo = pricer.price(**params["model"])
-            self.after(0, self._show_result, theo, pricer)
+            result = pricer.price(**params["model"], return_greeks=True)
+            self.after(0, self._show_result, result, pricer)
         except Exception as exc:
             err_msg = f"计算失败: {exc}"
             self.after(0, self._on_error, err_msg)
@@ -647,7 +742,20 @@ class CBPricerApp(ctk.CTk):
         )
         return {"pricer": pricer, "model": model}
 
-    def _show_result(self, theo, pricer):
+    @staticmethod
+    def _fmt_greek(val, fmt):
+        if val is None:
+            return "—"
+        try:
+            f = float(val)
+        except (TypeError, ValueError):
+            return "—"
+        if f != f:  # NaN
+            return "—"
+        return format(f, fmt)
+
+    def _show_result(self, result, pricer):
+        theo = result["price"] if isinstance(result, dict) else result
         self.v_result.set(f"{theo:.3f}")
         info = (
             f"S₀={pricer.S0:.3f}  K={pricer.K:.2f}  "
@@ -656,6 +764,20 @@ class CBPricerApp(ctk.CTk):
             f"转股比例={pricer.ratio:.4f}"
         )
         self.v_status.set(info)
+
+        if isinstance(result, dict):
+            self.v_bond_floor.set(self._fmt_greek(result.get("bond_floor"), ".3f"))
+            self.v_parity.set(self._fmt_greek(result.get("parity"), ".3f"))
+            self.v_option_prem.set(self._fmt_greek(result.get("option_premium"), ".3f"))
+            self.v_delta.set(self._fmt_greek(result.get("delta"), ".4f"))
+            self.v_gamma.set(self._fmt_greek(result.get("gamma"), ".6f"))
+            self.v_vega.set(self._fmt_greek(result.get("vega"), ".4f"))
+            self.v_theta.set(self._fmt_greek(result.get("theta"), ".4f"))
+
+            # 深度实值 + 已过强赎线: 期权价值数学上为 0, 提示是模型预期而非 bug
+            opt = result.get("option_premium") or 0.0
+            if abs(opt) < 0.01 and pricer.S0 / pricer.K >= pricer.call_trigger_ratio:
+                self.v_status.set(info + "  ·  深度实值 + 已过强赎线, 期权价值锁定为 0 (理论锚 = 转股价值)")
 
         if theo > 100:
             self.lbl_result.configure(text_color=GREEN)
@@ -804,6 +926,165 @@ class CBPricerApp(ctk.CTk):
         self.v_bt_status.set(
             f"✅ {len(dates)} 个采样点  ·  平均基差(市价-理论)={mean_basis:+.2f}  ·  相关系数={corr:.3f}"
         )
+        self.btn_bt_png.configure(state="normal")
+        self.btn_bt_csv.configure(state="normal")
+
+    # ── 隐含波动率反解 ──────────────────────────────────────
+    def _solve_iv(self):
+        try:
+            target = float(self.v_market_price.get().strip())
+        except ValueError:
+            messagebox.showwarning("提示", "请在「市价 ¥」处填入有效数字 (如 110.5)")
+            return
+        if target <= 0:
+            messagebox.showwarning("提示", "市价必须为正数")
+            return
+        self.btn_iv.configure(state="disabled")
+        self._start_progress(f"反解 IV (target={target:.2f})")
+        threading.Thread(target=self._solve_iv_worker, args=(target,), daemon=True).start()
+
+    def _solve_iv_worker(self, target):
+        try:
+            params = self._collect_params()
+            pricer = UniversalCBPricer(**params["pricer"])
+            m = params["model"]
+            iv = pricer.solve_implied_vol(
+                target_price=target, r=m["r"], base_spread=m["base_spread"],
+                p_down=m["p_down"], distress_k=m["distress_k"],
+                M=max(150, m["M"] // 3), N=max(500, m["N"] // 3),
+            )
+            if iv != iv:  # NaN
+                self.after(0, lambda: self.v_iv.set("—"))
+                self.after(0, lambda: self.v_status.set(
+                    f"❌ 反解失败: 市价 {target:.2f} 在 σ ∈ [5%, 200%] 区间内无解"))
+            else:
+                self.after(0, lambda: self.v_iv.set(f"{iv*100:.2f}%"))
+                hist = float(self.v_sigma.get())
+                gap = iv * 100 - hist
+                self.after(0, lambda: self.v_status.set(
+                    f"反解 IV = {iv*100:.2f}% (匹配市价 {target:.2f}); "
+                    f"历史 σ = {hist:.2f}%, 差 {gap:+.2f}pp"))
+        except Exception as exc:
+            self.after(0, self._on_error, f"反解 IV 失败: {exc}")
+        finally:
+            self.after(0, self._stop_progress)
+            self.after(0, lambda: self.btn_iv.configure(state="normal"))
+
+    # ── 收敛诊断 ────────────────────────────────────────────
+    def _convergence_check(self):
+        self.btn_conv.configure(state="disabled")
+        self._start_progress("收敛诊断 (M, N → 2M, 2N)")
+        threading.Thread(target=self._convergence_worker, daemon=True).start()
+
+    def _convergence_worker(self):
+        try:
+            params = self._collect_params()
+            pricer = UniversalCBPricer(**params["pricer"])
+            m = params["model"]
+            theo_a = float(pricer.price(**m))
+            m2 = dict(m)
+            m2["M"] = m["M"] * 2
+            m2["N"] = m["N"] * 2
+            theo_b = float(pricer.price(**m2))
+            diff = theo_b - theo_a
+            rel = abs(diff) / max(abs(theo_b), 1e-9)
+            verdict = "已收敛" if rel < 1e-3 else ("基本收敛" if rel < 5e-3 else "未收敛, 建议加密")
+            self.after(0, lambda: self.v_status.set(
+                f"收敛诊断: M={m['M']},N={m['N']} → {theo_a:.4f}; 翻倍 → {theo_b:.4f}; "
+                f"Δ={diff:+.4f} ({rel*100:.3f}%)  [{verdict}]"))
+        except Exception as exc:
+            self.after(0, self._on_error, f"收敛诊断失败: {exc}")
+        finally:
+            self.after(0, self._stop_progress)
+            self.after(0, lambda: self.btn_conv.configure(state="normal"))
+
+    # ── 参数预设保存/加载 ──────────────────────────────────
+    _PRESET_VARS = (
+        "v_bond_code", "v_S0", "v_K", "v_face", "v_redemp",
+        "v_cur_date", "v_mat_date", "v_iss_date", "v_conv_date",
+        "v_coupons", "v_sigma", "v_r", "v_spread", "v_p_down", "v_dk",
+        "v_call_ratio", "v_put_ratio", "v_put_years", "v_M", "v_N",
+        "v_vol_window", "v_market_price",
+        "v_bt_start", "v_bt_end", "v_bt_freq",
+    )
+
+    def _save_preset(self):
+        path = filedialog.asksaveasfilename(
+            title="保存参数预设",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("所有文件", "*.*")],
+            initialfile=(self.v_bond_code.get().strip() or "cb_preset") + ".json",
+        )
+        if not path:
+            return
+        try:
+            data = {name: getattr(self, name).get() for name in self._PRESET_VARS}
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.v_status.set(f"已保存预设到 {path}")
+        except Exception as exc:
+            messagebox.showerror("保存失败", str(exc))
+
+    def _load_preset(self):
+        path = filedialog.askopenfilename(
+            title="加载参数预设",
+            filetypes=[("JSON", "*.json"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for name in self._PRESET_VARS:
+                if name in data:
+                    getattr(self, name).set(data[name])
+            self.v_status.set(f"已加载预设 {path}")
+        except Exception as exc:
+            messagebox.showerror("加载失败", str(exc))
+
+    # ── 回测结果导出 ──────────────────────────────────────
+    def _export_bt_png(self):
+        if self._bt_figure is None:
+            messagebox.showinfo("提示", "请先运行回测")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出回测图",
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
+            initialfile=(self.v_bond_code.get().strip() or "backtest") + ".png",
+        )
+        if not path:
+            return
+        try:
+            self._bt_figure.savefig(path, dpi=150, bbox_inches="tight",
+                                    facecolor=self._bt_figure.get_facecolor())
+            self.v_bt_status.set(f"已导出图表到 {path}")
+        except Exception as exc:
+            messagebox.showerror("导出失败", str(exc))
+
+    def _export_bt_csv(self):
+        if not self._last_bt_result or not self._last_bt_result.get("dates"):
+            messagebox.showinfo("提示", "请先运行回测")
+            return
+        path = filedialog.asksaveasfilename(
+            title="导出回测序列",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv"), ("所有文件", "*.*")],
+            initialfile=(self.v_bond_code.get().strip() or "backtest") + ".csv",
+        )
+        if not path:
+            return
+        try:
+            r = self._last_bt_result
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["date", "theoretical_price", "market_price", "stock_price", "sigma"])
+                for d, t, m, s, sg in zip(r["dates"], r["theo_prices"],
+                                          r["market_prices"], r["stock_prices"], r["sigmas"]):
+                    w.writerow([d.isoformat(), f"{t:.4f}", f"{m:.4f}", f"{s:.4f}", f"{sg:.6f}"])
+            self.v_bt_status.set(f"已导出 {len(r['dates'])} 条记录到 {path}")
+        except Exception as exc:
+            messagebox.showerror("导出失败", str(exc))
 
 
 # ── 启动 ──────────────────────────────────────────────────
