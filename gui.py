@@ -211,18 +211,18 @@ class CBPricerApp(ctk.CTk):
                                 placeholder_text="例: 128009.SZ", border_width=1, corner_radius=8, fg_color=BG_INPUT)
         ent_code.pack(side="left", padx=(0, 12))
         
-        self.btn_wind = ctk.CTkButton(search_frame, text="自动拉取 (Wind)", command=self._fetch_wind,
+        self.btn_wind = ctk.CTkButton(search_frame, text="🔍 自动拉取 (Wind)", command=self._fetch_wind,
                                       fg_color=ACCENT, hover_color="#74c7ec", text_color="#11111b",
-                                      font=(FONT_FAMILY, 14, "bold"), width=140, height=36, corner_radius=8)
+                                      font=(FONT_FAMILY, 14, "bold"), width=150, height=36, corner_radius=8)
         self.btn_wind.pack(side="left")
 
-        self.btn_save = ctk.CTkButton(search_frame, text="保存", command=self._save_preset,
+        self.btn_save = ctk.CTkButton(search_frame, text="💾 保存", command=self._save_preset,
                                       fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                      font=(FONT_FAMILY, 13), width=60, height=36, corner_radius=8)
+                                      font=(FONT_FAMILY, 13), width=65, height=36, corner_radius=8)
         self.btn_save.pack(side="left", padx=(8, 0))
-        self.btn_load = ctk.CTkButton(search_frame, text="加载", command=self._load_preset,
+        self.btn_load = ctk.CTkButton(search_frame, text="📂 加载", command=self._load_preset,
                                       fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                      font=(FONT_FAMILY, 13), width=60, height=36, corner_radius=8)
+                                      font=(FONT_FAMILY, 13), width=65, height=36, corner_radius=8)
         self.btn_load.pack(side="left", padx=(6, 0))
 
         ref_frame = ctk.CTkFrame(wind_card, fg_color="transparent")
@@ -297,8 +297,8 @@ class CBPricerApp(ctk.CTk):
         btn_box = ctk.CTkFrame(res_card, fg_color="transparent")
         btn_box.grid(row=0, column=0, padx=30, pady=30, sticky="w")
         
-        self.btn_calc = ctk.CTkButton(btn_box, text="▶ 计算理论价格", command=self._run_pricing,
-                                      font=(FONT_FAMILY, 18, "bold"), width=240, height=54, corner_radius=12,
+        self.btn_calc = ctk.CTkButton(btn_box, text="✨ 计算理论价格", command=self._run_pricing,
+                                      font=(FONT_FAMILY, 18, "bold"), width=240, height=56, corner_radius=12,
                                       fg_color=("#1e66f5", "#0052cc"), hover_color=("#7287fd", "#0066ff"), text_color=("#ffffff", "#ffffff"))
         self.btn_calc.pack()
         
@@ -312,11 +312,17 @@ class CBPricerApp(ctk.CTk):
         self.lbl_result.pack(side="top", anchor="e", pady=(0, 5))
         
         self.lbl_status = ctk.CTkLabel(res_card, textvariable=self.v_status, font=(FONT_FAMILY, 13), text_color=TEXT_DIM)
-        self.lbl_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 8))
+        self.lbl_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 4))
+        
+        # 进度条
+        self.progress_bar = ctk.CTkProgressBar(res_card, orientation="horizontal", mode="indeterminate", 
+                                               height=4, corner_radius=2, progress_color=ACCENT, fg_color=BG_INPUT)
+        self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=35, pady=(0, 10))
+        self.progress_bar.set(0)
 
         # 工具栏: 解 IV + 收敛诊断
         tools_box = ctk.CTkFrame(res_card, fg_color="transparent")
-        tools_box.grid(row=2, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 20))
+        tools_box.grid(row=3, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 20))
 
         ctk.CTkLabel(tools_box, text="市价 ¥", text_color=TEXT_DIM,
                      font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
@@ -324,20 +330,20 @@ class CBPricerApp(ctk.CTk):
                      font=(FONT_MONO, 13), fg_color=BG_INPUT, border_color=BORDER,
                      border_width=1, corner_radius=6,
                      placeholder_text="如 110.5").pack(side="left", padx=(0, 6))
-        self.btn_iv = ctk.CTkButton(tools_box, text="解 IV", command=self._solve_iv,
+        self.btn_iv = ctk.CTkButton(tools_box, text="🎯 解 IV", command=self._solve_iv,
                                     fg_color=BORDER, hover_color="#45475a", text_color=ORANGE,
                                     font=(FONT_FAMILY, 12, "bold"),
-                                    width=80, height=28, corner_radius=6)
+                                    width=85, height=30, corner_radius=6)
         self.btn_iv.pack(side="left", padx=(0, 6))
         ctk.CTkLabel(tools_box, text="IV =", text_color=TEXT_DIM,
                      font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 2))
         ctk.CTkLabel(tools_box, textvariable=self.v_iv, text_color=ORANGE,
                      font=(FONT_MONO, 13, "bold"), width=60).pack(side="left", padx=(0, 12))
 
-        self.btn_conv = ctk.CTkButton(tools_box, text="收敛诊断", command=self._convergence_check,
+        self.btn_conv = ctk.CTkButton(tools_box, text="🩺 收敛诊断", command=self._convergence_check,
                                       fg_color=BORDER, hover_color="#45475a", text_color=TEXT_DIM,
                                       font=(FONT_FAMILY, 12, "bold"),
-                                      width=90, height=28, corner_radius=6)
+                                      width=100, height=30, corner_radius=6)
         self.btn_conv.pack(side="left")
 
         # ── 价值分解 & 希腊值卡片 ──
@@ -351,25 +357,30 @@ class CBPricerApp(ctk.CTk):
 
         dbody = ctk.CTkFrame(decomp_card, fg_color="transparent")
         dbody.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 22))
-        dbody.grid_columnconfigure(0, weight=1, uniform="dec")
-        dbody.grid_columnconfigure(1, weight=1, uniform="dec")
+        dbody.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="dec")
 
-        def _decomp_row(parent, row, col, label_text, var):
-            f = ctk.CTkFrame(parent, fg_color="transparent")
-            f.grid(row=row, column=col, sticky="ew", padx=8, pady=4)
-            f.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(f, text=label_text, text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 13)).grid(row=0, column=0, sticky="w")
-            ctk.CTkLabel(f, textvariable=var, text_color=TEXT,
-                         font=(FONT_MONO, 14, "bold")).grid(row=0, column=1, sticky="e")
+        def _create_metric_tile(parent, row, col, label_text, var, highlight=False):
+            tile = ctk.CTkFrame(parent, fg_color=BG_INPUT, corner_radius=10)
+            tile.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+            tile.grid_columnconfigure(0, weight=1)
+            
+            lbl = ctk.CTkLabel(tile, text=label_text, text_color=TEXT_DIM, font=(FONT_FAMILY, 12))
+            lbl.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 2))
+            
+            val_color = ACCENT if highlight else TEXT
+            val = ctk.CTkLabel(tile, textvariable=var, text_color=val_color, font=(FONT_MONO, 16, "bold"))
+            val.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 10))
+            return tile
 
-        _decomp_row(dbody, 0, 0, "纯债价值",          self.v_bond_floor)
-        _decomp_row(dbody, 1, 0, "转股价值 (parity)", self.v_parity)
-        _decomp_row(dbody, 2, 0, "期权溢价",          self.v_option_prem)
-        _decomp_row(dbody, 0, 1, "Δ Delta", self.v_delta)
-        _decomp_row(dbody, 1, 1, "Γ Gamma", self.v_gamma)
-        _decomp_row(dbody, 2, 1, "ν Vega",  self.v_vega)
-        _decomp_row(dbody, 3, 1, "Θ Theta", self.v_theta)
+        _create_metric_tile(dbody, 0, 0, "纯债价值", self.v_bond_floor)
+        _create_metric_tile(dbody, 0, 1, "转股价值", self.v_parity)
+        _create_metric_tile(dbody, 0, 2, "期权溢价", self.v_option_prem, highlight=True)
+        _create_metric_tile(dbody, 0, 3, "Δ Delta", self.v_delta)
+        
+        _create_metric_tile(dbody, 1, 0, "Γ Gamma", self.v_gamma)
+        _create_metric_tile(dbody, 1, 1, "ν Vega", self.v_vega)
+        _create_metric_tile(dbody, 1, 2, "Θ Theta", self.v_theta)
+
 
         # ── 历史回测卡片 ──
         bt_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
@@ -398,19 +409,19 @@ class CBPricerApp(ctk.CTk):
                           width=70, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
                           text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT).pack(side="left", padx=(0, 12))
 
-        self.btn_backtest = ctk.CTkButton(bt_ctrl, text="运行回测", command=self._run_backtest,
+        self.btn_backtest = ctk.CTkButton(bt_ctrl, text="📊 运行回测", command=self._run_backtest,
                                           fg_color=ACCENT, hover_color="#74c7ec", text_color=("#ffffff", "#11111b"),
-                                          font=(FONT_FAMILY, 13, "bold"), width=100, height=30, corner_radius=6)
+                                          font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
         self.btn_backtest.pack(side="left")
 
-        self.btn_bt_png = ctk.CTkButton(bt_ctrl, text="导出 PNG", command=self._export_bt_png,
+        self.btn_bt_png = ctk.CTkButton(bt_ctrl, text="📸 导出 PNG", command=self._export_bt_png,
                                         fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                        font=(FONT_FAMILY, 12), width=80, height=30, corner_radius=6,
+                                        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6,
                                         state="disabled")
         self.btn_bt_png.pack(side="left", padx=(8, 0))
-        self.btn_bt_csv = ctk.CTkButton(bt_ctrl, text="导出 CSV", command=self._export_bt_csv,
+        self.btn_bt_csv = ctk.CTkButton(bt_ctrl, text="📝 导出 CSV", command=self._export_bt_csv,
                                         fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                        font=(FONT_FAMILY, 12), width=80, height=30, corner_radius=6,
+                                        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6,
                                         state="disabled")
         self.btn_bt_csv.pack(side="left", padx=(6, 0))
 
@@ -442,6 +453,8 @@ class CBPricerApp(ctk.CTk):
         self._animating = True
         self._anim_base = base_msg
         self._anim_step = 0
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.start()
         self._tick_progress()
 
     def _tick_progress(self):
@@ -454,6 +467,9 @@ class CBPricerApp(ctk.CTk):
 
     def _stop_progress(self):
         self._animating = False
+        if hasattr(self, 'progress_bar'):
+            self.progress_bar.stop()
+            self.progress_bar.set(0)
 
     # ── Wind 获取 ────────────────────────────────────────
     def _fetch_wind(self):
