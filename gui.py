@@ -11,12 +11,14 @@ from datetime import date, datetime, timedelta
 import csv
 import json
 import threading
+import sys
 import numpy as np
 
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
 # 解决 Matplotlib 中文显示和负号问题
 matplotlib.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'sans-serif']
@@ -45,9 +47,11 @@ ORANGE    = ("#fe640b", "#fab387")     # Peach
 
 BTN_CTRL  = ("#ccd0da", "#313244")
 BTN_HOVER = ("#bcc0cc", "#45475a")
+ACCENT_HOVER = ("#7287fd", "#74c7ec")
 
-FONT_FAMILY = "SF Pro Display"
-FONT_MONO = "SF Mono"
+_IS_MAC = sys.platform == "darwin"
+FONT_FAMILY = "SF Pro Display" if _IS_MAC else "Segoe UI"
+FONT_MONO = "SF Mono" if _IS_MAC else "Cascadia Mono"
 
 # 历史波动率窗口选项 (交易日数)
 VOL_WINDOW_MAP = {"1M": 21, "2M": 42, "3M": 63, "6M": 126, "1Y": 252}
@@ -66,46 +70,74 @@ def get_color(color_val):
     return color_val
 
 # ── UI 辅助函数 ──────────────────────────────────────────────
-def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=150):
+def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=130):
     text_color = ORANGE if wind else TEXT_DIM
     
     row_frame = ctk.CTkFrame(parent, fg_color="transparent")
-    row_frame.grid(row=row, column=0, sticky="ew", padx=25, pady=8)
+    row_frame.grid(row=row, column=0, sticky="ew", padx=16, pady=4)
     row_frame.grid_columnconfigure(1, weight=1)
     
-    dot_text = "●  " if wind else "    "
-    lbl = ctk.CTkLabel(row_frame, text=f"{dot_text}{label_text}", text_color=text_color, font=(FONT_FAMILY, 14))
+    dot_text = "● " if wind else "  "
+    lbl = ctk.CTkLabel(row_frame, text=f"{dot_text}{label_text}", text_color=text_color, font=(FONT_FAMILY, 13))
     lbl.grid(row=0, column=0, sticky="w")
     
     ent_container = ctk.CTkFrame(row_frame, fg_color="transparent")
     ent_container.grid(row=0, column=1, sticky="e")
     
-    ent = ctk.CTkEntry(ent_container, textvariable=var, width=width, font=(FONT_MONO, 14), 
-                       border_width=1, border_color=BORDER, corner_radius=6, 
-                       fg_color=BG_INPUT, text_color=TEXT)
+    ent = ctk.CTkEntry(ent_container, textvariable=var, width=width, font=(FONT_MONO, 13), 
+                       border_width=0, corner_radius=6, 
+                       fg_color=BG_INPUT, text_color=TEXT, height=28)
     ent.pack(side="left")
     
     if extra_widget:
-        extra_widget(ent_container).pack(side="left", padx=(8, 0))
+        extra_widget(ent_container).pack(side="left", padx=(6, 0))
         
     return ent
 
-def create_card(parent, title, row, col):
-    card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
-    card.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+def create_card(parent, title, row, col, icon=""):
+    card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
+    card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
     card.grid_columnconfigure(0, weight=1)
     
     header = ctk.CTkFrame(card, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=25, pady=(20, 10))
+    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
     
-    title_lbl = ctk.CTkLabel(header, text=title, font=(FONT_FAMILY, 16, "bold"), text_color=TEXT)
+    title_lbl = ctk.CTkLabel(header, text=f"{icon} {title}" if icon else title, font=(FONT_FAMILY, 14, "bold"), text_color=TEXT)
     title_lbl.pack(side="left")
     
     content = ctk.CTkFrame(card, fg_color="transparent")
-    content.grid(row=1, column=0, sticky="nsew", pady=(0, 15))
+    content.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
     content.grid_columnconfigure(0, weight=1)
     return content
 
+
+class CollapsibleSection(ctk.CTkFrame):
+    """可折叠面板: 点击标题行展开/收起内容"""
+    def __init__(self, parent, title, expanded=False, **kw):
+        kw.setdefault("fg_color", "transparent")
+        super().__init__(parent, **kw)
+        self.grid_columnconfigure(0, weight=1)
+        self._expanded = expanded
+        self._title = title
+        arrow = "▼" if expanded else "▶"
+        self.header_btn = ctk.CTkButton(
+            self, text=f"{arrow}  {title}", command=self.toggle,
+            anchor="w", fg_color="transparent", hover_color=BG_INPUT,
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 13, "bold"), height=28)
+        self.header_btn.grid(row=0, column=0, sticky="ew", padx=10)
+        self.content = ctk.CTkFrame(self, fg_color="transparent")
+        self.content.grid_columnconfigure(0, weight=1)
+        if expanded:
+            self.content.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+    def toggle(self):
+        self._expanded = not self._expanded
+        arrow = "▼" if self._expanded else "▶"
+        self.header_btn.configure(text=f"{arrow}  {self._title}")
+        if self._expanded:
+            self.content.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+        else:
+            self.content.grid_remove()
 
 # ── 主窗口 ────────────────────────────────────────────────
 class CBPricerApp(ctk.CTk):
@@ -113,9 +145,9 @@ class CBPricerApp(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode("Dark") # 默认深色
         
-        self.title("可转债理论定价系统")
-        self.geometry("1060x900")
-        self.minsize(980, 800)
+        self.title("CBPricer")
+        self.geometry("1280x900")
+        self.minsize(1100, 800)
         self.configure(fg_color=BG_APP)
         
         self.grid_columnconfigure(0, weight=1)
@@ -149,7 +181,7 @@ class CBPricerApp(ctk.CTk):
         self.v_N           = ctk.StringVar(value="2000")
         self.v_result      = ctk.StringVar(value="—")
         self.v_status      = ctk.StringVar(value="就绪")
-        self.v_ref_info    = ctk.StringVar(value="输入代码获取转债数据...")
+        self.v_ref_info    = ctk.StringVar(value="尚未拉取数据")
         self.v_vol_window  = ctk.StringVar(value=VOL_WINDOW_DEFAULT)
         self.v_theme       = ctk.StringVar(value="Dark")
 
@@ -172,73 +204,125 @@ class CBPricerApp(ctk.CTk):
         self.v_market_price = ctk.StringVar(value="")
         self.v_iv           = ctk.StringVar(value="—")
 
+        self.v_comparison   = ctk.StringVar(value="")
+
+        self.v_sens_status  = ctk.StringVar(value="设置参数范围后点击运行")
+
+        self._sens_figure   = None
+
+        self._sens_canvas   = None
+
+
+
         self._last_stock_code = None
         self._last_credit = None
-        self._bt_canvas = None
-        self._bt_figure = None
-        self._last_bt_result = None
-
-    # ── UI ────────────────────────────────────────────────
     def _build_ui(self):
-        self.main_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.main_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-        self.main_frame.grid_columnconfigure(0, weight=1, uniform="col")
-        self.main_frame.grid_columnconfigure(1, weight=1, uniform="col")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0)
+        self._build_header()
+        self._build_tabview()
+        self._build_statusbar()
+        self._bind_shortcuts()
 
-        # ── 顶部栏：搜索与拉取 ──
-        wind_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
-        wind_card.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
-        wind_card.grid_columnconfigure(1, weight=1)
+    def _build_header(self):
+        self._tab_names = ["⚡ 定价", "📈 回测", "🔥 敏感性"]
         
-        # 顶部标题 & 主题切换
-        title_frame = ctk.CTkFrame(wind_card, fg_color="transparent")
-        title_frame.grid(row=0, column=0, padx=25, pady=(25, 5), sticky="w")
-        
-        lbl_wind_title = ctk.CTkLabel(title_frame, text="⚡ 智能定价引擎", font=(FONT_FAMILY, 20, "bold"), text_color=ACCENT)
-        lbl_wind_title.pack(side="left")
-        
-        # 深浅色切换 Switch
-        self.theme_switch = ctk.CTkSwitch(title_frame, text="深色模式", command=self._toggle_theme, 
-                                          progress_color=ACCENT, button_color=TEXT_DIM, button_hover_color=TEXT,
-                                          font=(FONT_FAMILY, 13), text_color=TEXT)
-        self.theme_switch.pack(side="left", padx=(20, 0))
-        self.theme_switch.select() # 默认开启深色
-        
-        search_frame = ctk.CTkFrame(wind_card, fg_color="transparent")
-        search_frame.grid(row=0, column=1, padx=25, pady=(25, 5), sticky="e")
-        
-        ent_code = ctk.CTkEntry(search_frame, textvariable=self.v_bond_code, width=180, font=(FONT_MONO, 15),
-                                placeholder_text="例: 128009.SZ", border_width=1, corner_radius=8, fg_color=BG_INPUT)
-        ent_code.pack(side="left", padx=(0, 12))
-        
-        self.btn_wind = ctk.CTkButton(search_frame, text="🔍 自动拉取 (Wind)", command=self._fetch_wind,
-                                      fg_color=ACCENT, hover_color="#74c7ec", text_color="#11111b",
-                                      font=(FONT_FAMILY, 14, "bold"), width=150, height=36, corner_radius=8)
-        self.btn_wind.pack(side="left")
+        header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+        header.grid_columnconfigure(1, weight=0)
+        header.grid_columnconfigure(2, weight=1)
+        header.grid_propagate(False)
 
-        self.btn_save = ctk.CTkButton(search_frame, text="💾 保存", command=self._save_preset,
-                                      fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                      font=(FONT_FAMILY, 13), width=65, height=36, corner_radius=8)
-        self.btn_save.pack(side="left", padx=(8, 0))
-        self.btn_load = ctk.CTkButton(search_frame, text="📂 加载", command=self._load_preset,
-                                      fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                      font=(FONT_FAMILY, 13), width=65, height=36, corner_radius=8)
+        left_frame = ctk.CTkFrame(header, fg_color="transparent")
+        left_frame.grid(row=0, column=0, sticky="w", padx=20, pady=15)
+        ctk.CTkLabel(left_frame, text="CBPricer", font=(FONT_FAMILY, 20, "bold"), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(left_frame, text="PRO", font=(FONT_FAMILY, 10, "bold"), text_color=ACCENT, 
+                     fg_color=BG_INPUT, corner_radius=4, padx=6, pady=2).pack(side="left", padx=(8, 16), pady=(0, 2))
+                     
+        self.theme_switch = ctk.CTkSwitch(left_frame, text="深色模式", command=self._toggle_theme, width=40, progress_color=ACCENT, font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
+        self.theme_switch.pack(side="left")
+        self.theme_switch.select()
+
+        self.tab_seg = ctk.CTkSegmentedButton(
+            header, values=self._tab_names, command=self._switch_tab,
+            font=(FONT_FAMILY, 13, "bold"), height=30,
+            selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
+            unselected_color=BG_INPUT, unselected_hover_color=BTN_HOVER,
+            text_color=TEXT, text_color_disabled=TEXT_DIM,
+            corner_radius=8)
+        self.tab_seg.set("⚡ 定价")
+        self.tab_seg.grid(row=0, column=1, pady=15)
+
+        right_frame = ctk.CTkFrame(header, fg_color="transparent")
+        right_frame.grid(row=0, column=2, sticky="e", padx=20, pady=15)
+        
+        ctk.CTkLabel(right_frame, text="💡 输入代码获取转债数据 👉", text_color=TEXT_DIM, font=(FONT_FAMILY, 12, "bold")).pack(side="left", padx=(0, 8))
+        ctk.CTkEntry(right_frame, textvariable=self.v_bond_code, width=150,
+                     font=(FONT_MONO, 13), placeholder_text="如 128009.SZ",
+                     border_width=0, corner_radius=6, fg_color=BG_INPUT, height=30).pack(side="left")
+        self.btn_wind = ctk.CTkButton(
+            right_frame, text="Wind 同步", command=self._fetch_wind,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
+            font=(FONT_FAMILY, 12, "bold"), width=80, height=30, corner_radius=6)
+        self.btn_wind.pack(side="left", padx=(8, 0))
+        
+        self.btn_save = ctk.CTkButton(right_frame, text="💾", command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
+        self.btn_save.pack(side="left", padx=(12, 0))
+        self.btn_load = ctk.CTkButton(right_frame, text="📂", command=self._load_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_load.pack(side="left", padx=(6, 0))
 
-        ref_frame = ctk.CTkFrame(wind_card, fg_color="transparent")
-        ref_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=25, pady=(0, 20))
+    def _build_statusbar(self):
+        sb = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=28)
+        sb.grid(row=2, column=0, sticky="ew")
+        sb.grid_columnconfigure(1, weight=1)
+        sb.grid_propagate(False)
         
-        lbl_legend = ctk.CTkLabel(ref_frame, text="● 橙色字段将自动填充", text_color=ORANGE, font=(FONT_FAMILY, 12))
-        lbl_legend.pack(side="left")
-        self.lbl_ref = ctk.CTkLabel(ref_frame, textvariable=self.v_ref_info, text_color=TEXT_DIM, font=(FONT_FAMILY, 13))
-        self.lbl_ref.pack(side="right")
+        ctk.CTkLabel(sb, text="● 标橙参数由 Wind 自动填充", text_color=ORANGE, font=(FONT_FAMILY, 11)).grid(row=0, column=0, sticky="w", padx=15, pady=4)
+        self.lbl_ref = ctk.CTkLabel(sb, textvariable=self.v_ref_info, text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
+        self.lbl_ref.grid(row=0, column=1, sticky="w", padx=15, pady=4)
+        self.lbl_status = ctk.CTkLabel(sb, textvariable=self.v_status, text_color=TEXT, font=(FONT_FAMILY, 11, "bold"))
+        self.lbl_status.grid(row=0, column=2, sticky="e", padx=15, pady=4)
 
-        # ── 左列 ──
-        col0_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        col0_frame.grid(row=1, column=0, sticky="nsew")
-        col0_frame.grid_columnconfigure(0, weight=1)
-        
-        sec1 = create_card(col0_frame, "基本条款", 0, 0)
+    def _build_tabview(self):
+        self._tab_frames = {}
+        self._tab_container = ctk.CTkFrame(self, fg_color="transparent")
+        self._tab_container.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self._tab_container.grid_columnconfigure(0, weight=1)
+        self._tab_container.grid_rowconfigure(0, weight=1)
+
+        for name in self._tab_names:
+            f = ctk.CTkFrame(self._tab_container, fg_color="transparent")
+            f.grid_columnconfigure(0, weight=1)
+            f.grid_rowconfigure(0, weight=1)
+            self._tab_frames[name] = f
+
+        self._tab_frames["⚡ 定价"].grid(row=0, column=0, sticky="nsew")
+        self._build_pricing_tab()
+        self._build_backtest_tab()
+        self._build_sensitivity_tab()
+
+    def _switch_tab(self, selected):
+        for name, f in self._tab_frames.items():
+            if name == selected:
+                f.grid(row=0, column=0, sticky="nsew")
+            else:
+                f.grid_remove()
+    def _build_pricing_tab(self):
+        tab = self._tab_frames["⚡ 定价"]
+        tab.grid_columnconfigure(0, weight=0)
+        tab.grid_columnconfigure(1, weight=1)
+        tab.grid_rowconfigure(0, weight=1)
+
+        # ── 左列: 参数面板 ──
+        lp = ctk.CTkScrollableFrame(tab, fg_color="transparent", width=380,
+                                    scrollbar_button_color=BORDER)
+        lp.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        lp.grid_columnconfigure(0, weight=1)
+
+        sec1 = create_card(lp, "基本条款", 0, 0, icon="📝")
         _form_row(sec1, "正股价 S", self.v_S0, 0, wind=True)
         _form_row(sec1, "转股价 K", self.v_K, 1, wind=True)
         _form_row(sec1, "面值", self.v_face, 2, wind=True)
@@ -247,194 +331,369 @@ class CBPricerApp(ctk.CTk):
         _form_row(sec1, "到期日期", self.v_mat_date, 5, wind=True)
         _form_row(sec1, "发行日期", self.v_iss_date, 6, wind=True)
         _form_row(sec1, "转股起始日", self.v_conv_date, 7, wind=True)
-        _form_row(sec1, "各年票息 (%)", self.v_coupons, 8, wind=True, width=200)
+        _form_row(sec1, "各年票息 (%)", self.v_coupons, 8, wind=True, width=180)
 
-        # ── 右列 ──
-        col1_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        col1_frame.grid(row=1, column=1, sticky="nsew")
-        col1_frame.grid_columnconfigure(0, weight=1)
-
-        sec2 = create_card(col1_frame, "模型参数", 0, 0)
-        
+        sec2 = create_card(lp, "模型参数", 1, 0, icon="⚙️")
         def make_vol(p):
-            self.vol_window_menu = ctk.CTkOptionMenu(p, variable=self.v_vol_window, values=list(VOL_WINDOW_MAP.keys()), 
-                                                     width=80, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER, 
-                                                     text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
-                                                     command=self._on_vol_window_change)
+            self.vol_window_menu = ctk.CTkOptionMenu(
+                p, variable=self.v_vol_window, values=list(VOL_WINDOW_MAP.keys()),
+                width=75, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
+                text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
+                command=self._on_vol_window_change)
             return self.vol_window_menu
-        _form_row(sec2, "波动率 σ (%)", self.v_sigma, 0, wind=True, width=100, extra_widget=make_vol)
-        
+        _form_row(sec2, "波动率 σ (%)", self.v_sigma, 0, wind=True, width=80, extra_widget=make_vol)
         def make_shi(p):
-            self.btn_shibor = ctk.CTkButton(p, text="Shibor", command=self._fetch_shibor, fg_color=BTN_CTRL, hover_color=BTN_HOVER, 
-                                            text_color=ORANGE, font=(FONT_FAMILY, 12, "bold"), width=80, height=28, corner_radius=6)
+            self.btn_shibor = ctk.CTkButton(
+                p, text="Shibor", command=self._fetch_shibor, fg_color=BTN_CTRL,
+                hover_color=BTN_HOVER, text_color=ORANGE,
+                font=(FONT_FAMILY, 12, "bold"), width=75, height=28, corner_radius=6)
             return self.btn_shibor
-        _form_row(sec2, "无风险利率 r (%)", self.v_r, 1, width=100, extra_widget=make_shi)
-        
+        _form_row(sec2, "无风险利率 r (%)", self.v_r, 1, width=80, extra_widget=make_shi)
         def make_spr(p):
-            self.btn_spread = ctk.CTkButton(p, text="按评级填", command=self._fill_spread_from_rating, fg_color=BTN_CTRL, hover_color=BTN_HOVER, 
-                                            text_color=ORANGE, font=(FONT_FAMILY, 12, "bold"), width=80, height=28, corner_radius=6)
+            self.btn_spread = ctk.CTkButton(
+                p, text="按评级", command=self._fill_spread_from_rating, fg_color=BTN_CTRL,
+                hover_color=BTN_HOVER, text_color=ORANGE,
+                font=(FONT_FAMILY, 12, "bold"), width=75, height=28, corner_radius=6)
             return self.btn_spread
-        _form_row(sec2, "信用利差 (%)", self.v_spread, 2, width=100, extra_widget=make_spr)
-        
+        _form_row(sec2, "信用利差 (%)", self.v_spread, 2, width=80, extra_widget=make_spr)
         _form_row(sec2, "下修概率 p (%)", self.v_p_down, 3)
         _form_row(sec2, "信用扩张系数 (%)", self.v_dk, 4)
 
-        sec3 = create_card(col1_frame, "条款触发条件", 1, 0)
+        adv = CollapsibleSection(lp, "高级参数 (条款 & 网格)", expanded=False)
+        adv.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
+        sec3 = create_card(adv.content, "条款触发条件", 0, 0, icon="⚡")
         _form_row(sec3, "强赎触发 (%K)", self.v_call_ratio, 0, wind=True)
         _form_row(sec3, "回售触发 (%K)", self.v_put_ratio, 1, wind=True)
         _form_row(sec3, "回售生效年数", self.v_put_years, 2, wind=True)
-
-        sec4 = create_card(col1_frame, "数值网格", 2, 0)
+        sec4 = create_card(adv.content, "数值网格", 1, 0, icon="🧮")
         _form_row(sec4, "空间节点 M", self.v_M, 0)
         _form_row(sec4, "时间步数 N", self.v_N, 1)
 
-        # ── 底部结果区 ──
-        res_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
-        res_card.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 20))
-        res_card.grid_columnconfigure(0, weight=1)
-        res_card.grid_columnconfigure(1, weight=1)
+        # ── 右列: 结果面板 ──
+        rp = ctk.CTkFrame(tab, fg_color="transparent")
+        rp.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        rp.grid_columnconfigure(0, weight=1)
+        rp.grid_rowconfigure(1, weight=1)
+
+        # 英雄结果卡
+        rc = ctk.CTkFrame(rp, fg_color=BG_CARD, corner_radius=16)
+        rc.grid(row=0, column=0, sticky="ew", pady=(6, 12))
+        rc.grid_columnconfigure(0, weight=1)
+        rc.grid_columnconfigure(1, weight=1)
+
+        left_hero = ctk.CTkFrame(rc, fg_color="transparent")
+        left_hero.grid(row=0, column=0, sticky="nw", padx=30, pady=25)
         
-        btn_box = ctk.CTkFrame(res_card, fg_color="transparent")
-        btn_box.grid(row=0, column=0, padx=30, pady=30, sticky="w")
+        self.btn_calc = ctk.CTkButton(
+            left_hero, text="✨ 开始计算 (Ctrl+Enter)", command=self._run_pricing,
+            font=(FONT_FAMILY, 15, "bold"), width=200, height=50, corner_radius=10,
+            fg_color=("#1e66f5", "#0052cc"), hover_color=("#7287fd", "#0066ff"),
+            text_color=("#ffffff", "#ffffff"))
+        self.btn_calc.pack(anchor="w", pady=(0, 15))
         
-        self.btn_calc = ctk.CTkButton(btn_box, text="✨ 计算理论价格", command=self._run_pricing,
-                                      font=(FONT_FAMILY, 18, "bold"), width=240, height=56, corner_radius=12,
-                                      fg_color=("#1e66f5", "#0052cc"), hover_color=("#7287fd", "#0066ff"), text_color=("#ffffff", "#ffffff"))
-        self.btn_calc.pack()
-        
-        res_box = ctk.CTkFrame(res_card, fg_color="transparent")
-        res_box.grid(row=0, column=1, padx=40, pady=25, sticky="e")
-        
-        lbl_res_title = ctk.CTkLabel(res_box, text="理论价格 (¥)", font=(FONT_FAMILY, 14), text_color=TEXT_DIM)
-        lbl_res_title.pack(side="top", anchor="e")
-        
-        self.lbl_result = ctk.CTkLabel(res_box, textvariable=self.v_result, font=(FONT_FAMILY, 56, "bold"), text_color=TEXT)
-        self.lbl_result.pack(side="top", anchor="e", pady=(0, 5))
-        
-        self.lbl_status = ctk.CTkLabel(res_card, textvariable=self.v_status, font=(FONT_FAMILY, 13), text_color=TEXT_DIM)
-        self.lbl_status.grid(row=1, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 4))
-        
-        # 进度条
-        self.progress_bar = ctk.CTkProgressBar(res_card, orientation="horizontal", mode="indeterminate", 
-                                               height=4, corner_radius=2, progress_color=ACCENT, fg_color=BG_INPUT)
-        self.progress_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=35, pady=(0, 10))
+        self.progress_bar = ctk.CTkProgressBar(
+            left_hero, orientation="horizontal", mode="indeterminate",
+            width=200, height=4, corner_radius=2, progress_color=ACCENT, fg_color=BG_INPUT)
+        self.progress_bar.pack(anchor="w", pady=(0, 10))
         self.progress_bar.set(0)
 
-        # 工具栏: 解 IV + 收敛诊断
-        tools_box = ctk.CTkFrame(res_card, fg_color="transparent")
-        tools_box.grid(row=3, column=0, columnspan=2, sticky="w", padx=35, pady=(0, 20))
-
-        ctk.CTkLabel(tools_box, text="市价 ¥", text_color=TEXT_DIM,
-                     font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
-        ctk.CTkEntry(tools_box, textvariable=self.v_market_price, width=80,
-                     font=(FONT_MONO, 13), fg_color=BG_INPUT, border_color=BORDER,
-                     border_width=1, corner_radius=6,
-                     placeholder_text="如 110.5").pack(side="left", padx=(0, 6))
-        self.btn_iv = ctk.CTkButton(tools_box, text="🎯 解 IV", command=self._solve_iv,
-                                    fg_color=BORDER, hover_color="#45475a", text_color=ORANGE,
-                                    font=(FONT_FAMILY, 12, "bold"),
-                                    width=85, height=30, corner_radius=6)
-        self.btn_iv.pack(side="left", padx=(0, 6))
-        ctk.CTkLabel(tools_box, text="IV =", text_color=TEXT_DIM,
-                     font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 2))
-        ctk.CTkLabel(tools_box, textvariable=self.v_iv, text_color=ORANGE,
-                     font=(FONT_MONO, 13, "bold"), width=60).pack(side="left", padx=(0, 12))
-
-        self.btn_conv = ctk.CTkButton(tools_box, text="🩺 收敛诊断", command=self._convergence_check,
-                                      fg_color=BORDER, hover_color="#45475a", text_color=TEXT_DIM,
-                                      font=(FONT_FAMILY, 12, "bold"),
-                                      width=100, height=30, corner_radius=6)
-        self.btn_conv.pack(side="left")
-
-        # ── 价值分解 & 希腊值卡片 ──
-        decomp_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
-        decomp_card.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 20))
-        decomp_card.grid_columnconfigure(0, weight=1)
-
-        dh = ctk.CTkFrame(decomp_card, fg_color="transparent")
-        dh.grid(row=0, column=0, sticky="ew", padx=25, pady=(20, 8))
-        ctk.CTkLabel(dh, text="价值分解 & 希腊值", font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
-
-        dbody = ctk.CTkFrame(decomp_card, fg_color="transparent")
-        dbody.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 22))
-        dbody.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="dec")
-
-        def _create_metric_tile(parent, row, col, label_text, var, highlight=False):
-            tile = ctk.CTkFrame(parent, fg_color=BG_INPUT, corner_radius=10)
-            tile.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
-            tile.grid_columnconfigure(0, weight=1)
-            
-            lbl = ctk.CTkLabel(tile, text=label_text, text_color=TEXT_DIM, font=(FONT_FAMILY, 12))
-            lbl.grid(row=0, column=0, sticky="w", padx=12, pady=(10, 2))
-            
-            val_color = ACCENT if highlight else TEXT
-            val = ctk.CTkLabel(tile, textvariable=var, text_color=val_color, font=(FONT_MONO, 16, "bold"))
-            val.grid(row=1, column=0, sticky="w", padx=12, pady=(0, 10))
-            return tile
-
-        _create_metric_tile(dbody, 0, 0, "纯债价值", self.v_bond_floor)
-        _create_metric_tile(dbody, 0, 1, "转股价值", self.v_parity)
-        _create_metric_tile(dbody, 0, 2, "期权溢价", self.v_option_prem, highlight=True)
-        _create_metric_tile(dbody, 0, 3, "Δ Delta", self.v_delta)
+        right_hero = ctk.CTkFrame(rc, fg_color="transparent")
+        right_hero.grid(row=0, column=1, sticky="ne", padx=30, pady=25)
         
-        _create_metric_tile(dbody, 1, 0, "Γ Gamma", self.v_gamma)
-        _create_metric_tile(dbody, 1, 1, "ν Vega", self.v_vega)
-        _create_metric_tile(dbody, 1, 2, "Θ Theta", self.v_theta)
+        ctk.CTkLabel(right_hero, text="理论价格 (¥)", font=(FONT_FAMILY, 13),
+                     text_color=TEXT_DIM).pack(anchor="e")
+        self.lbl_result = ctk.CTkLabel(right_hero, textvariable=self.v_result,
+                                       font=(FONT_FAMILY, 56, "bold"), text_color=TEXT)
+        self.lbl_result.pack(anchor="e")
 
+        # IV 工具栏
+        tb = ctk.CTkFrame(rc, fg_color="transparent")
+        tb.grid(row=1, column=0, columnspan=2, sticky="ew", padx=30, pady=(0, 25))
+        
+        ctk.CTkLabel(tb, text="🎯 隐含波动率反解", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 13, "bold")).pack(side="left", padx=(0, 15))
+        ctk.CTkEntry(tb, textvariable=self.v_market_price, width=80,
+                     font=(FONT_MONO, 13), fg_color=BG_INPUT, border_width=0, corner_radius=6,
+                     placeholder_text="市价 ¥").pack(side="left", padx=(0, 8))
+        self.btn_iv = ctk.CTkButton(
+            tb, text="解 IV", command=self._solve_iv,
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=ORANGE,
+            font=(FONT_FAMILY, 12, "bold"), width=70, height=28, corner_radius=6)
+        self.btn_iv.pack(side="left", padx=(0, 15))
+        
+        ctk.CTkLabel(tb, text="IV =", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(tb, textvariable=self.v_iv, text_color=ORANGE,
+                     font=(FONT_MONO, 14, "bold"), width=70, anchor="w").pack(side="left", padx=(0, 20))
+                     
+        self.btn_conv = ctk.CTkButton(
+            tb, text="🩺 收敛诊断", command=self._convergence_check,
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+            font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
+        self.btn_conv.pack(side="right")
 
-        # ── 历史回测卡片 ──
-        bt_card = ctk.CTkFrame(self.main_frame, fg_color=BG_CARD, corner_radius=16, border_width=1, border_color=BORDER)
-        bt_card.grid(row=4, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 20))
-        bt_card.grid_columnconfigure(0, weight=1)
+        # 指标仪表盘
+        dc = ctk.CTkFrame(rp, fg_color="transparent")
+        dc.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
+        dc.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="dec")
+        dc.grid_rowconfigure((0, 1), weight=1, uniform="r")
 
-        bt_header = ctk.CTkFrame(bt_card, fg_color="transparent")
-        bt_header.grid(row=0, column=0, sticky="ew", padx=25, pady=(20, 10))
-        ctk.CTkLabel(bt_header, text="📈 历史回测对比", font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
-        ctk.CTkLabel(bt_header, text="理论价 vs 实际收盘 (条款/模型参数 = 当前界面值)",
+        def _tile(parent, row, col, label, var, hl=False):
+            t = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=16)
+            t.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
+            t.grid_columnconfigure(0, weight=1)
+            t.grid_rowconfigure(1, weight=1)
+            ctk.CTkLabel(t, text=label, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 12, "bold")).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 0))
+            val_color = ACCENT if hl else TEXT
+            ctk.CTkLabel(t, textvariable=var, text_color=val_color,
+                         font=(FONT_MONO, 20, "bold")).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+
+        _tile(dc, 0, 0, "🏷️ 纯债价值", self.v_bond_floor)
+        _tile(dc, 0, 1, "🔄 转股价值", self.v_parity)
+        _tile(dc, 0, 2, "✨ 期权溢价", self.v_option_prem, hl=True)
+        _tile(dc, 0, 3, "Δ Delta", self.v_delta)
+        _tile(dc, 1, 0, "Γ Gamma", self.v_gamma)
+        _tile(dc, 1, 1, "ν Vega", self.v_vega)
+        _tile(dc, 1, 2, "Θ Theta", self.v_theta)
+        _tile(dc, 1, 3, "🎯 隐含波动率", self.v_iv)
+    def _build_backtest_tab(self):
+        tab = self._tab_frames["📈 回测"]
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(2, weight=1)
+
+        # 控制栏
+        ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
+        ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 12), padx=6)
+
+        ch = ctk.CTkFrame(ctrl, fg_color="transparent")
+        ch.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 8))
+        ctk.CTkLabel(ch, text="📈 历史回测对比",
+                     font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(ch, text="理论价 vs 实际收盘 (条款/模型参数 = 当前界面值)",
                      font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
 
-        bt_ctrl = ctk.CTkFrame(bt_card, fg_color="transparent")
-        bt_ctrl.grid(row=1, column=0, sticky="ew", padx=25, pady=(0, 10))
-
-        ctk.CTkLabel(bt_ctrl, text="开始", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
-        ctk.CTkEntry(bt_ctrl, textvariable=self.v_bt_start, width=110, font=(FONT_MONO, 13),
-                     fg_color=BG_INPUT, border_color=BORDER, border_width=1, corner_radius=6).pack(side="left", padx=(0, 12))
-
-        ctk.CTkLabel(bt_ctrl, text="结束", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
-        ctk.CTkEntry(bt_ctrl, textvariable=self.v_bt_end, width=110, font=(FONT_MONO, 13),
-                     fg_color=BG_INPUT, border_color=BORDER, border_width=1, corner_radius=6).pack(side="left", padx=(0, 12))
-
-        ctk.CTkLabel(bt_ctrl, text="频率", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
-        ctk.CTkOptionMenu(bt_ctrl, variable=self.v_bt_freq, values=["日", "周", "月"],
-                          width=70, font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
-                          text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT).pack(side="left", padx=(0, 12))
-
-        self.btn_backtest = ctk.CTkButton(bt_ctrl, text="📊 运行回测", command=self._run_backtest,
-                                          fg_color=ACCENT, hover_color="#74c7ec", text_color=("#ffffff", "#11111b"),
-                                          font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
+        cc = ctk.CTkFrame(ctrl, fg_color="transparent")
+        cc.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
+        ctk.CTkLabel(cc, text="开始", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkEntry(cc, textvariable=self.v_bt_start, width=110, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(cc, text="结束", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkEntry(cc, textvariable=self.v_bt_end, width=110, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(cc, text="频率", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkOptionMenu(cc, variable=self.v_bt_freq, values=["日", "周", "月"],
+                          width=70, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
+                          text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT).pack(side="left", padx=(0, 15))
+        self.btn_backtest = ctk.CTkButton(
+            cc, text="📊 运行回测", command=self._run_backtest,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
+            font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
         self.btn_backtest.pack(side="left")
-
-        self.btn_bt_png = ctk.CTkButton(bt_ctrl, text="📸 导出 PNG", command=self._export_bt_png,
-                                        fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6,
-                                        state="disabled")
-        self.btn_bt_png.pack(side="left", padx=(8, 0))
-        self.btn_bt_csv = ctk.CTkButton(bt_ctrl, text="📝 导出 CSV", command=self._export_bt_csv,
-                                        fg_color=BORDER, hover_color="#45475a", text_color=TEXT,
-                                        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6,
-                                        state="disabled")
+        self.btn_bt_png = ctk.CTkButton(
+            cc, text="📸 PNG", command=self._export_bt_png,
+            fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+            font=(FONT_FAMILY, 12), width=75, height=32, corner_radius=6, state="disabled")
+        self.btn_bt_png.pack(side="left", padx=(10, 0))
+        self.btn_bt_csv = ctk.CTkButton(
+            cc, text="📝 CSV", command=self._export_bt_csv,
+            fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+            font=(FONT_FAMILY, 12), width=75, height=32, corner_radius=6, state="disabled")
         self.btn_bt_csv.pack(side="left", padx=(6, 0))
 
-        self.lbl_bt_status = ctk.CTkLabel(bt_card, textvariable=self.v_bt_status,
-                                          font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
-        self.lbl_bt_status.grid(row=2, column=0, sticky="w", padx=30, pady=(0, 8))
+        self.lbl_bt_status = ctk.CTkLabel(
+            tab, textvariable=self.v_bt_status,
+            font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
+        self.lbl_bt_status.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 6))
 
-        # matplotlib 图表容器
-        self.bt_chart_frame = ctk.CTkFrame(bt_card, fg_color=BG_CARD, corner_radius=8)
-        self.bt_chart_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.bt_chart_frame = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
+        self.bt_chart_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
         self.bt_chart_frame.grid_columnconfigure(0, weight=1)
         self.bt_chart_frame.grid_rowconfigure(0, weight=1)
-        
+
+    def _bind_shortcuts(self):
+        self.bind_all("<Control-Return>", lambda e: self._run_pricing())
+        self.bind_all("<Control-s>", lambda e: self._save_preset())
+        self.bind_all("<Control-o>", lambda e: self._load_preset())
+    def _build_sensitivity_tab(self):
+        tab = self._tab_frames["🔥 敏感性"]
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(2, weight=1)
+
+        ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
+        ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 12), padx=6)
+
+        ch = ctk.CTkFrame(ctrl, fg_color="transparent")
+        ch.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 8))
+        ctk.CTkLabel(ch, text="🔥 敏感性分析 (σ-S Heatmap)",
+                     font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(ch, text="固定其他参数，遍历 (波动率, 正股价) 网格",
+                     font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
+
+        cc = ctk.CTkFrame(ctrl, fg_color="transparent")
+        cc.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
+
+        self.v_sens_s_min = ctk.StringVar(value="70")
+        self.v_sens_s_max = ctk.StringVar(value="130")
+        self.v_sens_sig_min = ctk.StringVar(value="10")
+        self.v_sens_sig_max = ctk.StringVar(value="60")
+        self.v_sens_steps = ctk.StringVar(value="12")
+
+        ctk.CTkLabel(cc, text="S (%K)", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkEntry(cc, textvariable=self.v_sens_s_min, width=50, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 2))
+        ctk.CTkLabel(cc, text="~", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=2)
+        ctk.CTkEntry(cc, textvariable=self.v_sens_s_max, width=50, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 15))
+
+        ctk.CTkLabel(cc, text="σ (%)", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkEntry(cc, textvariable=self.v_sens_sig_min, width=50, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 2))
+        ctk.CTkLabel(cc, text="~", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=2)
+        ctk.CTkEntry(cc, textvariable=self.v_sens_sig_max, width=50, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 15))
+
+        ctk.CTkLabel(cc, text="网格", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+        ctk.CTkEntry(cc, textvariable=self.v_sens_steps, width=40, font=(FONT_MONO, 13),
+                     fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(side="left", padx=(0, 15))
+
+        self.btn_sensitivity = ctk.CTkButton(
+            cc, text="🔥 运行分析", command=self._run_sensitivity,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
+            font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
+        self.btn_sensitivity.pack(side="left")
+
+        self.lbl_sens_status = ctk.CTkLabel(
+            tab, textvariable=self.v_sens_status, font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
+        self.lbl_sens_status.grid(row=1, column=0, sticky="sw", padx=16, pady=(0, 6))
+
+        self.sens_chart_frame = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
+        self.sens_chart_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        self.sens_chart_frame.grid_columnconfigure(0, weight=1)
+        self.sens_chart_frame.grid_rowconfigure(0, weight=1)
+
+    def _run_sensitivity(self):
+        try:
+            params = self._collect_params()
+        except Exception as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return
+        try:
+            s_min = float(self.v_sens_s_min.get()) / 100.0
+            s_max = float(self.v_sens_s_max.get()) / 100.0
+            sig_min = float(self.v_sens_sig_min.get()) / 100.0
+            sig_max = float(self.v_sens_sig_max.get()) / 100.0
+            steps = int(self.v_sens_steps.get())
+        except ValueError:
+            messagebox.showerror("错误", "请输入有效的范围参数")
+            return
+        if steps < 3 or steps > 30:
+            messagebox.showwarning("提示", "网格步数建议 3~30")
+            return
+        self.btn_sensitivity.configure(state="disabled")
+        self._start_progress("正在计算敏感性网格")
+        threading.Thread(
+            target=self._sensitivity_worker,
+            args=(params, s_min, s_max, sig_min, sig_max, steps),
+            daemon=True).start()
+
+    def _sensitivity_worker(self, params, s_min, s_max, sig_min, sig_max, steps):
+        try:
+            K = params["pricer"]["K"]
+            S_vals = np.linspace(K * s_min, K * s_max, steps)
+            sig_vals = np.linspace(sig_min, sig_max, steps)
+            m = params["model"]
+            m_fast = dict(m, M=max(100, m["M"] // 4), N=max(500, m["N"] // 4))
+            grid = np.zeros((steps, steps))
+            total = steps * steps
+            done = [0]
+
+            def compute_one(i, j):
+                p = dict(params["pricer"], S0=float(S_vals[j]))
+                pricer = UniversalCBPricer(**p)
+                return i, j, float(pricer.price(
+                    sigma=float(sig_vals[i]), r=m_fast["r"],
+                    base_spread=m_fast["base_spread"], p_down=m_fast["p_down"],
+                    distress_k=m_fast["distress_k"], M=m_fast["M"], N=m_fast["N"]))
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futs = [pool.submit(compute_one, i, j)
+                        for i in range(steps) for j in range(steps)]
+                for fut in as_completed(futs):
+                    i, j, v = fut.result()
+                    grid[i, j] = v
+                    done[0] += 1
+                    if done[0] % max(1, total // 20) == 0:
+                        self.after(0, lambda d=done[0]: self.v_sens_status.set(
+                            f"进度 {d}/{total} ..."))
+
+            self.after(0, self._render_sensitivity_chart, S_vals, sig_vals, grid, K)
+        except Exception as exc:
+            self.after(0, lambda: self.v_sens_status.set(f"❌ 敏感性分析失败: {exc}"))
+            self.after(0, lambda: messagebox.showerror("敏感性分析失败", str(exc)))
+        finally:
+            self.after(0, self._stop_progress)
+            self.after(0, lambda: self.btn_sensitivity.configure(state="normal"))
+
+    def _render_sensitivity_chart(self, S_vals, sig_vals, grid, K):
+        if self._sens_figure is not None:
+            self._sens_figure.clf()
+            plt.close(self._sens_figure)
+            self._sens_figure = None
+            self._sens_canvas = None
+        for child in self.sens_chart_frame.winfo_children():
+            child.destroy()
+
+        bg = get_color(BG_CARD)
+        bg_in = get_color(BG_INPUT)
+        txt = get_color(TEXT)
+        txt_dim = get_color(TEXT_DIM)
+        brd = get_color(BORDER)
+
+        fig = Figure(figsize=(11, 5), dpi=100, facecolor=bg)
+        ax = fig.add_subplot(111, facecolor=bg_in)
+
+        vmin, vmax = float(np.min(grid)), float(np.max(grid))
+        center = 100.0
+        if vmin < center < vmax:
+            from matplotlib.colors import TwoSlopeNorm
+            norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
+        else:
+            norm = None
+
+        im = ax.pcolormesh(S_vals, sig_vals * 100, grid, cmap="RdYlGn",
+                           norm=norm, shading="auto")
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        cbar.set_label("理论价 (¥)", color=txt_dim, fontsize=10)
+        cbar.ax.tick_params(colors=txt_dim, labelsize=9)
+
+        # Mark current point
+        try:
+            cur_s = float(self.v_S0.get())
+            cur_sig = float(self.v_sigma.get())
+            ax.plot(cur_s, cur_sig, marker="*", markersize=18,
+                    color=get_color(ACCENT), markeredgecolor="white",
+                    markeredgewidth=1.5, zorder=5)
+        except ValueError:
+            pass
+
+        ax.set_xlabel("正股价 S (¥)", color=txt_dim, fontsize=11)
+        ax.set_ylabel("波动率 σ (%)", color=txt_dim, fontsize=11)
+        ax.set_title("理论价 σ-S 敏感性热力图", color=txt, fontsize=13, fontweight="bold")
+        ax.tick_params(colors=txt_dim, labelsize=9)
+        for spine in ax.spines.values():
+            spine.set_color(brd)
+
+        fig.tight_layout()
+        canvas = FigureCanvasTkAgg(fig, master=self.sens_chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._sens_figure = fig
+        self._sens_canvas = canvas
+        self.v_sens_status.set(
+            f"✅ {len(S_vals)}×{len(sig_vals)} = {len(S_vals)*len(sig_vals)} 点  |  "
+            f"价格范围 {float(np.min(grid)):.2f} ~ {float(np.max(grid)):.2f}")
+
     def _toggle_theme(self):
         """切换深浅色模式"""
         if self.theme_switch.get() == 1:
@@ -726,8 +985,18 @@ class CBPricerApp(ctk.CTk):
             self.after(0, lambda: self.btn_calc.configure(state="normal"))
 
     def _collect_params(self):
-        def pf(v): return float(v.get())
-        def pd(v): return date.fromisoformat(v.get().strip())
+        def pf(v):
+            val = v.get().strip()
+            try:
+                return float(val)
+            except ValueError:
+                raise ValueError(f"请输入有效数字，当前值: '{val}'")
+        def pd(v):
+            val = v.get().strip()
+            try:
+                return date.fromisoformat(val)
+            except ValueError:
+                raise ValueError(f"日期格式应为 YYYY-MM-DD，当前值: '{val}'")
 
         coupon_str = self.v_coupons.get().strip()
         coupon_rates = tuple(float(x.strip()) / 100.0
@@ -802,9 +1071,21 @@ class CBPricerApp(ctk.CTk):
         else:
             self.lbl_result.configure(text_color=TEXT)
 
+
+    def _animate_result(self, target, steps=15, interval=25):
+        """结果数字跳动动画"""
+        try:
+            current = float(self.v_result.get())
+        except (ValueError, TypeError):
+            current = 0.0
+        for i in range(1, steps + 1):
+            val = current + (target - current) * (i / steps)
+            self.after(i * interval, lambda v=val: self.v_result.set(f"{v:.3f}"))
+
     def _on_error(self, msg):
         self._stop_progress()
         self.v_status.set(f"❌ {msg}")
+        self.v_ref_info.set(f"❌ 获取失败")
         self.v_result.set("—")
         self.lbl_result.configure(text_color=RED)
         messagebox.showerror("错误", str(msg))
@@ -881,7 +1162,6 @@ class CBPricerApp(ctk.CTk):
         # 释放旧图表资源，防止内存泄漏
         if self._bt_figure is not None:
             self._bt_figure.clf()
-            import matplotlib.pyplot as plt
             plt.close(self._bt_figure)
             self._bt_figure = None
             self._bt_canvas = None
@@ -900,7 +1180,7 @@ class CBPricerApp(ctk.CTk):
         red_color = get_color(RED)
         green_color = get_color(GREEN)
 
-        fig = Figure(figsize=(9, 4), dpi=100, facecolor=bg_card_color)
+        fig = Figure(figsize=(11, 5), dpi=100, facecolor=bg_card_color)
         ax = fig.add_subplot(111, facecolor=bg_input_color)
 
         ax.plot(dates, theo, color=accent_color, linewidth=2.0, marker="o", markersize=4,
@@ -1104,6 +1384,9 @@ class CBPricerApp(ctk.CTk):
 
 
 # ── 启动 ──────────────────────────────────────────────────
-if __name__ == "__main__":
+def main():
     app = CBPricerApp()
     app.mainloop()
+
+if __name__ == "__main__":
+    main()

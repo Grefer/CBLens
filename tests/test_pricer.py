@@ -310,3 +310,86 @@ class TestBondFloor:
     def test_bond_floor_positive(self, base_pricer):
         bf = base_pricer.bond_floor_value(date(2025, 1, 1), 0.05)
         assert bf > 0
+
+    def test_bond_floor_increases_toward_maturity(self, base_pricer):
+        """纯债价值随到期日临近应趋向赎回价."""
+        bf_early = base_pricer.bond_floor_value(date(2025, 1, 1), 0.05)
+        bf_late = base_pricer.bond_floor_value(date(2026, 7, 1), 0.05)
+        assert bf_late > bf_early
+
+
+# ── 9. 隐含波动率反解 ──────────────────────────────────────
+class TestImpliedVol:
+
+    def test_iv_round_trip(self):
+        """已知 σ 计算理论价, 再反解 IV, 应回到原始 σ."""
+        pricer = UniversalCBPricer(
+            S0=52.0, K=52.77,
+            current_date=date(2024, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        sigma_true = 0.30
+        target = pricer.price(sigma=sigma_true, r=0.022, base_spread=0.03,
+                              p_down=0.0, distress_k=0.0, M=300, N=1000)
+        iv = pricer.solve_implied_vol(target_price=target, r=0.022, base_spread=0.03,
+                                      p_down=0.0, distress_k=0.0, M=300, N=1000)
+        assert not np.isnan(iv), "IV 反解不应返回 NaN"
+        assert abs(iv - sigma_true) < 0.03, \
+            f"IV {iv:.4f} 与真实 σ {sigma_true:.4f} 偏差过大"
+
+    def test_iv_out_of_range_returns_nan(self):
+        """目标价超出合理区间时应返回 NaN."""
+        pricer = UniversalCBPricer(
+            S0=50.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        iv = pricer.solve_implied_vol(target_price=500.0, r=0.022, base_spread=0.03)
+        assert np.isnan(iv), "超范围目标价应返回 NaN"
+
+
+# ── 10. 希腊值基本约束 ─────────────────────────────────────
+class TestGreeks:
+
+    @pytest.fixture
+    def greeks_pricer(self):
+        return UniversalCBPricer(
+            S0=50.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+
+    def test_delta_non_negative(self, greeks_pricer):
+        """Delta 应非负 (可转债价格随正股上涨)."""
+        result = greeks_pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                                     M=200, N=500, return_greeks=True)
+        assert result["delta"] >= 0, f"Delta={result['delta']:.4f} 不应为负"
+
+    def test_vega_positive(self, greeks_pricer):
+        """Vega 应为正 (波动率增大提升可转债价值)."""
+        result = greeks_pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                                     M=200, N=500, return_greeks=True)
+        assert result["vega"] > 0, f"Vega={result['vega']:.4f} 应为正"
+
+    def test_price_decomposition_consistency(self, greeks_pricer):
+        """理论价 ≈ max(纯债底, 转股价值) + 期权溢价."""
+        result = greeks_pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                                     M=200, N=500, return_greeks=True)
+        reconstructed = max(result["bond_floor"], result["parity"]) + result["option_premium"]
+        assert abs(result["price"] - reconstructed) < 0.01, \
+            f"价值分解不一致: price={result['price']:.3f}, reconstructed={reconstructed:.3f}"
+
+    def test_return_greeks_false_returns_float(self, greeks_pricer):
+        """return_greeks=False 应返回 float."""
+        result = greeks_pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                                     M=200, N=500, return_greeks=False)
+        assert isinstance(result, float)

@@ -14,5 +14,6 @@ venv/
 
 # Editor / tooling
 .claude/
+.gemini/
 .vscode/
 .idea/
