@@ -1,4 +1,5 @@
 import logging
+import bisect
 import numpy as np
 from scipy.linalg import solve_banded
 from scipy.optimize import brentq
@@ -731,18 +732,21 @@ def backtest_theoretical_price(
     # 4) 逐点定价
     dates_out, theo_out, mkt_out, s0_out, sigma_out = [], [], [], [], []
     total = len(sample_points)
+    # stock_dates 已按时间升序; 用 bisect 在 O(log N) 内定位 <= val_date 的最近交易日,
+    # 再向前线性跳过 NaN. 替代旧的 O(N) 反向扫描.
     for i, (val_date, market_px) in enumerate(sample_points):
         if issue_dt and val_date < issue_dt:
             continue
         if maturity_dt and val_date >= maturity_dt:
             continue
 
-        # 拿当日正股 close (找 stock_dates 里 <= val_date 的最近一个)
+        pos = bisect.bisect_right(stock_dates, val_date) - 1
         idx = None
-        for j in range(len(stock_dates) - 1, -1, -1):
-            if stock_dates[j] <= val_date and not np.isnan(stock_close[j]):
-                idx = j
+        while pos >= 0:
+            if not np.isnan(stock_close[pos]):
+                idx = pos
                 break
+            pos -= 1
         if idx is None:
             continue
         S0 = stock_close[idx]

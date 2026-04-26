@@ -13,6 +13,7 @@ import json
 import threading
 import sys
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -68,6 +69,22 @@ def get_color(color_val):
     if isinstance(color_val, tuple):
         return color_val[1] if ctk.get_appearance_mode() == "Dark" else color_val[0]
     return color_val
+
+
+def _latest_finite_number(values):
+    """返回序列中最后一个可用有限数值，若无则返回 None。"""
+    if not values:
+        return None
+    for v in reversed(values):
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(fv):
+            return fv
+    return None
 
 # ── UI 辅助函数 ──────────────────────────────────────────────
 def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=130):
@@ -204,15 +221,13 @@ class CBPricerApp(ctk.CTk):
         self.v_market_price = ctk.StringVar(value="")
         self.v_iv           = ctk.StringVar(value="—")
 
-        self.v_comparison   = ctk.StringVar(value="")
-
         self.v_sens_status  = ctk.StringVar(value="设置参数范围后点击运行")
 
-        self._sens_figure   = None
-
-        self._sens_canvas   = None
-
-
+        self._sens_figure     = None
+        self._sens_canvas     = None
+        self._bt_figure       = None
+        self._bt_canvas       = None
+        self._last_bt_result  = None
 
         self._last_stock_code = None
         self._last_credit = None
@@ -784,9 +799,7 @@ class CBPricerApp(ctk.CTk):
                            (val_date - timedelta(days=10)).isoformat(),
                            val_date.isoformat())
                 if rr.ErrorCode == 0 and rr.Data and rr.Data[0]:
-                    vals = [v for v in rr.Data[0] if v is not None]
-                    if vals:
-                        shibor_rate = float(vals[-1])
+                    shibor_rate = _latest_finite_number(rr.Data[0])
             except Exception:
                 shibor_rate = None
 
@@ -935,10 +948,9 @@ class CBPricerApp(ctk.CTk):
                       date.today().isoformat())
             if r.ErrorCode != 0 or not r.Data or not r.Data[0]:
                 raise RuntimeError(f"Wind edb 返回空: {r.Data}")
-            vals = [v for v in r.Data[0] if v is not None]
-            if not vals:
-                raise RuntimeError("近 10 天 Shibor 1Y 全为空")
-            latest = float(vals[-1])
+            latest = _latest_finite_number(r.Data[0])
+            if latest is None:
+                raise RuntimeError("近 10 天 Shibor 1Y 无有效数值")
             self.after(0, lambda: self.v_r.set(f"{latest:.2f}"))
             self.after(0, lambda: self.v_status.set(f"Shibor 1Y = {latest:.4f}%"))
         except Exception as exc:
@@ -976,7 +988,8 @@ class CBPricerApp(ctk.CTk):
             params = self._collect_params()
             pricer = UniversalCBPricer(**params["pricer"])
             result = pricer.price(**params["model"], return_greeks=True)
-            self.after(0, self._show_result, result, pricer)
+            sigma_used = params["model"]["sigma"]
+            self.after(0, lambda: self._show_result(result, pricer, sigma_used))
         except Exception as exc:
             err_msg = f"计算失败: {exc}"
             self.after(0, self._on_error, err_msg)
@@ -1039,13 +1052,13 @@ class CBPricerApp(ctk.CTk):
             return "—"
         return format(f, fmt)
 
-    def _show_result(self, result, pricer):
+    def _show_result(self, result, pricer, sigma_used):
         theo = result["price"] if isinstance(result, dict) else result
         self.v_result.set(f"{theo:.3f}")
         info = (
             f"S₀={pricer.S0:.3f}  K={pricer.K:.2f}  "
             f"T={pricer.T:.4f}年  "
-            f"σ={float(self.v_sigma.get()):.1f}%  "
+            f"σ={sigma_used*100:.1f}%  "
             f"转股比例={pricer.ratio:.4f}"
         )
         self.v_status.set(info)
@@ -1071,16 +1084,6 @@ class CBPricerApp(ctk.CTk):
         else:
             self.lbl_result.configure(text_color=TEXT)
 
-
-    def _animate_result(self, target, steps=15, interval=25):
-        """结果数字跳动动画"""
-        try:
-            current = float(self.v_result.get())
-        except (ValueError, TypeError):
-            current = 0.0
-        for i in range(1, steps + 1):
-            val = current + (target - current) * (i / steps)
-            self.after(i * interval, lambda v=val: self.v_result.set(f"{v:.3f}"))
 
     def _on_error(self, msg):
         self._stop_progress()
@@ -1188,7 +1191,6 @@ class CBPricerApp(ctk.CTk):
         ax.plot(dates, mkt, color=orange_color, linewidth=2.0, marker="s", markersize=4,
                 label="市价(收盘)", zorder=2)
 
-        # numpy already imported at module level
         theo_arr = np.array(theo)
         mkt_arr = np.array(mkt)
         ax.fill_between(dates, theo_arr, mkt_arr,
