@@ -4,10 +4,10 @@ import customtkinter as ctk
 from datetime import timedelta
 import numpy as np
 
-from gui.theme import *
-from gui.widgets import _form_row, create_card, CollapsibleSection, Tooltip
+from ..theme import *
+from ..widgets import _form_row, create_card, CollapsibleSection, Tooltip
 
-from pricer import UniversalCBPricer
+from ...pricer import UniversalCBPricer
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 

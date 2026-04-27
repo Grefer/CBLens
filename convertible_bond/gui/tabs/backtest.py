@@ -1,7 +1,7 @@
 """📈 回测 Tab — 控制栏 + 图表区."""
 import customtkinter as ctk
 
-from gui.theme import *
+from ..theme import *
 
 
 def build(app, tab):

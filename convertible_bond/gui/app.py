@@ -11,16 +11,13 @@ from tkinter import messagebox, filedialog
 from datetime import date, datetime, timedelta
 import csv
 import json
+import logging
+import re
 import threading
-import sys
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import os as _os
-# 确保项目根目录在 sys.path 中, 无论从哪个位置启动
-_PROJECT_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
+logger = logging.getLogger(__name__)
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -32,19 +29,27 @@ import matplotlib.pyplot as plt
 matplotlib.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'sans-serif']
 matplotlib.rcParams['axes.unicode_minus'] = False
 
-from CB import (
-    UniversalCBPricer, ensure_wind, to_date, parse_coupon, hist_vol,
-    fetch_cashflow, backtest_theoretical_price,
-    DEFAULT_COUPON_RATES,
+from ..pricer import UniversalCBPricer, DEFAULT_COUPON_RATES
+from ..data_providers import (
+    to_date, parse_coupon_string as parse_coupon,
+    DataProvider, WindDataProvider, AkshareDataProvider, CSVDataProvider,
+    BondTerms,
 )
+from ..cache import CachedBondDataProvider, TermsBundle, project_bundle_path
+from ..backtest import backtest_theoretical_price
 
-from gui.tabs import batch as batch_tab
+from .tabs import batch as batch_tab
 
 # ── 从 gui.theme / gui.widgets 导入, 同时保持本文件内的向后引用 ──
-from gui.theme import *  # noqa: F401,F403  (颜色/字体/常量)
-from gui.widgets import _form_row, create_card, CollapsibleSection, Tooltip, _latest_finite_number  # noqa: F401
+from .theme import *  # noqa: F401,F403  (颜色/字体/常量)
+from .widgets import _form_row, create_card, CollapsibleSection, Tooltip, AutocompleteEntry, _latest_finite_number  # noqa: F401
 
 ctk.set_default_color_theme("blue")
+
+BOND_CODE_RE = re.compile(r"^\d{6}\.[A-Z]{2}$")
+DEFAULT_P_DOWN_PCT = 15.0
+DEFAULT_DISTRESS_K_PCT = 5.0
+DEFAULT_CREDIT_SPREAD_PCT = 3.0
 
 def get_color(color_val):
     """解析当前模式下的颜色值，主要用于 Matplotlib"""
@@ -69,7 +74,7 @@ def _latest_finite_number(values):
     return None
 
 # ── UI 辅助函数 ──────────────────────────────────────────────
-def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=130):
+def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=130, source_var=None):
     text_color = ORANGE if wind else TEXT_DIM
     
     row_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -90,6 +95,14 @@ def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width
     
     if extra_widget:
         extra_widget(ent_container).pack(side="left", padx=(6, 0))
+
+    if source_var is not None:
+        ctk.CTkLabel(
+            ent_container, textvariable=source_var,
+            width=54, anchor="w",
+            text_color=ORANGE if wind else TEXT_DIM,
+            font=(FONT_FAMILY, 11),
+        ).pack(side="left", padx=(6, 0))
         
     return ent
 
@@ -219,8 +232,8 @@ class CBPricerApp(ctk.CTk):
         self.v_sigma     = ctk.StringVar(value="28")
         self.v_r         = ctk.StringVar(value="2.2")
         self.v_spread    = ctk.StringVar(value="3.0")
-        self.v_p_down    = ctk.StringVar(value="0")
-        self.v_dk        = ctk.StringVar(value="5")
+        self.v_p_down    = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
+        self.v_dk        = ctk.StringVar(value=f"{DEFAULT_DISTRESS_K_PCT:g}")
         self.v_call_ratio  = ctk.StringVar(value="130")
         self.v_put_ratio   = ctk.StringVar(value="70")
         self.v_put_years   = ctk.StringVar(value="2")
@@ -264,6 +277,47 @@ class CBPricerApp(ctk.CTk):
 
         self._last_stock_code = None
         self._last_credit = None
+
+        # 定价参数来源标签
+        self.v_src_S0          = ctk.StringVar(value="手工")
+        self.v_src_K           = ctk.StringVar(value="手工")
+        self.v_src_face        = ctk.StringVar(value="手工")
+        self.v_src_redemp      = ctk.StringVar(value="手工")
+        self.v_src_cur_date    = ctk.StringVar(value="系统")
+        self.v_src_mat_date    = ctk.StringVar(value="手工")
+        self.v_src_iss_date    = ctk.StringVar(value="手工")
+        self.v_src_conv_date   = ctk.StringVar(value="手工")
+        self.v_src_coupons     = ctk.StringVar(value="手工")
+        self.v_src_sigma       = ctk.StringVar(value="手工")
+        self.v_src_r           = ctk.StringVar(value="手工")
+        self.v_src_spread      = ctk.StringVar(value="手工")
+        self.v_src_p_down      = ctk.StringVar(value="模型")
+        self.v_src_dk          = ctk.StringVar(value="模型")
+        self.v_src_call_ratio  = ctk.StringVar(value="手工")
+        self.v_src_put_ratio   = ctk.StringVar(value="手工")
+        self.v_src_put_years   = ctk.StringVar(value="手工")
+        self.v_src_call_notice = ctk.StringVar(value="手工")
+
+        self._programmatic_update = False
+        self._suppress_bond_autoload = False
+        self._auto_fetch_after = None
+        self._last_auto_loaded_code = None
+        self._fetch_in_flight_code = None
+        self._fetch_in_flight_source = None
+        self._source_trace_handles = []
+
+        # 动态行情源
+        self.v_data_source = ctk.StringVar(value="Wind")
+        self._provider_cache: dict = {}      # name -> 已实例化的 provider (惰性)
+        self._csv_root: str = ""             # CSV provider 的根目录
+
+        # 转债静态信息缓存: 项目级单文件 bundle (data/cb_data.json)
+        # 通过 `python -m convertible_bond.cli.sync_tradable` 批量更新
+        self.terms_cache = TermsBundle(project_bundle_path())
+        self._force_refresh_terms = False    # 下次 _fetch_wind 是否强制走网络
+        self._attach_manual_source_tracking()
+        self._bond_code_trace = self.v_bond_code.trace_add("write", self._on_bond_code_write)
+
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=0)
@@ -307,15 +361,40 @@ class CBPricerApp(ctk.CTk):
         right_frame = ctk.CTkFrame(header, fg_color="transparent")
         right_frame.grid(row=0, column=2, sticky="e", padx=20, pady=15)
         
-        ctk.CTkLabel(right_frame, text="💡 输入代码获取转债数据 👉", text_color=TEXT_DIM, font=(FONT_FAMILY, 12, "bold")).pack(side="left", padx=(0, 8))
-        ctk.CTkEntry(right_frame, textvariable=self.v_bond_code, width=150,
-                     font=(FONT_MONO, 13), placeholder_text="如 128009.SZ",
-                     border_width=0, corner_radius=6, fg_color=BG_INPUT, height=30).pack(side="left")
+        ctk.CTkLabel(right_frame, text="行情源", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 12, "bold")).pack(side="left", padx=(0, 4))
+        self.data_source_menu = ctk.CTkOptionMenu(
+            right_frame, variable=self.v_data_source,
+            values=["Wind", "akshare"],
+            command=self._on_data_source_change,
+            width=88, height=30, font=(FONT_FAMILY, 12),
+            fg_color=BG_INPUT, button_color=BTN_HOVER, text_color=TEXT,
+            dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT, corner_radius=6)
+        self.data_source_menu.pack(side="left", padx=(0, 10))
+        Tooltip(self.data_source_menu,
+                "选择动态行情/利率来源；转债基础信息固定读取 cb_data, 并由 Wind 刷新")
+
+        AutocompleteEntry(
+            right_frame, textvariable=self.v_bond_code,
+            get_suggestions=self._search_bond_index,
+            on_select=self._on_bond_code_selected,
+            width=140, font=(FONT_MONO, 13), placeholder_text="如 128009.SZ",
+            border_width=0, corner_radius=6, fg_color=BG_INPUT, height=30,
+        ).pack(side="left")
         self.btn_wind = ctk.CTkButton(
-            right_frame, text="Wind 同步", command=self._fetch_wind,
+            right_frame, text="📥 同步", command=self._fetch_wind,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
             font=(FONT_FAMILY, 12, "bold"), width=80, height=30, corner_radius=6)
         self.btn_wind.pack(side="left", padx=(8, 0))
+        Tooltip(self.btn_wind, "读取 cb_data 静态信息 + 拉取正股 + 历史 σ")
+
+        self.btn_refresh_terms = ctk.CTkButton(
+            right_frame, text="🔄", command=self._refresh_terms,
+            fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+            font=(FONT_FAMILY, 14), width=32, height=30, corner_radius=6)
+        self.btn_refresh_terms.pack(side="left", padx=(4, 0))
+        Tooltip(self.btn_refresh_terms,
+                "强制用 Wind 刷新当前债的 cb_data\n(下修 / 评级变更后用)")
         
         self.btn_save = ctk.CTkButton(right_frame, text="💾", command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_save.pack(side="left", padx=(12, 0))
@@ -330,7 +409,7 @@ class CBPricerApp(ctk.CTk):
         sb.grid_columnconfigure(1, weight=1)
         sb.grid_propagate(False)
         
-        ctk.CTkLabel(sb, text="● 标橙参数由 Wind 自动填充", text_color=ORANGE, font=(FONT_FAMILY, 11)).grid(row=0, column=0, sticky="w", padx=15, pady=4)
+        ctk.CTkLabel(sb, text="来源: 条款 / 行情 / 历史 / 利率 / 评级 / 模型 / 手工", text_color=ORANGE, font=(FONT_FAMILY, 11)).grid(row=0, column=0, sticky="w", padx=15, pady=4)
         self.lbl_ref = ctk.CTkLabel(sb, textvariable=self.v_ref_info, text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
         self.lbl_ref.grid(row=0, column=1, sticky="w", padx=15, pady=4)
         self.lbl_status = ctk.CTkLabel(sb, textvariable=self.v_status, text_color=TEXT, font=(FONT_FAMILY, 11, "bold"))
@@ -361,6 +440,142 @@ class CBPricerApp(ctk.CTk):
                 f.grid(row=0, column=0, sticky="nsew")
             else:
                 f.grid_remove()
+
+    # ── 字段来源与自动加载 ─────────────────────────────────
+    def _attach_manual_source_tracking(self):
+        pairs = (
+            (self.v_S0, self.v_src_S0),
+            (self.v_K, self.v_src_K),
+            (self.v_face, self.v_src_face),
+            (self.v_redemp, self.v_src_redemp),
+            (self.v_cur_date, self.v_src_cur_date),
+            (self.v_mat_date, self.v_src_mat_date),
+            (self.v_iss_date, self.v_src_iss_date),
+            (self.v_conv_date, self.v_src_conv_date),
+            (self.v_coupons, self.v_src_coupons),
+            (self.v_sigma, self.v_src_sigma),
+            (self.v_r, self.v_src_r),
+            (self.v_spread, self.v_src_spread),
+            (self.v_p_down, self.v_src_p_down),
+            (self.v_dk, self.v_src_dk),
+            (self.v_call_ratio, self.v_src_call_ratio),
+            (self.v_put_ratio, self.v_src_put_ratio),
+            (self.v_put_years, self.v_src_put_years),
+            (self.v_call_notice, self.v_src_call_notice),
+        )
+        for value_var, source_var in pairs:
+            handle = value_var.trace_add(
+                "write",
+                lambda *_args, src=source_var: self._mark_manual_source(src),
+            )
+            self._source_trace_handles.append((value_var, handle))
+
+    def _mark_manual_source(self, source_var):
+        if self._programmatic_update:
+            return
+        source_var.set("手工")
+
+    def _set_field(self, value_var, value, source_var=None, source=None):
+        self._programmatic_update = True
+        try:
+            value_var.set(value)
+        finally:
+            self._programmatic_update = False
+        if source_var is not None and source is not None:
+            source_var.set(source)
+
+    @staticmethod
+    def _fmt_pct(value):
+        return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+    def _normalize_bond_code(self, raw: str) -> str:
+        code = (raw or "").strip().upper()
+        if not code:
+            return ""
+        if BOND_CODE_RE.match(code):
+            return code
+        if re.fullmatch(r"\d{6}", code):
+            matches = [
+                cached for cached in self.terms_cache.list_bonds()
+                if cached.upper().startswith(f"{code}.")
+            ]
+            if len(matches) == 1:
+                return matches[0].upper()
+            if code.startswith(("110", "111", "113", "118")):
+                return f"{code}.SH"
+            if code.startswith(("123", "127", "128")):
+                return f"{code}.SZ"
+        return code
+
+    def _set_bond_code_safely(self, code: str):
+        if self.v_bond_code.get().strip() == code:
+            return
+        self._suppress_bond_autoload = True
+        try:
+            self.v_bond_code.set(code)
+        finally:
+            self._suppress_bond_autoload = False
+
+    def _on_bond_code_write(self, *_):
+        if self._suppress_bond_autoload:
+            return
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not BOND_CODE_RE.match(code):
+            self._last_auto_loaded_code = None
+            if self._auto_fetch_after is not None:
+                self.after_cancel(self._auto_fetch_after)
+                self._auto_fetch_after = None
+            return
+        if self._auto_fetch_after is not None:
+            self.after_cancel(self._auto_fetch_after)
+        self._auto_fetch_after = self.after(650, lambda c=code: self._auto_load_bond_code(c))
+
+    def _on_bond_code_selected(self, code: str):
+        norm = self._normalize_bond_code(code)
+        if not BOND_CODE_RE.match(norm):
+            return
+        if self._auto_fetch_after is not None:
+            self.after_cancel(self._auto_fetch_after)
+            self._auto_fetch_after = None
+        self._auto_load_bond_code(norm)
+
+    def _auto_load_bond_code(self, code: str):
+        self._auto_fetch_after = None
+        code = self._normalize_bond_code(code)
+        if not BOND_CODE_RE.match(code):
+            return
+        if self._normalize_bond_code(self.v_bond_code.get()) != code:
+            return
+        self._set_bond_code_safely(code)
+        if (self._last_auto_loaded_code == code
+                and self._fetch_in_flight_code == code
+                and self._fetch_in_flight_source == self.v_data_source.get()):
+            return
+        self._last_auto_loaded_code = code
+        if self.terms_cache.has(code):
+            self._fill_from_cache(code)
+        self._fetch_wind(auto=True)
+
+    def _cache_meta_source(self, code: str) -> str:
+        try:
+            raw = self.terms_cache._data.get(code, {})
+            return str(raw.get("_meta", {}).get("source") or "cb_data")
+        except Exception:
+            return "cb_data"
+
+    @staticmethod
+    def _provider_market_name(provider) -> str:
+        market = getattr(provider, "market", None)
+        return getattr(market, "name", None) or getattr(provider, "name", "?")
+
+    @staticmethod
+    def _terms_source_label(origin: str) -> str:
+        if not origin:
+            return "条款"
+        if "Wind" in origin:
+            return "Wind"
+        return "cb_data"
+
     def _build_pricing_tab(self):
         tab = self._tab_frames["⚡ 定价"]
         tab.grid_columnconfigure(0, weight=0)
@@ -374,15 +589,15 @@ class CBPricerApp(ctk.CTk):
         lp.grid_columnconfigure(0, weight=1)
 
         sec1 = create_card(lp, "基本条款", 0, 0, icon="📝")
-        _form_row(sec1, "正股价 S", self.v_S0, 0, wind=True)
-        _form_row(sec1, "转股价 K", self.v_K, 1, wind=True)
-        _form_row(sec1, "面值", self.v_face, 2, wind=True)
-        _form_row(sec1, "到期赎回价", self.v_redemp, 3, wind=True)
-        _form_row(sec1, "估值日期", self.v_cur_date, 4)
-        _form_row(sec1, "到期日期", self.v_mat_date, 5, wind=True)
-        _form_row(sec1, "发行日期", self.v_iss_date, 6, wind=True)
-        _form_row(sec1, "转股起始日", self.v_conv_date, 7, wind=True)
-        _form_row(sec1, "各年票息 (%)", self.v_coupons, 8, wind=True, width=180)
+        _form_row(sec1, "正股价 S", self.v_S0, 0, wind=True, source_var=self.v_src_S0)
+        _form_row(sec1, "转股价 K", self.v_K, 1, wind=True, source_var=self.v_src_K)
+        _form_row(sec1, "面值", self.v_face, 2, wind=True, source_var=self.v_src_face)
+        _form_row(sec1, "到期赎回价", self.v_redemp, 3, wind=True, source_var=self.v_src_redemp)
+        _form_row(sec1, "估值日期", self.v_cur_date, 4, source_var=self.v_src_cur_date)
+        _form_row(sec1, "到期日期", self.v_mat_date, 5, wind=True, source_var=self.v_src_mat_date)
+        _form_row(sec1, "发行日期", self.v_iss_date, 6, wind=True, source_var=self.v_src_iss_date)
+        _form_row(sec1, "转股起始日", self.v_conv_date, 7, wind=True, source_var=self.v_src_conv_date)
+        _form_row(sec1, "各年票息 (%)", self.v_coupons, 8, wind=True, width=180, source_var=self.v_src_coupons)
 
         sec2 = create_card(lp, "模型参数", 1, 0, icon="⚙️")
         def make_vol(p):
@@ -392,31 +607,34 @@ class CBPricerApp(ctk.CTk):
                 text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
                 command=self._on_vol_window_change)
             return self.vol_window_menu
-        _form_row(sec2, "波动率 σ (%)", self.v_sigma, 0, wind=True, width=80, extra_widget=make_vol)
+        _form_row(sec2, "波动率 σ (%)", self.v_sigma, 0, wind=True, width=80,
+                  extra_widget=make_vol, source_var=self.v_src_sigma)
         def make_shi(p):
             self.btn_shibor = ctk.CTkButton(
                 p, text="Shibor", command=self._fetch_shibor, fg_color=BTN_CTRL,
                 hover_color=BTN_HOVER, text_color=ORANGE,
                 font=(FONT_FAMILY, 12, "bold"), width=75, height=28, corner_radius=6)
             return self.btn_shibor
-        _form_row(sec2, "无风险利率 r (%)", self.v_r, 1, width=80, extra_widget=make_shi)
+        _form_row(sec2, "无风险利率 r (%)", self.v_r, 1, width=80,
+                  extra_widget=make_shi, source_var=self.v_src_r)
         def make_spr(p):
             self.btn_spread = ctk.CTkButton(
                 p, text="按评级", command=self._fill_spread_from_rating, fg_color=BTN_CTRL,
                 hover_color=BTN_HOVER, text_color=ORANGE,
                 font=(FONT_FAMILY, 12, "bold"), width=75, height=28, corner_radius=6)
             return self.btn_spread
-        _form_row(sec2, "信用利差 (%)", self.v_spread, 2, width=80, extra_widget=make_spr)
-        _form_row(sec2, "下修概率 p (%)", self.v_p_down, 3)
-        _form_row(sec2, "信用扩张系数 (%)", self.v_dk, 4)
+        _form_row(sec2, "信用利差 (%)", self.v_spread, 2, width=80,
+                  extra_widget=make_spr, source_var=self.v_src_spread)
+        _form_row(sec2, "下修概率 p (%)", self.v_p_down, 3, source_var=self.v_src_p_down)
+        _form_row(sec2, "信用扩张系数 (%)", self.v_dk, 4, source_var=self.v_src_dk)
 
         adv = CollapsibleSection(lp, "高级参数 (条款 & 网格)", expanded=False)
         adv.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
         sec3 = create_card(adv.content, "条款触发条件", 0, 0, icon="⚡")
-        _form_row(sec3, "强赎触发 (%K)", self.v_call_ratio, 0, wind=True)
-        _form_row(sec3, "回售触发 (%K)", self.v_put_ratio, 1, wind=True)
-        _form_row(sec3, "回售生效年数", self.v_put_years, 2, wind=True)
-        _form_row(sec3, "强赎宽限天数", self.v_call_notice, 3)
+        _form_row(sec3, "强赎触发 (%K)", self.v_call_ratio, 0, wind=True, source_var=self.v_src_call_ratio)
+        _form_row(sec3, "回售触发 (%K)", self.v_put_ratio, 1, wind=True, source_var=self.v_src_put_ratio)
+        _form_row(sec3, "回售生效年数", self.v_put_years, 2, wind=True, source_var=self.v_src_put_years)
+        _form_row(sec3, "强赎宽限天数", self.v_call_notice, 3, source_var=self.v_src_call_notice)
         sec4 = create_card(adv.content, "数值网格", 1, 0, icon="🧮")
         _form_row(sec4, "空间节点 M", self.v_M, 0)
         _form_row(sec4, "时间步数 N", self.v_N, 1)
@@ -798,152 +1016,355 @@ class CBPricerApp(ctk.CTk):
             self.progress_bar.stop()
             self.progress_bar.set(0)
 
-    # ── Wind 获取 ────────────────────────────────────────
-    def _fetch_wind(self):
-        code = self.v_bond_code.get().strip()
+    # ── 动态行情源管理 ──────────────────────────────────
+    def _get_provider(self, name=None) -> DataProvider:
+        """惰性构造动态行情 provider, 并叠加 cb_data 静态信息层."""
+        name = name or self.v_data_source.get()
+        if name in self._provider_cache:
+            return self._provider_cache[name]
+        try:
+            if name == "Wind":
+                inner: DataProvider = WindDataProvider()
+            elif name == "akshare":
+                inner = AkshareDataProvider()
+            elif name == "CSV":
+                if not self._csv_root:
+                    raise RuntimeError("请先选择 CSV 数据根目录")
+                inner = CSVDataProvider(self._csv_root)
+            else:
+                raise RuntimeError(f"未知行情源: {name}")
+        except ImportError as e:
+            raise RuntimeError(str(e)) from e
+        # 转债基础信息固定从 cb_data 读取; 正股价格/历史 σ/Shibor 透传到 inner
+        static_source = inner if isinstance(inner, WindDataProvider) else None
+        provider = CachedBondDataProvider(
+            inner,
+            self.terms_cache,
+            static_source=static_source,
+            max_age_days=365,
+        )
+        self._provider_cache[name] = provider
+        return provider
+
+    def _on_data_source_change(self, choice):
+        """切换动态行情源. CSV 兼容旧入口, 新界面默认不展示."""
+        if choice == "CSV":
+            path = filedialog.askdirectory(title="选择 CSV 数据根目录 (含 bonds/ stocks/ terms/ 子目录)")
+            if not path:
+                # 用户取消, 还原下拉选择
+                prev = next((k for k in self._provider_cache if k != "CSV"), "Wind")
+                self.v_data_source.set(prev)
+                return
+            self._csv_root = path
+            # CSV 路径变更, 失效缓存
+            self._provider_cache.pop("CSV", None)
+        self.v_status.set(f"行情源已切换至 {choice}")
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if BOND_CODE_RE.match(code):
+            if self.terms_cache.has(code):
+                self._fill_from_cache(code)
+            self._fetch_wind(auto=True)
+
+    # ── 转债代码联想 ─────────────────────────────────────────
+    def _search_bond_index(self, query: str, limit: int = 30):
+        """在本地 cb_data.json 索引上做模糊匹配, 同时支持代码与中文简称.
+
+        返回 [(code, "code  sec_name"), ...]; query 为空返回 []."""
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        prefix, contains = [], []
+        for code, d in self.terms_cache._data.items():
+            if code.startswith("_") or not isinstance(d, dict):
+                continue
+            name = (d.get("sec_name") or "")
+            cl, nl = code.lower(), name.lower()
+            if q in cl or q in nl:
+                label = f"{code}  {name}" if name else code
+                bucket = prefix if (cl.startswith(q) or nl.startswith(q)) else contains
+                bucket.append((code, label))
+        prefix.sort(key=lambda t: t[0])
+        contains.sort(key=lambda t: t[0])
+        return (prefix + contains)[:limit]
+
+    def _fill_from_cache(self, code: str):
+        """从本地 cb_data.json 直接填表, 不走网络.
+        正股价 / σ / r 会在代码输入后自动异步同步."""
+        code = self._normalize_bond_code(code)
+        terms = self.terms_cache.get(code)
+        if terms is None:
+            return
+        iss_dt = terms.issue_date
+        mat_dt = terms.maturity_date
+        conv_dt = iss_dt + timedelta(days=180) if iss_dt else None
+        put_years = None
+        if terms.put_obs_months is not None and iss_dt and mat_dt:
+            total_months = (mat_dt - iss_dt).days / 30.4375
+            put_years = int(round(max(0, (total_months - float(terms.put_obs_months)) / 12)))
+        self._fill_wind_data({
+            "bond_code": code,
+            "S0": None,
+            "K": terms.conversion_price,
+            "face": terms.face_value or 100.0,
+            "mat_date": mat_dt,
+            "iss_date": iss_dt,
+            "conv_date": conv_dt,
+            "redemp": float(terms.redemption_price) if terms.redemption_price is not None else 107.0,
+            "call_ratio": terms.call_trigger_pct,
+            "put_ratio": terms.put_trigger_pct,
+            "put_years": put_years,
+            "coupons_tuple": terms.coupon_rates,
+            "coupon_src": "terms",
+            "sigma": None,
+            "shibor": None,
+            "stock_code": terms.underlying_code,
+            "sec_name": terms.sec_name,
+            "close": terms.close,
+            "credit": terms.credit_rating,
+            "outstanding": terms.outstanding_balance,
+            "provider_name": "本地",
+            "market_source": self.v_data_source.get(),
+            "terms_source": self._cache_meta_source(code),
+            "terms_origin": "缓存",
+            "cache_age": self.terms_cache.fetched_at(code),
+        })
+
+    # ── 数据同步 (拉条款 + 正股 + 历史 σ) ───────────────────
+    def _fetch_wind(self, auto=False):
+        code = self._normalize_bond_code(self.v_bond_code.get())
         if not code:
             messagebox.showwarning("提示", "请先输入转债代码, 例如 128009.SZ")
             return
+        self._set_bond_code_safely(code)
+        source_name = self.v_data_source.get()
+        if self._fetch_in_flight_code == code and self._fetch_in_flight_source == source_name:
+            return
+        self._fetch_in_flight_code = code
+        self._fetch_in_flight_source = source_name
         self.btn_wind.configure(state="disabled")
-        self._start_progress(f"正在从 Wind 获取 {code} 数据")
-        threading.Thread(target=self._fetch_wind_worker, args=(code,), daemon=True).start()
+        if self._force_refresh_terms:
+            msg = f"从 {source_name} 强制刷新 {code}"
+        elif auto:
+            msg = f"自动同步 {code} ({source_name})"
+        else:
+            msg = f"同步 {code} (基础信息优先读 cb_data)"
+        vol_window_label = self.v_vol_window.get()
+        self._start_progress(msg)
+        threading.Thread(
+            target=self._fetch_wind_worker,
+            args=(code, auto, source_name, vol_window_label),
+            daemon=True,
+        ).start()
 
-    def _fetch_wind_worker(self, code):
+    def _refresh_terms(self):
+        """强制用 Wind 刷新当前债的 cb_data."""
+        code = self.v_bond_code.get().strip()
+        if not code:
+            messagebox.showwarning("提示", "请先输入转债代码")
+            return
+        self._force_refresh_terms = True
+        self._fetch_wind()
+
+    def _fetch_wind_worker(self, code, auto=False, source_name=None, vol_window_label=None):
+        force = self._force_refresh_terms
+        self._force_refresh_terms = False
+        source_name = source_name or self.v_data_source.get()
+        vol_window_label = vol_window_label or VOL_WINDOW_DEFAULT
         try:
-            w = ensure_wind()
+            provider = self._get_provider(source_name)
+            market_source = self._provider_market_name(provider)
             val_date = date.today()
-            val_str = val_date.strftime("%Y%m%d")
 
-            fields = [
-                "sec_name", "underlyingcode", "ipo_date", "maturitydate",
-                "latestpar",
-                "clause_conversion2_swapshareprice",
-                "clause_calloption_redemptionprice",
-                "clause_calloption_triggerproportion",
-                "clause_putoption_redeem_triggerproportion",
-                "clause_putoption_putbackperiodobs",
-                "couponrate",
-                "close", "creditrating", "outstandingbalance",
-            ]
-            res = w.wss(code, ",".join(fields), f"tradeDate={val_str}")
-            if res.ErrorCode != 0:
-                raise RuntimeError(f"Wind 返回错误: {res.Data}")
-            data = {f.lower(): d[0] for f, d in zip(res.Fields, res.Data)}
+            had_cached = self.terms_cache.has(code)
+            if force and isinstance(provider, CachedBondDataProvider):
+                terms = provider.force_refresh(code, val_date)
+                terms_origin = "Wind强制刷新"
+            else:
+                terms = provider.get_bond_terms(code, val_date)
+                terms_origin = "cb_data" if had_cached and not force else "Wind刷新"
 
-            stock_code = data.get("underlyingcode")
+            stock_code = terms.underlying_code
             if not stock_code:
-                raise ValueError("未返回标的正股代码")
+                raise ValueError("cb_data 未包含标的正股代码 — 请先用 Wind 刷新基础信息")
 
-            res_s = w.wss(stock_code, "close", f"tradeDate={val_str};priceAdj=U")
-            if res_s.ErrorCode != 0:
-                raise RuntimeError(f"取正股现价失败: {res_s.Data}")
-            S0 = float(res_s.Data[0][0])
-
-            vol_win_days = VOL_WINDOW_MAP.get(self.v_vol_window.get(), 126)
             try:
-                sigma = hist_vol(w, stock_code, val_date, vol_win_days)
+                S0 = provider.get_stock_close(stock_code, val_date)
+            except Exception as exc:
+                logger.warning("正股现价获取失败: %s", exc)
+                S0 = float("nan")
+
+            vol_win_days = VOL_WINDOW_MAP.get(vol_window_label, 126)
+            try:
+                sigma = provider.hist_vol(stock_code, val_date, vol_win_days)
             except Exception:
                 sigma = None
 
-            # 顺带拉 Shibor 1Y 作为无风险利率推荐值
             shibor_rate = None
             try:
-                rr = w.edb("SHIBOR1Y.IR",
-                           (val_date - timedelta(days=10)).isoformat(),
-                           val_date.isoformat())
-                if rr.ErrorCode == 0 and rr.Data and rr.Data[0]:
-                    shibor_rate = _latest_finite_number(rr.Data[0])
+                shibor_rate = provider.get_risk_free_rate(val_date)
             except Exception:
                 shibor_rate = None
 
-            iss_dt = to_date(data["ipo_date"])
+            iss_dt = terms.issue_date
             conv_dt = iss_dt + timedelta(days=180) if iss_dt else None
 
-            cf = fetch_cashflow(w, code)
-            if cf and cf["coupon_rates"]:
-                coupons_tuple = cf["coupon_rates"]
+            cf = provider.get_cashflow(code)
+            if cf and cf.coupon_rates:
+                coupons_tuple = cf.coupon_rates
                 coupon_src = "cashflow"
             else:
-                coupons_tuple = parse_coupon(data.get("couponrate"))
-                coupon_src = "couponrate"
+                coupons_tuple = terms.coupon_rates
+                coupon_src = "terms"
 
-            mat_dt = (cf["maturity_date"] if cf and cf["maturity_date"] else to_date(data["maturitydate"]))
+            mat_dt = (cf.maturity_date if cf and cf.maturity_date else terms.maturity_date)
 
-            if cf and cf["redemption_price"] is not None:
-                redemp = float(cf["redemption_price"])
-            elif data.get("clause_calloption_redemptionprice") is not None:
-                redemp = float(data["clause_calloption_redemptionprice"])
+            if cf and cf.redemption_price is not None:
+                redemp = float(cf.redemption_price)
+            elif terms.redemption_price is not None:
+                redemp = float(terms.redemption_price)
             else:
                 redemp = 107.0
 
-            put_obs_months = data.get("clause_putoption_putbackperiodobs")
             put_years = None
-            if put_obs_months is not None and iss_dt and mat_dt:
+            if terms.put_obs_months is not None and iss_dt and mat_dt:
                 total_months = (mat_dt - iss_dt).days / 30.4375
-                put_years = int(round(max(0, (total_months - float(put_obs_months)) / 12)))
+                put_years = int(round(max(0, (total_months - float(terms.put_obs_months)) / 12)))
 
             self.after(0, self._fill_wind_data, {
-                "S0": S0,
-                "K": float(data["clause_conversion2_swapshareprice"]),
-                "face": float(data.get("latestpar") or 100.0),
+                "bond_code": code,
+                "S0": float(S0) if S0 == S0 else None,  # NaN check
+                "K": terms.conversion_price,
+                "face": terms.face_value or 100.0,
                 "mat_date": mat_dt,
                 "iss_date": iss_dt,
                 "conv_date": conv_dt,
                 "redemp": float(redemp),
-                "call_ratio": data.get("clause_calloption_triggerproportion"),
-                "put_ratio": data.get("clause_putoption_redeem_triggerproportion"),
+                "call_ratio": terms.call_trigger_pct,
+                "put_ratio": terms.put_trigger_pct,
                 "put_years": put_years,
                 "coupons_tuple": coupons_tuple,
                 "coupon_src": coupon_src,
                 "sigma": sigma,
                 "shibor": shibor_rate,
                 "stock_code": stock_code,
-                "sec_name": data.get("sec_name"),
-                "close": data.get("close"),
-                "credit": data.get("creditrating"),
-                "outstanding": data.get("outstandingbalance"),
+                "sec_name": terms.sec_name,
+                "close": terms.close,
+                "credit": terms.credit_rating,
+                "outstanding": terms.outstanding_balance,
+                "provider_name": provider.name,
+                "market_source": market_source,
+                "terms_source": self._cache_meta_source(code),
+                "terms_origin": terms_origin,
+                "cache_age": self.terms_cache.fetched_at(code),
+                "vol_window": vol_window_label,
             })
         except Exception as exc:
-            err_msg = f"Wind 获取失败: {exc}"
-            self.after(0, self._on_error, err_msg)
+            err_msg = f"{source_name} 获取失败: {exc}"
+            self.after(0, self._on_error, err_msg, not auto)
         finally:
+            if self._fetch_in_flight_code == code and self._fetch_in_flight_source == source_name:
+                self._fetch_in_flight_code = None
+                self._fetch_in_flight_source = None
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_wind.configure(state="normal"))
 
     def _fill_wind_data(self, d):
-        self.v_S0.set(f"{d['S0']:.4f}")
-        self.v_K.set(f"{d['K']:.2f}")
-        self.v_face.set(f"{d['face']:.0f}")
-        self.v_cur_date.set(date.today().isoformat())
-        self.v_mat_date.set(d["mat_date"].isoformat() if d["mat_date"] else "")
-        self.v_iss_date.set(d["iss_date"].isoformat() if d["iss_date"] else "")
-        self.v_conv_date.set(d["conv_date"].isoformat() if d["conv_date"] else "")
-        self.v_redemp.set(f"{d['redemp']:.1f}")
+        data_code = d.get("bond_code")
+        if data_code and self._normalize_bond_code(self.v_bond_code.get()) != data_code:
+            return
+
+        origin_tag = d.get("terms_origin", "?")
+        terms_label = self._terms_source_label(origin_tag)
+        market_label = d.get("market_source") or self.v_data_source.get()
+        coupon_src = d.get("coupon_src", "terms")
+        coupon_label = "现金流" if coupon_src == "cashflow" else terms_label
+
+        if d.get("S0") is not None:
+            self._set_field(self.v_S0, f"{d['S0']:.4f}", self.v_src_S0, "行情")
+        elif "S0" in d:
+            self._set_field(self.v_S0, "", self.v_src_S0, "待行情")
+        if d.get("K") is not None:
+            self._set_field(self.v_K, f"{d['K']:.2f}", self.v_src_K, terms_label)
+        if d.get("face") is not None:
+            self._set_field(self.v_face, f"{d['face']:.0f}", self.v_src_face, terms_label)
+        self._set_field(self.v_cur_date, date.today().isoformat(), self.v_src_cur_date, "系统")
+        self._set_field(
+            self.v_mat_date,
+            d["mat_date"].isoformat() if d.get("mat_date") else "",
+            self.v_src_mat_date,
+            terms_label,
+        )
+        self._set_field(
+            self.v_iss_date,
+            d["iss_date"].isoformat() if d.get("iss_date") else "",
+            self.v_src_iss_date,
+            terms_label,
+        )
+        self._set_field(
+            self.v_conv_date,
+            d["conv_date"].isoformat() if d.get("conv_date") else "",
+            self.v_src_conv_date,
+            terms_label,
+        )
+        if d.get("redemp") is not None:
+            self._set_field(self.v_redemp, f"{d['redemp']:.1f}", self.v_src_redemp, coupon_label)
         if d.get("call_ratio") is not None:
-            self.v_call_ratio.set(f"{float(d['call_ratio']):.0f}")
+            self._set_field(self.v_call_ratio, f"{float(d['call_ratio']):.0f}", self.v_src_call_ratio, terms_label)
         if d.get("put_ratio") is not None:
-            self.v_put_ratio.set(f"{float(d['put_ratio']):.0f}")
+            self._set_field(self.v_put_ratio, f"{float(d['put_ratio']):.0f}", self.v_src_put_ratio, terms_label)
         if d.get("put_years") is not None:
-            self.v_put_years.set(f"{int(d['put_years'])}")
-        if d["sigma"] is not None:
-            self.v_sigma.set(f"{d['sigma'] * 100:.2f}")
+            self._set_field(self.v_put_years, f"{int(d['put_years'])}", self.v_src_put_years, terms_label)
+        if d.get("sigma") is not None:
+            self._set_field(self.v_sigma, f"{d['sigma'] * 100:.2f}", self.v_src_sigma, "历史")
+        elif "sigma" in d:
+            self._set_field(self.v_sigma, "", self.v_src_sigma, "待历史")
         if d.get("shibor") is not None:
-            self.v_r.set(f"{d['shibor']:.2f}")
-        
+            self._set_field(self.v_r, f"{d['shibor']:.2f}", self.v_src_r, "利率")
+
         parsed = d.get("coupons_tuple")
         if parsed:
-            self.v_coupons.set(",".join(f"{c*100:.2f}" for c in parsed))
+            self._set_field(
+                self.v_coupons,
+                ",".join(f"{c*100:.2f}" for c in parsed),
+                self.v_src_coupons,
+                coupon_label,
+            )
 
         self._last_stock_code = d.get("stock_code")
         self._last_credit = d.get("credit")
 
         if d.get("credit") and d["credit"] in CREDIT_SPREAD_TABLE:
-            self.v_spread.set(f"{CREDIT_SPREAD_TABLE[d['credit']]:.1f}")
+            self._set_field(
+                self.v_spread,
+                f"{CREDIT_SPREAD_TABLE[d['credit']]:.1f}",
+                self.v_src_spread,
+                "评级",
+            )
+        elif "credit" in d:
+            self._set_field(
+                self.v_spread,
+                f"{DEFAULT_CREDIT_SPREAD_PCT:.1f}",
+                self.v_src_spread,
+                "默认",
+            )
+
+        self._set_field(
+            self.v_p_down,
+            self._fmt_pct(d.get("p_down_pct", DEFAULT_P_DOWN_PCT)),
+            self.v_src_p_down,
+            "模型",
+        )
+        self._set_field(
+            self.v_dk,
+            self._fmt_pct(d.get("distress_k_pct", DEFAULT_DISTRESS_K_PCT)),
+            self.v_src_dk,
+            "模型",
+        )
 
         if d.get("close") is not None:
-            self.v_market_price.set(f"{float(d['close']):.2f}")
+            self._set_field(self.v_market_price, f"{float(d['close']):.2f}")
 
-        ref_parts = []
+        ref_parts = [f"[条款:{origin_tag} | 行情:{market_label}]"]
         if d.get("sec_name"):
             ref_parts.append(str(d["sec_name"]))
         if d.get("close") is not None:
@@ -952,12 +1373,26 @@ class CBPricerApp(ctk.CTk):
             ref_parts.append(f"评级 {d['credit']}")
         if d.get("outstanding") is not None:
             ref_parts.append(f"剩余规模 {float(d['outstanding']):.2f} 亿")
-        self.v_ref_info.set("  ·  ".join(ref_parts) if ref_parts else "—")
+        if d.get("cache_age") and origin_tag == "缓存":
+            ref_parts.append(f"缓存日期 {d['cache_age'].strftime('%Y-%m-%d')}")
+        source_parts = []
+        if d.get("S0") is not None:
+            source_parts.append(f"S={market_label}")
+        if d.get("sigma") is not None:
+            source_parts.append(f"σ={market_label}历史{d.get('vol_window') or self.v_vol_window.get()}")
+        if d.get("shibor") is not None:
+            source_parts.append(f"r={market_label}")
+        elif self.v_src_r.get() == "手工":
+            source_parts.append("r=手工")
+        source_parts.append(f"利差={self.v_src_spread.get()}")
+        source_parts.append("p/dk=模型")
+        ref_parts.append("来源 " + " / ".join(source_parts))
+        self.v_ref_info.set("  ·  ".join(ref_parts))
 
-        coupon_src = d.get("coupon_src", "couponrate")
-        src_tag = "付息计划" if coupon_src == "cashflow" else "票面字段"
+        src_tag = "付息计划" if coupon_src == "cashflow" else "条款字段"
+        s0_text = f"S₀={d['S0']:.3f}" if d.get("S0") is not None else "S₀=N/A"
         self.v_status.set(
-            f"已获取 {self.v_bond_code.get()} (正股 {d['stock_code']}, S₀={d['S0']:.3f}, 票息: {src_tag})"
+            f"已加载 {self.v_bond_code.get()} (正股 {d.get('stock_code', '?')}, {s0_text}, 票息: {src_tag})"
         )
 
     # ── 波动率窗口切换 ────────────────────────────────────
@@ -975,9 +1410,10 @@ class CBPricerApp(ctk.CTk):
 
     def _recompute_vol_worker(self, stock_code, days):
         try:
-            w = ensure_wind()
-            sigma = hist_vol(w, stock_code, date.today(), days)
-            self.after(0, lambda: self.v_sigma.set(f"{sigma * 100:.2f}"))
+            provider = self._get_provider()
+            sigma = provider.hist_vol(stock_code, date.today(), days)
+            self.after(0, lambda: self._set_field(
+                self.v_sigma, f"{sigma * 100:.2f}", self.v_src_sigma, "历史"))
             self.after(0, lambda: self.v_status.set(
                 f"已按 {self.v_vol_window.get()} 窗口重算 σ = {sigma*100:.2f}%"
             ))
@@ -990,24 +1426,21 @@ class CBPricerApp(ctk.CTk):
     # ── Shibor 1Y ────────────────────────────────────────
     def _fetch_shibor(self):
         self.btn_shibor.configure(state="disabled")
-        self._start_progress("拉取 Shibor 1Y")
+        self._start_progress("拉取无风险利率")
         threading.Thread(target=self._fetch_shibor_worker, daemon=True).start()
 
     def _fetch_shibor_worker(self):
         try:
-            w = ensure_wind()
-            r = w.edb("SHIBOR1Y.IR",
-                      (date.today() - timedelta(days=10)).isoformat(),
-                      date.today().isoformat())
-            if r.ErrorCode != 0 or not r.Data or not r.Data[0]:
-                raise RuntimeError(f"Wind edb 返回空: {r.Data}")
-            latest = _latest_finite_number(r.Data[0])
+            provider = self._get_provider()
+            latest = provider.get_risk_free_rate(date.today())
             if latest is None:
-                raise RuntimeError("近 10 天 Shibor 1Y 无有效数值")
-            self.after(0, lambda: self.v_r.set(f"{latest:.2f}"))
-            self.after(0, lambda: self.v_status.set(f"Shibor 1Y = {latest:.4f}%"))
+                raise RuntimeError(f"{provider.name} 未返回有效无风险利率")
+            self.after(0, lambda: self._set_field(
+                self.v_r, f"{latest:.2f}", self.v_src_r, "利率"))
+            self.after(0, lambda: self.v_status.set(
+                f"无风险利率 ({provider.name}) = {latest:.4f}%"))
         except Exception as exc:
-            self.after(0, self._on_error, f"Shibor 拉取失败: {exc}")
+            self.after(0, self._on_error, f"无风险利率拉取失败: {exc}")
         finally:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_shibor.configure(state="normal"))
@@ -1015,7 +1448,7 @@ class CBPricerApp(ctk.CTk):
     # ── 按评级填入信用利差 ────────────────────────────────
     def _fill_spread_from_rating(self):
         if not self._last_credit:
-            messagebox.showinfo("提示", "请先从 Wind 获取参数, 取得评级后再按此按钮")
+            messagebox.showinfo("提示", "请先点击 📥 同步获取条款, 取得评级后再按此按钮")
             return
         if self._last_credit not in CREDIT_SPREAD_TABLE:
             messagebox.showwarning(
@@ -1025,7 +1458,7 @@ class CBPricerApp(ctk.CTk):
             )
             return
         val = CREDIT_SPREAD_TABLE[self._last_credit]
-        self.v_spread.set(f"{val:.1f}")
+        self._set_field(self.v_spread, f"{val:.1f}", self.v_src_spread, "评级")
         self.v_status.set(f"按评级 {self._last_credit} 填入信用利差 {val:.1f}%")
 
     # ── 定价计算 ──────────────────────────────────────────
@@ -1139,13 +1572,14 @@ class CBPricerApp(ctk.CTk):
             self.lbl_result.configure(text_color=TEXT)
 
 
-    def _on_error(self, msg):
+    def _on_error(self, msg, show_dialog=True):
         self._stop_progress()
         self.v_status.set(f"❌ {msg}")
-        self.v_ref_info.set(f"❌ 获取失败")
-        self.v_result.set("—")
-        self.lbl_result.configure(text_color=RED)
-        messagebox.showerror("错误", str(msg))
+        if show_dialog:
+            self.v_ref_info.set(f"❌ 获取失败")
+            self.v_result.set("—")
+            self.lbl_result.configure(text_color=RED)
+            messagebox.showerror("错误", str(msg))
 
     # ── 历史回测 ────────────────────────────────────────────
     def _run_backtest(self):
@@ -1192,6 +1626,8 @@ class CBPricerApp(ctk.CTk):
 
     def _backtest_worker(self, code, start, end, freq, params):
         try:
+            provider = self._get_provider()
+
             def progress(i, total):
                 self.after(0, lambda: self.v_bt_status.set(
                     f"进度 {i}/{total} ..."
@@ -1199,7 +1635,7 @@ class CBPricerApp(ctk.CTk):
 
             result = backtest_theoretical_price(
                 code, start_date=start, end_date=end, freq=freq,
-                progress_cb=progress, **params,
+                provider=provider, progress_cb=progress, **params,
             )
             self._last_bt_result = result
             self.after(0, self._render_backtest_chart, result)
@@ -1509,6 +1945,7 @@ class CBPricerApp(ctk.CTk):
         "v_call_ratio", "v_put_ratio", "v_put_years", "v_call_notice", "v_M", "v_N",
         "v_vol_window", "v_market_price",
         "v_bt_start", "v_bt_end", "v_bt_freq",
+        "v_data_source",
     )
 
     def _save_preset(self):
@@ -1538,9 +1975,24 @@ class CBPricerApp(ctk.CTk):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for name in self._PRESET_VARS:
-                if name in data:
-                    getattr(self, name).set(data[name])
+            self._programmatic_update = True
+            self._suppress_bond_autoload = True
+            try:
+                for name in self._PRESET_VARS:
+                    if name in data:
+                        getattr(self, name).set(data[name])
+            finally:
+                self._suppress_bond_autoload = False
+                self._programmatic_update = False
+            for src in (
+                self.v_src_S0, self.v_src_K, self.v_src_face, self.v_src_redemp,
+                self.v_src_cur_date, self.v_src_mat_date, self.v_src_iss_date,
+                self.v_src_conv_date, self.v_src_coupons, self.v_src_sigma,
+                self.v_src_r, self.v_src_spread, self.v_src_p_down, self.v_src_dk,
+                self.v_src_call_ratio, self.v_src_put_ratio, self.v_src_put_years,
+                self.v_src_call_notice,
+            ):
+                src.set("预设")
             self.v_status.set(f"已加载预设 {path}")
         except Exception as exc:
             messagebox.showerror("加载失败", str(exc))

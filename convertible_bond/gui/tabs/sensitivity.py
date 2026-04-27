@@ -1,7 +1,7 @@
 """🔥 敏感性 Tab — σ-S 热力图."""
 import customtkinter as ctk
 
-from gui.theme import *
+from ..theme import *
 
 
 def build(app, tab):

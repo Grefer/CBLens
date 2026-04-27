@@ -1,7 +1,7 @@
 [project]
 name = "convertible-bond-pricer"
 version = "1.0.0"
-description = "可转债理论定价引擎 — Crank-Nicolson PDE 求解 + Wind 数据集成 + GUI"
+description = "可转债理论定价引擎 — Crank-Nicolson PDE 求解 + akshare/Wind 数据集成 + GUI"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
@@ -10,13 +10,14 @@ dependencies = [
     "numpy>=2.0",
     "scipy>=1.14",
     "pillow>=10.0",
+    "akshare>=1.13",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-cb-gui = "gui.app:main"
+cb-gui = "convertible_bond.gui.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

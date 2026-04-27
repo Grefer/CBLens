@@ -1,0 +1,99 @@
+"""Convertible Bond pricer package."""
+
+from .pricer import (
+    UniversalCBPricer,
+    DEFAULT_COUPON_RATES,
+    DEFAULT_FACE_VALUE,
+    DEFAULT_REDEMPTION_PRICE,
+)
+from .pricing_api import (
+    price_from_provider,
+    price_from_wind,
+    price_from_auto,
+    batch_price_from_provider,
+    batch_price_from_provider_threaded,
+)
+from .batch_pricing import (
+    BATCH_RESULT_COLUMNS,
+    build_batch_provider,
+    list_upcoming_tradable_from_cache,
+    list_batch_codes_from_cache,
+    load_batch_results_cache,
+    merge_upcoming_pricing_results,
+    parse_bond_codes,
+    project_batch_cache_path,
+    save_batch_results_cache,
+    summarize_batch_results,
+    write_batch_results_csv,
+)
+from .backtest import backtest_theoretical_price
+from .data_providers import (
+    DataProvider,
+    BondTerms,
+    CashflowSchedule,
+    WindDataProvider,
+    AkshareDataProvider,
+    CSVDataProvider,
+    auto_data_provider,
+    detect_available_providers,
+    to_date,
+    parse_coupon_string,
+)
+from .cache import (
+    TermsCache, TermsBundle, CachedBondDataProvider, CachingDataProvider,
+    project_bundle_path,
+)
+from .cb_data_sync import (
+    filter_listed_codes,
+    is_terminal_terms,
+    refresh_one,
+    sync_cb_data,
+    sync_cb_terms,
+)
+# 旧名字保留作向后兼容; 新代码请用 sync_cb_terms.
+bulk_sync_terms = sync_cb_terms
+
+__all__ = [
+    "UniversalCBPricer",
+    "DEFAULT_COUPON_RATES",
+    "DEFAULT_FACE_VALUE",
+    "DEFAULT_REDEMPTION_PRICE",
+    "price_from_provider",
+    "price_from_wind",
+    "price_from_auto",
+    "batch_price_from_provider",
+    "batch_price_from_provider_threaded",
+    "BATCH_RESULT_COLUMNS",
+    "build_batch_provider",
+    "list_upcoming_tradable_from_cache",
+    "list_batch_codes_from_cache",
+    "load_batch_results_cache",
+    "merge_upcoming_pricing_results",
+    "parse_bond_codes",
+    "project_batch_cache_path",
+    "save_batch_results_cache",
+    "summarize_batch_results",
+    "write_batch_results_csv",
+    "backtest_theoretical_price",
+    "DataProvider",
+    "BondTerms",
+    "CashflowSchedule",
+    "WindDataProvider",
+    "AkshareDataProvider",
+    "CSVDataProvider",
+    "auto_data_provider",
+    "detect_available_providers",
+    "TermsCache",
+    "TermsBundle",
+    "CachedBondDataProvider",
+    "CachingDataProvider",
+    "bulk_sync_terms",
+    "filter_listed_codes",
+    "is_terminal_terms",
+    "refresh_one",
+    "sync_cb_data",
+    "sync_cb_terms",
+    "project_bundle_path",
+    "to_date",
+    "parse_coupon_string",
+]

@@ -1,0 +1,60 @@
+# 项目数据目录
+
+## `cb_data.json`
+
+全市场存续可转债的**静态基础信息快照** (semi-static fields)，由 `TermsBundle` 维护。
+runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wind 接口。
+
+### 文件结构
+
+```json
+{
+  "_bundle_meta": {
+    "updated_at": "2026-04-27T15:30:00",
+    "source": "Wind",
+    "n_bonds": 532
+  },
+  "128009.SZ": {
+    "sec_name": "...",
+    "underlying_code": "002...",
+    "issue_date": "2020-07-30",
+    "listing_date": "2020-08-17",
+    "tradable_date": "2020-08-17",
+    "is_tradable": true,
+    "trading_status": "tradable",
+    "maturity_date": "2026-07-30",
+    "conversion_price": 52.77,
+    "redemption_price": 107.0,
+    "coupon_rates": [0.003, 0.004, ...],
+    ...
+    "_meta": {"fetched_at": "...", "source": "wind"}
+  },
+  ...
+}
+```
+
+### 何时刷新
+
+| 场景 | 命令 |
+| --- | --- |
+| 月初定期 (新债/退市/下修) | `python -m convertible_bond.cli.sync_tradable` |
+| 单只债的事件后 | GUI 顶部 🔄 按钮 |
+| 仅查看当前状态 | `python -m convertible_bond.cli.sync_tradable --info` |
+
+### 数据来源对比
+
+- **转债基础信息**: 固定由 WindPy 获取并写入 `cb_data.json`，覆盖强赎/回售触发比例、回售观察期、完整付息计划等 akshare 缺失字段。
+- **动态行情/利率**: GUI 和批量定价中可选择 Wind 或 akshare。akshare 无法返回无风险利率时，程序放弃接口获取并保留界面/参数中的手工值。
+
+### 交易状态字段
+
+- `listing_date`: 数据源返回的上市/挂牌日期；没有显式字段时可能与 `issue_date` 相同
+- `tradable_date`: 进入可交易或关注窗口的日期；定向/非标准代码段若无明确字段，默认用上市/发行后 6 个月估算
+- `is_tradable`: 同步日视角是否已进入可交易日期
+- `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`
+
+### 注意
+
+- 此文件是 git 跟踪的，提交前可 `git diff` 检查变化是否合理 (例如下修后只该影响一只债)
+- 下修事件之后，**建议手动 🔄 刷新对应债** 而不是等月度全量同步，避免短期定价偏差
+- 读取 `cb_data` 命中时不会请求 Wind；正股价格、历史波动率、Shibor 等动态字段仍会按选择的行情源请求

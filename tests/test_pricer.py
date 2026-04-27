@@ -16,14 +16,13 @@ from datetime import date, timedelta
 # 确保项目根目录在 sys.path 中
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from CB import (
+from convertible_bond.pricer import (
     UniversalCBPricer,
-    to_date,
-    parse_coupon,
     DEFAULT_COUPON_RATES,
     DEFAULT_FACE_VALUE,
     DEFAULT_REDEMPTION_PRICE,
 )
+from convertible_bond.data_providers import to_date, parse_coupon_string as parse_coupon
 
 
 # ── 公共 fixture ──────────────────────────────────────────
@@ -447,148 +446,121 @@ class TestCallNotice:
         assert not np.isnan(result["theta"]), "theta 不应为 NaN"
 
 
-# ── 12. 回测 (backtest with fake Wind) ────────────────────────
-class FakeWindResponse:
-    """模拟 WindPy 的返回对象."""
-    def __init__(self, error_code=0, fields=None, data=None, times=None):
-        self.ErrorCode = error_code
-        self.Fields = fields or []
-        self.Data = data or [] if data is not None else []
-        self.Times = times or []
+# ── 12. 回测 (backtest with FakeProvider) ────────────────────
+from convertible_bond.data_providers import DataProvider, BondTerms, CashflowSchedule
 
 
-class FakeWind:
-    """最小化 WindPy 桩, 仅覆盖 backtest_theoretical_price 的调用面."""
-    def __init__(self, bond_code, stock_code, terms, bond_close_series, stock_close_series):
+class FakeProvider(DataProvider):
+    """直接实现 DataProvider 接口的最小桩, 给回测/批量定价测试用."""
+    name = "fake"
+
+    def __init__(self, bond_code, stock_code, terms: BondTerms,
+                 bond_close, stock_close):
         self.bond_code = bond_code
         self.stock_code = stock_code
-        self.terms = terms  # dict[lowercase_field] -> value
-        self.bond_close = bond_close_series  # list[(date, float)]
-        self.stock_close = stock_close_series
+        self.terms = terms
+        self.bond_close = bond_close   # [(date, float)]
+        self.stock_close = stock_close
 
-    def wss(self, code, fields_str, opts=""):
-        fields = [f.strip() for f in fields_str.split(",")]
-        if code == self.bond_code:
-            data = [[self.terms.get(f.lower())] for f in fields]
-            return FakeWindResponse(fields=fields, data=data)
-        if code == self.stock_code:
-            # 只会被问 "close" 用于现价
-            return FakeWindResponse(fields=fields, data=[[self.stock_close[-1][1]]])
-        return FakeWindResponse(error_code=1)
+    def get_bond_terms(self, bond_code, valuation_date):
+        return self.terms
 
-    def wset(self, table, opts):
-        # 让 cashflow 返回错, 强制 fallback 到 couponrate 字段
-        return FakeWindResponse(error_code=1)
+    def get_stock_close(self, stock_code, on_date):
+        for d, v in reversed(self.stock_close):
+            if d <= on_date and v is not None:
+                return float(v)
+        raise RuntimeError(f"FakeProvider 无 {stock_code} 现价")
 
-    def wsd(self, code, field, start, end, opts=""):
-        if code == self.bond_code:
-            dates = [d for d, _ in self.bond_close]
-            data = [[v for _, v in self.bond_close]]
-            return FakeWindResponse(fields=[field], data=data, times=dates)
-        if code == self.stock_code:
-            dates = [d for d, _ in self.stock_close]
-            data = [[v for _, v in self.stock_close]]
-            return FakeWindResponse(fields=[field], data=data, times=dates)
-        return FakeWindResponse(error_code=1)
+    def get_stock_history(self, stock_code, start, end):
+        return [(d, v) for d, v in self.stock_close if start <= d <= end]
+
+    def get_bond_history(self, bond_code, start, end):
+        return [(d, v) for d, v in self.bond_close if start <= d <= end]
 
 
 @pytest.fixture
-def fake_wind():
-    """构造一个跨 8 个月的伪 Wind 数据集."""
-    issue_date = date(2020, 7, 30)
-    maturity_date = date(2026, 7, 30)
+def fake_provider():
+    """构造跨 8 个月的伪数据 + FakeProvider."""
     start = date(2025, 1, 1)
     end = date(2025, 8, 31)
 
-    # 构造日级历史 (243 天) - 简单线性走势 + 噪声
-    bond_close = []
-    stock_close = []
+    bond_close, stock_close = [], []
     n = (end - start).days + 1
     for i in range(n):
         d = start + timedelta(days=i)
-        # 跳过周末以模拟交易日
         if d.weekday() >= 5:
             continue
         bond_close.append((d, 110.0 + 0.01 * i))
         stock_close.append((d, 50.0 + 0.02 * i))
 
-    terms = {
-        "underlyingcode": "000001.SZ",
-        "ipo_date": "2020-07-30",
-        "maturitydate": "2026-07-30",
-        "latestpar": 100.0,
-        "clause_conversion2_swapshareprice": 52.77,
-        "clause_calloption_redemptionprice": 107.0,
-        "clause_calloption_triggerproportion": 130.0,
-        "clause_putoption_redeem_triggerproportion": 70.0,
-        "clause_putoption_putbackperiodobs": 48.0,
-        "couponrate": "0.3,0.4,0.8,1.5,1.8,2.0",
-    }
-    return FakeWind("123001.SZ", "000001.SZ", terms, bond_close, stock_close), start, end
+    terms = BondTerms(
+        sec_name="测试债",
+        underlying_code="000001.SZ",
+        issue_date=date(2020, 7, 30),
+        maturity_date=date(2026, 7, 30),
+        face_value=100.0,
+        conversion_price=52.77,
+        redemption_price=107.0,
+        call_trigger_pct=130.0,
+        put_trigger_pct=70.0,
+        put_obs_months=48.0,
+        coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
+        close=110.0,
+    )
+    provider = FakeProvider("123001.SZ", "000001.SZ", terms, bond_close, stock_close)
+    return provider, start, end
 
 
 class TestBacktest:
 
-    def test_backtest_returns_expected_keys(self, fake_wind, monkeypatch):
+    def test_backtest_returns_expected_keys(self, fake_provider):
         """回测应返回完整字段, 包括新增的 bond_floors / parities / ivs."""
-        from CB import backtest_theoretical_price
-        import backtest as bt_module
+        from convertible_bond.backtest import backtest_theoretical_price
 
-        wind, start, end = fake_wind
-        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
-
+        provider, start, end = fake_provider
         result = backtest_theoretical_price(
             "123001.SZ", start_date=start, end_date=end,
-            freq="M",  # 月频, 减少计算量
-            M=80, N=200,
+            freq="M", M=80, N=200, provider=provider,
         )
         for key in ["dates", "theo_prices", "market_prices", "stock_prices",
                     "sigmas", "bond_floors", "parities", "ivs"]:
             assert key in result, f"缺少字段: {key}"
         assert len(result["dates"]) >= 3, "应有 ≥3 个月度采样点"
-        assert all(np.isnan(iv) for iv in result["ivs"]), "默认 solve_iv=False 时 IV 应全 NaN"
+        assert all(np.isnan(iv) for iv in result["ivs"]), \
+            "默认 solve_iv=False 时 IV 应全 NaN"
 
-    def test_backtest_theoretical_in_range(self, fake_wind, monkeypatch):
+    def test_backtest_theoretical_in_range(self, fake_provider):
         """理论价应落在合理范围 (面值附近)."""
-        from CB import backtest_theoretical_price
-        import backtest as bt_module
+        from convertible_bond.backtest import backtest_theoretical_price
 
-        wind, start, end = fake_wind
-        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
-
+        provider, start, end = fake_provider
         result = backtest_theoretical_price(
-            "123001.SZ", start_date=start, end_date=end, freq="M",
-            M=80, N=200,
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", M=80, N=200, provider=provider,
         )
         for theo in result["theo_prices"]:
             assert 60 < theo < 200, f"理论价 {theo:.2f} 越界"
 
-    def test_backtest_solve_iv_produces_finite_values(self, fake_wind, monkeypatch):
+    def test_backtest_solve_iv_produces_finite_values(self, fake_provider):
         """solve_iv=True 时, 至少部分 IV 应能解出有限值."""
-        from CB import backtest_theoretical_price
-        import backtest as bt_module
+        from convertible_bond.backtest import backtest_theoretical_price
 
-        wind, start, end = fake_wind
-        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
-
+        provider, start, end = fake_provider
         result = backtest_theoretical_price(
-            "123001.SZ", start_date=start, end_date=end, freq="M",
-            M=80, N=200, solve_iv=True,
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", M=80, N=200, solve_iv=True, provider=provider,
         )
         finite_ivs = [iv for iv in result["ivs"] if np.isfinite(iv)]
         assert len(finite_ivs) >= 1, "solve_iv=True 至少应解出一个有限 IV"
 
-    def test_backtest_value_decomposition_relationship(self, fake_wind, monkeypatch):
+    def test_backtest_value_decomposition_relationship(self, fake_provider):
         """每个采样点应满足: parity = S0 * face/K, bond_floor > 0."""
-        from CB import backtest_theoretical_price
-        import backtest as bt_module
+        from convertible_bond.backtest import backtest_theoretical_price
 
-        wind, start, end = fake_wind
-        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
-
+        provider, start, end = fake_provider
         result = backtest_theoretical_price(
-            "123001.SZ", start_date=start, end_date=end, freq="M",
-            M=80, N=200,
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", M=80, N=200, provider=provider,
         )
         K = 52.77
         face = 100.0
@@ -597,3 +569,365 @@ class TestBacktest:
             assert abs(par - s0 * face / K) < 1e-6, \
                 f"parity 一致性破坏: {par:.4f} vs {s0 * face / K:.4f}"
             assert bf > 0, f"bond_floor 应为正: {bf:.4f}"
+
+
+# ── 13. price_from_provider (provider 通用入口) ────────────
+class TestPriceFromProvider:
+
+    def test_price_from_provider_basic(self, fake_provider):
+        """通过 FakeProvider 调 price_from_provider 应返回完整结果字典."""
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, M=80, N=200,
+        )
+        assert result["bond_code"] == "123001.SZ"
+        assert result["stock_code"] == "000001.SZ"
+        assert result["data_source"] == "fake"
+        assert 60 < result["theoretical_price"] < 200
+        assert result["sigma"] > 0
+
+
+# ── 14. 条款本地缓存 + CachingDataProvider ──────────────────
+class TestTermsCache:
+
+    def test_set_get_roundtrip(self, tmp_path):
+        from convertible_bond.cache import TermsCache
+        cache = TermsCache(tmp_path)
+        terms = BondTerms(
+            sec_name="测试债",
+            underlying_code="000001.SZ",
+            issue_date=date(2020, 7, 30),
+            listing_date=date(2020, 8, 17),
+            tradable_date=date(2020, 8, 17),
+            is_tradable=True,
+            trading_status="tradable",
+            maturity_date=date(2026, 7, 30),
+            face_value=100.0,
+            conversion_price=52.77,
+            coupon_rates=(0.003, 0.005, 0.01),
+        )
+        cache.set("123001.SZ", terms, source="wind")
+        loaded = cache.get("123001.SZ")
+        assert loaded is not None
+        assert loaded.sec_name == "测试债"
+        assert loaded.conversion_price == 52.77
+        assert loaded.listing_date == date(2020, 8, 17)
+        assert loaded.tradable_date == date(2020, 8, 17)
+        assert loaded.is_tradable is True
+        assert loaded.trading_status == "tradable"
+        assert loaded.maturity_date == date(2026, 7, 30)
+        assert loaded.coupon_rates == (0.003, 0.005, 0.01)
+
+    def test_missing_returns_none(self, tmp_path):
+        from convertible_bond.cache import TermsCache
+        cache = TermsCache(tmp_path)
+        assert cache.get("999999.SZ") is None
+        assert not cache.has("999999.SZ")
+
+    def test_list_bonds(self, tmp_path):
+        from convertible_bond.cache import TermsCache
+        cache = TermsCache(tmp_path)
+        for code in ["123001.SZ", "113001.SH", "127001.SZ"]:
+            cache.set(code, BondTerms(conversion_price=10.0), source="wind")
+        assert sorted(cache.list_bonds()) == ["113001.SH", "123001.SZ", "127001.SZ"]
+
+    def test_fetched_at_and_stale(self, tmp_path):
+        from convertible_bond.cache import TermsCache
+        cache = TermsCache(tmp_path)
+        cache.set("X.SZ", BondTerms(conversion_price=1.0))
+        ts = cache.fetched_at("X.SZ")
+        assert ts is not None
+        # 刚写的不应过期
+        assert not cache.is_stale("X.SZ", max_age_days=30)
+        # 不存在的视为过期
+        assert cache.is_stale("Y.SZ", max_age_days=30)
+
+    def test_delete(self, tmp_path):
+        from convertible_bond.cache import TermsCache
+        cache = TermsCache(tmp_path)
+        cache.set("X.SZ", BondTerms(conversion_price=1.0))
+        assert cache.has("X.SZ")
+        cache.delete("X.SZ")
+        assert not cache.has("X.SZ")
+
+
+class TestCachingDataProvider:
+
+    def test_first_call_fetches_and_persists(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachingDataProvider
+        provider, _, end = fake_provider
+        cache = TermsCache(tmp_path)
+        wrapped = CachingDataProvider(provider, cache, max_age_days=30)
+        assert not cache.has("123001.SZ")
+        terms = wrapped.get_bond_terms("123001.SZ", end)
+        assert terms.conversion_price == 52.77
+        assert cache.has("123001.SZ"), "首次调用应写回缓存"
+
+    def test_second_call_uses_cache(self, fake_provider, tmp_path):
+        """缓存命中后, 内层 provider 不应被调用."""
+        from convertible_bond.cache import TermsCache, CachingDataProvider
+        provider, _, end = fake_provider
+        cache = TermsCache(tmp_path)
+        wrapped = CachingDataProvider(provider, cache, max_age_days=30)
+
+        wrapped.get_bond_terms("123001.SZ", end)  # 写入缓存
+
+        # 把 inner.get_bond_terms 改成永远抛错, 验证下次仍能拿到 terms
+        def boom(*a, **kw):
+            raise RuntimeError("不应该走到这里")
+        provider.get_bond_terms = boom  # type: ignore[method-assign]
+
+        terms = wrapped.get_bond_terms("123001.SZ", end)
+        assert terms.conversion_price == 52.77
+
+    def test_force_refresh(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachingDataProvider
+        provider, _, end = fake_provider
+        cache = TermsCache(tmp_path)
+        wrapped = CachingDataProvider(provider, cache)
+
+        # 先用 inner 写一个旧版本
+        wrapped.get_bond_terms("123001.SZ", end)
+
+        # 改 inner 的返回值, 然后强刷
+        provider.terms = BondTerms(
+            sec_name="新名字",
+            underlying_code="000001.SZ",
+            conversion_price=100.0,  # 新 K
+        )
+        fresh = wrapped.force_refresh("123001.SZ", end)
+        assert fresh.conversion_price == 100.0
+        assert cache.get("123001.SZ").conversion_price == 100.0
+
+    def test_inner_failure_falls_back_to_cache(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachingDataProvider
+        provider, _, end = fake_provider
+        cache = TermsCache(tmp_path)
+        wrapped = CachingDataProvider(provider, cache, max_age_days=0)
+        # max_age_days=0 → 永远视为过期, 强制走 inner
+        wrapped.get_bond_terms("123001.SZ", end)  # 先写入缓存
+
+        # 让 inner 抛错
+        def boom(*a, **kw):
+            raise RuntimeError("network down")
+        provider.get_bond_terms = boom  # type: ignore[method-assign]
+
+        # 即便缓存过期, inner 失败时也应回退到缓存
+        terms = wrapped.get_bond_terms("123001.SZ", end)
+        assert terms.conversion_price == 52.77
+
+    def test_dynamic_methods_passthrough(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachingDataProvider
+        provider, start, end = fake_provider
+        cache = TermsCache(tmp_path)
+        wrapped = CachingDataProvider(provider, cache)
+
+        # 价格/历史接口应直接透传
+        s0 = wrapped.get_stock_close("000001.SZ", end)
+        assert s0 > 0
+        hist = wrapped.get_stock_history("000001.SZ", start, end)
+        assert len(hist) > 50
+
+
+class TestCachedBondDataProvider:
+
+    def test_terms_read_from_cb_data_and_market_passthrough(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachedBondDataProvider
+
+        market, start, end = fake_provider
+        cache = TermsCache(tmp_path)
+        cache.set("123001.SZ", market.terms, source="Wind")
+
+        class StaticBoom(FakeProvider):
+            def get_bond_terms(self, bond_code, valuation_date):
+                raise RuntimeError("不应该刷新 Wind")
+
+        static = StaticBoom("123001.SZ", "000001.SZ", market.terms, [], [])
+        wrapped = CachedBondDataProvider(
+            market, cache, static_source=static, auto_refresh=False)
+
+        terms = wrapped.get_bond_terms("123001.SZ", end)
+        assert terms.conversion_price == 52.77
+        assert wrapped.get_stock_close("000001.SZ", end) > 0
+        assert len(wrapped.get_stock_history("000001.SZ", start, end)) > 50
+
+    def test_force_refresh_uses_static_wind_and_merges_cashflow(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachedBondDataProvider
+
+        market, _, end = fake_provider
+        cache = TermsCache(tmp_path)
+
+        class StaticWind(FakeProvider):
+            name = "Wind"
+
+            def get_cashflow(self, bond_code):
+                return CashflowSchedule(
+                    coupon_rates=(0.001, 0.002, 0.003),
+                    redemption_price=108.0,
+                    maturity_date=date(2026, 7, 30),
+                )
+
+        static_terms = BondTerms(
+            sec_name="Wind债",
+            underlying_code="000001.SZ",
+            issue_date=date(2020, 7, 30),
+            maturity_date=date(2026, 7, 30),
+            face_value=100.0,
+            conversion_price=66.0,
+            coupon_rates=(0.01,),
+        )
+        static = StaticWind("123001.SZ", "000001.SZ", static_terms, [], [])
+        wrapped = CachedBondDataProvider(market, cache, static_source=static)
+
+        fresh = wrapped.force_refresh("123001.SZ", end)
+        assert fresh.conversion_price == 66.0
+        assert fresh.coupon_rates == (0.001, 0.002, 0.003)
+        assert fresh.redemption_price == 108.0
+        assert cache.get("123001.SZ").redemption_price == 108.0
+
+    def test_risk_free_rate_is_requested_once_per_date(self, fake_provider, tmp_path):
+        from convertible_bond.cache import TermsCache, CachedBondDataProvider
+
+        market, _, end = fake_provider
+        market.risk_calls = 0
+
+        def risk_free_once(on_date):
+            market.risk_calls += 1
+            return 2.25
+
+        market.get_risk_free_rate = risk_free_once  # type: ignore[method-assign]
+        wrapped = CachedBondDataProvider(market, TermsCache(tmp_path), static_source=market)
+
+        assert wrapped.get_risk_free_rate(end) == 2.25
+        assert wrapped.get_risk_free_rate(end) == 2.25
+        assert market.risk_calls == 1
+
+
+class TestAkshareStockFallbacks:
+
+    def test_stock_history_falls_back_to_daily(self):
+        import pandas as pd
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        class FakeAk:
+            def stock_zh_a_hist(self, **kwargs):
+                raise RuntimeError("hist down")
+
+            def stock_zh_a_daily(self, **kwargs):
+                assert kwargs["symbol"] == "sz000001"
+                return pd.DataFrame({
+                    "date": ["2025-01-02", "2025-01-03"],
+                    "close": [10.0, 10.5],
+                })
+
+        provider = object.__new__(AkshareDataProvider)
+        provider._ak = FakeAk()
+
+        history = provider.get_stock_history(
+            "000001.SZ", date(2025, 1, 1), date(2025, 1, 10))
+        assert history == [(date(2025, 1, 2), 10.0), (date(2025, 1, 3), 10.5)]
+
+    def test_stock_close_falls_back_to_spot_snapshot(self):
+        import pandas as pd
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        class FakeAk:
+            def stock_zh_a_hist(self, **kwargs):
+                raise RuntimeError("hist down")
+
+            def stock_zh_a_daily(self, **kwargs):
+                raise RuntimeError("daily down")
+
+            def stock_zh_a_spot_em(self):
+                return pd.DataFrame({
+                    "代码": ["000001", "600000"],
+                    "最新价": [12.34, 7.89],
+                })
+
+        provider = object.__new__(AkshareDataProvider)
+        provider._ak = FakeAk()
+
+        assert provider.get_stock_close("000001.SZ", date(2025, 1, 10)) == 12.34
+
+
+# ── 15. TermsBundle (单文件项目级 snapshot) ─────────────────
+class TestTermsBundle:
+
+    def test_set_get_roundtrip(self, tmp_path):
+        from convertible_bond.cache import TermsBundle
+        bundle = TermsBundle(tmp_path / "test_bundle.json")
+        terms = BondTerms(
+            sec_name="测试债",
+            underlying_code="000001.SZ",
+            issue_date=date(2020, 7, 30),
+            listing_date=date(2020, 8, 17),
+            tradable_date=date(2020, 8, 17),
+            is_tradable=True,
+            trading_status="tradable",
+            maturity_date=date(2026, 7, 30),
+            conversion_price=52.77,
+            coupon_rates=(0.003, 0.005),
+        )
+        bundle.set("128009.SZ", terms, source="wind")
+        # 重新打开同一文件, 验证持久化
+        bundle2 = TermsBundle(tmp_path / "test_bundle.json")
+        loaded = bundle2.get("128009.SZ")
+        assert loaded is not None
+        assert loaded.conversion_price == 52.77
+        assert loaded.listing_date == date(2020, 8, 17)
+        assert loaded.tradable_date == date(2020, 8, 17)
+        assert loaded.is_tradable is True
+        assert loaded.trading_status == "tradable"
+        assert loaded.maturity_date == date(2026, 7, 30)
+
+    def test_set_many_atomic(self, tmp_path):
+        """set_many 应一次性提交, 期间只刷盘一次."""
+        from convertible_bond.cache import TermsBundle
+        bundle = TermsBundle(tmp_path / "b.json")
+        items = [
+            ("A.SZ", BondTerms(conversion_price=10.0)),
+            ("B.SH", BondTerms(conversion_price=20.0)),
+            ("C.SZ", BondTerms(conversion_price=30.0)),
+        ]
+        bundle.set_many(items, source="wind")
+        assert sorted(bundle.list_bonds()) == ["A.SZ", "B.SH", "C.SZ"]
+
+    def test_bundle_meta(self, tmp_path):
+        from convertible_bond.cache import TermsBundle
+        bundle = TermsBundle(tmp_path / "b.json")
+        bundle.set("X.SZ", BondTerms(conversion_price=1.0), source="wind")
+        meta = bundle.bundle_meta()
+        assert meta.get("n_bonds") == 1
+        assert "updated_at" in meta
+
+    def test_bundle_compatible_with_caching_provider(self, fake_provider, tmp_path):
+        """TermsBundle 应和 TermsCache 同样可用作 CachingDataProvider 的存储."""
+        from convertible_bond.cache import TermsBundle, CachingDataProvider
+        provider, _, end = fake_provider
+        bundle = TermsBundle(tmp_path / "b.json")
+        wrapped = CachingDataProvider(provider, bundle, max_age_days=30)
+        terms = wrapped.get_bond_terms("123001.SZ", end)
+        assert terms.conversion_price == 52.77
+        assert bundle.has("123001.SZ"), "首次拉取应写回 bundle"
+
+    def test_corrupt_bundle_treated_as_empty(self, tmp_path):
+        """损坏的 JSON 不应让 bundle 初始化爆炸."""
+        from convertible_bond.cache import TermsBundle
+        p = tmp_path / "broken.json"
+        p.write_text("{ this is not valid json")
+        bundle = TermsBundle(p)
+        assert bundle.list_bonds() == []
+        # 之后写入应能正常工作 (覆盖损坏文件)
+        bundle.set("X.SZ", BondTerms(conversion_price=1.0))
+        assert bundle.has("X.SZ")
+
+    def test_delete(self, tmp_path):
+        from convertible_bond.cache import TermsBundle
+        bundle = TermsBundle(tmp_path / "b.json")
+        bundle.set("X.SZ", BondTerms(conversion_price=1.0))
+        assert bundle.delete("X.SZ") is True
+        assert not bundle.has("X.SZ")
+        assert bundle.delete("X.SZ") is False  # 已删除, 再 delete 返回 False

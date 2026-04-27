@@ -12,7 +12,7 @@ A 股可转债的理论定价工具：Crank-Nicolson PDE 求解 + 强赎/回售/
 - **历史回测**：周/月频对比"理论价 vs 收盘价 vs 纯债底 vs 转股价值"，支持 IV vs HV 时序
 - **现金流可视化**：完整付息计划 + 末期兑付一图展示
 - **σ-S 敏感性热力图**：固定其他参数，遍历 (波动率, 正股价) 网格
-- **Wind 自动取数**：输入转债代码 → 自动拉条款、正股、Shibor、信用评级
+- **分层自动取数**：转债基础信息固定由 Wind 写入 `cb_data`，正股行情 / Shibor 可选 Wind 或 akshare
 - **GUI**：CustomTkinter + Catppuccin 配色 + 深浅色无缝切换
 
 ## 安装
@@ -24,7 +24,7 @@ pip install -e ".[dev]"
 ```
 
 > **WindPy 不通过 pip 发布**，需在 Wind 终端"插件管理"中将 Python 接口安装到当前 venv。
-> 仅离线使用 `UniversalCBPricer` 时无需 Wind。
+> 仅离线使用 `convertible_bond.pricer.UniversalCBPricer` 时无需 Wind。
 
 ## 快速使用
 
@@ -33,10 +33,11 @@ pip install -e ".[dev]"
 ```bash
 cb-gui          # 通过 console_script 入口
 # 或
-python gui.py
+python -m convertible_bond.gui.app
 ```
 
 界面三个 tab：
+
 - **⚡ 定价**：手填条款 / Wind 一键同步 → 单点定价 + 希腊值 + 隐含波动率
 - **📈 回测**：历史区间逐点定价 → 理论 vs 市价对比 + IV/HV spread
 - **🔥 敏感性**：σ-S 网格热力图
@@ -44,7 +45,7 @@ python gui.py
 ### CLI
 
 ```bash
-# 输入转债代码自动定价 (需 Wind)
+# 兼容入口: 输入转债代码自动定价 (需 Wind)
 python CB.py 128009.SZ
 python CB.py 128009.SZ 2025-06-30   # 指定估值日
 ```
@@ -53,7 +54,7 @@ python CB.py 128009.SZ 2025-06-30   # 指定估值日
 
 ```python
 from datetime import date
-from CB import UniversalCBPricer
+from convertible_bond.pricer import UniversalCBPricer
 
 pricer = UniversalCBPricer(
     S0=55.0, K=52.77,
@@ -81,7 +82,7 @@ iv = pricer.solve_implied_vol(target_price=110.5, r=0.022, base_spread=0.03)
 
 ```python
 from datetime import date
-from CB import backtest_theoretical_price
+from convertible_bond.backtest import backtest_theoretical_price
 
 result = backtest_theoretical_price(
     bond_code="128009.SZ",
@@ -100,11 +101,12 @@ result = backtest_theoretical_price(
 
 求解 Black-Scholes-Merton 类型的可转债 PDE：
 
-```
+```text
 ∂V/∂t + ½σ²S² ∂²V/∂S² + rS ∂V/∂S − (r + s(S))V + 票息 = 0
 ```
 
 设计取舍：
+
 - **风险中性漂移用 r**, **折现用 r + spread(S)**：信用利差仅参与折现，不污染漂移
 - **信用利差 distress 扩张**：`s(S) = base_spread + distress_k · max(0, 1 − S/K)`
 - **下修概率 S-依赖**：S ≥ K 时为 0；S = 0 时取 `p_down`，线性插值
@@ -117,12 +119,19 @@ result = backtest_theoretical_price(
 
 ## 项目结构
 
-```
+```text
 ConvertibleBond/
-├── CB.py              # 定价引擎 + Wind 集成 + 回测
-├── gui.py             # CustomTkinter GUI
+├── convertible_bond/    # 主包
+│   ├── pricer.py        # PDE 定价引擎
+│   ├── pricing_api.py   # 自动取参与批量定价 helper
+│   ├── backtest.py      # 历史回测与 Wind 辅助
+│   ├── data_providers.py # Wind / akshare / CSV 数据源抽象
+│   ├── cache.py          # cb_data 静态信息缓存 + 动态行情组合 provider
+│   └── gui/             # CustomTkinter GUI 包
+├── CB.py                # 顶层兼容入口
+├── gui.py               # 顶层 GUI 启动入口
 ├── tests/
-│   └── test_pricer.py # pytest 套件
+│   └── test_pricer.py   # pytest 套件
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md

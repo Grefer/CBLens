@@ -4,5 +4,8 @@ numpy>=2.0
 scipy>=1.14
 pillow>=10.0
 
-# WindPy 需从 Wind 金融终端的"插件管理"里安装到当前 .venv 对应的 Python,
-# 不通过 pip 发布. 参考 CB.py 中 _ensure_wind() 的报错提示.
+# 默认在线数据源 (免 token, 无需 Wind 终端):
+akshare>=1.13
+
+# 可选: WindPy (字段更全, 但不通过 pip 发布)
+#   在 Wind 终端 "插件管理" 中将 Python 接口安装到当前 .venv

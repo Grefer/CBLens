@@ -1,7 +1,7 @@
 """
 可转债历史回测模块.
 
-从 CB.py 拆分而来, 包含 backtest_theoretical_price 及其 Wind 依赖辅助函数.
+通过 DataProvider 抽象拉取数据, 支持 Wind / akshare / CSV 等任意后端.
 """
 import bisect
 import logging
@@ -9,19 +9,21 @@ import numpy as np
 from datetime import date, timedelta
 from typing import Optional
 
-from pricer import UniversalCBPricer, DEFAULT_REDEMPTION_PRICE
+from .pricer import UniversalCBPricer, DEFAULT_REDEMPTION_PRICE, DEFAULT_FACE_VALUE
+from .data_providers import (
+    DataProvider, WindDataProvider, BondTerms, parse_coupon_string, to_date,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# ── Wind 辅助 (遗留, 仅供 backtest_theoretical_price 内部使用) ──
+# ── 旧版 Wind 直连 helper, 仅为兼容 (不建议新代码使用) ──
 def _ensure_wind():
     try:
         from WindPy import w  # type: ignore[import-not-found]
     except ImportError as e:
         raise ImportError(
-            "未检测到 WindPy. 请在 Wind 终端 '插件管理' 中安装 Python 接口, "
-            "或使用 DataProvider 接口 (price_from_provider)."
+            "未检测到 WindPy. 请使用 DataProvider 接口或 pip install akshare."
         ) from e
     if not w.isconnected():
         ret = w.start()
@@ -31,27 +33,15 @@ def _ensure_wind():
 
 
 def _to_date(v):
-    if v is None:
-        return None
-    from datetime import datetime
-    if isinstance(v, datetime):
-        return v.date()
-    if isinstance(v, date):
-        return v
-    return date.fromisoformat(str(v)[:10])
+    return to_date(v)
 
 
 def _parse_coupon(raw):
-    if raw is None or raw == "":
-        return None
-    parts = [p.strip().rstrip("%") for p in str(raw).split(",") if p.strip()]
-    try:
-        return tuple(float(p) / 100.0 for p in parts)
-    except ValueError:
-        return None
+    return parse_coupon_string(raw)
 
 
 def _fetch_cashflow(w, bond_code):
+    """旧 dict 形态返回, 兼容老调用方."""
     res = w.wset("cashflow", f"windcode={bond_code}")
     if res.ErrorCode != 0 or not res.Data:
         return None
@@ -110,6 +100,7 @@ def backtest_theoretical_price(
     N=1000,
     solve_iv=False,
     progress_cb=None,
+    provider: Optional[DataProvider] = None,
     **pricer_overrides,
 ):
     """
@@ -118,49 +109,39 @@ def backtest_theoretical_price(
     假设: K/条款/票息用当前值 (忽略历史下修); 正股 S0 与滚动 σ 取历史值.
 
     参数:
-        freq: "D"(日)/"W"(周)/"M"(月). 采样频率
-        solve_iv: 若为 True, 逐点反解隐含波动率 (耗时 ~5x). 失败/越界返回 NaN.
+        provider: DataProvider 实例 (Wind/akshare/CSV); 默认 WindDataProvider
+        freq: "D"/"W"/"M" 采样频率
+        solve_iv: True 时逐点反解 IV (耗时 ~5x)
         progress_cb: callable(i, total) 用于 UI 进度反馈
-    返回: dict{dates, theo_prices, market_prices, stock_prices, sigmas,
-              bond_floors, parities, ivs}
-        - sigmas 为采样日滚动 σ (年化, HV)
-        - bond_floors / parities 为同期纯债价值 / 转股价值, 用于价值分解
-        - ivs 为反解 IV 序列 (solve_iv=False 时全为 NaN)
+    返回 dict: {dates, theo_prices, market_prices, stock_prices, sigmas,
+              bond_floors, parities, ivs, bond_code, stock_code}
     """
-    w = _ensure_wind()
+    if provider is None:
+        provider = WindDataProvider()
 
-    # 1) 拿条款快照 (与 price_from_wind 一致)
-    fields = [
-        "underlyingcode", "ipo_date", "maturitydate", "latestpar",
-        "clause_conversion2_swapshareprice",
-        "clause_calloption_redemptionprice",
-        "clause_calloption_triggerproportion",
-        "clause_putoption_redeem_triggerproportion",
-        "clause_putoption_putbackperiodobs",
-        "couponrate",
-    ]
-    res = w.wss(bond_code, ",".join(fields), f"tradeDate={end_date.strftime('%Y%m%d')}")
-    if res.ErrorCode != 0:
-        raise RuntimeError(f"Wind 取 {bond_code} 条款失败: {res.Data}")
-    data = {f.lower(): d[0] for f, d in zip(res.Fields, res.Data)}
-
-    stock_code = data.get("underlyingcode")
+    # 1) 拉条款
+    terms: BondTerms = provider.get_bond_terms(bond_code, end_date)
+    stock_code = terms.underlying_code
     if not stock_code:
-        raise ValueError(f"{bond_code} 未返回标的正股代码")
+        raise ValueError(f"{bond_code} 数据源未返回标的正股代码")
 
-    issue_dt = _to_date(data["ipo_date"])
-    cf = _fetch_cashflow(w, bond_code)
-    coupon_rates = (cf and cf["coupon_rates"]) or _parse_coupon(data["couponrate"])
-    maturity_dt = (cf and cf["maturity_date"]) or _to_date(data["maturitydate"])
-    if cf and cf["redemption_price"] is not None:
-        redemption_price = float(cf["redemption_price"])
-    elif data["clause_calloption_redemptionprice"] is not None:
-        redemption_price = float(data["clause_calloption_redemptionprice"])
+    issue_dt = terms.issue_date
+    cf = provider.get_cashflow(bond_code)
+
+    coupon_rates = (cf.coupon_rates if cf and cf.coupon_rates else terms.coupon_rates)
+    maturity_dt = (cf.maturity_date if cf and cf.maturity_date else terms.maturity_date)
+    if cf and cf.redemption_price is not None:
+        redemption_price = float(cf.redemption_price)
+    elif terms.redemption_price is not None:
+        redemption_price = float(terms.redemption_price)
     else:
-        redemption_price = 107.0
+        redemption_price = DEFAULT_REDEMPTION_PRICE
 
-    K = float(data["clause_conversion2_swapshareprice"])
-    face_value = float(data.get("latestpar") or 100.0)
+    if terms.conversion_price is None:
+        raise ValueError(f"{bond_code} 数据源未返回转股价 K")
+
+    K = float(terms.conversion_price)
+    face_value = float(terms.face_value or DEFAULT_FACE_VALUE)
     conv_start_dt = issue_dt + timedelta(days=180) if issue_dt else None
 
     common_kwargs = dict(
@@ -172,41 +153,29 @@ def backtest_theoretical_price(
         redemption_price=redemption_price,
         coupon_rates=coupon_rates,
     )
-    call_pct = data.get("clause_calloption_triggerproportion")
-    if call_pct is not None:
-        common_kwargs["call_trigger_ratio"] = float(call_pct) / 100.0
-    put_pct = data.get("clause_putoption_redeem_triggerproportion")
-    if put_pct is not None:
-        common_kwargs["put_trigger_ratio"] = float(put_pct) / 100.0
-    put_obs_months = data.get("clause_putoption_putbackperiodobs")
-    if put_obs_months is not None and issue_dt and maturity_dt:
+    if terms.call_trigger_pct is not None:
+        common_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
+    if terms.put_trigger_pct is not None:
+        common_kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
+    if terms.put_obs_months is not None and issue_dt and maturity_dt:
         total_months = (maturity_dt - issue_dt).days / 30.4375
-        active_years = max(0, (total_months - float(put_obs_months)) / 12)
+        active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
         common_kwargs["put_active_years"] = int(round(active_years))
     common_kwargs.update(pricer_overrides)
 
-    # 2) 批量拉转债与正股历史收盘价
+    # 2) 拉历史价格 (转债 + 正股, 多取 2.5x vol_window 用于滚动 σ)
     lookback_start = start_date - timedelta(days=int(vol_window_days * 2.5) + 15)
-    res_b = w.wsd(bond_code, "close",
-                  start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-    if res_b.ErrorCode != 0:
-        raise RuntimeError(f"Wind 取 {bond_code} 历史价失败: {res_b.Data}")
-    bond_dates_raw = res_b.Times
-    bond_close = res_b.Data[0]
-    bond_series = [
-        (_to_date(d), float(v) if v is not None else None)
-        for d, v in zip(bond_dates_raw, bond_close)
-    ]
 
-    res_s = w.wsd(stock_code, "close",
-                  lookback_start.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"),
-                  "priceAdj=U")
-    if res_s.ErrorCode != 0:
-        raise RuntimeError(f"Wind 取正股 {stock_code} 历史价失败: {res_s.Data}")
-    stock_dates = [_to_date(d) for d in res_s.Times]
-    stock_close = np.array([float(v) if v is not None else np.nan for v in res_s.Data[0]])
+    bond_series_raw = provider.get_bond_history(bond_code, start_date, end_date)
+    bond_series = [(d, v) for d, v in bond_series_raw if d is not None]
 
-    # 3) 采样日筛选
+    stock_series = provider.get_stock_history(stock_code, lookback_start, end_date)
+    stock_dates = [d for d, _ in stock_series if d is not None]
+    stock_close = np.array(
+        [float(v) if v is not None else np.nan for d, v in stock_series if d is not None]
+    )
+
+    # 3) 采样筛选
     valid_points = [(d, p) for d, p in bond_series if p is not None]
     if not valid_points:
         raise RuntimeError("历史区间内无有效转债收盘价")
@@ -233,6 +202,7 @@ def backtest_theoretical_price(
     total = len(sample_points)
     iv_M = max(150, M // 3)
     iv_N = max(500, N // 3)
+
     for i, (val_date, market_px) in enumerate(sample_points):
         if issue_dt and val_date < issue_dt:
             continue
