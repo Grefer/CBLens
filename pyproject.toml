@@ -16,7 +16,7 @@ dependencies = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
-cb-gui = "gui:main"
+cb-gui = "gui.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

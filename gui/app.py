@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-可转债理论定价 GUI
-支持手动输入参数 & 通过 Wind 代码自动拉取
-最美观优雅的极简 Apple-inspired 设计，支持深/浅色模式无缝切换
+可转债理论定价 GUI — 主应用模块.
+
+从原始 gui.py 拆分而来. UI 构建辅助件见 gui.theme / gui.widgets;
+各 tab 的纯 UI 布局见 gui.tabs.* (业务逻辑方法仍留在本类中).
 """
 
 import customtkinter as ctk
@@ -14,6 +15,12 @@ import threading
 import sys
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import os as _os
+# 确保项目根目录在 sys.path 中, 无论从哪个位置启动
+_PROJECT_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -31,38 +38,13 @@ from CB import (
     DEFAULT_COUPON_RATES,
 )
 
-# ── 颜色与主题 ──────────────────────────────────────────────
-ctk.set_default_color_theme("blue")  
+from gui.tabs import batch as batch_tab
 
-# Catppuccin 风格高级配色: (浅色 Latte, 深色 Mocha)
-BG_APP    = ("#dce0e8", "#11111b")     # Crust
-BG_CARD   = ("#eff1f5", "#1e1e2e")     # Base
-BG_INPUT  = ("#e6e9ef", "#181825")     # Mantle
-BORDER    = ("#ccd0da", "#313244")     # Surface0
-TEXT      = ("#4c4f69", "#cdd6f4")     # Text
-TEXT_DIM  = ("#6c6f85", "#a6adc8")     # Subtext0
-ACCENT    = ("#1e66f5", "#89b4fa")     # Blue
-GREEN     = ("#40a02b", "#a6e3a1")     # Green
-RED       = ("#d20f39", "#f38ba8")     # Red
-ORANGE    = ("#fe640b", "#fab387")     # Peach 
+# ── 从 gui.theme / gui.widgets 导入, 同时保持本文件内的向后引用 ──
+from gui.theme import *  # noqa: F401,F403  (颜色/字体/常量)
+from gui.widgets import _form_row, create_card, CollapsibleSection, Tooltip, _latest_finite_number  # noqa: F401
 
-BTN_CTRL  = ("#ccd0da", "#313244")
-BTN_HOVER = ("#bcc0cc", "#45475a")
-ACCENT_HOVER = ("#7287fd", "#74c7ec")
-
-_IS_MAC = sys.platform == "darwin"
-FONT_FAMILY = "SF Pro Display" if _IS_MAC else "Segoe UI"
-FONT_MONO = "SF Mono" if _IS_MAC else "Cascadia Mono"
-
-# 历史波动率窗口选项 (交易日数)
-VOL_WINDOW_MAP = {"1M": 21, "2M": 42, "3M": 63, "6M": 126, "1Y": 252}
-VOL_WINDOW_DEFAULT = "1M"
-
-# 同评级信用利差经验值 (%)
-CREDIT_SPREAD_TABLE = {
-    "AAA": 0.5, "AA+": 1.5, "AA": 2.5,
-    "AA-": 4.0, "A+": 6.0, "A": 8.0,
-}
+ctk.set_default_color_theme("blue")
 
 def get_color(color_val):
     """解析当前模式下的颜色值，主要用于 Matplotlib"""
@@ -156,6 +138,54 @@ class CollapsibleSection(ctk.CTkFrame):
         else:
             self.content.grid_remove()
 
+
+class Tooltip:
+    """轻量悬浮提示: 鼠标悬停 delay_ms 后弹出, 离开/点击立即收起."""
+    def __init__(self, widget, text, delay_ms=450):
+        self.widget = widget
+        self.text = text
+        self.delay = delay_ms
+        self._after_id = None
+        self._tip = None
+        widget.bind("<Enter>", self._on_enter)
+        widget.bind("<Leave>", self._on_leave)
+        widget.bind("<ButtonPress>", self._on_leave)
+
+    def _on_enter(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _on_leave(self, _event=None):
+        self._cancel()
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+    def _cancel(self):
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip is not None:
+            return
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        tip = ctk.CTkToplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tip.configure(fg_color=BG_INPUT)
+        lbl = ctk.CTkLabel(
+            tip, text=self.text, font=(FONT_FAMILY, 11),
+            text_color=TEXT, fg_color=BG_INPUT, corner_radius=6,
+            padx=10, pady=4)
+        lbl.pack()
+        tip.update_idletasks()
+        # 居中对齐到目标控件下方
+        tip.geometry(f"+{x - tip.winfo_width() // 2}+{y}")
+        self._tip = tip
+
+
 # ── 主窗口 ────────────────────────────────────────────────
 class CBPricerApp(ctk.CTk):
     def __init__(self):
@@ -194,6 +224,7 @@ class CBPricerApp(ctk.CTk):
         self.v_call_ratio  = ctk.StringVar(value="130")
         self.v_put_ratio   = ctk.StringVar(value="70")
         self.v_put_years   = ctk.StringVar(value="2")
+        self.v_call_notice = ctk.StringVar(value="30")
         self.v_M           = ctk.StringVar(value="500")
         self.v_N           = ctk.StringVar(value="2000")
         self.v_result      = ctk.StringVar(value="—")
@@ -207,6 +238,8 @@ class CBPricerApp(ctk.CTk):
         self.v_bt_end    = ctk.StringVar(value=today.isoformat())
         self.v_bt_freq   = ctk.StringVar(value="周")
         self.v_bt_status = ctk.StringVar(value="输入转债代码 → 拉取参数 → 运行回测")
+        self.v_bt_solve_iv = ctk.BooleanVar(value=True)
+        self.v_bt_show_decomp = ctk.BooleanVar(value=True)
 
         # 价值分解 & 希腊值
         self.v_bond_floor   = ctk.StringVar(value="—")
@@ -242,7 +275,7 @@ class CBPricerApp(ctk.CTk):
         self._bind_shortcuts()
 
     def _build_header(self):
-        self._tab_names = ["⚡ 定价", "📈 回测", "🔥 敏感性"]
+        self._tab_names = ["⚡ 定价", "📈 回测", "🔥 敏感性", "📦 批量"]
         
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
@@ -286,8 +319,10 @@ class CBPricerApp(ctk.CTk):
         
         self.btn_save = ctk.CTkButton(right_frame, text="💾", command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_save.pack(side="left", padx=(12, 0))
+        Tooltip(self.btn_save, "保存当前参数预设  (Ctrl+S)")
         self.btn_load = ctk.CTkButton(right_frame, text="📂", command=self._load_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_load.pack(side="left", padx=(6, 0))
+        Tooltip(self.btn_load, "加载参数预设  (Ctrl+O)")
 
     def _build_statusbar(self):
         sb = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=28)
@@ -318,6 +353,7 @@ class CBPricerApp(ctk.CTk):
         self._build_pricing_tab()
         self._build_backtest_tab()
         self._build_sensitivity_tab()
+        batch_tab.build(self, self._tab_frames["📦 批量"])
 
     def _switch_tab(self, selected):
         for name, f in self._tab_frames.items():
@@ -380,6 +416,7 @@ class CBPricerApp(ctk.CTk):
         _form_row(sec3, "强赎触发 (%K)", self.v_call_ratio, 0, wind=True)
         _form_row(sec3, "回售触发 (%K)", self.v_put_ratio, 1, wind=True)
         _form_row(sec3, "回售生效年数", self.v_put_years, 2, wind=True)
+        _form_row(sec3, "强赎宽限天数", self.v_call_notice, 3)
         sec4 = create_card(adv.content, "数值网格", 1, 0, icon="🧮")
         _form_row(sec4, "空间节点 M", self.v_M, 0)
         _form_row(sec4, "时间步数 N", self.v_N, 1)
@@ -446,6 +483,11 @@ class CBPricerApp(ctk.CTk):
             fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
             font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
         self.btn_conv.pack(side="right")
+        self.btn_cashflow = ctk.CTkButton(
+            tb, text="💰 现金流", command=self._show_cashflow,
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+            font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
+        self.btn_cashflow.pack(side="right", padx=(0, 8))
 
         # 指标仪表盘
         dc = ctk.CTkFrame(rp, fg_color="transparent")
@@ -505,6 +547,17 @@ class CBPricerApp(ctk.CTk):
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
             font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
         self.btn_backtest.pack(side="left")
+        ctk.CTkCheckBox(
+            cc, text="价值分解", variable=self.v_bt_show_decomp,
+            command=self._refresh_backtest_chart,
+            font=(FONT_FAMILY, 12), text_color=TEXT_DIM, fg_color=ACCENT,
+            checkbox_width=16, checkbox_height=16,
+            border_width=1, corner_radius=3).pack(side="left", padx=(15, 0))
+        ctk.CTkCheckBox(
+            cc, text="反解 IV", variable=self.v_bt_solve_iv,
+            font=(FONT_FAMILY, 12), text_color=TEXT_DIM, fg_color=ACCENT,
+            checkbox_width=16, checkbox_height=16,
+            border_width=1, corner_radius=3).pack(side="left", padx=(10, 0))
         self.btn_bt_png = ctk.CTkButton(
             cc, text="📸 PNG", command=self._export_bt_png,
             fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
@@ -1028,6 +1081,7 @@ class CBPricerApp(ctk.CTk):
             call_trigger_ratio=pf(self.v_call_ratio) / 100.0,
             put_trigger_ratio=pf(self.v_put_ratio) / 100.0,
             put_active_years=int(pf(self.v_put_years)),
+            call_notice_days=int(pf(self.v_call_notice)),
         )
         model = dict(
             sigma=pf(self.v_sigma) / 100.0,
@@ -1121,6 +1175,8 @@ class CBPricerApp(ctk.CTk):
                 M=int(float(self.v_M.get())),
                 N=int(float(self.v_N.get())),
                 vol_window_days=VOL_WINDOW_MAP.get(self.v_vol_window.get(), 21),
+                solve_iv=bool(self.v_bt_solve_iv.get()),
+                call_notice_days=int(float(self.v_call_notice.get())),
             )
         except ValueError as e:
             messagebox.showerror("错误", f"参数解析失败: {e}")
@@ -1153,10 +1209,19 @@ class CBPricerApp(ctk.CTk):
         finally:
             self.after(0, lambda: self.btn_backtest.configure(state="normal"))
 
+    def _refresh_backtest_chart(self):
+        """切换"价值分解"复选框时无需重新拉数据, 用缓存重绘."""
+        if self._last_bt_result is not None:
+            self._render_backtest_chart(self._last_bt_result)
+
     def _render_backtest_chart(self, result):
         dates = result["dates"]
         theo = result["theo_prices"]
         mkt = result["market_prices"]
+        bond_floors = result.get("bond_floors", [])
+        parities = result.get("parities", [])
+        sigmas = result.get("sigmas", [])
+        ivs = result.get("ivs", [])
 
         if not dates:
             self.v_bt_status.set("❌ 无有效采样点")
@@ -1183,13 +1248,30 @@ class CBPricerApp(ctk.CTk):
         red_color = get_color(RED)
         green_color = get_color(GREEN)
 
-        fig = Figure(figsize=(11, 5), dpi=100, facecolor=bg_card_color)
-        ax = fig.add_subplot(111, facecolor=bg_input_color)
+        iv_arr = np.array([v if v is not None else np.nan for v in ivs], dtype=float) \
+                 if len(ivs) else np.array([])
+        has_iv = iv_arr.size > 0 and bool(np.any(np.isfinite(iv_arr)))
+        show_decomp = bool(self.v_bt_show_decomp.get()) and bond_floors and parities
+
+        if has_iv:
+            fig = Figure(figsize=(11, 6), dpi=100, facecolor=bg_card_color)
+            ax = fig.add_subplot(2, 1, 1, facecolor=bg_input_color)
+            ax_iv = fig.add_subplot(2, 1, 2, facecolor=bg_input_color, sharex=ax)
+        else:
+            fig = Figure(figsize=(11, 5), dpi=100, facecolor=bg_card_color)
+            ax = fig.add_subplot(111, facecolor=bg_input_color)
+            ax_iv = None
 
         ax.plot(dates, theo, color=accent_color, linewidth=2.0, marker="o", markersize=4,
                 label="理论价", zorder=3)
         ax.plot(dates, mkt, color=orange_color, linewidth=2.0, marker="s", markersize=4,
                 label="市价(收盘)", zorder=2)
+
+        if show_decomp:
+            ax.plot(dates, bond_floors, color=text_dim_color, linewidth=1.2,
+                    linestyle="--", alpha=0.7, label="纯债价值", zorder=1)
+            ax.plot(dates, parities, color=green_color, linewidth=1.2,
+                    linestyle=":", alpha=0.7, label="转股价值", zorder=1)
 
         theo_arr = np.array(theo)
         mkt_arr = np.array(mkt)
@@ -1198,7 +1280,6 @@ class CBPricerApp(ctk.CTk):
         ax.fill_between(dates, theo_arr, mkt_arr,
                         where=(mkt_arr < theo_arr).tolist(), color=green_color, alpha=0.12, label="市价折价")
 
-        ax.set_xlabel("日期", color=text_dim_color, fontsize=10)
         ax.set_ylabel("价格", color=text_dim_color, fontsize=10)
         ax.tick_params(colors=text_dim_color, labelsize=9)
         for spine in ax.spines.values():
@@ -1208,6 +1289,36 @@ class CBPricerApp(ctk.CTk):
         legend = ax.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
                            edgecolor=border_color, fontsize=9, labelcolor=text_color)
         legend.get_frame().set_linewidth(0.5)
+
+        if ax_iv is not None:
+            hv_pct = np.array(sigmas) * 100
+            iv_pct = iv_arr * 100
+            ax_iv.plot(dates, hv_pct, color=text_dim_color, linewidth=1.5,
+                       marker="o", markersize=3, label="历史波动率 HV", zorder=2)
+            ax_iv.plot(dates, iv_pct, color=accent_color, linewidth=2.0,
+                       marker="s", markersize=4, label="隐含波动率 IV", zorder=3)
+            valid = np.isfinite(iv_pct) & np.isfinite(hv_pct)
+            if np.any(valid):
+                d_v = np.array(dates)[valid]
+                hv_v = hv_pct[valid]
+                iv_v = iv_pct[valid]
+                where_high = [bool(x) for x in (iv_v >= hv_v)]
+                where_low = [bool(x) for x in (iv_v < hv_v)]
+                ax_iv.fill_between(d_v, hv_v, iv_v, where=where_high,
+                                   color=red_color, alpha=0.12)
+                ax_iv.fill_between(d_v, hv_v, iv_v, where=where_low,
+                                   color=green_color, alpha=0.12)
+            ax_iv.set_xlabel("日期", color=text_dim_color, fontsize=10)
+            ax_iv.set_ylabel("σ (%)", color=text_dim_color, fontsize=10)
+            ax_iv.tick_params(colors=text_dim_color, labelsize=9)
+            for spine in ax_iv.spines.values():
+                spine.set_color(border_color)
+            ax_iv.grid(True, color=border_color, linestyle="--", alpha=0.4)
+            leg_iv = ax_iv.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
+                                  edgecolor=border_color, fontsize=9, labelcolor=text_color)
+            leg_iv.get_frame().set_linewidth(0.5)
+        else:
+            ax.set_xlabel("日期", color=text_dim_color, fontsize=10)
 
         fig.autofmt_xdate(rotation=25)
         fig.tight_layout()
@@ -1221,9 +1332,19 @@ class CBPricerApp(ctk.CTk):
 
         mean_basis = float(np.mean(mkt_arr - theo_arr))
         corr = float(np.corrcoef(theo_arr, mkt_arr)[0, 1]) if len(theo) > 1 else float("nan")
-        self.v_bt_status.set(
-            f"✅ {len(dates)} 个采样点  ·  平均基差(市价-理论)={mean_basis:+.2f}  ·  相关系数={corr:.3f}"
-        )
+        status_parts = [
+            f"✅ {len(dates)} 个采样点",
+            f"平均基差(市价-理论)={mean_basis:+.2f}",
+            f"相关系数={corr:.3f}",
+        ]
+        if has_iv:
+            iv_valid = iv_arr[np.isfinite(iv_arr)]
+            hv_arr = np.array(sigmas)
+            hv_for_iv = hv_arr[np.isfinite(iv_arr)]
+            if iv_valid.size:
+                mean_iv_hv = float(np.mean(iv_valid - hv_for_iv)) * 100
+                status_parts.append(f"IV-HV 均值={mean_iv_hv:+.2f}pp")
+        self.v_bt_status.set("  ·  ".join(status_parts))
         self.btn_bt_png.configure(state="normal")
         self.btn_bt_csv.configure(state="normal")
 
@@ -1268,6 +1389,90 @@ class CBPricerApp(ctk.CTk):
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_iv.configure(state="normal"))
 
+    # ── 现金流可视化 ────────────────────────────────────────
+    def _show_cashflow(self):
+        try:
+            params = self._collect_params()
+        except Exception as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return
+        try:
+            pricer = UniversalCBPricer(**params["pricer"])
+        except Exception as exc:
+            messagebox.showerror("构造失败", str(exc))
+            return
+
+        # 现金流序列: 非末期 → 每期票息; 末期 → redemption_price (含末期利息+面值+赎回溢价)
+        labels, amounts, kinds = [], [], []
+        for p in pricer.coupon_periods:
+            if p["is_final"]:
+                labels.append(p["end"].isoformat())
+                amounts.append(float(pricer.redemption_price))
+                kinds.append("到期兑付")
+            else:
+                labels.append(p["end"].isoformat())
+                amounts.append(float(p["coupon_amount"]))
+                kinds.append(f"票息 {p['rate']*100:.2f}%")
+
+        if not labels:
+            messagebox.showinfo("提示", "没有可显示的现金流")
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title(f"现金流: {self.v_bond_code.get() or '未命名'}")
+        win.geometry("900x500")
+        win.configure(fg_color=BG_APP)
+        win.transient(self)
+
+        bg = get_color(BG_CARD)
+        bg_in = get_color(BG_INPUT)
+        txt = get_color(TEXT)
+        txt_dim = get_color(TEXT_DIM)
+        brd = get_color(BORDER)
+        accent = get_color(ACCENT)
+        orange = get_color(ORANGE)
+
+        fig = Figure(figsize=(9, 4.5), dpi=100, facecolor=bg)
+        ax = fig.add_subplot(111, facecolor=bg_in)
+
+        x_pos = np.arange(len(labels))
+        colors = [orange if k == "到期兑付" else accent for k in kinds]
+        bars = ax.bar(x_pos, amounts, color=colors, edgecolor=brd, linewidth=0.5)
+
+        for bar, amt in zip(bars, amounts):
+            ax.annotate(f"{amt:.2f}",
+                        xy=(bar.get_x() + bar.get_width() / 2, bar.get_height()),
+                        xytext=(0, 3), textcoords="offset points",
+                        ha="center", fontsize=9, color=txt)
+
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+        ax.set_ylabel("现金流 (¥/百元面值)", color=txt_dim, fontsize=10)
+        ax.set_title(f"{self.v_bond_code.get() or '可转债'} 现金流计划",
+                     color=txt, fontsize=13, fontweight="bold")
+        ax.tick_params(colors=txt_dim, labelsize=9)
+        for spine in ax.spines.values():
+            spine.set_color(brd)
+        ax.grid(True, axis="y", color=brd, linestyle="--", alpha=0.4)
+
+        from matplotlib.patches import Patch
+        legend = ax.legend(handles=[
+            Patch(facecolor=accent, label="期间票息"),
+            Patch(facecolor=orange, label="到期兑付 (面值+末期利息+溢价)"),
+        ], loc="best", framealpha=0.9, facecolor=bg, edgecolor=brd,
+            fontsize=9, labelcolor=txt)
+        legend.get_frame().set_linewidth(0.5)
+
+        fig.tight_layout()
+        canvas = FigureCanvasTkAgg(fig, master=win)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=12, pady=12)
+
+        total = sum(amounts)
+        ctk.CTkLabel(
+            win, text=f"现金流合计 (未折现) = {total:.2f}  ·  共 {len(labels)} 笔",
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(pady=(0, 10))
+
     # ── 收敛诊断 ────────────────────────────────────────────
     def _convergence_check(self):
         self.btn_conv.configure(state="disabled")
@@ -1301,7 +1506,7 @@ class CBPricerApp(ctk.CTk):
         "v_bond_code", "v_S0", "v_K", "v_face", "v_redemp",
         "v_cur_date", "v_mat_date", "v_iss_date", "v_conv_date",
         "v_coupons", "v_sigma", "v_r", "v_spread", "v_p_down", "v_dk",
-        "v_call_ratio", "v_put_ratio", "v_put_years", "v_M", "v_N",
+        "v_call_ratio", "v_put_ratio", "v_put_years", "v_call_notice", "v_M", "v_N",
         "v_vol_window", "v_market_price",
         "v_bt_start", "v_bt_end", "v_bt_freq",
     )
@@ -1374,12 +1579,19 @@ class CBPricerApp(ctk.CTk):
             return
         try:
             r = self._last_bt_result
+            n = len(r["dates"])
+            bf = r.get("bond_floors") or [float("nan")] * n
+            par = r.get("parities") or [float("nan")] * n
+            iv = r.get("ivs") or [float("nan")] * n
             with open(path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
-                w.writerow(["date", "theoretical_price", "market_price", "stock_price", "sigma"])
-                for d, t, m, s, sg in zip(r["dates"], r["theo_prices"],
-                                          r["market_prices"], r["stock_prices"], r["sigmas"]):
-                    w.writerow([d.isoformat(), f"{t:.4f}", f"{m:.4f}", f"{s:.4f}", f"{sg:.6f}"])
+                w.writerow(["date", "theoretical_price", "market_price", "stock_price",
+                            "sigma", "bond_floor", "parity", "implied_vol"])
+                for d, t, m, s, sg, b, p, ivv in zip(
+                        r["dates"], r["theo_prices"], r["market_prices"],
+                        r["stock_prices"], r["sigmas"], bf, par, iv):
+                    w.writerow([d.isoformat(), f"{t:.4f}", f"{m:.4f}", f"{s:.4f}",
+                                f"{sg:.6f}", f"{b:.4f}", f"{p:.4f}", f"{ivv:.6f}"])
             self.v_bt_status.set(f"已导出 {len(r['dates'])} 条记录到 {path}")
         except Exception as exc:
             messagebox.showerror("导出失败", str(exc))

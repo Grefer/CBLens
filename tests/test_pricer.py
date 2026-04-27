@@ -393,3 +393,207 @@ class TestGreeks:
         result = greeks_pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
                                      M=200, N=500, return_greeks=False)
         assert isinstance(result, float)
+
+
+# ── 11. 强赎宽限期 (call grace period) ───────────────────────
+class TestCallNotice:
+    """call_notice_days 把"立即行权" cap 抬升到 parity·(1+σ√t_grace),
+    直接对应实务里"触发→公告→摘牌"窗口期的 stock optionality."""
+
+    @pytest.fixture
+    def itm_kwargs(self):
+        return dict(
+            S0=80.0, K=52.77,  # 深度 ITM, S/K ≈ 1.52 > 1.3 触发线
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+
+    def test_zero_grace_locks_option_premium_to_zero(self, itm_kwargs):
+        """call_notice_days=0 + 深度 ITM → 期权溢价应锁定为 0 (旧版行为)."""
+        pricer = UniversalCBPricer(call_notice_days=0, **itm_kwargs)
+        result = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                              M=200, N=500, return_greeks=True)
+        assert abs(result["option_premium"]) < 0.5, \
+            f"call_notice_days=0 期权溢价 {result['option_premium']:.3f} 应近 0"
+
+    def test_positive_grace_yields_positive_premium(self, itm_kwargs):
+        """call_notice_days=30 + 深度 ITM → 期权溢价 > 0."""
+        pricer = UniversalCBPricer(call_notice_days=30, **itm_kwargs)
+        result = pricer.price(sigma=0.30, r=0.022, base_spread=0.03,
+                              M=200, N=500, return_greeks=True)
+        assert result["option_premium"] > 0.5, \
+            f"call_notice_days=30 期权溢价 {result['option_premium']:.3f} 应显著为正"
+
+    def test_grace_monotone_in_days(self, itm_kwargs):
+        """更长的宽限期 → 不低于的理论价 (单调性)."""
+        p0 = UniversalCBPricer(call_notice_days=0, **itm_kwargs).price(
+            sigma=0.30, r=0.022, base_spread=0.03, M=200, N=500)
+        p30 = UniversalCBPricer(call_notice_days=30, **itm_kwargs).price(
+            sigma=0.30, r=0.022, base_spread=0.03, M=200, N=500)
+        p60 = UniversalCBPricer(call_notice_days=60, **itm_kwargs).price(
+            sigma=0.30, r=0.022, base_spread=0.03, M=200, N=500)
+        assert p0 <= p30 + 0.01, f"宽限期单调性破坏: p0={p0:.3f}, p30={p30:.3f}"
+        assert p30 <= p60 + 0.01, f"宽限期单调性破坏: p30={p30:.3f}, p60={p60:.3f}"
+
+    def test_theta_with_grace_no_error(self, itm_kwargs):
+        """theta 重建 tomorrow_pricer 时应正确传入 call_notice_days, 不报错."""
+        pricer = UniversalCBPricer(call_notice_days=30, **itm_kwargs)
+        result = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                              M=150, N=300, return_greeks=True)
+        # theta 是数值差分, 不应是 NaN
+        assert not np.isnan(result["theta"]), "theta 不应为 NaN"
+
+
+# ── 12. 回测 (backtest with fake Wind) ────────────────────────
+class FakeWindResponse:
+    """模拟 WindPy 的返回对象."""
+    def __init__(self, error_code=0, fields=None, data=None, times=None):
+        self.ErrorCode = error_code
+        self.Fields = fields or []
+        self.Data = data or [] if data is not None else []
+        self.Times = times or []
+
+
+class FakeWind:
+    """最小化 WindPy 桩, 仅覆盖 backtest_theoretical_price 的调用面."""
+    def __init__(self, bond_code, stock_code, terms, bond_close_series, stock_close_series):
+        self.bond_code = bond_code
+        self.stock_code = stock_code
+        self.terms = terms  # dict[lowercase_field] -> value
+        self.bond_close = bond_close_series  # list[(date, float)]
+        self.stock_close = stock_close_series
+
+    def wss(self, code, fields_str, opts=""):
+        fields = [f.strip() for f in fields_str.split(",")]
+        if code == self.bond_code:
+            data = [[self.terms.get(f.lower())] for f in fields]
+            return FakeWindResponse(fields=fields, data=data)
+        if code == self.stock_code:
+            # 只会被问 "close" 用于现价
+            return FakeWindResponse(fields=fields, data=[[self.stock_close[-1][1]]])
+        return FakeWindResponse(error_code=1)
+
+    def wset(self, table, opts):
+        # 让 cashflow 返回错, 强制 fallback 到 couponrate 字段
+        return FakeWindResponse(error_code=1)
+
+    def wsd(self, code, field, start, end, opts=""):
+        if code == self.bond_code:
+            dates = [d for d, _ in self.bond_close]
+            data = [[v for _, v in self.bond_close]]
+            return FakeWindResponse(fields=[field], data=data, times=dates)
+        if code == self.stock_code:
+            dates = [d for d, _ in self.stock_close]
+            data = [[v for _, v in self.stock_close]]
+            return FakeWindResponse(fields=[field], data=data, times=dates)
+        return FakeWindResponse(error_code=1)
+
+
+@pytest.fixture
+def fake_wind():
+    """构造一个跨 8 个月的伪 Wind 数据集."""
+    issue_date = date(2020, 7, 30)
+    maturity_date = date(2026, 7, 30)
+    start = date(2025, 1, 1)
+    end = date(2025, 8, 31)
+
+    # 构造日级历史 (243 天) - 简单线性走势 + 噪声
+    bond_close = []
+    stock_close = []
+    n = (end - start).days + 1
+    for i in range(n):
+        d = start + timedelta(days=i)
+        # 跳过周末以模拟交易日
+        if d.weekday() >= 5:
+            continue
+        bond_close.append((d, 110.0 + 0.01 * i))
+        stock_close.append((d, 50.0 + 0.02 * i))
+
+    terms = {
+        "underlyingcode": "000001.SZ",
+        "ipo_date": "2020-07-30",
+        "maturitydate": "2026-07-30",
+        "latestpar": 100.0,
+        "clause_conversion2_swapshareprice": 52.77,
+        "clause_calloption_redemptionprice": 107.0,
+        "clause_calloption_triggerproportion": 130.0,
+        "clause_putoption_redeem_triggerproportion": 70.0,
+        "clause_putoption_putbackperiodobs": 48.0,
+        "couponrate": "0.3,0.4,0.8,1.5,1.8,2.0",
+    }
+    return FakeWind("123001.SZ", "000001.SZ", terms, bond_close, stock_close), start, end
+
+
+class TestBacktest:
+
+    def test_backtest_returns_expected_keys(self, fake_wind, monkeypatch):
+        """回测应返回完整字段, 包括新增的 bond_floors / parities / ivs."""
+        from CB import backtest_theoretical_price
+        import backtest as bt_module
+
+        wind, start, end = fake_wind
+        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
+
+        result = backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M",  # 月频, 减少计算量
+            M=80, N=200,
+        )
+        for key in ["dates", "theo_prices", "market_prices", "stock_prices",
+                    "sigmas", "bond_floors", "parities", "ivs"]:
+            assert key in result, f"缺少字段: {key}"
+        assert len(result["dates"]) >= 3, "应有 ≥3 个月度采样点"
+        assert all(np.isnan(iv) for iv in result["ivs"]), "默认 solve_iv=False 时 IV 应全 NaN"
+
+    def test_backtest_theoretical_in_range(self, fake_wind, monkeypatch):
+        """理论价应落在合理范围 (面值附近)."""
+        from CB import backtest_theoretical_price
+        import backtest as bt_module
+
+        wind, start, end = fake_wind
+        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
+
+        result = backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end, freq="M",
+            M=80, N=200,
+        )
+        for theo in result["theo_prices"]:
+            assert 60 < theo < 200, f"理论价 {theo:.2f} 越界"
+
+    def test_backtest_solve_iv_produces_finite_values(self, fake_wind, monkeypatch):
+        """solve_iv=True 时, 至少部分 IV 应能解出有限值."""
+        from CB import backtest_theoretical_price
+        import backtest as bt_module
+
+        wind, start, end = fake_wind
+        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
+
+        result = backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end, freq="M",
+            M=80, N=200, solve_iv=True,
+        )
+        finite_ivs = [iv for iv in result["ivs"] if np.isfinite(iv)]
+        assert len(finite_ivs) >= 1, "solve_iv=True 至少应解出一个有限 IV"
+
+    def test_backtest_value_decomposition_relationship(self, fake_wind, monkeypatch):
+        """每个采样点应满足: parity = S0 * face/K, bond_floor > 0."""
+        from CB import backtest_theoretical_price
+        import backtest as bt_module
+
+        wind, start, end = fake_wind
+        monkeypatch.setattr(bt_module, "_ensure_wind", lambda: wind)
+
+        result = backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end, freq="M",
+            M=80, N=200,
+        )
+        K = 52.77
+        face = 100.0
+        for s0, par, bf in zip(result["stock_prices"], result["parities"],
+                                result["bond_floors"]):
+            assert abs(par - s0 * face / K) < 1e-6, \
+                f"parity 一致性破坏: {par:.4f} vs {s0 * face / K:.4f}"
+            assert bf > 0, f"bond_floor 应为正: {bf:.4f}"
