@@ -314,8 +314,10 @@ def _batch_result_from_provider(
         theo = res["theoretical_price"]
         if mkt is not None and theo > 0:
             res["deviation"] = (float(mkt) - theo) / theo
+            res["undervaluation_rate"] = -res["deviation"]
         else:
             res["deviation"] = float("nan")
+            res["undervaluation_rate"] = float("nan")
         res["status"] = "ok"
         return res
     except Exception as exc:
@@ -325,6 +327,7 @@ def _batch_result_from_provider(
             "theoretical_price": float("nan"),
             "market_price": None,
             "deviation": float("nan"),
+            "undervaluation_rate": float("nan"),
         }
 
 

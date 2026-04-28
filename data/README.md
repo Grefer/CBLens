@@ -38,6 +38,8 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 | 场景 | 命令 |
 | --- | --- |
 | 月初定期 (新债/退市/下修) | `python -m convertible_bond.cli.sync_tradable` |
+| 每日准入状态 (停牌/强赎/ST/成交额等) | `python -m convertible_bond.cli.sync_admission_status` |
+| 查看主池筛选报告 | `python -m convertible_bond.cli.screen_pool` |
 | 单只债的事件后 | GUI 顶部 🔄 按钮 |
 | 仅查看当前状态 | `python -m convertible_bond.cli.sync_tradable --info` |
 
@@ -52,6 +54,29 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `tradable_date`: 进入可交易或关注窗口的日期；定向/非标准代码段若无明确字段，默认用上市/发行后 6 个月估算
 - `is_tradable`: 同步日视角是否已进入可交易日期
 - `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`
+- `suspension_status`: 停牌/暂停交易等补充状态
+- `call_status`, `call_announce_date`, `call_redemption_date`: 强赎公告和执行状态
+- `last_trading_date`, `delisting_date`: 最后交易日 / 摘牌日，用于剔除临近摘牌标的
+- `underlying_name`, `underlying_status`: 正股名称与风险状态，用于识别 ST / 退市风险
+- `bond_turnover_amount`: 转债成交额，口径由数据源决定；设置阈值后可用于低流动性过滤
+
+这些字段由 `convertible_bond.admission_status` 做增量刷新。刷新时只会写入数据源明确返回的非空值；
+如果 Wind 某个候选字段不可用，不会清空本地已有值或人工维护值。
+
+### 主池准入筛选
+
+批量定价主池会先剔除不适合进入模型排序的标的：
+
+- 不可交易或尚未进入可交易窗口
+- 停牌 / 暂停交易
+- 已公告强赎
+- 临近最后交易日、摘牌日或到期日
+- 正股 ST / 退市风险
+- 成交额低于指定阈值
+- 剩余余额低于默认阈值
+- 信用评级低于默认阈值
+
+字段缺失时不会直接剔除，避免因数据源覆盖不足误杀；明确命中风险条件时才排除出主池。
 
 ### 人工事件覆盖字段
 

@@ -18,6 +18,7 @@ from ...batch_pricing import (
     save_batch_results_cache,
     sort_batch_results_for_review,
     split_batch_codes_from_cache,
+    summarize_exclusions,
     summarize_batch_results,
     write_batch_results_csv,
 )
@@ -100,7 +101,7 @@ def build(app, tab):
     app.btn_batch_export.pack(side="left", padx=(8, 0))
 
     codes, excluded = split_batch_codes_from_cache(getattr(app, "terms_cache", None))
-    suffix = f", 已过滤 {len(excluded)} 只非主池标的" if excluded else ""
+    suffix = _excluded_status_suffix(excluded)
     app.v_batch_status = ctk.StringVar(value=f"将基于本地 cb_data 普通转债池定价 ({len(codes)} 只{suffix})")
     ctk.CTkLabel(tab, textvariable=app.v_batch_status,
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).grid(
@@ -180,7 +181,7 @@ def _run_batch(app):
     watchlist_codes = [e.get("bond_code") for e in app._batch_watchlist if e.get("bond_code")]
 
     app.btn_batch_run.configure(state="disabled")
-    skipped = f", 已过滤 {len(excluded)} 只非主池标的" if excluded else ""
+    skipped = _excluded_status_suffix(excluded)
     watch = f", 关注池 {len(watchlist_codes)} 只" if watchlist_codes else ""
     app.v_batch_status.set(f"正在定价 {len(codes)} 只普通转债 (自动并发{skipped}{watch}) ...")
     app._start_progress(f"全量定价 {len(codes)} 只")
@@ -248,6 +249,14 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
     finally:
         app.after(0, app._stop_progress)
         app.after(0, lambda: app.btn_batch_run.configure(state="normal"))
+
+
+def _excluded_status_suffix(excluded):
+    if not excluded:
+        return ""
+    by_reason = summarize_exclusions(excluded)
+    top = "、".join(f"{reason}{count}" for reason, count in list(by_reason.items())[:2])
+    return f", 准入过滤 {len(excluded)} 只 ({top})"
 
 
 def _render_batch_views(
@@ -360,7 +369,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         f"✅ {view_name}: 展示 {summary['total']}/{total} 只  |  成功 {summary['success']}  失败 {summary['failed']}  |  "
         f"按机会分排序 (兼顾低估、转股折价、余额/评级/HV风险)")
     if excluded_count:
-        app.v_batch_status.set(f"{app.v_batch_status.get()}  |  已过滤 {excluded_count} 只定向/非主池标的")
+        app.v_batch_status.set(f"{app.v_batch_status.get()}  |  准入过滤 {excluded_count} 只")
     app.btn_batch_export.configure(state="normal")
     app.btn_batch_save_cache.configure(state="normal")
     if cache_path is not None:

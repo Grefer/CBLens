@@ -81,6 +81,15 @@ class BondTerms:
     close: Optional[float] = None                   # 转债现价
     credit_rating: Optional[str] = None
     outstanding_balance: Optional[float] = None     # 剩余规模 (亿)
+    suspension_status: Optional[str] = None          # 停复牌/交易状态补充
+    call_status: Optional[str] = None                # 强赎公告/执行状态
+    call_announce_date: Optional[date] = None        # 强赎公告日
+    call_redemption_date: Optional[date] = None      # 强赎登记/赎回日
+    last_trading_date: Optional[date] = None         # 最后交易日/摘牌前最后可交易日
+    delisting_date: Optional[date] = None            # 摘牌日
+    underlying_name: Optional[str] = None            # 正股名称
+    underlying_status: Optional[str] = None          # 正股 ST/退市风险/停牌等状态
+    bond_turnover_amount: Optional[float] = None     # 转债成交额, 口径由数据源决定
 
 
 @dataclass
@@ -147,17 +156,19 @@ def infer_cb_trading_metadata(
     val_date = valuation_date or date.today()
     listing_date = terms.listing_date or terms.issue_date
     tradable_date = terms.tradable_date
+    explicit_is_tradable = terms.is_tradable
+    explicit_status = terms.trading_status
     standard_public = is_standard_public_cb_code(bond_code) and not looks_private_cb_name(terms.sec_name)
 
     if standard_public:
         tradable_date = tradable_date or listing_date
-        status = "tradable" if tradable_date is None or tradable_date <= val_date else "pending"
+        status = explicit_status or ("tradable" if tradable_date is None or tradable_date <= val_date else "pending")
     else:
         if tradable_date is None and listing_date is not None:
             tradable_date = _add_months(listing_date, 6)
         if tradable_date is None:
-            status = "private_unknown"
-            is_tradable = False
+            status = explicit_status or "private_unknown"
+            is_tradable = explicit_is_tradable if explicit_is_tradable is not None else False
             return replace(
                 terms,
                 listing_date=listing_date,
@@ -165,9 +176,10 @@ def infer_cb_trading_metadata(
                 is_tradable=is_tradable,
                 trading_status=status,
             )
-        status = "private_tradable" if tradable_date <= val_date else "private_pending"
+        status = explicit_status or ("private_tradable" if tradable_date <= val_date else "private_pending")
 
-    is_tradable = tradable_date is None or tradable_date <= val_date
+    inferred_is_tradable = tradable_date is None or tradable_date <= val_date
+    is_tradable = explicit_is_tradable if explicit_is_tradable is not None else inferred_is_tradable
     return replace(
         terms,
         listing_date=listing_date,
@@ -223,6 +235,41 @@ def _latest_finite(values) -> Optional[float]:
     return None
 
 
+def _float_or_none(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        text = str(value).replace(",", "").strip()
+        if text in {"", "--", "nan", "None"}:
+            return None
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _string_or_none(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text and text not in {"--", "nan", "None"} else None
+
+
+def _date_or_none(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (date, datetime)):
+            return to_date(value)
+        text = str(value).strip()
+        if not text or text in {"--", "nan", "None"}:
+            return None
+        if re.fullmatch(r"\d{8}", text):
+            return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+        return to_date(text)
+    except Exception:
+        return None
+
+
 # ── 接口 ──────────────────────────────────────────────────
 class DataProvider(ABC):
     """所有数据源后端的统一接口."""
@@ -252,6 +299,19 @@ class DataProvider(ABC):
     def get_risk_free_rate(self, on_date: date) -> Optional[float]:
         """无风险利率参考值 (%). 默认 None."""
         return None
+
+    def get_admission_status(
+        self,
+        bond_code: str,
+        valuation_date: date,
+        base_terms: Optional[BondTerms] = None,
+    ) -> BondTerms:
+        """拉取主池准入筛选所需的增量状态字段.
+
+        默认退回 ``get_bond_terms``。Wind 等数据源可覆盖该方法, 只刷新停牌、
+        强赎、摘牌、正股风险、成交额等字段, 供每日筛选前快速更新。
+        """
+        return self.get_bond_terms(bond_code, valuation_date)
 
     def hist_vol(self, stock_code: str, end_date: date, window_days: int) -> float:
         """从历史收盘计算年化滚动波动率 (默认实现, 子类可覆盖)."""
@@ -342,6 +402,115 @@ class WindDataProvider(DataProvider):
             outstanding_balance=_f("outstandingbalance"),
         )
         return infer_cb_trading_metadata(bond_code, terms, valuation_date)
+
+    def get_admission_status(self, bond_code, valuation_date, base_terms=None):
+        """增量刷新主池准入状态字段.
+
+        Wind 字段在不同终端/权限下可能存在差异, 因此这里逐个候选字段尝试;
+        拿不到的字段保持 None, 不影响已有 cb_data 内容。
+        """
+        bond_data = self._wss_candidates(
+            bond_code,
+            {
+                "suspension_status": ("trade_status", "suspensionstatus", "suspendtype"),
+                "call_status": (
+                    "clause_calloption_status",
+                    "calloption_status",
+                    "redemption_status",
+                    "earlyredemption_status",
+                ),
+                "call_announce_date": (
+                    "clause_calloption_announcementdate",
+                    "calloption_announcementdate",
+                    "redemption_announcementdate",
+                ),
+                "call_redemption_date": (
+                    "clause_calloption_redemptiondate",
+                    "calloption_redemptiondate",
+                    "redemptiondate",
+                ),
+                "last_trading_date": ("lasttrade_date", "lasttradingdate", "last_trade_date"),
+                "delisting_date": ("delist_date", "delistingdate"),
+                "credit_rating": ("creditrating",),
+                "outstanding_balance": ("outstandingbalance",),
+            },
+            valuation_date,
+        )
+        bond_turnover_amount = self._wsd_latest_number(bond_code, "amt", valuation_date)
+
+        underlying_code = None
+        if base_terms is not None:
+            underlying_code = base_terms.underlying_code
+        if not underlying_code:
+            underlying_code = self._wss_value(bond_code, "underlyingcode", valuation_date)
+
+        stock_data = {}
+        if underlying_code:
+            stock_data = self._wss_candidates(
+                str(underlying_code),
+                {
+                    "underlying_name": ("sec_name",),
+                    "underlying_status": ("trade_status", "riskwarning", "st_status", "specialtreatment"),
+                },
+                valuation_date,
+            )
+
+        terms = BondTerms(
+            suspension_status=_string_or_none(bond_data.get("suspension_status")),
+            call_status=_string_or_none(bond_data.get("call_status")),
+            call_announce_date=_date_or_none(bond_data.get("call_announce_date")),
+            call_redemption_date=_date_or_none(bond_data.get("call_redemption_date")),
+            last_trading_date=_date_or_none(bond_data.get("last_trading_date")),
+            delisting_date=_date_or_none(bond_data.get("delisting_date")),
+            underlying_name=_string_or_none(stock_data.get("underlying_name")),
+            underlying_status=_string_or_none(stock_data.get("underlying_status")),
+            bond_turnover_amount=bond_turnover_amount,
+            credit_rating=_string_or_none(bond_data.get("credit_rating")),
+            outstanding_balance=_float_or_none(bond_data.get("outstanding_balance")),
+        )
+        return terms
+
+    def _wss_candidates(self, code, candidates, valuation_date):
+        return {
+            key: self._wss_first_available(code, fields, valuation_date)
+            for key, fields in candidates.items()
+        }
+
+    def _wss_first_available(self, code, fields, valuation_date):
+        for field_name in fields:
+            value = self._wss_value(code, field_name, valuation_date)
+            if value is not None:
+                return value
+        return None
+
+    def _wss_value(self, code, field_name, valuation_date):
+        w = self._ensure()
+        val_str = valuation_date.strftime("%Y%m%d")
+        try:
+            res = w.wss(code, field_name, f"tradeDate={val_str}")
+        except Exception:
+            return None
+        if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
+            return None
+        try:
+            value = res.Data[0][0]
+        except Exception:
+            return None
+        return value if value not in ("", "--") else None
+
+    def _wsd_latest_number(self, code, field_name, valuation_date):
+        w = self._ensure()
+        d = valuation_date.isoformat()
+        try:
+            res = w.wsd(code, field_name, d, d, "")
+        except Exception:
+            return None
+        if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
+            return None
+        try:
+            return _float_or_none(res.Data[0][-1])
+        except Exception:
+            return None
 
     def get_stock_close(self, stock_code, on_date):
         w = self._ensure()
@@ -620,6 +789,7 @@ class AkshareDataProvider(DataProvider):
         K_val = float(K) if K is not None and float(K) > 0 else None
         close_val = _gl("债现价", "现价", "价格")
         rating = _gl("信用评级") or rating_profile
+        turnover = _float_or_none(_gl("成交额", "成交额(元)", "成交额(万元)"))
 
         size_val = None
         if size_str is not None:
@@ -646,6 +816,8 @@ class AkshareDataProvider(DataProvider):
             close=(float(close_val) if close_val is not None else None),
             credit_rating=str(rating) if rating else None,
             outstanding_balance=size_val,
+            underlying_name=str(_gl("正股简称")) if _gl("正股简称") else None,
+            bond_turnover_amount=turnover,
         )
         return infer_cb_trading_metadata(bond_code, terms, valuation_date)
 
@@ -871,6 +1043,15 @@ class CSVDataProvider(DataProvider):
             close=d.get("close"),
             credit_rating=d.get("credit_rating"),
             outstanding_balance=d.get("outstanding_balance"),
+            suspension_status=d.get("suspension_status"),
+            call_status=d.get("call_status"),
+            call_announce_date=to_date(d.get("call_announce_date")),
+            call_redemption_date=to_date(d.get("call_redemption_date")),
+            last_trading_date=to_date(d.get("last_trading_date")),
+            delisting_date=to_date(d.get("delisting_date")),
+            underlying_name=d.get("underlying_name"),
+            underlying_status=d.get("underlying_status"),
+            bond_turnover_amount=d.get("bond_turnover_amount"),
         )
         return infer_cb_trading_metadata(bond_code, terms, valuation_date)
 

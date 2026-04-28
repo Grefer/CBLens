@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from convertible_bond.batch_pricing import (
+    AdmissionFilterConfig,
     BATCH_RESULT_COLUMNS,
     annotate_batch_result,
     filter_batch_results_by_view,
@@ -16,7 +17,9 @@ from convertible_bond.batch_pricing import (
     merge_upcoming_pricing_results,
     parse_bond_codes,
     save_batch_results_cache,
+    screen_batch_pool_from_cache,
     split_batch_codes_from_cache,
+    summarize_exclusions,
     summarize_batch_results,
     write_batch_results_csv,
 )
@@ -79,6 +82,83 @@ def test_list_batch_codes_from_cache_filters_nonstandard_private_bonds():
         ),
         on_date=date(2026, 4, 28),
     ) == "非普通公募转债代码段"
+
+
+def test_batch_pricing_exclusion_reason_applies_admission_filters():
+    check_date = date(2026, 4, 28)
+
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", is_tradable=False),
+        on_date=check_date,
+    ) == "不可交易"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", trading_status="停牌"),
+        on_date=check_date,
+    ) == "停牌/暂停交易"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        {"sec_name": "南银转债", "call_status": "已公告强赎"},
+        on_date=check_date,
+    ) == "已公告强赎"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", call_redemption_date=date(2026, 5, 6)),
+        on_date=check_date,
+    ) == "已公告强赎"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", last_trading_date=date(2026, 5, 10)),
+        on_date=check_date,
+    ) == "临近摘牌"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", underlying_name="*ST 测试"),
+        on_date=check_date,
+    ) == "正股 ST/退市风险"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", bond_turnover_amount=400.0),
+        on_date=check_date,
+        min_turnover_amount=1000.0,
+    ) == "成交额过低"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", outstanding_balance=0.3),
+        on_date=check_date,
+    ) == "余额过小"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", credit_rating="A"),
+        on_date=check_date,
+    ) == "评级过低"
+
+
+def test_batch_pool_screening_report_uses_configurable_thresholds():
+    class FakeTermsCache:
+        data = {
+            "113001.SH": BondTerms(sec_name="大余额", outstanding_balance=2.0, credit_rating="AA"),
+            "113002.SH": BondTerms(sec_name="小余额", outstanding_balance=0.8, credit_rating="AA"),
+            "113003.SH": BondTerms(sec_name="低评级", outstanding_balance=2.0, credit_rating="A+"),
+        }
+
+        def list_bonds(self):
+            return list(self.data)
+
+        def get(self, code):
+            return self.data[code]
+
+    report = screen_batch_pool_from_cache(
+        FakeTermsCache(),
+        admission_config=AdmissionFilterConfig(
+            min_outstanding_balance=1.0,
+            min_credit_rating="AA-",
+        ),
+    )
+
+    assert report["accepted"] == ["113001.SH"]
+    assert summarize_exclusions(report["excluded"]) == {"余额过小": 1, "评级过低": 1}
 
 
 def test_upcoming_tradable_cache_finds_private_bonds_in_window():
@@ -164,6 +244,7 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
     assert row["parity"] == pytest.approx(251.69, rel=1e-3)
     assert row["conversion_premium"] == pytest.approx(-0.130, rel=1e-2)
     assert "模型低估" in row["risk_tags"]
+    assert row["undervaluation_rate"] == pytest.approx(0.294)
     assert "转股折价" in row["risk_tags"]
     assert "高HV" in row["risk_tags"]
     assert row["confidence"] in {"中", "低"}

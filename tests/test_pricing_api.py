@@ -44,6 +44,8 @@ def test_batch_price_from_provider_threaded_runs_concurrently(monkeypatch):
     assert max_active > 1
     assert [row["bond_code"] for row in results] == ["A", "B", "C"]
     assert [row["status"] for row in results] == ["ok", "ok", "ok"]
+    assert results[0]["undervaluation_rate"] == 0.1
+    assert results[1]["undervaluation_rate"] == -0.1
     assert progress[-1] == (3, 3)
 
 

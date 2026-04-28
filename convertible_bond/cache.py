@@ -85,6 +85,15 @@ def _json_dict_to_terms(d: dict) -> BondTerms:
         close=d.get("close"),
         credit_rating=d.get("credit_rating"),
         outstanding_balance=d.get("outstanding_balance"),
+        suspension_status=d.get("suspension_status"),
+        call_status=d.get("call_status"),
+        call_announce_date=to_date(d.get("call_announce_date")),
+        call_redemption_date=to_date(d.get("call_redemption_date")),
+        last_trading_date=to_date(d.get("last_trading_date")),
+        delisting_date=to_date(d.get("delisting_date")),
+        underlying_name=d.get("underlying_name"),
+        underlying_status=d.get("underlying_status"),
+        bond_turnover_amount=d.get("bond_turnover_amount"),
     )
 
 
@@ -459,4 +468,3 @@ class CachedBondDataProvider(DataProvider):
 
     def hist_vol(self, stock_code, end_date, window_days):
         return self.market.hist_vol(stock_code, end_date, window_days)
-

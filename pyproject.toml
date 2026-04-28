@@ -18,6 +18,8 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 cb-gui = "convertible_bond.gui.app:main"
+cb-screen-pool = "convertible_bond.cli.screen_pool:main"
+cb-sync-admission-status = "convertible_bond.cli.sync_admission_status:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

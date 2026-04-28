@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, List, Sequence
@@ -40,6 +41,7 @@ BATCH_RESULT_COLUMNS = [
     "theoretical_price",
     "market_price",
     "deviation",
+    "undervaluation_rate",
     "credit_rating",
     "status",
     "parity",
@@ -62,6 +64,56 @@ HARD_REVIEW_TAGS = {
     "高HV", "极小余额", "小余额", "余额异常", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
 }
+DEFAULT_DELIST_WINDOW_DAYS = 30
+DEFAULT_MIN_OUTSTANDING_BALANCE = 0.5
+DEFAULT_MIN_CREDIT_RATING = "A+"
+_SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "暂停上市")
+_CALL_ANNOUNCED_KEYWORDS = ("已公告强赎", "公告强赎", "强制赎回", "提前赎回", "赎回登记")
+_UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "暂停上市", "终止上市", "退市")
+_RATING_SCORES = {
+    "C": 0,
+    "CC": 1,
+    "CCC": 2,
+    "B-": 3,
+    "B": 4,
+    "B+": 5,
+    "BB-": 6,
+    "BB": 7,
+    "BB+": 8,
+    "BBB-": 9,
+    "BBB": 10,
+    "BBB+": 11,
+    "A-": 12,
+    "A": 13,
+    "A+": 14,
+    "AA-": 15,
+    "AA": 16,
+    "AA+": 17,
+    "AAA": 18,
+}
+
+
+@dataclass(frozen=True)
+class AdmissionFilterConfig:
+    """批量定价主池准入参数.
+
+    字段缺失时不剔除; 只有数据明确触发风险条件时才排除出主池。
+    ``min_turnover_amount`` 的单位跟随数据源原始口径，未设置时不做成交额过滤。
+    """
+
+    delist_window_days: int = DEFAULT_DELIST_WINDOW_DAYS
+    min_outstanding_balance: float | None = DEFAULT_MIN_OUTSTANDING_BALANCE
+    min_credit_rating: str | None = DEFAULT_MIN_CREDIT_RATING
+    min_turnover_amount: float | None = None
+
+
+@dataclass(frozen=True)
+class AdmissionFilterResult:
+    """单只转债主池准入结果."""
+
+    bond_code: str
+    accepted: bool
+    reason: str | None = None
 
 
 def project_batch_cache_path() -> Path:
@@ -98,7 +150,12 @@ def parse_bond_codes(raw: str | Iterable[str]) -> List[str]:
     return codes
 
 
-def list_batch_codes_from_cache(terms_cache, *, include_nonstandard: bool = False) -> List[str]:
+def list_batch_codes_from_cache(
+    terms_cache,
+    *,
+    include_nonstandard: bool = False,
+    admission_config: AdmissionFilterConfig | None = None,
+) -> List[str]:
     """返回 cb_data 静态信息缓存中的批量定价代码池.
 
     默认只返回当前 A 股普通公募可转债常见代码段:
@@ -115,18 +172,30 @@ def list_batch_codes_from_cache(terms_cache, *, include_nonstandard: bool = Fals
         return codes
     return [
         code for code in codes
-        if batch_pricing_exclusion_reason(code, _cached_terms(terms_cache, code)) is None
+        if batch_pricing_exclusion_reason(
+            code,
+            _cached_terms(terms_cache, code),
+            admission_config=admission_config,
+        ) is None
     ]
 
 
-def split_batch_codes_from_cache(terms_cache) -> tuple[List[str], List[tuple[str, str]]]:
+def split_batch_codes_from_cache(
+    terms_cache,
+    *,
+    admission_config: AdmissionFilterConfig | None = None,
+) -> tuple[List[str], List[tuple[str, str]]]:
     """把缓存代码池拆成 (可批量定价代码, 被过滤代码及原因)."""
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return [], []
     kept: List[str] = []
     excluded: List[tuple[str, str]] = []
     for code in terms_cache.list_bonds():
-        reason = batch_pricing_exclusion_reason(code, _cached_terms(terms_cache, code))
+        reason = batch_pricing_exclusion_reason(
+            code,
+            _cached_terms(terms_cache, code),
+            admission_config=admission_config,
+        )
         if reason is None:
             kept.append(code)
         else:
@@ -134,17 +203,61 @@ def split_batch_codes_from_cache(terms_cache) -> tuple[List[str], List[tuple[str
     return kept, excluded
 
 
+def screen_batch_pool_from_cache(
+    terms_cache,
+    *,
+    admission_config: AdmissionFilterConfig | None = None,
+) -> dict:
+    """返回主池准入筛选报告.
+
+    报告用于 GUI/CLI 在定价前展示数据池质量，结构为:
+    ``{accepted, excluded, total, n_accepted, n_excluded, excluded_by_reason}``。
+    """
+    accepted, excluded = split_batch_codes_from_cache(
+        terms_cache,
+        admission_config=admission_config,
+    )
+    return {
+        "accepted": accepted,
+        "excluded": excluded,
+        "total": len(accepted) + len(excluded),
+        "n_accepted": len(accepted),
+        "n_excluded": len(excluded),
+        "excluded_by_reason": summarize_exclusions(excluded),
+    }
+
+
+def summarize_exclusions(excluded: Sequence[tuple[str, str]]) -> dict[str, int]:
+    """按剔除原因统计数量, 保持首次出现顺序."""
+    summary: dict[str, int] = {}
+    for _, reason in excluded:
+        summary[reason] = summary.get(reason, 0) + 1
+    return summary
+
+
 def batch_pricing_exclusion_reason(
     code: str,
     terms: Any = None,
     *,
     on_date: date | None = None,
+    delist_window_days: int = DEFAULT_DELIST_WINDOW_DAYS,
+    min_outstanding_balance: float | None = DEFAULT_MIN_OUTSTANDING_BALANCE,
+    min_credit_rating: str | None = DEFAULT_MIN_CREDIT_RATING,
+    min_turnover_amount: float | None = None,
+    admission_config: AdmissionFilterConfig | None = None,
 ) -> str | None:
     """返回批量主池过滤原因; None 表示可以进入主批量定价.
 
     这里采用保守的白名单策略。定向转债在可交易前可能值得关注，但进入
     deviation 排序会制造虚假的"低估"信号，因此默认不进主池。
+    对停牌、强赎、临近摘牌、正股 ST、低成交额、小余额、低评级等二级
+    准入条件采用"字段明确才剔除"的保守规则，避免因数据源缺字段误杀。
     """
+    if admission_config is not None:
+        delist_window_days = admission_config.delist_window_days
+        min_outstanding_balance = admission_config.min_outstanding_balance
+        min_credit_rating = admission_config.min_credit_rating
+        min_turnover_amount = admission_config.min_turnover_amount
     check_date = on_date or date.today()
     terms = _with_inferred_trading_metadata(code, terms, check_date)
     tradable_date = _terms_date(terms, "tradable_date")
@@ -156,6 +269,30 @@ def batch_pricing_exclusion_reason(
     plain, exch = raw_code.split(".", 1)
     if exch not in {"SH", "SZ"}:
         return "非沪深主板/深市可转债"
+    if is_tradable is False:
+        return "不可交易"
+    if _terms_status_contains(terms, _SUSPENSION_KEYWORDS, "trading_status", "suspension_status"):
+        return "停牌/暂停交易"
+    if _call_announced(terms, check_date):
+        return "已公告强赎"
+    delist_reason = _near_delisting_reason(terms, check_date, delist_window_days)
+    if delist_reason:
+        return delist_reason
+    if _underlying_has_st_risk(terms):
+        return "正股 ST/退市风险"
+    turnover = _finite_float(_terms_value(terms, "bond_turnover_amount"))
+    if min_turnover_amount is not None and turnover is not None and turnover < min_turnover_amount:
+        return "成交额过低"
+    balance = _finite_float(_terms_value(terms, "outstanding_balance"))
+    if (
+        min_outstanding_balance is not None
+        and balance is not None
+        and balance < min_outstanding_balance
+    ):
+        return "余额过小"
+    rating = _terms_value(terms, "credit_rating")
+    if min_credit_rating and _rating_below(rating, min_credit_rating):
+        return "评级过低"
 
     name = _terms_value(terms, "sec_name") or _terms_value(terms, "bond_name")
     standard_public = is_standard_public_cb_code(raw_code) and not looks_private_cb_name(name)
@@ -182,6 +319,61 @@ def batch_pricing_exclusion_reason(
         return "非普通公募转债代码段"
     if looks_private_cb_name(name):
         return "定向转债/暂不可自由交易"
+    return None
+
+
+def _terms_status_contains(terms: Any, keywords: Sequence[str], *keys: str) -> bool:
+    text = " ".join(str(_terms_value(terms, key) or "") for key in keys).upper()
+    return any(keyword.upper() in text for keyword in keywords)
+
+
+def _call_announced(terms: Any, on_date: date) -> bool:
+    if _terms_status_contains(terms, _CALL_ANNOUNCED_KEYWORDS, "call_status", "trading_status"):
+        return True
+    announce_date = _terms_date(terms, "call_announce_date")
+    if announce_date is not None and announce_date <= on_date:
+        return True
+    # Wind 对部分已强赎标的只返回强赎赎回日/登记日, 不返回文字状态。
+    # 该字段一旦出现, 即表示已进入强赎安排, 应从主池剔除。
+    if _terms_date(terms, "call_redemption_date") is not None:
+        return True
+    return False
+
+
+def _near_delisting_reason(terms: Any, on_date: date, window_days: int) -> str | None:
+    window = max(0, int(window_days))
+    for key in ("last_trading_date", "delisting_date"):
+        d = _terms_date(terms, key)
+        if d is not None and on_date <= d <= on_date + timedelta(days=window):
+            return "临近摘牌"
+    maturity = _terms_date(terms, "maturity_date")
+    if maturity is not None and on_date <= maturity <= on_date + timedelta(days=window):
+        return "临近到期/摘牌"
+    return None
+
+
+def _underlying_has_st_risk(terms: Any) -> bool:
+    name = str(_terms_value(terms, "underlying_name") or "").upper()
+    status = str(_terms_value(terms, "underlying_status") or "").upper()
+    text = f"{name} {status}"
+    return any(keyword.upper() in text for keyword in _UNDERLYING_ST_KEYWORDS)
+
+
+def _rating_below(rating: Any, minimum: str) -> bool:
+    score = _rating_score(rating)
+    min_score = _rating_score(minimum)
+    return score is not None and min_score is not None and score < min_score
+
+
+def _rating_score(rating: Any) -> int | None:
+    if rating is None:
+        return None
+    raw = str(rating).upper().replace(" ", "").strip()
+    if not raw:
+        return None
+    for label in sorted(_RATING_SCORES, key=len, reverse=True):
+        if raw == label or raw.startswith(label):
+            return _RATING_SCORES[label]
     return None
 
 
@@ -399,6 +591,7 @@ def annotate_batch_result(row: dict) -> dict:
             confidence_points -= 12
 
     if deviation is not None:
+        out["undervaluation_rate"] = -deviation
         score += max(0.0, -deviation) * 100.0
         if deviation < -0.08:
             risk_tags.append("模型低估")
@@ -614,6 +807,8 @@ def _csv_value(row: dict, column: str):
         return ""
     if column in {"deviation", "conversion_premium", "model_premium_to_parity"}:
         return f"{float(value):.6f}" if value != "" else ""
+    if column == "undervaluation_rate":
+        return f"{float(value):.6f}" if value != "" else ""
     if column in {"parity", "opportunity_score"}:
         return f"{float(value):.4f}" if value != "" else ""
     if column == "risk_tags" and isinstance(value, list):
@@ -640,6 +835,7 @@ def _restore_result_row(row: dict) -> dict:
     for key in (
         "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
         "conversion_premium", "model_premium_to_parity", "opportunity_score",
+        "undervaluation_rate",
     ):
         if key in restored and restored[key] is None:
             restored[key] = float("nan")
