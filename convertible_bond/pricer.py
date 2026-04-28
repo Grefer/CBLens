@@ -37,6 +37,7 @@ class UniversalCBPricer:
                  put_trigger_ratio: float = 0.7,
                  put_active_years: int = 2,
                  down_reset_premium: float = 1.02,
+                 down_reset_block_until: Optional[date] = None,
                  call_notice_days: int = 30):
         self._validate_inputs(S0, K, current_date, maturity_date, face_value)
         self.S0 = S0
@@ -51,6 +52,7 @@ class UniversalCBPricer:
         self.put_trigger_ratio = put_trigger_ratio
         self.put_active_years = put_active_years
         self.down_reset_premium = down_reset_premium
+        self.down_reset_block_until = down_reset_block_until
         self.call_notice_days = max(0, int(call_notice_days))
         self.coupon_rates = tuple(coupon_rates or DEFAULT_COUPON_RATES)
 
@@ -232,12 +234,19 @@ class UniversalCBPricer:
                     )
 
                 # 下修博弈: S < K 时才可能触发下修, 概率随 OTM 程度线性递增.
+                # p_down 按年化事件强度解释, 每个 PDE 时间步转换成 step probability;
+                # 否则会在 N 个时间步里反复应用完整概率, 造成 OTM 转债被严重高估.
                 # 下修后 K_new = S / down_reset_premium, 用齐次性近似 post-reset 延续价值:
                 # 同一 CB 网格上 moneyness=premium 处的 V, 下限为 face*premium.
                 # ITM 区域 (S>K) p_reset=0 不受影响; OTM 区域被适度拉升, 天然单调连续.
-                if p_down > 0:
-                    # S-dependent 下修概率: S>=K → 0, S=0 → p_down
-                    p_reset = p_down * np.clip(1.0 - S_grid / self.K, 0.0, 1.0)
+                down_reset_allowed = (
+                    self.down_reset_block_until is None
+                    or step_date > self.down_reset_block_until
+                )
+                if p_down > 0 and down_reset_allowed:
+                    # S-dependent 下修概率: S>=K → 0, S=0 → step_down_prob
+                    step_down_prob = 1.0 - float(np.exp(-p_down * dt))
+                    p_reset = step_down_prob * np.clip(1.0 - S_grid / self.K, 0.0, 1.0)
                     V_post_reset = float(np.interp(self.K * self.down_reset_premium, S_grid, V))
                     conv_floor = self.face_value * self.down_reset_premium
                     reset_value = max(V_post_reset, conv_floor)
@@ -264,7 +273,7 @@ class UniversalCBPricer:
               *, return_greeks: Literal[True]) -> Dict[str, float]: ...
 
     def price(self, sigma: float, r: float, base_spread: float,
-              p_down: float = 0.1,        # 下修博弈概率
+              p_down: float = 0.1,        # 下修博弈年化强度
               distress_k: float = 0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
               M: int = 500, N: int = 2000,
               return_greeks: bool = False) -> Union[float, Dict[str, float]]:
@@ -317,6 +326,7 @@ class UniversalCBPricer:
                 put_trigger_ratio=self.put_trigger_ratio,
                 put_active_years=self.put_active_years,
                 down_reset_premium=self.down_reset_premium,
+                down_reset_block_until=self.down_reset_block_until,
                 call_notice_days=self.call_notice_days,
             )
             S_grid_t, V_t = tomorrow_pricer._price_grid(

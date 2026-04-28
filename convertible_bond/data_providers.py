@@ -73,6 +73,10 @@ class BondTerms:
     call_trigger_pct: Optional[float] = None        # 强赎触发 (例 130.0 = 130%K)
     put_trigger_pct: Optional[float] = None         # 回售触发 (例 70.0)
     put_obs_months: Optional[float] = None          # 回售观察期月数 (从发行起算)
+    down_reset_block_until: Optional[date] = None   # 公告不下修/不提议期间, 该日前不计下修
+    down_reset_p_scale: Optional[float] = None      # 单债下修强度缩放; 0 表示不计下修博弈
+    down_reset_note: Optional[str] = None           # 人工记录公告/判断来源
+    down_reset_cooldown_months: Optional[float] = None  # 募集说明书"再观察期", 决议不修正后的冻结月数
     coupon_rates: Optional[Tuple[float, ...]] = None  # 已解析的小数 (例 (0.003, 0.005, ...))
     close: Optional[float] = None                   # 转债现价
     credit_rating: Optional[str] = None
@@ -859,6 +863,10 @@ class CSVDataProvider(DataProvider):
             call_trigger_pct=d.get("call_trigger_pct"),
             put_trigger_pct=d.get("put_trigger_pct"),
             put_obs_months=d.get("put_obs_months"),
+            down_reset_block_until=to_date(d.get("down_reset_block_until")),
+            down_reset_p_scale=d.get("down_reset_p_scale"),
+            down_reset_note=d.get("down_reset_note"),
+            down_reset_cooldown_months=d.get("down_reset_cooldown_months"),
             coupon_rates=coupons,
             close=d.get("close"),
             credit_rating=d.get("credit_rating"),

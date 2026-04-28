@@ -17,6 +17,43 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .pricer import UniversalCBPricer, DEFAULT_FACE_VALUE, DEFAULT_REDEMPTION_PRICE
 from .data_providers import DataProvider, WindDataProvider, auto_data_provider
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
+from .down_reset_overrides import resolve_down_reset
+
+
+def _finite_float(value) -> Optional[float]:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _latest_price_on_or_before(history, on_date: date) -> Optional[float]:
+    latest: Optional[float] = None
+    latest_date: Optional[date] = None
+    for d, value in history or []:
+        if d is None or d > on_date:
+            continue
+        price = _finite_float(value)
+        if price is None:
+            continue
+        if latest_date is None or d >= latest_date:
+            latest_date = d
+            latest = price
+    return latest
+
+
+def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, fallback) -> Optional[float]:
+    fallback_price = _finite_float(fallback)
+    try:
+        history = provider.get_bond_history(
+            bond_code,
+            val_date - timedelta(days=15),
+            val_date,
+        )
+    except Exception:
+        return fallback_price
+    return _latest_price_on_or_before(history, val_date) or fallback_price
 
 
 def cb_data_provider_for_market(market_provider: DataProvider) -> DataProvider:
@@ -54,6 +91,7 @@ def price_from_provider(provider: DataProvider, bond_code,
 
     if sigma is None:
         sigma = provider.hist_vol(stock_code, val_date, vol_window_days)
+    market_price = _latest_bond_close(provider, bond_code, val_date, terms.close)
 
     issue_dt = terms.issue_date
     conv_start_dt = issue_dt + timedelta(days=180) if issue_dt else None
@@ -99,12 +137,19 @@ def price_from_provider(provider: DataProvider, bond_code,
         total_months = (maturity_dt - issue_dt).days / 30.4375
         active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
         pricer_kwargs["put_active_years"] = int(round(active_years))
+    resolved = resolve_down_reset(bond_code, terms)
+    if resolved.block_until is not None:
+        pricer_kwargs["down_reset_block_until"] = resolved.block_until
 
     pricer_kwargs.update(pricer_overrides)
     pricer = UniversalCBPricer(**pricer_kwargs)  # type: ignore[arg-type]
 
+    effective_p_down = float(p_down)
+    if resolved.p_scale is not None:
+        effective_p_down *= max(0.0, float(resolved.p_scale))
+
     theo = pricer.price(sigma=sigma, r=r, base_spread=base_spread,
-                        distress_k=distress_k, p_down=p_down, M=M, N=N)
+                        distress_k=distress_k, p_down=effective_p_down, M=M, N=N)
     return {
         "bond_code": bond_code,
         "bond_name": terms.sec_name,
@@ -114,7 +159,13 @@ def price_from_provider(provider: DataProvider, bond_code,
         "K": pricer.K,
         "T": pricer.T,
         "sigma": sigma,
-        "market_price": terms.close,
+        "p_down": effective_p_down,
+        "down_reset_block_until": resolved.block_until,
+        "down_reset_p_scale": resolved.p_scale,
+        "down_reset_note": resolved.note,
+        "down_reset_cooldown_months": resolved.cooldown_months,
+        "down_reset_announce_date": resolved.announce_date,
+        "market_price": market_price,
         "credit_rating": terms.credit_rating,
         "outstanding_balance": terms.outstanding_balance,
         "listing_date": terms.listing_date,
@@ -144,6 +195,81 @@ def _resolve_batch_workers(max_workers: Optional[int], total: int) -> int:
         # GUI 批量定价同时包含数据读取与 NumPy PDE 求解; 默认给到一个温和的自动并发。
         max_workers = min(8, max(2, os.cpu_count() or 4))
     return max(1, min(int(max_workers), total))
+
+
+class _BatchStockCache(DataProvider):
+    """装饰器: 批量定价期间缓存正股级数据, 避免同一正股重复发网络请求.
+
+    在批量定价场景中, 同一只正股可能被多只转债引用 (如 A、B 两只转债对应
+    同一只正股). 此外, ``price_from_provider`` 对每只债先调 ``get_stock_close``
+    再调 ``hist_vol`` (内部又调 ``get_stock_history``), 导致同一正股的历史数据
+    被拉取两次.
+
+    本装饰器在一次 batch run 的生命周期内:
+      - get_stock_close(stock, date) → 按 (stock, date) 缓存
+      - get_stock_history(stock, start, end) → 按 (stock, start, end) 缓存
+      - hist_vol(stock, end_date, window) → 按 (stock, end_date, window) 缓存
+
+    线程安全 (多线程并发定价时不会重复请求, 先到的线程写入, 后到的直接读缓存).
+    """
+
+    def __init__(self, inner: DataProvider):
+        self._inner = inner
+        self.name = inner.name
+        self._close_cache: Dict[tuple, float] = {}
+        self._history_cache: Dict[tuple, list] = {}
+        self._bond_history_cache: Dict[tuple, list] = {}
+        self._vol_cache: Dict[tuple, float] = {}
+        import threading
+        self._lock = threading.Lock()
+
+    # ── 缓存的接口 ────────────────────────────────────────
+    def get_stock_close(self, stock_code, on_date):
+        key = (stock_code, on_date)
+        with self._lock:
+            if key in self._close_cache:
+                return self._close_cache[key]
+            # 在线 provider 未明确线程安全, 缓存 miss 时也串行访问 inner.
+            value = self._inner.get_stock_close(stock_code, on_date)
+            self._close_cache[key] = value
+            return value
+
+    def get_stock_history(self, stock_code, start, end):
+        key = (stock_code, start, end)
+        with self._lock:
+            if key in self._history_cache:
+                return self._history_cache[key]
+            value = self._inner.get_stock_history(stock_code, start, end)
+            self._history_cache[key] = value
+            return value
+
+    def hist_vol(self, stock_code, end_date, window_days):
+        key = (stock_code, end_date, window_days)
+        with self._lock:
+            if key in self._vol_cache:
+                return self._vol_cache[key]
+            value = self._inner.hist_vol(stock_code, end_date, window_days)
+            self._vol_cache[key] = value
+            return value
+
+    # ── 直接透传的接口 ────────────────────────────────────
+    def get_bond_terms(self, bond_code, valuation_date):
+        return self._inner.get_bond_terms(bond_code, valuation_date)
+
+    def get_bond_history(self, bond_code, start, end):
+        key = (bond_code, start, end)
+        with self._lock:
+            if key in self._bond_history_cache:
+                return self._bond_history_cache[key]
+            value = self._inner.get_bond_history(bond_code, start, end)
+            self._bond_history_cache[key] = value
+            return value
+
+    def get_cashflow(self, bond_code):
+        return self._inner.get_cashflow(bond_code)
+
+    def get_risk_free_rate(self, on_date):
+        return self._inner.get_risk_free_rate(on_date)
 
 
 def _batch_result_from_provider(
@@ -218,6 +344,9 @@ def batch_price_from_provider_threaded(
 
     与 batch_price_from_provider 参数一致; max_workers=None 时按 CPU 核数自动选择
     一个温和上限, 避免 GUI 大批量计算时固定 4 线程成为瓶颈.
+
+    内部自动启用 _BatchStockCache: 同一正股的现价/历史/波动率只从数据源拉取一次,
+    后续引用相同正股的转债直接走内存缓存, 大幅减少网络请求量.
     """
     val_date = valuation_date or date.today()
     codes = list(bond_codes)
@@ -225,13 +354,15 @@ def batch_price_from_provider_threaded(
     if total == 0:
         return []
 
+    # 批量级正股数据缓存: 同一正股只拉一次, 显著减少网络请求
+    cached_provider = _BatchStockCache(provider)
     workers = _resolve_batch_workers(max_workers, total)
     results: List[Dict[str, Any]] = []
     done_count = 0
 
     def _price_one(code: str) -> Dict[str, Any]:
         return _batch_result_from_provider(
-            provider, code,
+            cached_provider, code,
             r=r, base_spread=base_spread,
             distress_k=distress_k, p_down=p_down,
             valuation_date=val_date,

@@ -9,6 +9,7 @@ UniversalCBPricer 单元测试
 - 辅助函数
 """
 import sys, os
+import json
 import pytest
 import numpy as np
 from datetime import date, timedelta
@@ -101,6 +102,48 @@ class TestRegression:
         p1 = pricer_otm.price(sigma=0.28, r=0.022, base_spread=0.03,
                                distress_k=0.05, p_down=0.15, M=200, N=500)
         assert p1 >= p0, f"p_down=0.15 价格 {p1:.3f} 应 >= p_down=0 价格 {p0:.3f}"
+
+    def test_p_down_is_time_step_scaled(self):
+        """p_down 应按时间步缩放, 不应随 PDE 网格 N 加密而被重复放大."""
+        kwargs = dict(
+            S0=18.66, K=24.55,
+            current_date=date(2026, 4, 28),
+            maturity_date=date(2028, 11, 28),
+            issue_date=date(2022, 12, 22),
+            conversion_start_date=date(2023, 6, 20),
+            coupon_rates=(0.004, 0.006, 0.011, 0.015, 0.025, 0.03),
+            redemption_price=115.0,
+        )
+        pricer = UniversalCBPricer(**kwargs)
+        p0 = pricer.price(sigma=0.675, r=0.022, base_spread=0.03,
+                          distress_k=0.05, p_down=0.0, M=300, N=1000)
+        p1 = pricer.price(sigma=0.675, r=0.022, base_spread=0.03,
+                          distress_k=0.05, p_down=0.15, M=300, N=1000)
+
+        assert p1 >= p0
+        assert p1 - p0 < 5.0
+
+    def test_down_reset_block_until_suppresses_near_term_reset_value(self):
+        """公告不下修期间应屏蔽对应窗口内的下修价值."""
+        kwargs = dict(
+            S0=18.66, K=24.55,
+            current_date=date(2026, 4, 28),
+            maturity_date=date(2028, 11, 28),
+            issue_date=date(2022, 12, 22),
+            conversion_start_date=date(2023, 6, 20),
+            coupon_rates=(0.004, 0.006, 0.011, 0.015, 0.025, 0.03),
+            redemption_price=115.0,
+        )
+        open_pricer = UniversalCBPricer(**kwargs)
+        blocked_pricer = UniversalCBPricer(
+            **kwargs, down_reset_block_until=date(2026, 6, 3))
+
+        p_open = open_pricer.price(sigma=0.675, r=0.022, base_spread=0.03,
+                                   distress_k=0.05, p_down=0.15, M=300, N=1000)
+        p_blocked = blocked_pricer.price(sigma=0.675, r=0.022, base_spread=0.03,
+                                         distress_k=0.05, p_down=0.15, M=300, N=1000)
+
+        assert p_blocked <= p_open
 
 
 # ── 2. 边界条件 ──────────────────────────────────────────
@@ -570,6 +613,35 @@ class TestBacktest:
                 f"parity 一致性破坏: {par:.4f} vs {s0 * face / K:.4f}"
             assert bf > 0, f"bond_floor 应为正: {bf:.4f}"
 
+    def test_backtest_applies_down_reset_p_scale(self, fake_provider, monkeypatch):
+        """回测应和单点/批量一样应用下修强度缩放."""
+        import convertible_bond.backtest as bt
+
+        provider, start, end = fake_provider
+        provider.terms.down_reset_p_scale = 0.0
+        seen_p_down = []
+
+        class SpyPricer:
+            def __init__(self, *args, **kwargs):
+                self.ratio = 100.0 / float(kwargs["K"])
+
+            def price(self, **kwargs):
+                seen_p_down.append(kwargs["p_down"])
+                return 100.0
+
+            def bond_floor_value(self, *_args, **_kwargs):
+                return 95.0
+
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+
+        bt.backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", p_down=0.15, M=80, N=200, provider=provider,
+        )
+
+        assert seen_p_down
+        assert all(p == 0.0 for p in seen_p_down)
+
 
 # ── 13. price_from_provider (provider 通用入口) ────────────
 class TestPriceFromProvider:
@@ -588,6 +660,67 @@ class TestPriceFromProvider:
         assert result["data_source"] == "fake"
         assert 60 < result["theoretical_price"] < 200
         assert result["sigma"] > 0
+
+    def test_price_from_provider_uses_latest_bond_history_close(self, fake_provider):
+        """market_price 应来自估值日前最近转债收盘价, 而不是静态 terms.close."""
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, M=80, N=200,
+        )
+
+        assert result["market_price"] == provider.bond_close[-1][1]
+        assert result["market_price"] != provider.terms.close
+
+    def test_price_from_provider_applies_down_reset_overrides(self, fake_provider):
+        """单债下修事件覆盖应传入 pricer 并缩放 p_down."""
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        provider.terms.down_reset_block_until = date(2025, 9, 30)
+        provider.terms.down_reset_p_scale = 0.0
+        provider.terms.down_reset_note = "公告不向下修正"
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["p_down"] == 0.0
+        assert result["down_reset_block_until"] == date(2025, 9, 30)
+        assert result["down_reset_note"] == "公告不向下修正"
+
+    def test_price_from_provider_resolves_event_overrides(self, fake_provider, tmp_path, monkeypatch):
+        """事件层 announce_date + cooldown_months → block_until 自动推算, p_scale 衰减 p_down."""
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        provider.terms.down_reset_cooldown_months = 6  # 募集说明书条款
+
+        ov_path = tmp_path / "down_reset_overrides.json"
+        ov_path.write_text(json.dumps({
+            "123001.SZ": {
+                "announce_date": "2025-04-13",
+                "p_scale_after_cooldown": 0.3,
+                "note": "测试: 公告不修正",
+            }
+        }), encoding="utf-8")
+        monkeypatch.setattr(dro, "_default_overrides", dro.DownResetOverrides(ov_path))
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_announce_date"] == date(2025, 4, 13)
+        assert result["down_reset_block_until"] == date(2025, 10, 13)  # +6M
+        assert result["down_reset_p_scale"] == 0.3
+        assert result["p_down"] == pytest.approx(0.15 * 0.3)
+        assert "announce=2025-04-13" in result["down_reset_note"]
+        assert "测试: 公告不修正" in result["down_reset_note"]
 
 
 # ── 14. 条款本地缓存 + CachingDataProvider ──────────────────
@@ -955,3 +1088,28 @@ class TestTermsBundle:
         assert bundle.delete("X.SZ") is True
         assert not bundle.has("X.SZ")
         assert bundle.delete("X.SZ") is False  # 已删除, 再 delete 返回 False
+
+
+class TestCSVDataProvider:
+
+    def test_terms_loads_down_reset_fields(self, tmp_path):
+        from convertible_bond.data_providers import CSVDataProvider
+
+        terms_dir = tmp_path / "terms"
+        terms_dir.mkdir()
+        (terms_dir / "123001.SZ.json").write_text(json.dumps({
+            "underlying_code": "000001.SZ",
+            "conversion_price": 52.77,
+            "down_reset_block_until": "2025-09-30",
+            "down_reset_p_scale": 0.25,
+            "down_reset_note": "csv override",
+            "down_reset_cooldown_months": 6,
+        }), encoding="utf-8")
+
+        provider = CSVDataProvider(tmp_path)
+        terms = provider.get_bond_terms("123001.SZ", date(2025, 8, 31))
+
+        assert terms.down_reset_block_until == date(2025, 9, 30)
+        assert terms.down_reset_p_scale == 0.25
+        assert terms.down_reset_note == "csv override"
+        assert terms.down_reset_cooldown_months == 6

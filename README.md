@@ -109,7 +109,7 @@ result = backtest_theoretical_price(
 
 - **风险中性漂移用 r**, **折现用 r + spread(S)**：信用利差仅参与折现，不污染漂移
 - **信用利差 distress 扩张**：`s(S) = base_spread + distress_k · max(0, 1 − S/K)`
-- **下修概率 S-依赖**：S ≥ K 时为 0；S = 0 时取 `p_down`，线性插值
+- **下修概率 S-依赖**：`p_down` 按年化强度解释并折算到 PDE 时间步；S ≥ K 时为 0，S = 0 时取当期步进概率，线性插值
 - **强赎宽限期**：触发后持有人留有 `call_notice_days` 行权窗口，cap 上抬 `parity·(1 + σ√t_grace)`，对应实务里 5–10% 的转股溢价
 - **回售边界**：仅在到期前 `put_active_years` 年内生效
 

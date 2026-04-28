@@ -37,6 +37,11 @@ from ..data_providers import (
 )
 from ..cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from ..backtest import backtest_theoretical_price
+from ..down_reset_overrides import (
+    DEFAULT_COOLDOWN_MONTHS, DownResetOverrides, default_overrides,
+    reload_default_overrides, resolve_down_reset,
+)
+from ..data_providers import _add_months
 
 from .tabs import batch as batch_tab
 
@@ -95,6 +100,13 @@ class CBPricerApp(ctk.CTk):
         self.v_spread    = ctk.StringVar(value="3.0")
         self.v_p_down    = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
         self.v_dk        = ctk.StringVar(value=f"{DEFAULT_DISTRESS_K_PCT:g}")
+        # 下修事件覆盖 (per-bond) — 由 cb_data 静态字段 + down_reset_overrides.json 解析
+        self.v_dr_announce_date = ctk.StringVar(value="")
+        self.v_dr_cooldown      = ctk.StringVar(value="")
+        self.v_dr_p_scale       = ctk.StringVar(value="")
+        self.v_dr_block_until   = ctk.StringVar(value="—")
+        self.v_dr_note          = ctk.StringVar(value="")
+        self.v_dr_status        = ctk.StringVar(value="无事件")
         self.v_call_ratio  = ctk.StringVar(value="130")
         self.v_put_ratio   = ctk.StringVar(value="70")
         self.v_put_years   = ctk.StringVar(value="2")
@@ -437,6 +449,41 @@ class CBPricerApp(ctk.CTk):
             return "Wind"
         return "cb_data"
 
+    def _build_down_reset_panel(self, parent):
+        """下修事件覆盖面板.
+
+        条款字段 (cooldown_months) 写回 cb_data.json;
+        事件字段 (announce_date / p_scale / note) 写到 down_reset_overrides.json.
+        触发 announce_date + cooldown → block_until 自动推算并显示.
+        """
+        card = create_card(parent, "下修事件参数", 0, 0, icon="🛡")
+        _form_row(card, "公告不修正日期", self.v_dr_announce_date, 0, width=130)
+        _form_row(card, "再观察期 (月)", self.v_dr_cooldown, 1, width=80)
+        _form_row(card, "p_scale (期满后乘子)", self.v_dr_p_scale, 2, width=80)
+        _form_row(card, "备注", self.v_dr_note, 3, width=240)
+        _form_row(card, "推算屏蔽至", self.v_dr_block_until, 4, width=130)
+
+        status_row = ctk.CTkFrame(card, fg_color="transparent")
+        status_row.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 4))
+        ctk.CTkLabel(status_row, textvariable=self.v_dr_status,
+                     text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(side="left")
+
+        btns = ctk.CTkFrame(card, fg_color="transparent")
+        btns.grid(row=6, column=0, sticky="ew", padx=16, pady=(2, 8))
+        ctk.CTkButton(btns, text="保存事件", command=self._save_down_reset_override,
+                      fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=ORANGE,
+                      font=(FONT_FAMILY, 12, "bold"), width=85, height=28,
+                      corner_radius=6).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(btns, text="清除事件", command=self._clear_down_reset_override,
+                      fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+                      font=(FONT_FAMILY, 12), width=85, height=28,
+                      corner_radius=6).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(btns, text="cooldown→cb_data",
+                      command=self._save_down_reset_cooldown_to_cb_data,
+                      fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+                      font=(FONT_FAMILY, 11), width=140, height=28,
+                      corner_radius=6).pack(side="left")
+
     def _build_pricing_tab(self):
         tab = self._tab_frames["⚡ 定价"]
         tab.grid_columnconfigure(0, weight=0)
@@ -459,6 +506,10 @@ class CBPricerApp(ctk.CTk):
         _form_row(sec1, "发行日期", self.v_iss_date, 6, wind=True, source_var=self.v_src_iss_date)
         _form_row(sec1, "转股起始日", self.v_conv_date, 7, wind=True, source_var=self.v_src_conv_date)
         _form_row(sec1, "各年票息 (%)", self.v_coupons, 8, wind=True, width=180, source_var=self.v_src_coupons)
+        _form_row(sec1, "强赎触发 (%K)", self.v_call_ratio, 9, wind=True, source_var=self.v_src_call_ratio)
+        _form_row(sec1, "回售触发 (%K)", self.v_put_ratio, 10, wind=True, source_var=self.v_src_put_ratio)
+        _form_row(sec1, "回售生效年数", self.v_put_years, 11, wind=True, source_var=self.v_src_put_years)
+        _form_row(sec1, "强赎宽限天数", self.v_call_notice, 12, source_var=self.v_src_call_notice)
 
         sec2 = create_card(lp, "模型参数", 1, 0, icon="⚙️")
         def make_vol(p):
@@ -486,17 +537,16 @@ class CBPricerApp(ctk.CTk):
             return self.btn_spread
         _form_row(sec2, "信用利差 (%)", self.v_spread, 2, width=80,
                   extra_widget=make_spr, source_var=self.v_src_spread)
-        _form_row(sec2, "下修概率 p (%)", self.v_p_down, 3, source_var=self.v_src_p_down)
+        _form_row(sec2, "下修强度 p (%/年)", self.v_p_down, 3, source_var=self.v_src_p_down)
         _form_row(sec2, "信用扩张系数 (%)", self.v_dk, 4, source_var=self.v_src_dk)
 
-        adv = CollapsibleSection(lp, "高级参数 (条款 & 网格)", expanded=False)
-        adv.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
-        sec3 = create_card(adv.content, "条款触发条件", 0, 0, icon="⚡")
-        _form_row(sec3, "强赎触发 (%K)", self.v_call_ratio, 0, wind=True, source_var=self.v_src_call_ratio)
-        _form_row(sec3, "回售触发 (%K)", self.v_put_ratio, 1, wind=True, source_var=self.v_src_put_ratio)
-        _form_row(sec3, "回售生效年数", self.v_put_years, 2, wind=True, source_var=self.v_src_put_years)
-        _form_row(sec3, "强赎宽限天数", self.v_call_notice, 3, source_var=self.v_src_call_notice)
-        sec4 = create_card(adv.content, "数值网格", 1, 0, icon="🧮")
+        dr_sec = CollapsibleSection(lp, "下修事件覆盖 (per-bond)", expanded=False)
+        dr_sec.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
+        self._build_down_reset_panel(dr_sec.content)
+
+        adv = CollapsibleSection(lp, "高级参数 (网格)", expanded=False)
+        adv.grid(row=3, column=0, sticky="ew", padx=6, pady=5)
+        sec4 = create_card(adv.content, "数值网格", 0, 0, icon="🧮")
         _form_row(sec4, "空间节点 M", self.v_M, 0)
         _form_row(sec4, "时间步数 N", self.v_N, 1)
 
@@ -955,6 +1005,7 @@ class CBPricerApp(ctk.CTk):
         terms = self.terms_cache.get(code)
         if terms is None:
             return
+        self._populate_down_reset_from_resolver(code, terms)
         iss_dt = terms.issue_date
         mat_dt = terms.maturity_date
         conv_dt = iss_dt + timedelta(days=180) if iss_dt else None
@@ -1112,6 +1163,7 @@ class CBPricerApp(ctk.CTk):
                 "close": terms.close,
                 "credit": terms.credit_rating,
                 "outstanding": terms.outstanding_balance,
+                "_terms": terms,
                 "provider_name": provider.name,
                 "market_source": market_source,
                 "terms_source": self._cache_meta_source(code),
@@ -1133,6 +1185,9 @@ class CBPricerApp(ctk.CTk):
         data_code = d.get("bond_code")
         if data_code and self._normalize_bond_code(self.v_bond_code.get()) != data_code:
             return
+        terms_for_dr = d.get("_terms") or self.terms_cache.get(data_code or "")
+        if data_code and terms_for_dr is not None:
+            self._populate_down_reset_from_resolver(data_code, terms_for_dr)
 
         origin_tag = d.get("terms_origin", "?")
         terms_label = self._terms_source_label(origin_tag)
@@ -1377,16 +1432,163 @@ class CBPricerApp(ctk.CTk):
             put_active_years=int(pf(self.v_put_years)),
             call_notice_days=int(pf(self.v_call_notice)),
         )
+
+        block_until, p_scale = self._compute_down_reset_from_ui()
+        if block_until is not None:
+            pricer["down_reset_block_until"] = block_until
+
+        p_down = pf(self.v_p_down) / 100.0
+        if p_scale is not None:
+            p_down *= max(0.0, p_scale)
+
         model = dict(
             sigma=pf(self.v_sigma) / 100.0,
             r=pf(self.v_r) / 100.0,
             base_spread=pf(self.v_spread) / 100.0,
-            p_down=pf(self.v_p_down) / 100.0,
+            p_down=p_down,
             distress_k=pf(self.v_dk) / 100.0,
             M=int(pf(self.v_M)),
             N=int(pf(self.v_N)),
         )
         return {"pricer": pricer, "model": model}
+
+    # ── 下修事件覆盖 ───────────────────────────────────────
+    def _compute_down_reset_from_ui(self):
+        """读取下修事件 GUI 字段 → (block_until, p_scale).
+
+        有公告日时用 announce_date + cooldown 推算 block_until; 没有公告日时,
+        允许直接使用 "推算屏蔽至" 中的硬 override 日期.
+        """
+        ann_str = self.v_dr_announce_date.get().strip()
+        cd_str = self.v_dr_cooldown.get().strip()
+        ps_str = self.v_dr_p_scale.get().strip()
+        block_str = self.v_dr_block_until.get().strip()
+
+        block_until = None
+        if ann_str:
+            try:
+                ann = date.fromisoformat(ann_str)
+            except ValueError:
+                raise ValueError(f"公告不修正日期格式应为 YYYY-MM-DD: '{ann_str}'")
+            try:
+                cd = float(cd_str) if cd_str else float(DEFAULT_COOLDOWN_MONTHS)
+            except ValueError:
+                raise ValueError(f"再观察期(月)应为数字或留空: '{cd_str}'")
+            block_until = _add_months(ann, int(round(cd)))
+        elif block_str and block_str not in {"—", "-", "N/A"}:
+            try:
+                block_until = date.fromisoformat(block_str)
+            except ValueError:
+                raise ValueError(f"推算屏蔽至日期格式应为 YYYY-MM-DD: '{block_str}'")
+
+        p_scale = None
+        if ps_str:
+            try:
+                p_scale = float(ps_str)
+            except ValueError:
+                raise ValueError(f"p_scale 应为数字或留空: '{ps_str}'")
+
+        # 同步显示推算出的 block_until
+        self.v_dr_block_until.set(block_until.isoformat() if block_until else "—")
+        return block_until, p_scale
+
+    def _populate_down_reset_from_resolver(self, code: str, terms: BondTerms) -> None:
+        """根据 cb_data.cooldown + overrides.json 填充 GUI 字段."""
+        ov = default_overrides().get(code) or {}
+        ann = ov.get("announce_date") or ""
+        ps = ov.get("p_scale_after_cooldown")
+        note_parts = []
+        if ov.get("note"):
+            note_parts.append(str(ov["note"]))
+        if terms.down_reset_note:
+            note_parts.append(terms.down_reset_note)
+
+        cooldown = terms.down_reset_cooldown_months
+        cd_str = "" if cooldown is None else f"{float(cooldown):g}"
+
+        self.v_dr_announce_date.set(str(ann))
+        self.v_dr_cooldown.set(cd_str)
+        self.v_dr_p_scale.set("" if ps is None else f"{float(ps):g}")
+        self.v_dr_note.set(" | ".join(note_parts))
+
+        # 同步 block_until 显示
+        resolved = resolve_down_reset(code, terms)
+        self.v_dr_block_until.set(
+            resolved.block_until.isoformat() if resolved.block_until else "—"
+        )
+
+        if ann:
+            tag = f"事件: {ann}"
+            if cooldown is None:
+                tag += " (cooldown 用默认值)"
+            self.v_dr_status.set(tag)
+        elif terms.down_reset_block_until is not None:
+            self.v_dr_status.set(f"硬 override: {terms.down_reset_block_until}")
+        else:
+            self.v_dr_status.set("无事件")
+
+    def _save_down_reset_override(self):
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not code:
+            messagebox.showwarning("提示", "请先输入转债代码")
+            return
+        ann_str = self.v_dr_announce_date.get().strip()
+        ps_str = self.v_dr_p_scale.get().strip()
+        ann = None
+        if ann_str:
+            try:
+                ann = date.fromisoformat(ann_str)
+            except ValueError:
+                messagebox.showwarning("提示", f"公告日格式应为 YYYY-MM-DD: {ann_str}")
+                return
+        ps = None
+        if ps_str:
+            try:
+                ps = float(ps_str)
+            except ValueError:
+                messagebox.showwarning("提示", f"p_scale 应为数字: {ps_str}")
+                return
+        try:
+            default_overrides().set(
+                code, announce_date=ann, p_scale_after_cooldown=ps,
+                note=self.v_dr_note.get().strip() or None,
+            )
+            reload_default_overrides()
+            self.v_dr_status.set(f"已保存到 overrides.json ({code})")
+        except Exception as exc:
+            messagebox.showerror("保存失败", str(exc))
+
+    def _clear_down_reset_override(self):
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not code:
+            return
+        if default_overrides().delete(code):
+            reload_default_overrides()
+        self.v_dr_announce_date.set("")
+        self.v_dr_p_scale.set("")
+        self.v_dr_note.set("")
+        self.v_dr_block_until.set("—")
+        self.v_dr_status.set("已清除")
+
+    def _save_down_reset_cooldown_to_cb_data(self):
+        """把 cooldown 写回 cb_data.json 的 down_reset_cooldown_months 字段."""
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not code:
+            messagebox.showwarning("提示", "请先输入转债代码")
+            return
+        terms = self.terms_cache.get(code)
+        if terms is None:
+            messagebox.showwarning("提示", f"{code} 不在 cb_data, 先 '同步' 拉取")
+            return
+        cd_str = self.v_dr_cooldown.get().strip()
+        try:
+            cd_val = float(cd_str) if cd_str else None
+        except ValueError:
+            messagebox.showwarning("提示", f"cooldown 应为数字或留空: {cd_str}")
+            return
+        terms.down_reset_cooldown_months = cd_val
+        self.terms_cache.set(code, terms, source="manual_gui")
+        self.v_dr_status.set(f"已写回 cb_data.json (cooldown={cd_val})")
 
     @staticmethod
     def _fmt_greek(val, fmt):

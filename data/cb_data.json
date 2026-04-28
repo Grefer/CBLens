@@ -4131,6 +4131,7 @@
       0.03
     ],
     "credit_rating": "A",
+    "down_reset_cooldown_months": 3,
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-12-22",

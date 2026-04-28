@@ -77,6 +77,10 @@ def _json_dict_to_terms(d: dict) -> BondTerms:
         call_trigger_pct=d.get("call_trigger_pct"),
         put_trigger_pct=d.get("put_trigger_pct"),
         put_obs_months=d.get("put_obs_months"),
+        down_reset_block_until=to_date(d.get("down_reset_block_until")),
+        down_reset_p_scale=d.get("down_reset_p_scale"),
+        down_reset_note=d.get("down_reset_note"),
+        down_reset_cooldown_months=d.get("down_reset_cooldown_months"),
         coupon_rates=coupons,
         close=d.get("close"),
         credit_rating=d.get("credit_rating"),
@@ -455,5 +459,4 @@ class CachedBondDataProvider(DataProvider):
 
     def hist_vol(self, stock_code, end_date, window_days):
         return self.market.hist_vol(stock_code, end_date, window_days)
-
 

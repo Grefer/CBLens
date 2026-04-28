@@ -12,7 +12,6 @@ from ...batch_pricing import (
     build_batch_provider,
     list_upcoming_tradable_from_cache,
     load_batch_results_cache,
-    merge_upcoming_pricing_results,
     save_batch_results_cache,
     split_batch_codes_from_cache,
     summarize_batch_results,
@@ -64,7 +63,7 @@ def build(app, tab):
     app.btn_batch_load_cache.pack(side="left", padx=(8, 0))
 
     app.btn_batch_upcoming = ctk.CTkButton(
-        cc, text="刷新关注池", command=lambda: _show_upcoming_tradable(app),
+        cc, text="刷新关注池", command=lambda: _refresh_watchlist_with_upcoming(app),
         fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=96, height=32, corner_radius=6)
     app.btn_batch_upcoming.pack(side="left", padx=(8, 0))
@@ -94,25 +93,23 @@ def build(app, tab):
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).grid(
                      row=1, column=0, sticky="w", padx=16, pady=(0, 6))
 
-    # 结果表格区: 主批量列表与近 7 日可交易关注池分开呈现
+    # 结果表格区: 主批量列表 + 我的关注池 (含自动发现的即将上市新债)
     app.batch_results_frame = ctk.CTkFrame(tab, fg_color="transparent")
     app.batch_results_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
     app.batch_results_frame.grid_columnconfigure(0, weight=1)
     app.batch_results_frame.grid_rowconfigure(0, weight=3)
-    app.batch_results_frame.grid_rowconfigure(1, weight=1)
-    app.batch_results_frame.grid_rowconfigure(2, weight=1)
+    app.batch_results_frame.grid_rowconfigure(1, weight=2)
 
     app.batch_table_frame = _create_table_section(
         app.batch_results_frame, row=0, title="主批量定价结果")
-    app.batch_upcoming_table_frame = _create_table_section(
-        app.batch_results_frame, row=1, title="近 7 日可交易关注池")
     app.batch_watchlist_table_frame = _create_table_section(
-        app.batch_results_frame, row=2, title="⭐ 我的关注池 (右键删除)")
+        app.batch_results_frame, row=1, title="⭐ 我的关注池 (右键删除)")
 
     app._batch_results = []
-    app._batch_upcoming_results = list_upcoming_tradable_from_cache(getattr(app, "terms_cache", None))
+    app._batch_upcoming_results = []
     app._batch_watchlist = load_watchlist()
-    _render_upcoming_table(app, app._batch_upcoming_results, update_status=False)
+    # 自动发现即将上市/可交易的新债并加入关注池
+    _auto_add_upcoming_to_watchlist(app, silent=True)
     _render_watchlist_table(app)
 
 
@@ -138,7 +135,6 @@ def _create_table_section(parent, *, row, title):
 
 def _run_batch(app):
     codes, excluded = split_batch_codes_from_cache(getattr(app, "terms_cache", None))
-    upcoming_rows = list_upcoming_tradable_from_cache(getattr(app, "terms_cache", None))
     if not codes:
         messagebox.showwarning("提示", "本地 cb_data 普通转债池为空, 请先同步基础信息")
         return
@@ -157,28 +153,32 @@ def _run_batch(app):
             base_spread=float(app.v_spread.get()) / 100.0,
             p_down=float(app.v_p_down.get()) / 100.0,
             distress_k=float(app.v_dk.get()) / 100.0,
-            M=max(100, int(float(app.v_M.get())) // 3),
-            N=max(500, int(float(app.v_N.get())) // 3),
+            M=max(300, int(float(app.v_M.get()))),
+            N=max(1000, int(float(app.v_N.get()))),
             vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
         )
     except ValueError as e:
         messagebox.showerror("参数错误", str(e))
         return
 
+    # 自动发现即将上市新债并加入关注池
+    _auto_add_upcoming_to_watchlist(app, silent=True)
+    watchlist_codes = [e.get("bond_code") for e in app._batch_watchlist if e.get("bond_code")]
+
     app.btn_batch_run.configure(state="disabled")
     skipped = f", 已过滤 {len(excluded)} 只非主池标的" if excluded else ""
-    watch = f", 关注池 {len(upcoming_rows)} 只" if upcoming_rows else ""
+    watch = f", 关注池 {len(watchlist_codes)} 只" if watchlist_codes else ""
     app.v_batch_status.set(f"正在定价 {len(codes)} 只普通转债 (自动并发{skipped}{watch}) ...")
     app._start_progress(f"全量定价 {len(codes)} 只")
 
     threading.Thread(
         target=_batch_worker,
-        args=(app, codes, upcoming_rows, source, csv_root, params, len(excluded)),
+        args=(app, codes, watchlist_codes, source, csv_root, params, len(excluded)),
         daemon=True,
     ).start()
 
 
-def _batch_worker(app, codes, upcoming_rows, source, csv_root, params, excluded_count=0):
+def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, excluded_count=0):
     try:
         provider = build_batch_provider(
             source,
@@ -202,26 +202,29 @@ def _batch_worker(app, codes, upcoming_rows, source, csv_root, params, excluded_
             progress_cb=on_progress,
             **params,
         )
-        upcoming_results = list(upcoming_rows)
-        upcoming_codes = [row["bond_code"] for row in upcoming_rows]
-        if upcoming_codes:
+        # 对关注池中不在主批量结果里的代码单独定价
+        main_codes_set = set(codes)
+        extra_codes = [c for c in watchlist_codes if c not in main_codes_set]
+        watchlist_pricing = []
+        if extra_codes:
             app.after(0, lambda: app.v_batch_status.set(
-                f"{provider.name} 正在计算近 7 日关注池 {len(upcoming_codes)} 只 ..."))
-            priced_upcoming = batch_price_from_provider_threaded(
-                provider, upcoming_codes,
+                f"{provider.name} 正在计算关注池 {len(extra_codes)} 只 ..."))
+            watchlist_pricing = batch_price_from_provider_threaded(
+                provider, extra_codes,
                 **params,
             )
-            upcoming_results = merge_upcoming_pricing_results(upcoming_rows, priced_upcoming)
         cache_path = save_batch_results_cache(
             results,
             source=provider.name,
             params=params,
-            upcoming_results=upcoming_results,
+            upcoming_results=watchlist_pricing,
         )
         app._batch_results = results
-        app._batch_upcoming_results = upcoming_results
+        app._batch_upcoming_results = watchlist_pricing
+        app._last_batch_source = provider.name
+        app._last_batch_params = dict(params)
         app.after(0, lambda: _render_batch_views(
-            app, results, upcoming_results,
+            app, results,
             cache_path=cache_path, excluded_count=excluded_count))
     except Exception as exc:
         app.after(0, lambda exc=exc: app.v_batch_status.set(f"❌ 批量定价失败: {exc}"))
@@ -234,7 +237,6 @@ def _batch_worker(app, codes, upcoming_rows, source, csv_root, params, excluded_
 def _render_batch_views(
     app,
     results,
-    upcoming_results,
     *,
     cache_path=None,
     cache_meta=None,
@@ -242,7 +244,6 @@ def _render_batch_views(
 ):
     _render_table(app, results, cache_path=cache_path,
                   cache_meta=cache_meta, excluded_count=excluded_count)
-    _render_upcoming_table(app, upcoming_results, update_status=False)
     _render_watchlist_table(app)
 
 
@@ -352,74 +353,35 @@ def _configure_tree_style():
     )
 
 
-def _show_upcoming_tradable(app, window_days=7):
-    rows = list_upcoming_tradable_from_cache(
-        getattr(app, "terms_cache", None),
-        window_days=window_days,
-    )
-    app._batch_upcoming_results = rows
-    _render_upcoming_table(app, rows, window_days=window_days)
-
-
-def _render_upcoming_table(app, rows, *, window_days=7, update_status=True):
-    frame = getattr(app, "batch_upcoming_table_frame", app.batch_table_frame)
-    for child in frame.winfo_children():
-        child.destroy()
-
-    if not rows:
-        if update_status:
-            app.v_batch_status.set(f"未来 {window_days} 天暂无即将可交易的定向/非主池转债")
-        return
-
-    headers = ["代码", "名称", "正股", "可交易日", "剩余天数", "K", "理论价", "参考价", "偏差(%)", "状态"]
-    col_widths = [100, 90, 80, 95, 70, 65, 70, 70, 70, 130]
-    columns = [f"u{i}" for i in range(len(headers))]
-
-    _configure_tree_style()
-    tree = ttk.Treeview(
-        frame,
-        columns=columns,
-        show="headings",
-        selectmode="browse",
-    )
-    y_scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-    x_scroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-    tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
-    tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
-    y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
-    x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
-
-    for column, header, width in zip(columns, headers, col_widths):
-        tree.heading(column, text=header)
-        tree.column(column, width=width, minwidth=width, stretch=False, anchor="w")
-
-    tree.tag_configure("upcoming", foreground=get_color(ACCENT))
-    tree.tag_configure("failed", foreground=get_color(TEXT_DIM))
-    for idx, row in enumerate(rows):
-        tradable_date = row.get("tradable_date")
-        dev = row.get("deviation", float("nan"))
-        dev_str = f"{dev*100:+.2f}" if _is_finite(dev) else "—"
-        is_ok = row.get("status") == "ok"
-        vals = [
-            row.get("bond_code", ""),
-            row.get("bond_name", ""),
-            row.get("stock_code", ""),
-            tradable_date.isoformat() if hasattr(tradable_date, "isoformat") else (tradable_date or ""),
-            str(row.get("days_to_trade", "")),
-            f"{float(row['K']):.2f}" if row.get("K") is not None else "—",
-            f"{float(row['theoretical_price']):.2f}" if is_ok and row.get("theoretical_price") is not None else "—",
-            f"{float(row['market_price']):.2f}" if row.get("market_price") is not None else "—",
-            dev_str,
-            row.get("status") or row.get("trading_status", ""),
+def _auto_add_upcoming_to_watchlist(app, *, silent=False):
+    """自动发现即将上市/可交易的新债并加入关注池."""
+    upcoming = list_upcoming_tradable_from_cache(
+        getattr(app, "terms_cache", None))
+    if upcoming:
+        new_items = [
+            {"bond_code": r["bond_code"],
+             "bond_name": r.get("bond_name"),
+             "stock_code": r.get("stock_code")}
+            for r in upcoming
         ]
-        tree.insert("", "end", iid=str(idx), values=vals,
-                    tags=["upcoming" if is_ok else "failed"])
+        app._batch_watchlist, added = add_to_watchlist(new_items)
+        if not silent:
+            if added:
+                app.v_batch_status.set(
+                    f"已自动添加 {added} 只即将上市/可交易转债到关注池")
+            else:
+                app.v_batch_status.set(
+                    "关注池已包含所有即将上市/可交易转债, 无新增")
+    else:
+        app._batch_watchlist = load_watchlist()
+        if not silent:
+            app.v_batch_status.set("暂无即将上市/可交易的新债")
 
-    if update_status:
-        app.v_batch_status.set(
-            f"未来 {window_days} 天即将可交易/进入关注窗口 {len(rows)} 只  |  "
-            f"刷新重算后显示理论价")
+
+def _refresh_watchlist_with_upcoming(app):
+    """'刷新关注池' 按钮: 检测即将上市新债 → 自动加入关注池 → 刷新显示."""
+    _auto_add_upcoming_to_watchlist(app, silent=False)
+    _render_watchlist_table(app)
 
 
 def _save_result_cache(app):
@@ -429,7 +391,9 @@ def _save_result_cache(app):
     try:
         path = save_batch_results_cache(
             app._batch_results,
-            source=getattr(app, "v_batch_source", None).get() if hasattr(app, "v_batch_source") else None,
+            source=getattr(app, "_last_batch_source", None)
+            or (getattr(app, "v_batch_source", None).get() if hasattr(app, "v_batch_source") else None),
+            params=getattr(app, "_last_batch_params", None),
             upcoming_results=getattr(app, "_batch_upcoming_results", []),
         )
         app.v_batch_status.set(f"已保存批量定价缓存: {path}")
@@ -448,12 +412,12 @@ def _load_result_cache(app):
         return
 
     results, excluded_count = _filter_nonstandard_results(loaded["results"])
-    upcoming_results = loaded.get("upcoming_results") or list_upcoming_tradable_from_cache(
-        getattr(app, "terms_cache", None))
     app._batch_results = results
-    app._batch_upcoming_results = upcoming_results
+    app._batch_upcoming_results = loaded.get("upcoming_results") or []
+    # 自动将即将上市新债加入关注池
+    _auto_add_upcoming_to_watchlist(app, silent=True)
     _render_batch_views(
-        app, results, upcoming_results,
+        app, results,
         cache_meta=loaded.get("meta"), excluded_count=excluded_count)
 
 
@@ -565,7 +529,12 @@ def _remove_selected_from_watchlist(app):
 
 
 def _watchlist_display_rows(app):
+    # 合并主批量定价结果 + 关注池额外定价结果
     by_code = {row.get("bond_code"): row for row in (app._batch_results or [])}
+    for row in (getattr(app, "_batch_upcoming_results", None) or []):
+        code = row.get("bond_code")
+        if code and code not in by_code:
+            by_code[code] = row
     rows = []
     for entry in app._batch_watchlist:
         code = entry.get("bond_code")

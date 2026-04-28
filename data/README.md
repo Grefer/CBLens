@@ -53,6 +53,14 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `is_tradable`: 同步日视角是否已进入可交易日期
 - `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`
 
+### 人工事件覆盖字段
+
+这些字段不会由 Wind 自动同步，适合记录“不下修”等公告事件：
+
+- `down_reset_block_until`: 该日期前不计下修博弈，例如公告未来一个月不提议下修
+- `down_reset_p_scale`: 单债下修强度缩放，`0` 表示完全不计下修博弈，`0.25` 表示按模型默认强度的 25%
+- `down_reset_note`: 覆盖原因或公告摘要
+
 ### 注意
 
 - 此文件是 git 跟踪的，提交前可 `git diff` 检查变化是否合理 (例如下修后只该影响一只债)

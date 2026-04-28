@@ -166,7 +166,12 @@ def list_upcoming_tradable_from_cache(
     on_date: date | None = None,
     window_days: int = 7,
 ) -> List[dict]:
-    """列出未来 window_days 天内进入可交易/关注窗口的非主池转债."""
+    """列出未来 window_days 天内即将上市/进入可交易窗口的转债.
+
+    包含两类:
+      1. 即将上市的普通公募新债 (listing_date 在窗口内, trading_status == 'pending')
+      2. 即将进入可交易窗口的定向/非主池转债 (原有逻辑)
+    """
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return []
     check_date = on_date or date.today()
@@ -177,11 +182,21 @@ def list_upcoming_tradable_from_cache(
         if terms is None:
             continue
         tradable_date = _terms_date(terms, "tradable_date")
-        if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
-            continue
         name = _terms_value(terms, "sec_name")
-        if is_standard_public_cb_code(code) and not looks_private_cb_name(name):
-            continue
+        trading_status = _terms_value(terms, "trading_status") or ""
+        is_std_public = is_standard_public_cb_code(code) and not looks_private_cb_name(name)
+
+        if is_std_public:
+            # 普通公募新债: listing/tradable 在窗口内且尚未开始交易 (pending)
+            if trading_status != "pending":
+                continue
+            if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
+                continue
+        else:
+            # 定向/非主池转债: 原有逻辑 — tradable_date 在窗口内
+            if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
+                continue
+
         rows.append({
             "bond_code": code,
             "bond_name": name,
@@ -190,7 +205,7 @@ def list_upcoming_tradable_from_cache(
             "days_to_trade": (tradable_date - check_date).days,
             "K": _terms_value(terms, "conversion_price"),
             "market_price": _terms_value(terms, "close"),
-            "trading_status": _terms_value(terms, "trading_status"),
+            "trading_status": trading_status,
         })
     rows.sort(key=lambda row: (row["tradable_date"], row["bond_code"]))
     return rows

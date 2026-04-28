@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "description": "下修事件覆盖层: 记录董事会决议不修正的公告日 + 期满后强度衰减系数. 与 cb_data.json 中静态条款 (down_reset_cooldown_months) 配合, 由 convertible_bond/down_reset_overrides.py 解析.",
+    "schema": {
+      "announce_date": "ISO 日期, 董事会公告不向下修正之日",
+      "p_scale_after_cooldown": "float, 冷静期满后施加在 p_down 上的乘子 (0=完全屏蔽, 0.3=偏冷淡, 1=不衰减)",
+      "note": "可选, 公告链接/原因记录"
+    }
+  },
+  "118027.SH": {
+    "announce_date": "2026-04-13",
+    "p_scale_after_cooldown": 0.3,
+    "note": "宏图转债 2026-04-13 触发下修但董事会公告不修正; cooldown=3M 为经验值, 募集书无强制再观察期"
+  }
+}
