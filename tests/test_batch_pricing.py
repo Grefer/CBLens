@@ -2,8 +2,13 @@ import csv
 import math
 from datetime import date
 
+import pytest
+
 from convertible_bond.batch_pricing import (
     BATCH_RESULT_COLUMNS,
+    annotate_batch_result,
+    filter_batch_results_by_view,
+    sort_batch_results_for_review,
     batch_pricing_exclusion_reason,
     list_upcoming_tradable_from_cache,
     list_batch_codes_from_cache,
@@ -64,6 +69,16 @@ def test_list_batch_codes_from_cache_filters_nonstandard_private_bonds():
         "124025.SZ", "110815.SH", "404004.NQ", "123456.SZ", "113050.SH",
     ]
     assert batch_pricing_exclusion_reason("124025.SZ", {"bond_name": "富乐定转"}) is not None
+    assert batch_pricing_exclusion_reason(
+        "124025.SZ",
+        BondTerms(
+            sec_name="富乐定转",
+            listing_date=date(2025, 1, 1),
+            tradable_date=date(2025, 7, 1),
+            is_tradable=True,
+        ),
+        on_date=date(2026, 4, 28),
+    ) == "非普通公募转债代码段"
 
 
 def test_upcoming_tradable_cache_finds_private_bonds_in_window():
@@ -129,6 +144,116 @@ def test_merge_upcoming_pricing_results_adds_theoretical_price():
     assert merged[0]["theoretical_price"] == 245.6
     assert merged[0]["S0"] == 40.07
     assert merged[0]["status"] == "ok"
+
+
+def test_annotate_batch_result_adds_review_metrics_and_tags():
+    row = annotate_batch_result({
+        "bond_code": "118033.SH",
+        "status": "ok",
+        "S0": 208.27,
+        "K": 82.75,
+        "sigma": 1.32,
+        "theoretical_price": 310.0,
+        "market_price": 218.9,
+        "deviation": -0.294,
+        "credit_rating": "AA-",
+        "outstanding_balance": 6.1,
+        "T": 2.9,
+    })
+
+    assert row["parity"] == pytest.approx(251.69, rel=1e-3)
+    assert row["conversion_premium"] == pytest.approx(-0.130, rel=1e-2)
+    assert "模型低估" in row["risk_tags"]
+    assert "转股折价" in row["risk_tags"]
+    assert "高HV" in row["risk_tags"]
+    assert row["confidence"] in {"中", "低"}
+    assert row["sensitivity_status"] == "波动率敏感"
+    assert row["review_bucket"] == "需复核"
+    assert row["review_notes"]
+    assert math.isfinite(row["opportunity_score"])
+
+
+def test_sort_batch_results_for_review_penalizes_noisy_deviation():
+    rows = sort_batch_results_for_review([
+        {
+            "bond_code": "NOISY",
+            "status": "ok",
+            "S0": 12.0,
+            "K": 10.0,
+            "sigma": 1.45,
+            "theoretical_price": 200.0,
+            "market_price": 140.0,
+            "deviation": -0.30,
+            "credit_rating": "A",
+            "outstanding_balance": 0.2,
+            "T": 0.3,
+        },
+        {
+            "bond_code": "CLEAN",
+            "status": "ok",
+            "S0": 16.0,
+            "K": 10.0,
+            "sigma": 0.42,
+            "theoretical_price": 176.0,
+            "market_price": 148.0,
+            "deviation": -0.16,
+            "credit_rating": "AA+",
+            "outstanding_balance": 12.0,
+            "T": 2.0,
+        },
+    ])
+
+    assert rows[0]["bond_code"] == "CLEAN"
+    assert "转股折价" in rows[0]["risk_tags"]
+    assert rows[0]["opportunity_score"] > rows[1]["opportunity_score"]
+
+
+def test_filter_batch_results_by_view_splits_review_lists():
+    rows = [
+        {
+            "bond_code": "VALUE",
+            "status": "ok",
+            "S0": 16.0,
+            "K": 10.0,
+            "sigma": 0.42,
+            "theoretical_price": 195.0,
+            "market_price": 166.0,
+            "deviation": -0.15,
+            "credit_rating": "AA+",
+            "outstanding_balance": 12.0,
+            "T": 2.0,
+        },
+        {
+            "bond_code": "DISCOUNT",
+            "status": "ok",
+            "S0": 20.0,
+            "K": 10.0,
+            "sigma": 0.45,
+            "theoretical_price": 214.0,
+            "market_price": 188.0,
+            "deviation": -0.12,
+            "credit_rating": "AA",
+            "outstanding_balance": 8.0,
+            "T": 2.0,
+        },
+        {
+            "bond_code": "NOISY",
+            "status": "ok",
+            "S0": 12.0,
+            "K": 10.0,
+            "sigma": 1.2,
+            "theoretical_price": 190.0,
+            "market_price": 140.0,
+            "deviation": -0.26,
+            "credit_rating": "A",
+            "outstanding_balance": 0.2,
+            "T": 0.3,
+        },
+    ]
+
+    assert [r["bond_code"] for r in filter_batch_results_by_view(rows, "低估候选")] == ["VALUE"]
+    assert [r["bond_code"] for r in filter_batch_results_by_view(rows, "转股折价")] == ["DISCOUNT"]
+    assert [r["bond_code"] for r in filter_batch_results_by_view(rows, "需复核")] == ["NOISY"]
 
 
 def test_write_batch_results_csv_uses_stable_columns(tmp_path):

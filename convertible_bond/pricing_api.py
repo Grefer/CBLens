@@ -14,6 +14,8 @@ import os
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import numpy as np
+
 from .pricer import UniversalCBPricer, DEFAULT_FACE_VALUE, DEFAULT_REDEMPTION_PRICE
 from .data_providers import DataProvider, WindDataProvider, auto_data_provider
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
@@ -87,10 +89,9 @@ def price_from_provider(provider: DataProvider, bond_code,
     if not stock_code:
         raise ValueError(f"{bond_code} 数据源未返回标的正股代码")
 
-    S0 = provider.get_stock_close(stock_code, val_date)
-
     if sigma is None:
         sigma = provider.hist_vol(stock_code, val_date, vol_window_days)
+    S0 = provider.get_stock_close(stock_code, val_date)
     market_price = _latest_bond_close(provider, bond_code, val_date, terms.close)
 
     issue_dt = terms.issue_date
@@ -248,9 +249,21 @@ class _BatchStockCache(DataProvider):
         with self._lock:
             if key in self._vol_cache:
                 return self._vol_cache[key]
-            value = self._inner.hist_vol(stock_code, end_date, window_days)
-            self._vol_cache[key] = value
-            return value
+        lookback = max(window_days * 2, window_days + 15)
+        history = self.get_stock_history(stock_code, end_date - timedelta(days=lookback), end_date)
+        closes = np.array([v for _, v in history if v is not None], dtype=float)
+        if len(closes) > window_days + 1:
+            closes = closes[-(window_days + 1):]
+        if len(closes) < 5:
+            raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
+        log_ret = np.diff(np.log(closes))
+        value = float(np.std(log_ret, ddof=1) * np.sqrt(252))
+        latest_close = _latest_price_on_or_before(history, end_date)
+        with self._lock:
+            self._vol_cache.setdefault(key, value)
+            if latest_close is not None:
+                self._close_cache.setdefault((stock_code, end_date), latest_close)
+            return self._vol_cache[key]
 
     # ── 直接透传的接口 ────────────────────────────────────
     def get_bond_terms(self, bond_code, valuation_date):

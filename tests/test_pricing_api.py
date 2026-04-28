@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import date, timedelta
 
 from convertible_bond import pricing_api
 
@@ -58,3 +59,43 @@ def test_batch_price_from_provider_keeps_legacy_worker_default(monkeypatch):
     pricing_api.batch_price_from_provider(DummyProvider(), ["A"])
 
     assert seen["max_workers"] == 4
+
+
+def test_batch_stock_cache_hist_vol_uses_shared_history_and_fills_close_cache():
+    class HistoryProvider:
+        name = "history"
+
+        def __init__(self):
+            self.history_calls = 0
+            self.close_calls = 0
+            self.hist_vol_calls = 0
+
+        def get_stock_history(self, stock_code, start, end):
+            self.history_calls += 1
+            return [
+                (start + timedelta(days=i), 10.0 + i)
+                for i in range((end - start).days + 1)
+            ]
+
+        def get_stock_close(self, stock_code, on_date):
+            self.close_calls += 1
+            raise AssertionError("close should be served from batch history cache")
+
+        def hist_vol(self, stock_code, end_date, window_days):
+            self.hist_vol_calls += 1
+            raise AssertionError("hist_vol should be computed by the batch cache")
+
+    inner = HistoryProvider()
+    cached = pricing_api._BatchStockCache(inner)
+    end = date(2026, 4, 28)
+
+    vol1 = cached.hist_vol("000001.SZ", end, 21)
+    vol2 = cached.hist_vol("000001.SZ", end, 21)
+    close = cached.get_stock_close("000001.SZ", end)
+
+    assert vol1 == vol2
+    assert vol1 > 0
+    assert close == 52.0
+    assert inner.history_calls == 1
+    assert inner.close_calls == 0
+    assert inner.hist_vol_calls == 0

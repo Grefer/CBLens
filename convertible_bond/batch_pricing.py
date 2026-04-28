@@ -42,11 +42,26 @@ BATCH_RESULT_COLUMNS = [
     "deviation",
     "credit_rating",
     "status",
+    "parity",
+    "conversion_premium",
+    "model_premium_to_parity",
+    "opportunity_score",
+    "confidence",
+    "risk_tags",
+    "sensitivity_status",
+    "review_bucket",
+    "review_notes",
 ]
 
 _CODE_SPLIT_RE = re.compile(r"[\s,;，；]+")
 _HEADER_TOKENS = {"code", "bond_code", "证券代码", "转债代码", "代码"}
 BATCH_RESULT_META_KEY = "_meta"
+LOW_RATING_PREFIXES = ("A", "BBB", "BB", "B", "CCC", "CC", "C")
+BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核")
+HARD_REVIEW_TAGS = {
+    "高HV", "极小余额", "小余额", "余额异常", "短久期",
+    "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
+}
 
 
 def project_batch_cache_path() -> Path:
@@ -149,10 +164,20 @@ def batch_pricing_exclusion_reason(
             return f"{(tradable_date - check_date).days} 日后可交易"
         return None
 
-    if is_tradable is True or (tradable_date and tradable_date <= check_date):
-        return None
     if tradable_date:
-        return f"{(tradable_date - check_date).days} 日后可交易"
+        if tradable_date > check_date:
+            return f"{(tradable_date - check_date).days} 日后可交易"
+        if not is_standard_public_cb_code(raw_code):
+            return "非普通公募转债代码段"
+        if looks_private_cb_name(name):
+            return "定向转债/非主池标的"
+        return "非主池标的"
+    if is_tradable is True:
+        if not is_standard_public_cb_code(raw_code):
+            return "非普通公募转债代码段"
+        if looks_private_cb_name(name):
+            return "定向转债/非主池标的"
+        return "非主池标的"
     if not is_standard_public_cb_code(raw_code):
         return "非普通公募转债代码段"
     if looks_private_cb_name(name):
@@ -224,7 +249,9 @@ def merge_upcoming_pricing_results(
         if priced:
             for key in (
                 "S0", "sigma", "theoretical_price", "market_price", "deviation",
-                "credit_rating", "status", "data_source",
+                "credit_rating", "status", "data_source", "parity",
+                "conversion_premium", "model_premium_to_parity",
+                "opportunity_score", "confidence", "risk_tags",
             ):
                 if key in priced:
                     out[key] = priced[key]
@@ -316,6 +343,207 @@ def summarize_batch_results(results: Sequence[dict]) -> dict:
     }
 
 
+def annotate_batch_result(row: dict) -> dict:
+    """给单只批量结果补研究筛选字段.
+
+    这些字段不改变模型定价, 只帮助排序和人工复核:
+    - parity: 转股价值
+    - conversion_premium: 市价相对转股价值溢价
+    - opportunity_score: 低估程度经风险惩罚后的机会分
+    - confidence / risk_tags: 结果可信度与复核提示
+    """
+    out = dict(row)
+    if out.get("status") != "ok":
+        out.setdefault("risk_tags", [])
+        out.setdefault("confidence", "低")
+        out.setdefault("opportunity_score", float("nan"))
+        return out
+
+    s0 = _finite_float(out.get("S0"))
+    k = _finite_float(out.get("K"))
+    theo = _finite_float(out.get("theoretical_price"))
+    market = _finite_float(out.get("market_price"))
+    deviation = _finite_float(out.get("deviation"))
+    sigma = _finite_float(out.get("sigma"))
+    balance = _finite_float(out.get("outstanding_balance"))
+    t_years = _finite_float(out.get("T"))
+    rating = str(out.get("credit_rating") or "").upper().strip()
+
+    risk_tags: list[str] = []
+    score = 0.0
+    confidence_points = 100.0
+
+    parity = s0 / k * 100.0 if s0 is not None and k and k > 0 else None
+    if parity is not None:
+        out["parity"] = parity
+    else:
+        risk_tags.append("数据缺口")
+        confidence_points -= 25
+
+    conversion_premium = None
+    if market is not None and parity and parity > 0:
+        conversion_premium = market / parity - 1.0
+        out["conversion_premium"] = conversion_premium
+        if conversion_premium < -0.03:
+            risk_tags.append("转股折价")
+            score += min(30.0, abs(conversion_premium) * 140.0)
+        elif conversion_premium < 0.03:
+            risk_tags.append("贴近转股价值")
+            score += 4.0
+
+    if theo is not None and parity and parity > 0:
+        model_premium = theo / parity - 1.0
+        out["model_premium_to_parity"] = model_premium
+        if model_premium > 0.45:
+            risk_tags.append("模型溢价高")
+            confidence_points -= 12
+
+    if deviation is not None:
+        score += max(0.0, -deviation) * 100.0
+        if deviation < -0.08:
+            risk_tags.append("模型低估")
+        if deviation > 0.08:
+            score -= min(20.0, deviation * 60.0)
+    else:
+        risk_tags.append("无偏差")
+        confidence_points -= 20
+
+    if sigma is not None:
+        if sigma > 0.80:
+            risk_tags.append("高HV")
+            penalty = min(28.0, 10.0 + (sigma - 0.80) * 35.0)
+            score -= penalty
+            confidence_points -= penalty
+        elif sigma > 0.60:
+            risk_tags.append("较高HV")
+            score -= 4.0
+            confidence_points -= 6.0
+    else:
+        risk_tags.append("无HV")
+        confidence_points -= 20
+
+    if balance is not None:
+        if balance <= 0:
+            risk_tags.append("余额异常")
+            score -= 30.0
+            confidence_points -= 35.0
+        elif balance < 0.5:
+            risk_tags.append("极小余额")
+            score -= 22.0
+            confidence_points -= 25.0
+        elif balance < 1.0:
+            risk_tags.append("小余额")
+            score -= 12.0
+            confidence_points -= 14.0
+        elif balance >= 10.0:
+            score += 2.0
+    else:
+        risk_tags.append("无余额")
+        confidence_points -= 8.0
+
+    if t_years is not None:
+        if t_years < 0.5:
+            risk_tags.append("短久期")
+            score -= 12.0
+            confidence_points -= 14.0
+        elif t_years < 1.0:
+            risk_tags.append("近到期")
+            score -= 5.0
+            confidence_points -= 7.0
+
+    if rating:
+        if rating.startswith("AA+"):
+            score += 3.0
+        elif rating == "AA" or rating.startswith("AAA"):
+            score += 2.0
+        elif rating.startswith("AA-"):
+            score += 0.5
+        elif rating.startswith(LOW_RATING_PREFIXES):
+            risk_tags.append("低评级")
+            score -= 8.0
+            confidence_points -= 12.0
+    else:
+        risk_tags.append("无评级")
+        confidence_points -= 8.0
+
+    if market is None or market <= 0:
+        risk_tags.append("无市价")
+        confidence_points -= 25.0
+        score = float("nan")
+    if theo is None or theo <= 0:
+        risk_tags.append("理论价异常")
+        confidence_points -= 30.0
+        score = float("nan")
+
+    confidence_points = max(0.0, min(100.0, confidence_points))
+    if confidence_points >= 78:
+        confidence = "高"
+    elif confidence_points >= 55:
+        confidence = "中"
+    else:
+        confidence = "低"
+
+    out["risk_tags"] = _dedupe_tags(risk_tags)
+    out["confidence"] = confidence
+    out["opportunity_score"] = score
+    out["sensitivity_status"] = _sensitivity_status(out["risk_tags"], confidence)
+    out["review_bucket"] = _review_bucket(out)
+    out["review_notes"] = _review_notes(out)
+    return out
+
+
+def annotate_batch_results(results: Sequence[dict]) -> List[dict]:
+    """补齐批量研究字段, 不改变输入列表."""
+    return [annotate_batch_result(row) for row in results]
+
+
+def sort_batch_results_for_review(results: Sequence[dict]) -> List[dict]:
+    """按实际复核价值排序: 成功行优先, 机会分降序, 偏差升序."""
+    annotated = annotate_batch_results(results)
+
+    def key(row: dict):
+        score = _finite_float(row.get("opportunity_score"))
+        deviation = _finite_float(row.get("deviation"))
+        ok_rank = 0 if row.get("status") == "ok" else 1
+        score_rank = -score if score is not None else float("inf")
+        deviation_rank = deviation if deviation is not None else float("inf")
+        return (ok_rank, score_rank, deviation_rank, row.get("bond_code") or "")
+
+    return sorted(annotated, key=key)
+
+
+def filter_batch_results_by_view(results: Sequence[dict], view: str | None) -> List[dict]:
+    """按批量页视图过滤结果, 并保持研究排序."""
+    rows = sort_batch_results_for_review(results)
+    view_name = view if view in BATCH_REVIEW_VIEWS else "综合机会"
+    if view_name == "综合机会":
+        return rows
+    if view_name == "低估候选":
+        return [
+            row for row in rows
+            if row.get("status") == "ok"
+            and _finite_float(row.get("opportunity_score")) is not None
+            and float(row["opportunity_score"]) >= 8.0
+            and row.get("confidence") in {"高", "中"}
+            and "转股折价" not in (row.get("risk_tags") or [])
+            and not (set(row.get("risk_tags") or []) & HARD_REVIEW_TAGS)
+        ]
+    if view_name == "转股折价":
+        return [
+            row for row in rows
+            if row.get("status") == "ok"
+            and "转股折价" in (row.get("risk_tags") or [])
+        ]
+    if view_name == "需复核":
+        return [
+            row for row in rows
+            if row.get("status") != "ok"
+            or bool(set(row.get("risk_tags") or []) & HARD_REVIEW_TAGS)
+            or row.get("confidence") == "低"
+        ]
+    return rows
+
+
 def save_batch_results_cache(
     results: Sequence[dict],
     *,
@@ -375,7 +603,8 @@ def write_batch_results_csv(path: str | Path, results: Sequence[dict]) -> None:
 
 def _csv_value(row: dict, column: str):
     if row.get("status") != "ok" and column in {
-        "S0", "K", "sigma", "theoretical_price",
+        "S0", "K", "sigma", "theoretical_price", "parity",
+        "conversion_premium", "model_premium_to_parity", "opportunity_score",
     }:
         return ""
     value = row.get(column, "")
@@ -383,8 +612,14 @@ def _csv_value(row: dict, column: str):
         return ""
     if isinstance(value, float) and math.isnan(value):
         return ""
-    if column == "deviation":
+    if column in {"deviation", "conversion_premium", "model_premium_to_parity"}:
         return f"{float(value):.6f}" if value != "" else ""
+    if column in {"parity", "opportunity_score"}:
+        return f"{float(value):.4f}" if value != "" else ""
+    if column == "risk_tags" and isinstance(value, list):
+        return "|".join(str(tag) for tag in value)
+    if column == "review_notes" and isinstance(value, list):
+        return "|".join(str(note) for note in value)
     return value
 
 
@@ -402,7 +637,75 @@ def _json_safe(value: Any):
 
 def _restore_result_row(row: dict) -> dict:
     restored = dict(row)
-    for key in ("deviation", "theoretical_price", "S0", "K", "sigma"):
+    for key in (
+        "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
+        "conversion_premium", "model_premium_to_parity", "opportunity_score",
+    ):
         if key in restored and restored[key] is None:
             restored[key] = float("nan")
     return restored
+
+
+def _finite_float(value) -> float | None:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _dedupe_tags(tags: Sequence[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        if tag and tag not in seen:
+            seen.add(tag)
+            out.append(tag)
+    return out
+
+
+def _sensitivity_status(tags: Sequence[str], confidence: str) -> str:
+    tag_set = set(tags or [])
+    if {"高HV", "模型溢价高"} & tag_set:
+        return "波动率敏感"
+    if {"极小余额", "小余额", "余额异常", "短久期", "低评级"} & tag_set:
+        return "条款/流动性敏感"
+    if confidence == "高":
+        return "较稳健"
+    if confidence == "中":
+        return "一般"
+    return "需复核"
+
+
+def _review_bucket(row: dict) -> str:
+    tags = set(row.get("risk_tags") or [])
+    if row.get("status") != "ok":
+        return "需复核"
+    if tags & HARD_REVIEW_TAGS or row.get("confidence") == "低":
+        return "需复核"
+    if "转股折价" in tags:
+        return "转股折价"
+    score = _finite_float(row.get("opportunity_score"))
+    if score is not None and score >= 8.0 and row.get("confidence") in {"高", "中"}:
+        return "低估候选"
+    return "综合机会"
+
+
+def _review_notes(row: dict) -> list[str]:
+    tags = set(row.get("risk_tags") or [])
+    notes: list[str] = []
+    if "转股折价" in tags:
+        notes.append("核实是否已进入转股期、是否停牌/强赎、K 和 S0 是否同日最新")
+    if "高HV" in tags or "较高HV" in tags:
+        notes.append("用 60/120 日 HV 或手工 sigma 重算, 防止短期波动抬高理论价")
+    if "模型溢价高" in tags:
+        notes.append("理论价主要来自期权/下修价值, 需要降低 p_down 或 sigma 做压力测试")
+    if {"极小余额", "小余额", "余额异常"} & tags:
+        notes.append("核实剩余规模、流动性、强赎/退市安排")
+    if "短久期" in tags or "近到期" in tags:
+        notes.append("核实到期兑付、回售和强赎时间表")
+    if "低评级" in tags:
+        notes.append("核实信用风险和信用利差假设")
+    if "模型低估" in tags and not notes:
+        notes.append("优先核实条款、行情日期和模型参数后再进入单债分析")
+    return _dedupe_tags(notes)
