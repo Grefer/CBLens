@@ -457,5 +457,3 @@ class CachedBondDataProvider(DataProvider):
         return self.market.hist_vol(stock_code, end_date, window_days)
 
 
-# bulk_sync_terms 已迁移至 cb_data_sync.sync_cb_terms.
-# 旧名字仍由包顶层 (`convertible_bond.bulk_sync_terms`) re-export, 见 __init__.py。

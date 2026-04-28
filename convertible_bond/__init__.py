@@ -50,8 +50,6 @@ from .cb_data_sync import (
     sync_cb_data,
     sync_cb_terms,
 )
-# 旧名字保留作向后兼容; 新代码请用 sync_cb_terms.
-bulk_sync_terms = sync_cb_terms
 
 __all__ = [
     "UniversalCBPricer",
@@ -87,7 +85,6 @@ __all__ = [
     "TermsBundle",
     "CachedBondDataProvider",
     "CachingDataProvider",
-    "bulk_sync_terms",
     "filter_listed_codes",
     "is_terminal_terms",
     "refresh_one",

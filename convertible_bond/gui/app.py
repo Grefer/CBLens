@@ -40,9 +40,18 @@ from ..backtest import backtest_theoretical_price
 
 from .tabs import batch as batch_tab
 
-# ── 从 gui.theme / gui.widgets 导入, 同时保持本文件内的向后引用 ──
-from .theme import *  # noqa: F401,F403  (颜色/字体/常量)
-from .widgets import _form_row, create_card, CollapsibleSection, Tooltip, AutocompleteEntry, _latest_finite_number  # noqa: F401
+from .theme import (
+    BG_APP, BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM,
+    ACCENT, ACCENT_HOVER, GREEN, RED, ORANGE,
+    BTN_CTRL, BTN_HOVER,
+    FONT_FAMILY, FONT_MONO,
+    VOL_WINDOW_MAP, VOL_WINDOW_DEFAULT, CREDIT_SPREAD_TABLE,
+    get_color,
+)
+from .widgets import (
+    _form_row, create_card, CollapsibleSection, Tooltip,
+    AutocompleteEntry, _latest_finite_number,
+)
 
 ctk.set_default_color_theme("blue")
 
@@ -51,155 +60,7 @@ DEFAULT_P_DOWN_PCT = 15.0
 DEFAULT_DISTRESS_K_PCT = 5.0
 DEFAULT_CREDIT_SPREAD_PCT = 3.0
 
-def get_color(color_val):
-    """解析当前模式下的颜色值，主要用于 Matplotlib"""
-    if isinstance(color_val, tuple):
-        return color_val[1] if ctk.get_appearance_mode() == "Dark" else color_val[0]
-    return color_val
 
-
-def _latest_finite_number(values):
-    """返回序列中最后一个可用有限数值，若无则返回 None。"""
-    if not values:
-        return None
-    for v in reversed(values):
-        if v is None:
-            continue
-        try:
-            fv = float(v)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(fv):
-            return fv
-    return None
-
-# ── UI 辅助函数 ──────────────────────────────────────────────
-def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=130, source_var=None):
-    text_color = ORANGE if wind else TEXT_DIM
-    
-    row_frame = ctk.CTkFrame(parent, fg_color="transparent")
-    row_frame.grid(row=row, column=0, sticky="ew", padx=16, pady=4)
-    row_frame.grid_columnconfigure(1, weight=1)
-    
-    dot_text = "● " if wind else "  "
-    lbl = ctk.CTkLabel(row_frame, text=f"{dot_text}{label_text}", text_color=text_color, font=(FONT_FAMILY, 13))
-    lbl.grid(row=0, column=0, sticky="w")
-    
-    ent_container = ctk.CTkFrame(row_frame, fg_color="transparent")
-    ent_container.grid(row=0, column=1, sticky="e")
-    
-    ent = ctk.CTkEntry(ent_container, textvariable=var, width=width, font=(FONT_MONO, 13), 
-                       border_width=0, corner_radius=6, 
-                       fg_color=BG_INPUT, text_color=TEXT, height=28)
-    ent.pack(side="left")
-    
-    if extra_widget:
-        extra_widget(ent_container).pack(side="left", padx=(6, 0))
-
-    if source_var is not None:
-        ctk.CTkLabel(
-            ent_container, textvariable=source_var,
-            width=54, anchor="w",
-            text_color=ORANGE if wind else TEXT_DIM,
-            font=(FONT_FAMILY, 11),
-        ).pack(side="left", padx=(6, 0))
-        
-    return ent
-
-def create_card(parent, title, row, col, icon=""):
-    card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
-    card.grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
-    card.grid_columnconfigure(0, weight=1)
-    
-    header = ctk.CTkFrame(card, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 4))
-    
-    title_lbl = ctk.CTkLabel(header, text=f"{icon} {title}" if icon else title, font=(FONT_FAMILY, 14, "bold"), text_color=TEXT)
-    title_lbl.pack(side="left")
-    
-    content = ctk.CTkFrame(card, fg_color="transparent")
-    content.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
-    content.grid_columnconfigure(0, weight=1)
-    return content
-
-
-class CollapsibleSection(ctk.CTkFrame):
-    """可折叠面板: 点击标题行展开/收起内容"""
-    def __init__(self, parent, title, expanded=False, **kw):
-        kw.setdefault("fg_color", "transparent")
-        super().__init__(parent, **kw)
-        self.grid_columnconfigure(0, weight=1)
-        self._expanded = expanded
-        self._title = title
-        arrow = "▼" if expanded else "▶"
-        self.header_btn = ctk.CTkButton(
-            self, text=f"{arrow}  {title}", command=self.toggle,
-            anchor="w", fg_color="transparent", hover_color=BG_INPUT,
-            text_color=TEXT_DIM, font=(FONT_FAMILY, 13, "bold"), height=28)
-        self.header_btn.grid(row=0, column=0, sticky="ew", padx=10)
-        self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.grid_columnconfigure(0, weight=1)
-        if expanded:
-            self.content.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
-
-    def toggle(self):
-        self._expanded = not self._expanded
-        arrow = "▼" if self._expanded else "▶"
-        self.header_btn.configure(text=f"{arrow}  {self._title}")
-        if self._expanded:
-            self.content.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
-        else:
-            self.content.grid_remove()
-
-
-class Tooltip:
-    """轻量悬浮提示: 鼠标悬停 delay_ms 后弹出, 离开/点击立即收起."""
-    def __init__(self, widget, text, delay_ms=450):
-        self.widget = widget
-        self.text = text
-        self.delay = delay_ms
-        self._after_id = None
-        self._tip = None
-        widget.bind("<Enter>", self._on_enter)
-        widget.bind("<Leave>", self._on_leave)
-        widget.bind("<ButtonPress>", self._on_leave)
-
-    def _on_enter(self, _event=None):
-        self._cancel()
-        self._after_id = self.widget.after(self.delay, self._show)
-
-    def _on_leave(self, _event=None):
-        self._cancel()
-        if self._tip is not None:
-            self._tip.destroy()
-            self._tip = None
-
-    def _cancel(self):
-        if self._after_id is not None:
-            self.widget.after_cancel(self._after_id)
-            self._after_id = None
-
-    def _show(self):
-        if self._tip is not None:
-            return
-        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
-        tip = ctk.CTkToplevel(self.widget)
-        tip.wm_overrideredirect(True)
-        tip.attributes("-topmost", True)
-        tip.configure(fg_color=BG_INPUT)
-        lbl = ctk.CTkLabel(
-            tip, text=self.text, font=(FONT_FAMILY, 11),
-            text_color=TEXT, fg_color=BG_INPUT, corner_radius=6,
-            padx=10, pady=4)
-        lbl.pack()
-        tip.update_idletasks()
-        # 居中对齐到目标控件下方
-        tip.geometry(f"+{x - tip.winfo_width() // 2}+{y}")
-        self._tip = tip
-
-
-# ── 主窗口 ────────────────────────────────────────────────
 class CBPricerApp(ctk.CTk):
     def __init__(self):
         super().__init__()

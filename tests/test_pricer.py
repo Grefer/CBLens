@@ -852,6 +852,30 @@ class TestAkshareStockFallbacks:
 
         assert provider.get_stock_close("000001.SZ", date(2025, 1, 10)) == 12.34
 
+    def test_risk_free_rate_uses_on_date(self):
+        """历史回测调用 get_risk_free_rate(过去某日) 应取该日期或之前最近一条 Shibor,
+        而不是返回最新值 (回归 #akshare-shibor-historical)."""
+        import pandas as pd
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        class FakeAk:
+            def macro_china_shibor_all(self):
+                return pd.DataFrame({
+                    "日期": ["2024-01-02", "2024-06-15", "2024-12-31", "2025-06-01"],
+                    "1Y_定价": [2.10, 2.20, 2.30, 2.50],
+                })
+
+        provider = object.__new__(AkshareDataProvider)
+        provider._ak = FakeAk()
+
+        # 历史日期 → 应取 <= on_date 的最近一条
+        assert provider.get_risk_free_rate(date(2024, 7, 1)) == 2.20
+        assert provider.get_risk_free_rate(date(2025, 1, 1)) == 2.30
+        # 当前及之后 → 取最近一条
+        assert provider.get_risk_free_rate(date(2025, 12, 31)) == 2.50
+        # 早于全部数据 → None (没有可参考的历史值)
+        assert provider.get_risk_free_rate(date(2023, 1, 1)) is None
+
 
 # ── 15. TermsBundle (单文件项目级 snapshot) ─────────────────
 class TestTermsBundle:

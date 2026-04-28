@@ -10,79 +10,9 @@ from datetime import date, timedelta
 from typing import Optional
 
 from .pricer import UniversalCBPricer, DEFAULT_REDEMPTION_PRICE, DEFAULT_FACE_VALUE
-from .data_providers import (
-    DataProvider, WindDataProvider, BondTerms, parse_coupon_string, to_date,
-)
+from .data_providers import DataProvider, WindDataProvider, BondTerms
 
 logger = logging.getLogger(__name__)
-
-
-# ── 旧版 Wind 直连 helper, 仅为兼容 (不建议新代码使用) ──
-def _ensure_wind():
-    try:
-        from WindPy import w  # type: ignore[import-not-found]
-    except ImportError as e:
-        raise ImportError(
-            "未检测到 WindPy. 请使用 DataProvider 接口或 pip install akshare."
-        ) from e
-    if not w.isconnected():
-        ret = w.start()
-        if ret.ErrorCode != 0:
-            raise RuntimeError(f"Wind 启动失败 (ErrorCode={ret.ErrorCode})")
-    return w
-
-
-def _to_date(v):
-    return to_date(v)
-
-
-def _parse_coupon(raw):
-    return parse_coupon_string(raw)
-
-
-def _fetch_cashflow(w, bond_code):
-    """旧 dict 形态返回, 兼容老调用方."""
-    res = w.wset("cashflow", f"windcode={bond_code}")
-    if res.ErrorCode != 0 or not res.Data:
-        return None
-    fields = [f.lower() for f in res.Fields]
-    try:
-        i_date = fields.index("cash_flows_date")
-        i_cf = fields.index("cash_flows_per_cny100_par")
-        i_rate = fields.index("coupon_rate")
-    except ValueError:
-        return None
-    rows = list(zip(*res.Data))
-    if not rows:
-        return None
-    coupons = []
-    for row in rows:
-        rate = row[i_rate]
-        if rate is None:
-            continue
-        coupons.append(float(rate) / 100.0)
-    last = rows[-1]
-    return {
-        "coupon_rates": tuple(coupons) if coupons else None,
-        "redemption_price": float(last[i_cf]) if last[i_cf] is not None else None,
-        "maturity_date": _to_date(last[i_date]) if last[i_date] else None,
-    }
-
-
-def _hist_vol(w, stock_code, end_date, window_days):
-    lookback = max(window_days * 2, window_days + 15)
-    start = end_date - timedelta(days=lookback)
-    res = w.wsd(stock_code, "close", start.isoformat(), end_date.isoformat(), "priceAdj=U")
-    if res.ErrorCode != 0:
-        raise RuntimeError(f"Wind 取正股历史价失败: {res.Data}")
-    closes = np.array([float(v) if v is not None else np.nan for v in res.Data[0]])
-    closes = closes[~np.isnan(closes)]
-    if len(closes) > window_days + 1:
-        closes = closes[-(window_days + 1):]
-    if len(closes) < 5:
-        raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
-    log_ret = np.diff(np.log(closes))
-    return float(np.std(log_ret, ddof=1) * np.sqrt(252))
 
 
 # ── 回测主函数 ──────────────────────────────────────────────

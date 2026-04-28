@@ -727,17 +727,33 @@ class AkshareDataProvider(DataProvider):
         if df is None or len(df) == 0:
             return None
         # 列名按 akshare 现版: '1Y_定价' or '1Y'
-        col = None
+        rate_col = None
         for c in df.columns:
             cs = str(c)
             if "1Y" in cs or "1y" in cs or "1年" in cs:
-                col = c
+                rate_col = c
                 break
-        if col is None:
+        if rate_col is None:
             return None
+
+        # 历史回测时需要 on_date 当天 (或之前最近一日) 的 Shibor, 不能用最新值
+        date_col = None
+        for c in df.columns:
+            cs = str(c).lower()
+            if cs in {"日期", "date"} or "日期" in str(c):
+                date_col = c
+                break
+
         try:
-            last = df[col].dropna().iloc[-1]
-            return float(last)
+            if date_col is None:
+                # 无日期列时只能退回 "最新值" — 历史回测会有偏差, 但好过抛错
+                return float(df[rate_col].dropna().iloc[-1])
+            sub = df[[date_col, rate_col]].dropna()
+            sub = sub.assign(_d=sub[date_col].apply(to_date))
+            sub = sub[sub["_d"].notna() & (sub["_d"] <= on_date)]
+            if len(sub) == 0:
+                return None
+            return float(sub.sort_values("_d")[rate_col].iloc[-1])
         except Exception:
             return None
 

@@ -27,7 +27,8 @@ def _latest_finite_number(values):
     return None
 
 
-def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width=130):
+def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
+              width=130, source_var=None):
     text_color = ORANGE if wind else TEXT_DIM
 
     row_frame = ctk.CTkFrame(parent, fg_color="transparent")
@@ -48,6 +49,14 @@ def _form_row(parent, label_text, var, row, wind=False, extra_widget=None, width
 
     if extra_widget:
         extra_widget(ent_container).pack(side="left", padx=(6, 0))
+
+    if source_var is not None:
+        ctk.CTkLabel(
+            ent_container, textvariable=source_var,
+            width=54, anchor="w",
+            text_color=ORANGE if wind else TEXT_DIM,
+            font=(FONT_FAMILY, 11),
+        ).pack(side="left", padx=(6, 0))
 
     return ent
 

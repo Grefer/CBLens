@@ -1,113 +1,19 @@
 """
-可转债定价系统 — 统一入口 (facade).
+可转债定价系统 — CLI 入口与最小兼容 facade.
 
-本文件为向后兼容的 re-export 层. 核心代码已拆分至:
-    - convertible_bond/pricer.py      — UniversalCBPricer (PDE 求解器, 无数据源依赖)
-    - convertible_bond/pricing_api.py — DataProvider 驱动的自动取参与批量定价接口
-    - convertible_bond/backtest.py    — backtest_theoretical_price (Wind 回测)
-    - convertible_bond/data_providers.py — DataProvider / Wind / akshare / CSV 后端
-
-新代码建议直接 import 对应子模块; 本文件保证
-  from CB import UniversalCBPricer, price_from_wind, ...
-仍然可用.
+核心代码已拆分到 `convertible_bond/` 包内 (pricer / pricing_api / backtest /
+data_providers / cache). 新代码请直接 import 子模块, 不要依赖本文件的 re-export。
 """
 from datetime import date
 
-from convertible_bond.pricer import (
-    UniversalCBPricer,
-    DEFAULT_COUPON_RATES,
-    DEFAULT_FACE_VALUE,
-    DEFAULT_REDEMPTION_PRICE,
-)
-
-from convertible_bond.pricing_api import (
-    price_from_provider,
-    price_from_wind,
-    price_from_auto,
-    batch_price_from_provider,
-)
-
-from convertible_bond.batch_pricing import (
-    BATCH_RESULT_COLUMNS,
-    build_batch_provider,
-    list_batch_codes_from_cache,
-    load_batch_results_cache,
-    parse_bond_codes,
-    project_batch_cache_path,
-    save_batch_results_cache,
-    summarize_batch_results,
-    write_batch_results_csv,
-)
-
-from convertible_bond.cache import (
-    CachedBondDataProvider,
-    TermsBundle,
-    project_bundle_path,
-)
-
+from convertible_bond.pricer import UniversalCBPricer
+from convertible_bond.pricing_api import price_from_provider
+from convertible_bond.cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from convertible_bond.data_providers import (
-    DataProvider,
-    BondTerms,
-    CashflowSchedule,
-    WindDataProvider,
-    AkshareDataProvider,
-    CSVDataProvider,
-    auto_data_provider,
-    detect_available_providers,
-    to_date,
-    parse_coupon_string as parse_coupon,
+    WindDataProvider, AkshareDataProvider, auto_data_provider,
 )
 
-from convertible_bond.backtest import (
-    backtest_theoretical_price,
-    _ensure_wind,
-    _to_date,
-    _parse_coupon,
-    _fetch_cashflow,
-    _hist_vol,
-)
 
-__all__ = [
-    "UniversalCBPricer",
-    "price_from_wind",
-    "price_from_auto",
-    "price_from_provider",
-    "batch_price_from_provider",
-    "BATCH_RESULT_COLUMNS",
-    "build_batch_provider",
-    "list_batch_codes_from_cache",
-    "load_batch_results_cache",
-    "parse_bond_codes",
-    "project_batch_cache_path",
-    "save_batch_results_cache",
-    "summarize_batch_results",
-    "write_batch_results_csv",
-    "backtest_theoretical_price",
-    "DataProvider",
-    "BondTerms",
-    "CashflowSchedule",
-    "WindDataProvider",
-    "AkshareDataProvider",
-    "CSVDataProvider",
-    "auto_data_provider",
-    "detect_available_providers",
-    "to_date",
-    "parse_coupon",
-    "DEFAULT_COUPON_RATES",
-    "DEFAULT_FACE_VALUE",
-    "DEFAULT_REDEMPTION_PRICE",
-]
-# ==========================================
-# 公有 API 别名 (供 GUI 及外部调用)
-# ==========================================
-ensure_wind = _ensure_wind
-hist_vol = _hist_vol
-fetch_cashflow = _fetch_cashflow
-
-
-# ==========================================
-# 示例 / CLI
-# ==========================================
 def _cli_price(argv):
     """命令行: python CB.py <bond_code> [valuation_date] [--source wind|akshare|auto].
 
@@ -153,37 +59,37 @@ def _cli_price(argv):
         print(f"市场价格: {result['market_price']:.3f}  (溢价 {diff:+.3f})")
 
 
+def _offline_demo():
+    today = date(2026, 4, 20)
+    pricer = UniversalCBPricer(
+        S0=55.0, K=52.77,
+        current_date=today, maturity_date=date(2026, 7, 30),
+        issue_date=date(2020, 7, 30),
+        conversion_start_date=date(2021, 2, 6),
+        coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
+        redemption_price=107.0,
+    )
+    full = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, return_greeks=True)
+
+    print(f"--- 离线示例 ---")
+    print(f"当前剩余期限: {pricer.T:.4f} 年")
+    print(f"当前票面利率: {pricer.get_coupon_rate(today):.4%}")
+    print(f"当前应计利息: {pricer.accrued_interest(today):.4f}")
+    print(f"通用模型估算价: {full['price']:.3f}")
+    print()
+    print(f"--- 希腊值 & 价值分解 ---")
+    print(f"  纯债价值: {full['bond_floor']:.3f}    "
+          f"转股价值: {full['parity']:.3f}    "
+          f"期权溢价: {full['option_premium']:.3f}")
+    print(f"  Δ={full['delta']:.4f}  Γ={full['gamma']:.6f}  "
+          f"ν={full['vega']:.4f}  Θ={full['theta']:.4f}")
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1:
         _cli_price(sys.argv[1:])
     else:
-        today = date(2026, 4, 20)
-        pricer = UniversalCBPricer(
-            S0=55.0, K=52.77,
-            current_date=today, maturity_date=date(2026, 7, 30),
-            issue_date=date(2020, 7, 30),
-            conversion_start_date=date(2021, 2, 6),
-            coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
-            redemption_price=107.0,
-        )
-        result = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
-                              distress_k=0.05, p_down=0.0)
-
-        print(f"--- 离线示例 ---")
-        print(f"当前剩余期限: {pricer.T:.4f} 年")
-        print(f"当前票面利率: {pricer.get_coupon_rate(today):.4%}")
-        print(f"当前应计利息: {pricer.accrued_interest(today):.4f}")
-        print(f"通用模型估算价: {result:.3f}")
-
-        full = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
-                            distress_k=0.05, p_down=0.0, return_greeks=True)
-        print()
-        print(f"--- 希腊值 & 价值分解 ---")
-        print(f"理论价: {full['price']:.3f}")
-        print(f"  纯债价值: {full['bond_floor']:.3f}    "
-              f"转股价值: {full['parity']:.3f}    "
-              f"期权溢价: {full['option_premium']:.3f}")
-        print(f"  Δ={full['delta']:.4f}  Γ={full['gamma']:.6f}  "
-              f"ν={full['vega']:.4f}  Θ={full['theta']:.4f}")
+        _offline_demo()
