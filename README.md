@@ -58,6 +58,10 @@ python -m convertible_bond.cli.sync_tradable
 python -m convertible_bond.cli.sync_admission_status
 cb-sync-admission-status --limit 50
 
+# 同步公告标题并解析为结构化事件表
+python -m convertible_bond.cli.sync_events --limit 50
+python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
+
 # 查看批量定价前的主池准入筛选报告
 python -m convertible_bond.cli.screen_pool
 cb-screen-pool --min-rating AA- --min-balance 1
@@ -113,7 +117,7 @@ result = backtest_theoretical_price(
 项目按五层组织，避免把“能定价”和“能筛选”混在一起：
 
 1. **基础信息层**：WindPy 获取转债发行条款、票息、转股价、强赎/回售规则、评级、余额等半静态信息，写入 `data/cb_data.json`。
-2. **事件状态层**：记录下修、不下修、强赎、回售、摘牌、正股 ST 等会改变投资含义的状态字段；字段明确命中风险时先从主池剔除。
+2. **事件状态层**：`data/cb_events.json` 记录下修、不下修、强赎、回售、摘牌等公告事件；`sync_admission_status` 刷新停牌、ST、成交额等状态字段；字段明确命中风险时先从主池剔除。
 3. **动态行情层**：Wind 或 akshare 获取正股/转债收盘价、正股历史波动率、无风险利率等定价输入。
 4. **模型定价层**：`UniversalCBPricer` 输出理论价、希腊值、纯债/转股/期权价值分解。
 5. **筛选打分层**：批量结果计算 `undervaluation_rate = (理论价 - 市价) / 理论价`，再结合转股溢价、HV、余额、评级、剩余期限等生成 `opportunity_score`、`risk_tags`、`confidence` 和复核视图。
@@ -123,6 +127,7 @@ result = backtest_theoretical_price(
 ```text
 Wind 同步基础信息
 → 刷新停牌/强赎/摘牌/ST/成交额等准入状态
+→ 同步公告事件并应用到 cb_data
 → 主池准入筛选
 → 更新行情/利率/HV
 → 批量理论定价

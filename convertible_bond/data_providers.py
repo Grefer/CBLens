@@ -85,6 +85,7 @@ class BondTerms:
     call_status: Optional[str] = None                # 强赎公告/执行状态
     call_announce_date: Optional[date] = None        # 强赎公告日
     call_redemption_date: Optional[date] = None      # 强赎登记/赎回日
+    call_no_redemption_until: Optional[date] = None  # "不提前赎回"承诺到期日, 该日前不计强赎博弈
     last_trading_date: Optional[date] = None         # 最后交易日/摘牌前最后可交易日
     delisting_date: Optional[date] = None            # 摘牌日
     underlying_name: Optional[str] = None            # 正股名称
@@ -270,6 +271,32 @@ def _date_or_none(value: Any) -> Optional[date]:
         return None
 
 
+def _wind_table_rows(res) -> List[dict]:
+    try:
+        fields = [str(f).lower() for f in res.Fields]
+        rows = list(zip(*res.Data))
+    except Exception:
+        return []
+    out: List[dict] = []
+    for row in rows:
+        out.append({field: row[i] for i, field in enumerate(fields)})
+    return out
+
+
+def _announcement_row_from_wind(row: dict) -> dict:
+    def pick(*keys):
+        for key in keys:
+            if key in row and row[key] not in (None, "", "--"):
+                return row[key]
+        return None
+
+    return {
+        "title": pick("title", "announcement_title", "ann_title", "content", "headline"),
+        "date": _date_or_none(pick("date", "announcement_date", "ann_date", "publishdate", "publish_date")),
+        "url": pick("url", "link", "announcement_url", "ann_url"),
+    }
+
+
 # ── 接口 ──────────────────────────────────────────────────
 class DataProvider(ABC):
     """所有数据源后端的统一接口."""
@@ -312,6 +339,18 @@ class DataProvider(ABC):
         强赎、摘牌、正股风险、成交额等字段, 供每日筛选前快速更新。
         """
         return self.get_bond_terms(bond_code, valuation_date)
+
+    def list_bond_announcements(
+        self,
+        bond_code: str,
+        start: date,
+        end: date,
+    ) -> List[dict]:
+        """返回公告列表. 每项至少建议包含 ``title`` 与 ``date``.
+
+        默认返回空列表, 让事件同步层可以在不支持公告接口的数据源上安全跳过。
+        """
+        return []
 
     def hist_vol(self, stock_code: str, end_date: date, window_days: int) -> float:
         """从历史收盘计算年化滚动波动率 (默认实现, 子类可覆盖)."""
@@ -505,6 +544,34 @@ class WindDataProvider(DataProvider):
             res = w.wsd(code, field_name, d, d, "")
         except Exception:
             return None
+
+    def list_bond_announcements(self, bond_code, start, end):
+        """尝试从 Wind 公告接口拉公告标题.
+
+        Wind 的公告 wset 字段在不同环境中可能有差异; 本实现只做容错尝试,
+        失败时返回空列表, 不影响状态字段同步和人工事件表。
+        """
+        w = self._ensure()
+        options = (
+            f"windcode={bond_code};startdate={start.isoformat()};enddate={end.isoformat()}",
+            f"windcode={bond_code};startDate={start.isoformat()};endDate={end.isoformat()}",
+            f"secid={bond_code};startdate={start.isoformat()};enddate={end.isoformat()}",
+        )
+        datasets = ("announcement", "announcemnent")
+        for dataset in datasets:
+            for option in options:
+                try:
+                    res = w.wset(dataset, option)
+                except Exception:
+                    continue
+                if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
+                    continue
+                rows = _wind_table_rows(res)
+                parsed = [_announcement_row_from_wind(row) for row in rows]
+                parsed = [row for row in parsed if row.get("title") and row.get("date")]
+                if parsed:
+                    return parsed
+        return []
         if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
             return None
         try:

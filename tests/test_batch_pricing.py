@@ -56,6 +56,8 @@ def test_list_batch_codes_from_cache_filters_nonstandard_private_bonds():
             "404004.NQ": BondTerms(sec_name="汇车退债"),
             "123456.SZ": BondTerms(sec_name="普通转债"),
             "113050.SH": BondTerms(sec_name="南银转债"),
+            "113575.SH": BondTerms(sec_name="东时转债", maturity_date=date(2026, 4, 9)),
+            "128044.SZ": BondTerms(sec_name="岭南转债", maturity_date=date(2024, 8, 14)),
         }
 
         def list_bonds(self):
@@ -67,9 +69,12 @@ def test_list_batch_codes_from_cache_filters_nonstandard_private_bonds():
     kept, excluded = split_batch_codes_from_cache(FakeTermsCache())
 
     assert kept == ["123456.SZ", "113050.SH"]
-    assert {code for code, _ in excluded} == {"124025.SZ", "110815.SH", "404004.NQ"}
+    assert {code for code, _ in excluded} == {
+        "124025.SZ", "110815.SH", "404004.NQ", "113575.SH", "128044.SZ",
+    }
     assert list_batch_codes_from_cache(FakeTermsCache(), include_nonstandard=True) == [
         "124025.SZ", "110815.SH", "404004.NQ", "123456.SZ", "113050.SH",
+        "113575.SH", "128044.SZ",
     ]
     assert batch_pricing_exclusion_reason("124025.SZ", {"bond_name": "富乐定转"}) is not None
     assert batch_pricing_exclusion_reason(
@@ -82,6 +87,11 @@ def test_list_batch_codes_from_cache_filters_nonstandard_private_bonds():
         ),
         on_date=date(2026, 4, 28),
     ) == "非普通公募转债代码段"
+    assert batch_pricing_exclusion_reason(
+        "113575.SH",
+        BondTerms(sec_name="东时转债", maturity_date=date(2026, 4, 9)),
+        on_date=date(2026, 4, 28),
+    ) == "已到期"
 
 
 def test_batch_pricing_exclusion_reason_applies_admission_filters():

@@ -39,6 +39,7 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 | --- | --- |
 | 月初定期 (新债/退市/下修) | `python -m convertible_bond.cli.sync_tradable` |
 | 每日准入状态 (停牌/强赎/ST/成交额等) | `python -m convertible_bond.cli.sync_admission_status` |
+| 公告事件 (下修/强赎/回售等) | `python -m convertible_bond.cli.sync_events --apply` |
 | 查看主池筛选报告 | `python -m convertible_bond.cli.screen_pool` |
 | 单只债的事件后 | GUI 顶部 🔄 按钮 |
 | 仅查看当前状态 | `python -m convertible_bond.cli.sync_tradable --info` |
@@ -91,3 +92,48 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - 此文件是 git 跟踪的，提交前可 `git diff` 检查变化是否合理 (例如下修后只该影响一只债)
 - 下修事件之后，**建议手动 🔄 刷新对应债** 而不是等月度全量同步，避免短期定价偏差
 - 读取 `cb_data` 命中时不会请求 Wind；正股价格、历史波动率、Shibor 等动态字段仍会按选择的行情源请求
+
+## `cb_events.json`
+
+结构化公告事件表。它和 `cb_data.json` 解耦，用于记录有时间属性的公告：
+
+- `down_reset_proposed`: 提议下修
+- `down_reset_approved`: 下修通过 / 转股价格调整
+- `down_reset_rejected`: 不下修
+- `call_redemption`: 公告强赎
+- `call_no_redemption`: 公告不强赎
+- `putback`: 回售
+- `rating_change`: 评级调整
+- `delisting`: 摘牌 / 最后交易日
+- `suspension`: 停牌
+
+文件结构：
+
+```json
+{
+  "_meta": {"updated_at": "2026-04-28T18:00:00"},
+  "events": [
+    {
+      "bond_code": "118006.SH",
+      "event_date": "2026-04-15",
+      "event_type": "call_redemption",
+      "raw_title": "关于实施赎回暨摘牌的公告",
+      "effective_start": "2026-04-27",
+      "effective_end": "2026-05-06",
+      "parsed_status": "已公告强赎",
+      "source": "Wind"
+    }
+  ]
+}
+```
+
+同步命令：
+
+```bash
+python -m convertible_bond.cli.sync_events --limit 50
+python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
+```
+
+`--apply` 会把事件表应用回 `cb_data.json` 的状态字段，例如强赎公告会写入
+`call_status / call_announce_date / call_redemption_date`，不下修公告会写入
+`down_reset_block_until / down_reset_note`。

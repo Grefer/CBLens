@@ -6,6 +6,10 @@ pillow>=10.0
 
 # 默认在线数据源 (免 token, 无需 Wind 终端):
 akshare>=1.13
+requests>=2.28
+
+# 公告 PDF 文本提取 (用于解析承诺期):
+pdfplumber>=0.9
 
 # 可选: WindPy (字段更全, 但不通过 pip 发布)
 #   在 Wind 终端 "插件管理" 中将 Python 接口安装到当前 .venv

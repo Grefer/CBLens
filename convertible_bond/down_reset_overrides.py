@@ -141,6 +141,20 @@ def resolve_down_reset(
     """
     ov = (overrides or default_overrides()).get(bond_code) or {}
     announce_date = to_date(ov.get("announce_date")) if ov else None
+    event_note = None
+    if announce_date is None:
+        try:
+            from .cb_events import events_for_down_reset
+            rejected = [
+                e for e in events_for_down_reset(bond_code)
+                if e.event_type == "down_reset_rejected"
+            ]
+            if rejected:
+                latest = max(rejected, key=lambda e: e.event_date)
+                announce_date = latest.event_date
+                event_note = latest.raw_title
+        except Exception:
+            event_note = None
 
     cooldown = terms.down_reset_cooldown_months
     if announce_date is not None and cooldown is None:
@@ -168,6 +182,8 @@ def resolve_down_reset(
         note_parts.append(f"announce={announce_date.isoformat()}")
     if ov.get("note"):
         note_parts.append(str(ov["note"]))
+    if event_note:
+        note_parts.append(str(event_note))
     if terms.down_reset_note:
         note_parts.append(terms.down_reset_note)
     note = " | ".join(note_parts) if note_parts else None

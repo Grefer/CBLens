@@ -43,6 +43,10 @@ from .data_providers import (
     to_date,
     parse_coupon_string,
 )
+from .cninfo_provider import (
+    CninfoAnnouncementProvider,
+    extract_text_from_pdf_bytes,
+)
 from .cache import (
     TermsCache, TermsBundle, CachedBondDataProvider, CachingDataProvider,
     project_bundle_path,
@@ -60,6 +64,19 @@ from .admission_status import (
     merge_admission_status,
     refresh_admission_status,
     refresh_admission_status_from_store,
+)
+from .cb_events import (
+    CBEvent,
+    CBEventStore,
+    apply_events_to_terms,
+    classify_announcement_title,
+    default_event_store,
+    parse_event_from_announcement,
+    project_events_path,
+)
+from .cb_event_sync import (
+    apply_events_to_bundle,
+    sync_cb_events,
 )
 
 __all__ = [
@@ -94,6 +111,8 @@ __all__ = [
     "WindDataProvider",
     "AkshareDataProvider",
     "CSVDataProvider",
+    "CninfoAnnouncementProvider",
+    "extract_text_from_pdf_bytes",
     "auto_data_provider",
     "detect_available_providers",
     "TermsCache",
@@ -110,6 +129,15 @@ __all__ = [
     "merge_admission_status",
     "refresh_admission_status",
     "refresh_admission_status_from_store",
+    "CBEvent",
+    "CBEventStore",
+    "apply_events_to_terms",
+    "classify_announcement_title",
+    "default_event_store",
+    "parse_event_from_announcement",
+    "project_events_path",
+    "apply_events_to_bundle",
+    "sync_cb_events",
     "project_bundle_path",
     "to_date",
     "parse_coupon_string",

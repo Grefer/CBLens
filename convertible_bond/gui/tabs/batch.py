@@ -465,7 +465,8 @@ def _load_result_cache(app):
         messagebox.showerror("加载缓存失败", str(exc))
         return
 
-    results, excluded_count = _filter_nonstandard_results(loaded["results"])
+    results, excluded_count = _filter_nonstandard_results(
+        loaded["results"], getattr(app, "terms_cache", None))
     results = sort_batch_results_for_review(results)
     app._batch_all_results = results
     app._batch_upcoming_results = annotate_batch_results(loaded.get("upcoming_results") or [])
@@ -495,11 +496,17 @@ def _export_csv(app):
         messagebox.showerror("导出失败", str(exc))
 
 
-def _filter_nonstandard_results(results):
+def _filter_nonstandard_results(results, terms_cache=None):
     kept = []
     excluded_count = 0
     for row in results:
-        reason = batch_pricing_exclusion_reason(row.get("bond_code", ""), row)
+        code = row.get("bond_code", "")
+        reason = batch_pricing_exclusion_reason(code, row)
+        if reason is None and terms_cache is not None and hasattr(terms_cache, "get"):
+            try:
+                reason = batch_pricing_exclusion_reason(code, terms_cache.get(code))
+            except Exception:
+                reason = None
         if reason is None:
             kept.append(row)
         else:

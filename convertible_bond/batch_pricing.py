@@ -69,6 +69,7 @@ DEFAULT_MIN_OUTSTANDING_BALANCE = 0.5
 DEFAULT_MIN_CREDIT_RATING = "A+"
 _SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "暂停上市")
 _CALL_ANNOUNCED_KEYWORDS = ("已公告强赎", "公告强赎", "强制赎回", "提前赎回", "赎回登记")
+_NO_CALL_KEYWORDS = ("不强赎", "不提前赎回", "暂不强赎", "暂不提前赎回")
 _UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "暂停上市", "终止上市", "退市")
 _RATING_SCORES = {
     "C": 0,
@@ -269,6 +270,15 @@ def batch_pricing_exclusion_reason(
     plain, exch = raw_code.split(".", 1)
     if exch not in {"SH", "SZ"}:
         return "非沪深主板/深市可转债"
+    delisting_date = _terms_date(terms, "delisting_date")
+    if delisting_date and delisting_date <= check_date:
+        return "已退市"
+    last_trading_date = _terms_date(terms, "last_trading_date")
+    if last_trading_date and last_trading_date < check_date:
+        return "已过最后交易日"
+    maturity_date = _terms_date(terms, "maturity_date")
+    if maturity_date and maturity_date <= check_date:
+        return "已到期"
     if is_tradable is False:
         return "不可交易"
     if _terms_status_contains(terms, _SUSPENSION_KEYWORDS, "trading_status", "suspension_status"):
@@ -328,6 +338,8 @@ def _terms_status_contains(terms: Any, keywords: Sequence[str], *keys: str) -> b
 
 
 def _call_announced(terms: Any, on_date: date) -> bool:
+    if _terms_status_contains(terms, _NO_CALL_KEYWORDS, "call_status", "trading_status"):
+        return False
     if _terms_status_contains(terms, _CALL_ANNOUNCED_KEYWORDS, "call_status", "trading_status"):
         return True
     announce_date = _terms_date(terms, "call_announce_date")
