@@ -544,6 +544,12 @@ class WindDataProvider(DataProvider):
             res = w.wsd(code, field_name, d, d, "")
         except Exception:
             return None
+        if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
+            return None
+        try:
+            return _float_or_none(res.Data[0][-1])
+        except Exception:
+            return None
 
     def list_bond_announcements(self, bond_code, start, end):
         """尝试从 Wind 公告接口拉公告标题.
@@ -572,12 +578,6 @@ class WindDataProvider(DataProvider):
                 if parsed:
                     return parsed
         return []
-        if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
-            return None
-        try:
-            return _float_or_none(res.Data[0][-1])
-        except Exception:
-            return None
 
     def get_stock_close(self, stock_code, on_date):
         w = self._ensure()

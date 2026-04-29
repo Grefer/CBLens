@@ -31,6 +31,54 @@ def test_infer_column():
     assert _infer_column("127045.SZ") == "szse"
 
 
+def test_list_bond_announcements_falls_back_to_searchkey():
+    provider = CninfoAnnouncementProvider()
+    provider._resolve_stock_param = lambda plain_code: plain_code
+
+    rows = [
+        {
+            "title": "关于不提前赎回可转债的公告",
+            "date": date(2026, 4, 1),
+            "url": "http://example.com/test.PDF",
+        },
+    ]
+    calls = []
+
+    def fake_query_pages(*, stock, se_date, column, category, searchkey=""):
+        calls.append((stock, column, category, searchkey))
+        if stock == "" and searchkey == "110073":
+            return rows
+        return []
+
+    provider._query_pages = fake_query_pages
+
+    result = provider.list_bond_announcements(
+        "110073.SH",
+        date(2026, 1, 1),
+        date(2026, 4, 29),
+    )
+
+    assert result == rows
+    assert calls[0] == ("110073", "sse", "category_cb_szsh", "")
+    assert ("", "sse", "category_cb_szsh", "110073") in calls
+
+
+def test_query_pages_raises_on_first_page_http_error():
+    import pytest
+
+    provider = CninfoAnnouncementProvider(request_interval=0)
+    resp = MagicMock(status_code=500)
+    provider._session.post = MagicMock(return_value=resp)
+
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        provider._query_pages(
+            stock="110073",
+            se_date="2026-01-01~2026-04-29",
+            column="sse",
+            category="",
+        )
+
+
 # ── 公告解析测试 ──
 
 def test_parse_announcement_item_basic():

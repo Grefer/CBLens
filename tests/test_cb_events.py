@@ -210,6 +210,15 @@ def test_event_store_round_trips_commitment_months(tmp_path):
     assert reloaded[0].effective_end == date(2026, 7, 15)
 
 
+def test_event_store_marks_synced_even_without_new_events(tmp_path):
+    store = CBEventStore(tmp_path / "events.json")
+    store.mark_synced(["113001.SH"])
+
+    reloaded = CBEventStore(tmp_path / "events.json")
+    assert "113001.SH" in reloaded._meta["synced_at_by_code"]
+    assert reloaded.list_events("113001.SH") == []
+
+
 def test_sync_events_and_apply_to_bundle(tmp_path):
     class FakeProvider:
         name = "fake"

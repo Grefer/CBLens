@@ -144,6 +144,11 @@ def sync_cb_events(
                 parsed_events.append(event)
 
     added = store.add_many(parsed_events)
+    failed_codes = {code for code, _err in failed}
+    synced_codes = [code for code in codes if code not in failed_codes]
+    mark_synced = getattr(store, "mark_synced", None)
+    if callable(mark_synced):
+        mark_synced(synced_codes)
     return {
         "scanned_announcements": scanned,
         "parsed_events": parsed_events,
@@ -193,6 +198,7 @@ def _changed_fields(before, after) -> list[str]:
         "call_status",
         "call_announce_date",
         "call_redemption_date",
+        "call_no_redemption_until",
         "delisting_date",
         "suspension_status",
         "down_reset_block_until",

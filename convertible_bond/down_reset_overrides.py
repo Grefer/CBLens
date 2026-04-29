@@ -16,8 +16,10 @@
         }
       }
 
-``resolve_down_reset`` 把两层合并成 pricer 需要的 ``(block_until, p_scale, note)``
-三元组. 显式手填的 ``BondTerms.down_reset_block_until`` 仍然优先 (硬 override).
+``resolve_down_reset`` 把 cb_events + 手工覆盖 + 条款字段合并成 pricer 需要的
+``(block_until, p_scale, note)`` 三元组. 其中 cb_events 解析出的
+``effective_end`` 会直接作为冻结期; 显式手填的 ``BondTerms.down_reset_block_until``
+仍然优先 (硬 override).
 """
 from __future__ import annotations
 
@@ -129,35 +131,42 @@ def resolve_down_reset(
     bond_code: str,
     terms: BondTerms,
     overrides: Optional[DownResetOverrides] = None,
+    *,
+    valuation_date: Optional[date] = None,
 ) -> ResolvedDownReset:
     """合并条款 + 事件层, 给 pricer 一组现成参数.
 
     优先级 (高 → 低):
       1. ``terms.down_reset_block_until`` 显式硬 override
-      2. 事件层 ``announce_date + cooldown_months`` 计算的 block_until
-      3. 无 (block_until = None, 即不屏蔽)
+      2. cb_events 中最新不下修事件的 ``effective_end``
+      3. 事件公告日 + cooldown_months 计算的 block_until
+      4. 无 (block_until = None, 即不屏蔽)
 
     p_scale: 事件层 ``p_scale_after_cooldown`` 优先, 否则用 ``terms.down_reset_p_scale``.
     """
     ov = (overrides or default_overrides()).get(bond_code) or {}
     announce_date = to_date(ov.get("announce_date")) if ov else None
+    event_block_until = None
+    event_cooldown = None
     event_note = None
     if announce_date is None:
         try:
             from .cb_events import events_for_down_reset
             rejected = [
-                e for e in events_for_down_reset(bond_code)
+                e for e in events_for_down_reset(bond_code, through_date=valuation_date)
                 if e.event_type == "down_reset_rejected"
             ]
             if rejected:
                 latest = max(rejected, key=lambda e: e.event_date)
                 announce_date = latest.event_date
+                event_block_until = latest.effective_end
+                event_cooldown = latest.commitment_months
                 event_note = latest.raw_title
         except Exception:
             event_note = None
 
-    cooldown = terms.down_reset_cooldown_months
-    if announce_date is not None and cooldown is None:
+    cooldown = event_cooldown if event_cooldown is not None else terms.down_reset_cooldown_months
+    if announce_date is not None and event_block_until is None and cooldown is None:
         cooldown = DEFAULT_COOLDOWN_MONTHS
         logger.info(
             "%s 有不修正公告 (%s) 但 cooldown_months 缺失, 兜底 %d 个月",
@@ -166,6 +175,8 @@ def resolve_down_reset(
 
     if terms.down_reset_block_until is not None:
         block_until = terms.down_reset_block_until
+    elif event_block_until is not None:
+        block_until = event_block_until
     elif announce_date is not None and cooldown is not None:
         block_until = _add_months(announce_date, int(round(float(cooldown))))
     else:
@@ -180,6 +191,8 @@ def resolve_down_reset(
     note_parts = []
     if announce_date is not None:
         note_parts.append(f"announce={announce_date.isoformat()}")
+    if event_block_until is not None:
+        note_parts.append(f"event_end={event_block_until.isoformat()}")
     if ov.get("note"):
         note_parts.append(str(ov["note"]))
     if event_note:

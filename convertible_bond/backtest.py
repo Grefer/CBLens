@@ -92,14 +92,6 @@ def backtest_theoretical_price(
         total_months = (maturity_dt - issue_dt).days / 30.4375
         active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
         common_kwargs["put_active_years"] = int(round(active_years))
-    resolved_down_reset = resolve_down_reset(bond_code, terms)
-    if resolved_down_reset.block_until is not None:
-        common_kwargs["down_reset_block_until"] = resolved_down_reset.block_until
-    common_kwargs.update(pricer_overrides)
-    effective_p_down = float(p_down)
-    if resolved_down_reset.p_scale is not None:
-        effective_p_down *= max(0.0, float(resolved_down_reset.p_scale))
-
     # 2) 拉历史价格 (转债 + 正股, 多取 2.5x vol_window 用于滚动 σ)
     lookback_start = start_date - timedelta(days=int(vol_window_days * 2.5) + 15)
 
@@ -167,8 +159,19 @@ def backtest_theoretical_price(
         sigma = float(np.std(log_ret, ddof=1) * np.sqrt(252))
 
         try:
+            resolved_down_reset = resolve_down_reset(
+                bond_code, terms, valuation_date=val_date,
+            )
+            point_kwargs = dict(common_kwargs)
+            if resolved_down_reset.block_until is not None:
+                point_kwargs["down_reset_block_until"] = resolved_down_reset.block_until
+            point_kwargs.update(pricer_overrides)
+            effective_p_down = float(p_down)
+            if resolved_down_reset.p_scale is not None:
+                effective_p_down *= max(0.0, float(resolved_down_reset.p_scale))
+
             pricer = UniversalCBPricer(
-                S0=S0, current_date=val_date, **common_kwargs)  # type: ignore[arg-type]
+                S0=S0, current_date=val_date, **point_kwargs)  # type: ignore[arg-type]
             theo = pricer.price(sigma=sigma, r=r, base_spread=base_spread,
                                 distress_k=distress_k, p_down=effective_p_down, M=M, N=N)
         except Exception as exc:

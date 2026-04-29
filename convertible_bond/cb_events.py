@@ -118,6 +118,19 @@ class CBEventStore:
             self._save()
         return added
 
+    def mark_synced(self, bond_codes: Iterable[str], synced_at: Optional[datetime] = None) -> None:
+        """记录某些转债公告已完成同步, 即使本次没有新增事件也更新时间戳."""
+        codes = sorted({str(code).strip().upper() for code in bond_codes if str(code).strip()})
+        if not codes:
+            return
+        ts = (synced_at or datetime.now()).isoformat(timespec="seconds")
+        by_code = dict(self._meta.get("synced_at_by_code", {}))
+        for code in codes:
+            by_code[code] = ts
+        self._meta["last_sync_at"] = ts
+        self._meta["synced_at_by_code"] = by_code
+        self._save()
+
 
 def parse_event_from_announcement(
     bond_code: str,

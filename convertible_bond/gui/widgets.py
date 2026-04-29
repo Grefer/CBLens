@@ -28,15 +28,12 @@ def _latest_finite_number(values):
 
 
 def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
-              width=130, source_var=None):
-    text_color = ORANGE if wind else TEXT_DIM
-
+              width=130, source_var=None, tooltip=None, show_source=False):
     row_frame = ctk.CTkFrame(parent, fg_color="transparent")
     row_frame.grid(row=row, column=0, sticky="ew", padx=16, pady=4)
     row_frame.grid_columnconfigure(1, weight=1)
 
-    dot_text = "● " if wind else "  "
-    lbl = ctk.CTkLabel(row_frame, text=f"{dot_text}{label_text}", text_color=text_color, font=(FONT_FAMILY, 13))
+    lbl = ctk.CTkLabel(row_frame, text=f"  {label_text}", text_color=TEXT_DIM, font=(FONT_FAMILY, 13))
     lbl.grid(row=0, column=0, sticky="w")
 
     ent_container = ctk.CTkFrame(row_frame, fg_color="transparent")
@@ -50,13 +47,17 @@ def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
     if extra_widget:
         extra_widget(ent_container).pack(side="left", padx=(6, 0))
 
-    if source_var is not None:
+    if show_source and source_var is not None:
         ctk.CTkLabel(
             ent_container, textvariable=source_var,
             width=54, anchor="w",
-            text_color=ORANGE if wind else TEXT_DIM,
+            text_color=TEXT_DIM,
             font=(FONT_FAMILY, 11),
         ).pack(side="left", padx=(6, 0))
+
+    if tooltip:
+        Tooltip(lbl, tooltip)
+        Tooltip(ent, tooltip)
 
     return ent
 
@@ -137,6 +138,12 @@ class Tooltip:
     def _show(self):
         if self._tip is not None:
             return
+        text = self.text() if callable(self.text) else self.text
+        if hasattr(text, "get"):
+            text = text.get()
+        text = str(text or "").strip()
+        if not text:
+            return
         x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         tip = ctk.CTkToplevel(self.widget)
@@ -144,7 +151,7 @@ class Tooltip:
         tip.attributes("-topmost", True)
         tip.configure(fg_color=BG_INPUT)
         lbl = ctk.CTkLabel(
-            tip, text=self.text, font=(FONT_FAMILY, 11),
+            tip, text=text, font=(FONT_FAMILY, 11),
             text_color=TEXT, fg_color=BG_INPUT, corner_radius=6,
             padx=10, pady=4)
         lbl.pack()

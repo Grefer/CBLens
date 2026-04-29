@@ -49,10 +49,10 @@ _HEADERS = {
     "Referer": "http://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice",
 }
 
-# 可转债相关公告分类
+# 可转债相关公告分类 (先精确后兜底; 配合 break-if-results 逻辑)
 _CB_CATEGORIES = (
+    "category_cb_szsh",        # 可转债专项 (优先)
     "",                        # 全部分类 (兜底)
-    "category_cb_szsh",        # 可转债专项
 )
 
 # Wind code → plain 6-digit code
@@ -158,6 +158,27 @@ class CninfoAnnouncementProvider(DataProvider):
             if all_rows:
                 break
 
+        # 巨潮目前对可转债代码作为 stock 参数经常返回空; 用 searchkey 全库搜索兜底.
+        # 该路径会返回发行人公告列表, 后续事件层再按标题筛出可转债事件.
+        if not all_rows:
+            logger.info("cninfo stock 查询无公告, 改用 searchkey 兜底: %s", plain_code)
+            for category in _CB_CATEGORIES:
+                page_rows = self._query_pages(
+                    stock="",
+                    se_date=se_date,
+                    column=column,
+                    category=category,
+                    searchkey=plain_code,
+                )
+                for row in page_rows:
+                    key = (row.get("title", ""), row.get("date"))
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        all_rows.append(row)
+
+                if all_rows:
+                    break
+
         return all_rows
 
     # ── PDF 下载与文本提取 ──
@@ -250,6 +271,7 @@ class CninfoAnnouncementProvider(DataProvider):
         se_date: str,
         column: str,
         category: str,
+        searchkey: str = "",
     ) -> List[dict]:
         """分页查询公告列表."""
         all_rows: List[dict] = []
@@ -258,7 +280,7 @@ class CninfoAnnouncementProvider(DataProvider):
             self._throttle()
             payload = {
                 "stock": stock,
-                "searchkey": "",
+                "searchkey": searchkey,
                 "plate": "",
                 "category": category,
                 "trade": "",
@@ -281,18 +303,26 @@ class CninfoAnnouncementProvider(DataProvider):
                     label="cninfo_query",
                 )
             except Exception as exc:
-                logger.warning("cninfo 公告查询失败 (stock=%s, page=%d): %s",
-                               stock, page_num, exc)
+                msg = f"cninfo 公告查询失败 (stock={stock}, page={page_num}): {exc}"
+                logger.warning(msg)
+                if not all_rows:
+                    raise RuntimeError(msg) from exc
                 break
 
             if resp.status_code != 200:
-                logger.warning("cninfo 公告查询 HTTP %d (stock=%s)", resp.status_code, stock)
+                msg = f"cninfo 公告查询 HTTP {resp.status_code} (stock={stock})"
+                logger.warning(msg)
+                if not all_rows:
+                    raise RuntimeError(msg)
                 break
 
             try:
                 body = resp.json()
             except Exception:
-                logger.warning("cninfo 公告查询返回非 JSON (stock=%s)", stock)
+                msg = f"cninfo 公告查询返回非 JSON (stock={stock})"
+                logger.warning(msg)
+                if not all_rows:
+                    raise RuntimeError(msg)
                 break
 
             announcements = body.get("announcements") or []

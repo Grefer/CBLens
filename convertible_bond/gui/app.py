@@ -38,10 +38,15 @@ from ..data_providers import (
 from ..cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from ..backtest import backtest_theoretical_price
 from ..down_reset_overrides import (
-    DEFAULT_COOLDOWN_MONTHS, DownResetOverrides, default_overrides,
+    DEFAULT_COOLDOWN_MONTHS, default_overrides,
     reload_default_overrides, resolve_down_reset,
 )
 from ..data_providers import _add_months
+from ..cb_events import (
+    CBEventStore,
+    apply_events_to_terms, project_events_path, reload_default_event_store,
+)
+from ..cb_event_sync import sync_cb_events
 
 from .tabs import batch as batch_tab
 
@@ -64,6 +69,7 @@ BOND_CODE_RE = re.compile(r"^\d{6}\.[A-Z]{2}$")
 DEFAULT_P_DOWN_PCT = 15.0
 DEFAULT_DISTRESS_K_PCT = 5.0
 DEFAULT_CREDIT_SPREAD_PCT = 3.0
+EVENT_SYNC_STALE_HOURS = 24
 
 
 class CBPricerApp(ctk.CTk):
@@ -100,7 +106,7 @@ class CBPricerApp(ctk.CTk):
         self.v_spread    = ctk.StringVar(value="3.0")
         self.v_p_down    = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
         self.v_dk        = ctk.StringVar(value=f"{DEFAULT_DISTRESS_K_PCT:g}")
-        # 下修事件覆盖 (per-bond) — 由 cb_data 静态字段 + down_reset_overrides.json 解析
+        # 下修事件覆盖 (per-bond) — 默认由 cb_events 自动解析; 面板仅作维护/确认
         self.v_dr_announce_date = ctk.StringVar(value="")
         self.v_dr_cooldown      = ctk.StringVar(value="")
         self.v_dr_p_scale       = ctk.StringVar(value="")
@@ -116,6 +122,7 @@ class CBPricerApp(ctk.CTk):
         self.v_result      = ctk.StringVar(value="—")
         self.v_status      = ctk.StringVar(value="就绪")
         self.v_ref_info    = ctk.StringVar(value="尚未拉取数据")
+        self.v_ref_detail  = ctk.StringVar(value="")
         self.v_vol_window  = ctk.StringVar(value=VOL_WINDOW_DEFAULT)
         self.v_theme       = ctk.StringVar(value="Dark")
 
@@ -188,6 +195,13 @@ class CBPricerApp(ctk.CTk):
         # 通过 `python -m convertible_bond.cli.sync_tradable` 批量更新
         self.terms_cache = TermsBundle(project_bundle_path())
         self._force_refresh_terms = False    # 下次 _fetch_wind 是否强制走网络
+
+        # 事件表 (data/cb_events.json)
+        self.event_store = CBEventStore(project_events_path())
+        self.v_event_summary = ctk.StringVar(value="加载转债后显示事件")
+        self._event_widgets: list = []       # 动态构建的事件行 widget 列表
+        self._event_sync_in_flight: set[str] = set()
+
         self._attach_manual_source_tracking()
         self._bond_code_trace = self.v_bond_code.trace_add("write", self._on_bond_code_write)
 
@@ -282,9 +296,10 @@ class CBPricerApp(ctk.CTk):
         sb.grid_columnconfigure(1, weight=1)
         sb.grid_propagate(False)
         
-        ctk.CTkLabel(sb, text="来源: 条款 / 行情 / 历史 / 利率 / 评级 / 模型 / 手工", text_color=ORANGE, font=(FONT_FAMILY, 11)).grid(row=0, column=0, sticky="w", padx=15, pady=4)
+        ctk.CTkLabel(sb, text="信息", text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).grid(row=0, column=0, sticky="w", padx=15, pady=4)
         self.lbl_ref = ctk.CTkLabel(sb, textvariable=self.v_ref_info, text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
         self.lbl_ref.grid(row=0, column=1, sticky="w", padx=15, pady=4)
+        Tooltip(self.lbl_ref, self.v_ref_detail)
         self.lbl_status = ctk.CTkLabel(sb, textvariable=self.v_status, text_color=TEXT, font=(FONT_FAMILY, 11, "bold"))
         self.lbl_status.grid(row=0, column=2, sticky="e", padx=15, pady=4)
 
@@ -427,6 +442,7 @@ class CBPricerApp(ctk.CTk):
         self._last_auto_loaded_code = code
         if self.terms_cache.has(code):
             self._fill_from_cache(code)
+        self._maybe_sync_events_background(code)
         self._fetch_wind(auto=True)
 
     def _cache_meta_source(self, code: str) -> str:
@@ -457,11 +473,16 @@ class CBPricerApp(ctk.CTk):
         触发 announce_date + cooldown → block_until 自动推算并显示.
         """
         card = create_card(parent, "下修事件参数", 0, 0, icon="🛡")
-        _form_row(card, "公告不修正日期", self.v_dr_announce_date, 0, width=130)
-        _form_row(card, "再观察期 (月)", self.v_dr_cooldown, 1, width=80)
-        _form_row(card, "p_scale (期满后乘子)", self.v_dr_p_scale, 2, width=80)
-        _form_row(card, "备注", self.v_dr_note, 3, width=240)
-        _form_row(card, "推算屏蔽至", self.v_dr_block_until, 4, width=130)
+        _form_row(card, "不修正公告日", self.v_dr_announce_date, 0, width=130,
+                  tooltip="手工覆盖入口。日常定价优先读取 cb_events, 通常无需填写。")
+        _form_row(card, "再观察期", self.v_dr_cooldown, 1, width=80,
+                  tooltip="单位: 月。没有公告正文承诺期时, 用公告日 + 再观察期推算冻结截止日。")
+        _form_row(card, "p_scale", self.v_dr_p_scale, 2, width=80,
+                  tooltip="冻结期结束后对下修强度 p_down 的乘子。留空表示不调整。")
+        _form_row(card, "备注", self.v_dr_note, 3, width=240,
+                  tooltip="手工记录覆盖依据。")
+        _form_row(card, "屏蔽至", self.v_dr_block_until, 4, width=130,
+                  tooltip="下修价值在该日期前被屏蔽。事件表有 effective_end 时会自动填入。")
 
         status_row = ctk.CTkFrame(card, fg_color="transparent")
         status_row.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 4))
@@ -496,22 +517,7 @@ class CBPricerApp(ctk.CTk):
         lp.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         lp.grid_columnconfigure(0, weight=1)
 
-        sec1 = create_card(lp, "基本条款", 0, 0, icon="📝")
-        _form_row(sec1, "正股价 S", self.v_S0, 0, wind=True, source_var=self.v_src_S0)
-        _form_row(sec1, "转股价 K", self.v_K, 1, wind=True, source_var=self.v_src_K)
-        _form_row(sec1, "面值", self.v_face, 2, wind=True, source_var=self.v_src_face)
-        _form_row(sec1, "到期赎回价", self.v_redemp, 3, wind=True, source_var=self.v_src_redemp)
-        _form_row(sec1, "估值日期", self.v_cur_date, 4, source_var=self.v_src_cur_date)
-        _form_row(sec1, "到期日期", self.v_mat_date, 5, wind=True, source_var=self.v_src_mat_date)
-        _form_row(sec1, "发行日期", self.v_iss_date, 6, wind=True, source_var=self.v_src_iss_date)
-        _form_row(sec1, "转股起始日", self.v_conv_date, 7, wind=True, source_var=self.v_src_conv_date)
-        _form_row(sec1, "各年票息 (%)", self.v_coupons, 8, wind=True, width=180, source_var=self.v_src_coupons)
-        _form_row(sec1, "强赎触发 (%K)", self.v_call_ratio, 9, wind=True, source_var=self.v_src_call_ratio)
-        _form_row(sec1, "回售触发 (%K)", self.v_put_ratio, 10, wind=True, source_var=self.v_src_put_ratio)
-        _form_row(sec1, "回售生效年数", self.v_put_years, 11, wind=True, source_var=self.v_src_put_years)
-        _form_row(sec1, "强赎宽限天数", self.v_call_notice, 12, source_var=self.v_src_call_notice)
-
-        sec2 = create_card(lp, "模型参数", 1, 0, icon="⚙️")
+        sec1 = create_card(lp, "定价核心", 0, 0, icon="⚡")
         def make_vol(p):
             self.vol_window_menu = ctk.CTkOptionMenu(
                 p, variable=self.v_vol_window, values=list(VOL_WINDOW_MAP.keys()),
@@ -519,36 +525,95 @@ class CBPricerApp(ctk.CTk):
                 text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
                 command=self._on_vol_window_change)
             return self.vol_window_menu
-        _form_row(sec2, "波动率 σ (%)", self.v_sigma, 0, wind=True, width=80,
-                  extra_widget=make_vol, source_var=self.v_src_sigma)
         def make_shi(p):
             self.btn_shibor = ctk.CTkButton(
                 p, text="Shibor", command=self._fetch_shibor, fg_color=BTN_CTRL,
                 hover_color=BTN_HOVER, text_color=ORANGE,
                 font=(FONT_FAMILY, 12, "bold"), width=75, height=28, corner_radius=6)
             return self.btn_shibor
-        _form_row(sec2, "无风险利率 r (%)", self.v_r, 1, width=80,
-                  extra_widget=make_shi, source_var=self.v_src_r)
         def make_spr(p):
             self.btn_spread = ctk.CTkButton(
                 p, text="按评级", command=self._fill_spread_from_rating, fg_color=BTN_CTRL,
                 hover_color=BTN_HOVER, text_color=ORANGE,
                 font=(FONT_FAMILY, 12, "bold"), width=75, height=28, corner_radius=6)
             return self.btn_spread
-        _form_row(sec2, "信用利差 (%)", self.v_spread, 2, width=80,
-                  extra_widget=make_spr, source_var=self.v_src_spread)
-        _form_row(sec2, "下修强度 p (%/年)", self.v_p_down, 3, source_var=self.v_src_p_down)
-        _form_row(sec2, "信用扩张系数 (%)", self.v_dk, 4, source_var=self.v_src_dk)
+        _form_row(sec1, "正股价 S", self.v_S0, 0, wind=True, source_var=self.v_src_S0,
+                  tooltip="估值日附近正股收盘/最新价, 是转股价值和下修触发判断的核心输入。")
+        _form_row(sec1, "转股价 K", self.v_K, 1, wind=True, source_var=self.v_src_K,
+                  tooltip="当前转股价。转股价值 = S / K * 100。")
+        _form_row(sec1, "波动率 σ (%)", self.v_sigma, 2, wind=True, width=80,
+                  source_var=self.v_src_sigma,
+                  tooltip="年化历史波动率。可在高级模型参数中切换估算窗口。")
+        _form_row(sec1, "信用利差 (%)", self.v_spread, 3, width=80,
+                  extra_widget=make_spr, source_var=self.v_src_spread,
+                  tooltip="用于纯债折现和信用风险调整。可按评级经验表自动填入。")
 
-        dr_sec = CollapsibleSection(lp, "下修事件覆盖 (per-bond)", expanded=False)
-        dr_sec.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
+        event_row = ctk.CTkFrame(sec1, fg_color="transparent")
+        event_row.grid(row=4, column=0, sticky="ew", padx=16, pady=(6, 2))
+        event_row.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(event_row, text="  事件状态", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 13)).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(event_row, textvariable=self.v_dr_status, text_color=TEXT,
+                     font=(FONT_FAMILY, 12), width=180, anchor="e").grid(
+            row=0, column=1, sticky="e")
+
+        adv_terms = CollapsibleSection(lp, "条款明细", expanded=False)
+        adv_terms.grid(row=1, column=0, sticky="ew", padx=6, pady=5)
+        sec_terms = create_card(adv_terms.content, "条款与日期", 0, 0, icon="📄")
+        _form_row(sec_terms, "面值", self.v_face, 0, wind=True, source_var=self.v_src_face,
+                  tooltip="通常为 100。除特殊测试外无需修改。")
+        _form_row(sec_terms, "到期赎回价", self.v_redemp, 1, wind=True, source_var=self.v_src_redemp,
+                  tooltip="到期偿付价格, 含最后一期利息和赎回溢价。")
+        _form_row(sec_terms, "估值日期", self.v_cur_date, 2, source_var=self.v_src_cur_date,
+                  tooltip="模型当前日期。历史定价或复盘时可手动调整。")
+        _form_row(sec_terms, "到期日期", self.v_mat_date, 3, wind=True, source_var=self.v_src_mat_date)
+        _form_row(sec_terms, "发行日期", self.v_iss_date, 4, wind=True, source_var=self.v_src_iss_date)
+        _form_row(sec_terms, "转股起始日", self.v_conv_date, 5, wind=True, source_var=self.v_src_conv_date)
+        _form_row(sec_terms, "各年票息 (%)", self.v_coupons, 6, wind=True, width=180, source_var=self.v_src_coupons,
+                  tooltip="逐年票息百分比, 逗号分隔。")
+        _form_row(sec_terms, "强赎触发 (%K)", self.v_call_ratio, 7, wind=True, source_var=self.v_src_call_ratio,
+                  tooltip="正股价格达到转股价的该比例附近时触发强赎条款。")
+        _form_row(sec_terms, "回售触发 (%K)", self.v_put_ratio, 8, wind=True, source_var=self.v_src_put_ratio,
+                  tooltip="正股价格低于转股价的该比例附近时触发回售条款。")
+        _form_row(sec_terms, "回售生效年数", self.v_put_years, 9, wind=True, source_var=self.v_src_put_years)
+        _form_row(sec_terms, "强赎宽限天数", self.v_call_notice, 10, source_var=self.v_src_call_notice,
+                  tooltip="公告强赎后的缓冲窗口。用于近似宽限期内的股票选择权。")
+
+        adv_model = CollapsibleSection(lp, "高级模型参数", expanded=False)
+        adv_model.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
+        sec2 = create_card(adv_model.content, "利率与风险参数", 0, 0, icon="⚙️")
+
+        vol_row = ctk.CTkFrame(sec2, fg_color="transparent")
+        vol_row.grid(row=0, column=0, sticky="ew", padx=16, pady=4)
+        vol_row.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(vol_row, text="  波动率窗口", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 13)).grid(row=0, column=0, sticky="w")
+        vol_box = ctk.CTkFrame(vol_row, fg_color="transparent")
+        vol_box.grid(row=0, column=1, sticky="e")
+        make_vol(vol_box).pack(side="left")
+        Tooltip(vol_row, "用于重新估算 σ 的历史窗口。修改后会重算当前正股的年化波动率。")
+
+        _form_row(sec2, "无风险利率 r (%)", self.v_r, 1, width=80,
+                  extra_widget=make_shi, source_var=self.v_src_r,
+                  tooltip="无风险利率, 默认可用 Shibor 1Y 近似。")
+        _form_row(sec2, "下修强度 p (%/年)", self.v_p_down, 2, source_var=self.v_src_p_down,
+                  tooltip="年化下修事件强度。公告不下修冻结期内会被事件表自动屏蔽。")
+        _form_row(sec2, "信用扩张系数 (%)", self.v_dk, 3, source_var=self.v_src_dk,
+                  tooltip="正股越低时信用利差扩张的幅度参数。")
+        sec4 = create_card(adv_model.content, "数值网格", 1, 0, icon="🧮")
+        _form_row(sec4, "空间节点 M", self.v_M, 0,
+                  tooltip="PDE 空间网格。越大越精细, 也越慢。")
+        _form_row(sec4, "时间步数 N", self.v_N, 1,
+                  tooltip="PDE 时间网格。越大越精细, 也越慢。")
+
+        dr_sec = CollapsibleSection(lp, "维护: 下修覆盖", expanded=False)
+        dr_sec.grid(row=3, column=0, sticky="ew", padx=6, pady=5)
         self._build_down_reset_panel(dr_sec.content)
 
-        adv = CollapsibleSection(lp, "高级参数 (网格)", expanded=False)
-        adv.grid(row=3, column=0, sticky="ew", padx=6, pady=5)
-        sec4 = create_card(adv.content, "数值网格", 0, 0, icon="🧮")
-        _form_row(sec4, "空间节点 M", self.v_M, 0)
-        _form_row(sec4, "时间步数 N", self.v_N, 1)
+        # ── 事件面板 ──
+        ev_sec = CollapsibleSection(lp, "公告事件", expanded=False)
+        ev_sec.grid(row=4, column=0, sticky="ew", padx=6, pady=5)
+        self._build_events_panel(ev_sec.content)
 
         # ── 右列: 结果面板 ──
         rp = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1188,6 +1253,8 @@ class CBPricerApp(ctk.CTk):
         terms_for_dr = d.get("_terms") or self.terms_cache.get(data_code or "")
         if data_code and terms_for_dr is not None:
             self._populate_down_reset_from_resolver(data_code, terms_for_dr)
+        if data_code:
+            self._maybe_sync_events_background(data_code)
 
         origin_tag = d.get("terms_origin", "?")
         terms_label = self._terms_source_label(origin_tag)
@@ -1280,7 +1347,7 @@ class CBPricerApp(ctk.CTk):
         if d.get("close") is not None:
             self._set_field(self.v_market_price, f"{float(d['close']):.2f}")
 
-        ref_parts = [f"[条款:{origin_tag} | 行情:{market_label}]"]
+        ref_parts = []
         if d.get("sec_name"):
             ref_parts.append(str(d["sec_name"]))
         if d.get("close") is not None:
@@ -1291,6 +1358,9 @@ class CBPricerApp(ctk.CTk):
             ref_parts.append(f"剩余规模 {float(d['outstanding']):.2f} 亿")
         if d.get("cache_age") and origin_tag == "缓存":
             ref_parts.append(f"缓存日期 {d['cache_age'].strftime('%Y-%m-%d')}")
+        self.v_ref_info.set("  ·  ".join(ref_parts) if ref_parts else "已加载")
+
+        detail_parts = [f"条款: {origin_tag}", f"行情: {market_label}"]
         source_parts = []
         if d.get("S0") is not None:
             source_parts.append(f"S={market_label}")
@@ -1302,8 +1372,8 @@ class CBPricerApp(ctk.CTk):
             source_parts.append("r=手工")
         source_parts.append(f"利差={self.v_src_spread.get()}")
         source_parts.append("p/dk=模型")
-        ref_parts.append("来源 " + " / ".join(source_parts))
-        self.v_ref_info.set("  ·  ".join(ref_parts))
+        detail_parts.append("参数来源: " + " / ".join(source_parts))
+        self.v_ref_detail.set("\n".join(detail_parts))
 
         src_tag = "付息计划" if coupon_src == "cashflow" else "条款字段"
         s0_text = f"S₀={d['S0']:.3f}" if d.get("S0") is not None else "S₀=N/A"
@@ -1379,6 +1449,9 @@ class CBPricerApp(ctk.CTk):
 
     # ── 定价计算 ──────────────────────────────────────────
     def _run_pricing(self):
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if code:
+            self._maybe_sync_events_background(code)
         self.v_result.set("…")
         self.lbl_result.configure(text_color=get_color(TEXT_DIM))
         self.btn_calc.configure(state="disabled")
@@ -1417,12 +1490,13 @@ class CBPricerApp(ctk.CTk):
         coupon_rates = tuple(float(x.strip()) / 100.0
                              for x in coupon_str.split(",") if x.strip())
 
+        current_date = pd(self.v_cur_date)
         pricer = dict(
             S0=pf(self.v_S0),
             K=pf(self.v_K),
             face_value=pf(self.v_face),
             redemption_price=pf(self.v_redemp),
-            current_date=pd(self.v_cur_date),
+            current_date=current_date,
             maturity_date=pd(self.v_mat_date),
             issue_date=pd(self.v_iss_date),
             conversion_start_date=pd(self.v_conv_date),
@@ -1433,7 +1507,7 @@ class CBPricerApp(ctk.CTk):
             call_notice_days=int(pf(self.v_call_notice)),
         )
 
-        block_until, p_scale = self._compute_down_reset_from_ui()
+        block_until, p_scale = self._resolve_down_reset_for_pricing(current_date)
         if block_until is not None:
             pricer["down_reset_block_until"] = block_until
 
@@ -1453,9 +1527,23 @@ class CBPricerApp(ctk.CTk):
         return {"pricer": pricer, "model": model}
 
     # ── 下修事件覆盖 ───────────────────────────────────────
-    def _compute_down_reset_from_ui(self):
+    def _resolve_down_reset_for_pricing(self, valuation_date: date):
+        """定价前直接从事件表/覆盖层解析下修冻结, UI 字段只作兜底维护入口."""
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        terms = self.terms_cache.get(code) if code else None
+        ui_block, ui_p_scale = self._compute_down_reset_from_ui(update_display=False)
+        if terms is None:
+            return ui_block, ui_p_scale
+
+        resolved = resolve_down_reset(code, terms, valuation_date=valuation_date)
+        block_until = resolved.block_until or ui_block
+        p_scale = ui_p_scale if ui_p_scale is not None else resolved.p_scale
+        return block_until, p_scale
+
+    def _compute_down_reset_from_ui(self, *, update_display: bool = True):
         """读取下修事件 GUI 字段 → (block_until, p_scale).
 
+        仅作为手工维护兜底. 常规定价优先走 cb_events / overrides 解析.
         有公告日时用 announce_date + cooldown 推算 block_until; 没有公告日时,
         允许直接使用 "推算屏蔽至" 中的硬 override 日期.
         """
@@ -1488,31 +1576,34 @@ class CBPricerApp(ctk.CTk):
             except ValueError:
                 raise ValueError(f"p_scale 应为数字或留空: '{ps_str}'")
 
-        # 同步显示推算出的 block_until
-        self.v_dr_block_until.set(block_until.isoformat() if block_until else "—")
+        if update_display:
+            self.v_dr_block_until.set(block_until.isoformat() if block_until else "—")
         return block_until, p_scale
 
     def _populate_down_reset_from_resolver(self, code: str, terms: BondTerms) -> None:
-        """根据 cb_data.cooldown + overrides.json 填充 GUI 字段."""
+        """根据 cb_events + cb_data.cooldown + overrides.json 填充 GUI 字段."""
         ov = default_overrides().get(code) or {}
         ann = ov.get("announce_date") or ""
         ps = ov.get("p_scale_after_cooldown")
+        resolved = resolve_down_reset(code, terms, valuation_date=date.today())
         note_parts = []
         if ov.get("note"):
             note_parts.append(str(ov["note"]))
         if terms.down_reset_note:
             note_parts.append(terms.down_reset_note)
+        note_text = " | ".join(note_parts) if note_parts else (resolved.note or "")
 
         cooldown = terms.down_reset_cooldown_months
+        if cooldown is None:
+            cooldown = resolved.cooldown_months
         cd_str = "" if cooldown is None else f"{float(cooldown):g}"
 
-        self.v_dr_announce_date.set(str(ann))
+        self.v_dr_announce_date.set(str(ann or resolved.announce_date or ""))
         self.v_dr_cooldown.set(cd_str)
         self.v_dr_p_scale.set("" if ps is None else f"{float(ps):g}")
-        self.v_dr_note.set(" | ".join(note_parts))
+        self.v_dr_note.set(note_text)
 
         # 同步 block_until 显示
-        resolved = resolve_down_reset(code, terms)
         self.v_dr_block_until.set(
             resolved.block_until.isoformat() if resolved.block_until else "—"
         )
@@ -1522,6 +1613,8 @@ class CBPricerApp(ctk.CTk):
             if cooldown is None:
                 tag += " (cooldown 用默认值)"
             self.v_dr_status.set(tag)
+        elif resolved.announce_date is not None:
+            self.v_dr_status.set(f"事件表: {resolved.announce_date}")
         elif terms.down_reset_block_until is not None:
             self.v_dr_status.set(f"硬 override: {terms.down_reset_block_until}")
         else:
@@ -1589,6 +1682,305 @@ class CBPricerApp(ctk.CTk):
         terms.down_reset_cooldown_months = cd_val
         self.terms_cache.set(code, terms, source="manual_gui")
         self.v_dr_status.set(f"已写回 cb_data.json (cooldown={cd_val})")
+
+    # ── 公告事件面板 ─────────────────────────────────────────
+    def _build_events_panel(self, parent):
+        """构建公告事件面板: 同步按钮 + 事件列表 + 应用按钮."""
+        card = create_card(parent, "事件时间线", 0, 0, icon="📋")
+
+        # 操作栏
+        toolbar = ctk.CTkFrame(card, fg_color="transparent")
+        toolbar.grid(row=0, column=0, sticky="ew", padx=16, pady=(8, 4))
+
+        self.btn_sync_events = ctk.CTkButton(
+            toolbar, text="🔄 同步公告", command=self._sync_events_from_cninfo,
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=ORANGE,
+            font=(FONT_FAMILY, 12, "bold"), width=100, height=28, corner_radius=6)
+        self.btn_sync_events.pack(side="left", padx=(0, 6))
+        Tooltip(self.btn_sync_events, "从巨潮资讯网抓取当前债的公告, 解析事件")
+
+        self.btn_apply_events = ctk.CTkButton(
+            toolbar, text="写回 cb_data", command=self._apply_events_to_current,
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+            font=(FONT_FAMILY, 12), width=100, height=28, corner_radius=6)
+        self.btn_apply_events.pack(side="left", padx=(0, 6))
+        Tooltip(self.btn_apply_events,
+                "维护动作: 将事件表固化写回 cb_data\n"
+                "日常定价会直接读取 cb_events, 不需要点这里")
+
+        ctk.CTkLabel(toolbar, textvariable=self.v_event_summary,
+                     text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(side="left", padx=(8, 0))
+
+        # 事件列表容器 (可滚动)
+        self._events_list_frame = ctk.CTkScrollableFrame(
+            card, fg_color="transparent", height=150,
+            scrollbar_button_color=BORDER)
+        self._events_list_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(4, 8))
+        self._events_list_frame.grid_columnconfigure(0, weight=1)
+
+    def _refresh_events_panel(self, bond_code: str):
+        """刷新事件面板: 从 event_store 加载当前债的事件并显示."""
+        # 清空旧 widget
+        for widget in self._event_widgets:
+            try:
+                widget.destroy()
+            except Exception:
+                pass
+        self._event_widgets.clear()
+
+        if not bond_code:
+            self.v_event_summary.set("请输入转债代码")
+            return
+
+        events = self.event_store.list_events(bond_code=bond_code)
+        if not events:
+            self.v_event_summary.set("无事件记录")
+            lbl = ctk.CTkLabel(
+                self._events_list_frame, text="暂无事件 — 点击「同步公告」从巨潮抓取",
+                text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
+            lbl.grid(row=0, column=0, sticky="w", padx=4, pady=4)
+            self._event_widgets.append(lbl)
+            return
+
+        self.v_event_summary.set(f"{len(events)} 条事件")
+        # 按日期倒序显示 (最新在上)
+        for i, ev in enumerate(reversed(events)):
+            row_frame = ctk.CTkFrame(
+                self._events_list_frame, fg_color=BG_INPUT, corner_radius=8)
+            row_frame.grid(row=i, column=0, sticky="ew", padx=2, pady=2)
+            row_frame.grid_columnconfigure(1, weight=1)
+            self._event_widgets.append(row_frame)
+
+            # 事件类型 badge
+            type_color = self._event_type_color(ev.event_type)
+            type_label = self._event_type_short(ev.event_type)
+            badge = ctk.CTkLabel(
+                row_frame, text=type_label, text_color="#ffffff",
+                fg_color=type_color, corner_radius=4,
+                font=(FONT_FAMILY, 10, "bold"), width=52, height=18)
+            badge.grid(row=0, column=0, padx=(6, 4), pady=4, sticky="w")
+
+            # 日期 + 标题
+            date_str = ev.event_date.isoformat()
+            title_short = ev.raw_title[:40] + ("…" if len(ev.raw_title) > 40 else "")
+            info_text = f"{date_str}  {title_short}"
+            if ev.commitment_months:
+                info_text += f"  [承诺{ev.commitment_months}个月]"
+
+            info_lbl = ctk.CTkLabel(
+                row_frame, text=info_text, text_color=TEXT,
+                font=(FONT_FAMILY, 11), anchor="w")
+            info_lbl.grid(row=0, column=1, padx=(2, 6), pady=4, sticky="w")
+
+            # 来源标签
+            src_lbl = ctk.CTkLabel(
+                row_frame, text=ev.source, text_color=TEXT_DIM,
+                font=(FONT_FAMILY, 10))
+            src_lbl.grid(row=0, column=2, padx=(2, 8), pady=4, sticky="e")
+
+    @staticmethod
+    def _event_type_color(event_type: str) -> str:
+        return {
+            "down_reset_proposed": "#e6a700",   # 黄
+            "down_reset_approved": "#40a02b",   # 绿
+            "down_reset_rejected": "#d20f39",   # 红
+            "call_redemption":     "#d20f39",
+            "call_no_redemption":  "#40a02b",
+            "putback":             "#7287fd",
+            "rating_change":       "#df8e1d",
+            "delisting":           "#8839ef",
+            "suspension":          "#fe640b",
+        }.get(event_type, "#6c6f85")
+
+    @staticmethod
+    def _event_type_short(event_type: str) -> str:
+        return {
+            "down_reset_proposed": "提议下修",
+            "down_reset_approved": "已下修",
+            "down_reset_rejected": "不下修",
+            "call_redemption":     "强赎",
+            "call_no_redemption":  "不强赎",
+            "putback":             "回售",
+            "rating_change":       "评级",
+            "delisting":           "摘牌",
+            "suspension":          "停牌",
+        }.get(event_type, event_type[:4])
+
+    def _event_last_synced_at(self, code: str) -> datetime | None:
+        meta = getattr(self.event_store, "_meta", {}) or {}
+        by_code = meta.get("synced_at_by_code") or {}
+        raw = by_code.get(code) if by_code else (meta.get("updated_at") or meta.get("last_sync_at"))
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw))
+        except ValueError:
+            return None
+
+    def _events_are_stale(self, code: str) -> bool:
+        synced_at = self._event_last_synced_at(code)
+        if synced_at is None:
+            return True
+        return datetime.now() - synced_at > timedelta(hours=EVENT_SYNC_STALE_HOURS)
+
+    def _maybe_sync_events_background(self, code: str) -> bool:
+        """后台刷新公告事件. 本地事件先参与定价, 网络结果回来后再刷新界面."""
+        code = self._normalize_bond_code(code)
+        if not BOND_CODE_RE.match(code):
+            return False
+        if code in self._event_sync_in_flight or not self._events_are_stale(code):
+            return False
+
+        self._event_sync_in_flight.add(code)
+        if self._normalize_bond_code(self.v_bond_code.get()) == code:
+            self.v_event_summary.set("公告缓存后台刷新中...")
+        threading.Thread(
+            target=self._auto_sync_events_worker, args=(code,), daemon=True,
+        ).start()
+        return True
+
+    def _auto_sync_events_worker(self, code: str):
+        try:
+            from ..cninfo_provider import CninfoAnnouncementProvider
+            provider = CninfoAnnouncementProvider()
+            store = CBEventStore(project_events_path())
+            result = sync_cb_events(
+                provider, [code], store,
+                end=date.today(), lookback_days=365,
+                download_pdf=True,
+            )
+            self.after(0, lambda: self._on_auto_sync_events_done(code, result, None))
+        except Exception as exc:
+            self.after(0, lambda: self._on_auto_sync_events_done(code, None, exc))
+
+    def _reload_events_for_current_code(self, code: str) -> None:
+        self.event_store = CBEventStore(project_events_path())
+        reload_default_event_store()
+        if self._normalize_bond_code(self.v_bond_code.get()) != code:
+            return
+        self._refresh_events_panel(code)
+        terms = self.terms_cache.get(code)
+        if terms is not None:
+            self._populate_down_reset_from_resolver(code, terms)
+
+    def _on_auto_sync_events_done(self, code: str, result: dict | None, exc: Exception | None):
+        self._event_sync_in_flight.discard(code)
+        self._reload_events_for_current_code(code)
+        if self._normalize_bond_code(self.v_bond_code.get()) != code:
+            return
+        if exc is not None:
+            self.v_event_summary.set(f"公告后台同步失败: {exc}")
+            return
+
+        scanned = result.get("scanned_announcements", 0) if result else 0
+        added = result.get("added", 0) if result else 0
+        pdf_ok = result.get("pdf_downloaded", 0) if result else 0
+        pdf_fail = result.get("pdf_failed", 0) if result else 0
+        msg = f"公告已自动刷新: 扫描 {scanned} 条, 新增 {added} 条"
+        if pdf_ok or pdf_fail:
+            msg += f" (PDF ✓{pdf_ok} ✗{pdf_fail})"
+        self.v_event_summary.set(msg)
+        self._maybe_reprice_after_event_refresh(code)
+
+    def _maybe_reprice_after_event_refresh(self, code: str) -> None:
+        if self._normalize_bond_code(self.v_bond_code.get()) != code:
+            return
+        result_text = self.v_result.get().strip()
+        if result_text in {"", "—", "…"} or result_text.startswith("ERR"):
+            return
+        try:
+            if self.btn_calc.cget("state") == "disabled":
+                return
+        except Exception:
+            return
+        self.v_status.set("公告事件已刷新, 自动重算理论价")
+        self._run_pricing()
+
+    def _sync_events_from_cninfo(self):
+        """从巨潮抓取当前债的公告并解析为事件."""
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not code:
+            messagebox.showwarning("提示", "请先输入转债代码")
+            return
+        self.btn_sync_events.configure(state="disabled")
+        self.v_event_summary.set(f"正在从巨潮同步 {code}...")
+        threading.Thread(
+            target=self._sync_events_worker, args=(code,), daemon=True,
+        ).start()
+
+    def _sync_events_worker(self, code: str):
+        try:
+            from ..cninfo_provider import CninfoAnnouncementProvider
+            provider = CninfoAnnouncementProvider()
+            result = sync_cb_events(
+                provider, [code], self.event_store,
+                end=date.today(), lookback_days=365,
+                download_pdf=True,
+            )
+            scanned = result["scanned_announcements"]
+            added = result["added"]
+            pdf_ok = result.get("pdf_downloaded", 0)
+            pdf_fail = result.get("pdf_failed", 0)
+            msg = f"扫描 {scanned} 条, 新增 {added} 条"
+            if pdf_ok or pdf_fail:
+                msg += f" (PDF ✓{pdf_ok} ✗{pdf_fail})"
+            self.after(0, lambda: self._on_sync_events_done(code, msg))
+        except Exception as exc:
+            logger.warning("事件同步失败 (%s): %s", code, exc)
+            self.after(0, lambda: self._on_sync_events_done(
+                code, f"同步失败: {exc}"))
+
+    def _on_sync_events_done(self, code: str, msg: str):
+        self.btn_sync_events.configure(state="normal")
+        self.v_event_summary.set(msg)
+        self._reload_events_for_current_code(code)
+        self._maybe_reprice_after_event_refresh(code)
+
+    def _apply_events_to_current(self):
+        """维护动作: 将事件表中的事件固化写回 cb_data."""
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not code:
+            messagebox.showwarning("提示", "请先输入转债代码")
+            return
+        terms = self.terms_cache.get(code)
+        if terms is None:
+            messagebox.showwarning("提示", f"{code} 不在 cb_data, 先同步")
+            return
+
+        events = self.event_store.list_events(
+            bond_code=code, through_date=date.today())
+        if not events:
+            self.v_event_summary.set("无可应用的事件")
+            return
+
+        patched = apply_events_to_terms(code, terms, events)
+
+        # 更新 GUI 字段
+        changes = []
+        if patched.down_reset_block_until != terms.down_reset_block_until:
+            block_str = (patched.down_reset_block_until.isoformat()
+                         if patched.down_reset_block_until else "—")
+            self.v_dr_block_until.set(block_str)
+            changes.append("block_until")
+        if patched.down_reset_note != terms.down_reset_note and patched.down_reset_note:
+            self.v_dr_note.set(patched.down_reset_note)
+            changes.append("note")
+        if patched.call_status != terms.call_status and patched.call_status:
+            changes.append(f"call={patched.call_status}")
+        if patched.call_no_redemption_until != terms.call_no_redemption_until:
+            changes.append(f"不强赎至={patched.call_no_redemption_until}")
+
+        # 把更新写回 cb_data
+        self.terms_cache.set(code, patched, source="cb_events")
+
+        if changes:
+            self.v_event_summary.set(f"已写回 cb_data: {', '.join(changes)}")
+            self.v_dr_status.set(f"事件已写回 ({len(events)} 条)")
+            # 重新填充下修面板
+            self._populate_down_reset_from_resolver(code, patched)
+        else:
+            self.v_event_summary.set("事件无新变更")
+
 
     @staticmethod
     def _fmt_greek(val, fmt):

@@ -138,7 +138,7 @@ def price_from_provider(provider: DataProvider, bond_code,
         total_months = (maturity_dt - issue_dt).days / 30.4375
         active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
         pricer_kwargs["put_active_years"] = int(round(active_years))
-    resolved = resolve_down_reset(bond_code, terms)
+    resolved = resolve_down_reset(bond_code, terms, valuation_date=val_date)
     if resolved.block_until is not None:
         pricer_kwargs["down_reset_block_until"] = resolved.block_until
 

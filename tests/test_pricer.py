@@ -722,6 +722,52 @@ class TestPriceFromProvider:
         assert "announce=2025-04-13" in result["down_reset_note"]
         assert "测试: 公告不修正" in result["down_reset_note"]
 
+    def test_price_from_provider_reads_cb_events_effective_end(self, fake_provider, tmp_path, monkeypatch):
+        """单只定价应直接用 cb_events 的 effective_end, 不要求先 apply 到 cb_data."""
+        from convertible_bond import cb_events as cbe
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        provider.terms.down_reset_cooldown_months = 6
+
+        store = cbe.CBEventStore(tmp_path / "cb_events.json")
+        store.add_many([
+            cbe.CBEvent(
+                bond_code="123001.SZ",
+                event_date=date(2025, 4, 13),
+                event_type="down_reset_rejected",
+                raw_title="关于不向下修正测试转债转股价格的公告",
+                effective_start=date(2025, 4, 14),
+                effective_end=date(2025, 7, 12),
+                commitment_months=3,
+            ),
+        ])
+        monkeypatch.setattr(cbe, "_default_event_store", store)
+        monkeypatch.setattr(
+            dro,
+            "_default_overrides",
+            dro.DownResetOverrides(tmp_path / "down_reset_overrides.json"),
+        )
+
+        early = dro.resolve_down_reset(
+            "123001.SZ",
+            provider.terms,
+            valuation_date=date(2025, 4, 1),
+        )
+        assert early.block_until is None
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_announce_date"] == date(2025, 4, 13)
+        assert result["down_reset_block_until"] == date(2025, 7, 12)
+        assert result["down_reset_cooldown_months"] == 3
+        assert "event_end=2025-07-12" in result["down_reset_note"]
+        assert "不向下修正测试转债" in result["down_reset_note"]
+
 
 # ── 14. 条款本地缓存 + CachingDataProvider ──────────────────
 class TestTermsCache:

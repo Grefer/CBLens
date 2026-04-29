@@ -559,9 +559,14 @@
   },
   "111000.SH": {
     "_meta": {
-      "fetched_at": "2026-04-28T00:56:18",
-      "source": "Wind"
+      "fetched_at": "2026-04-29T16:41:46",
+      "source": "cb_events"
     },
+    "bond_turnover_amount": null,
+    "call_announce_date": null,
+    "call_no_redemption_until": "2026-10-20",
+    "call_redemption_date": null,
+    "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 213.4905,
     "conversion_price": 17.35,
@@ -574,9 +579,15 @@
       0.03
     ],
     "credit_rating": "AA-",
+    "delisting_date": null,
+    "down_reset_block_until": "2026-02-01",
+    "down_reset_cooldown_months": null,
+    "down_reset_note": "起帆电缆关于不向下修正“起帆转债”转股价格的公告",
+    "down_reset_p_scale": null,
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-06-17",
+    "last_trading_date": null,
     "listing_date": "2021-06-17",
     "maturity_date": "2027-05-24",
     "outstanding_balance": 9.99179073,
@@ -584,9 +595,12 @@
     "put_trigger_pct": 70.0,
     "redemption_price": 115.0,
     "sec_name": "起帆转债",
+    "suspension_status": "停牌",
     "tradable_date": "2021-06-17",
     "trading_status": "tradable",
-    "underlying_code": "605222.SH"
+    "underlying_code": "605222.SH",
+    "underlying_name": null,
+    "underlying_status": null
   },
   "111001.SH": {
     "_meta": {
@@ -10632,6 +10646,6 @@
   },
   "_bundle_meta": {
     "n_bonds": 344,
-    "updated_at": "2026-04-28T01:09:16"
+    "updated_at": "2026-04-29T16:41:46"
   }
 }
