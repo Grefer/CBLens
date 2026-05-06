@@ -6,9 +6,20 @@ import numpy as np
 import customtkinter as ctk
 
 from .theme import (
-    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM, ORANGE, ACCENT,
+    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM, ORANGE, ACCENT, GREEN,
     FONT_FAMILY, FONT_MONO, get_color,
 )
+
+
+def _source_label_color(source: str):
+    """根据参数来源字符串返回配色元组 (浅色, 深色).
+
+    行情/历史数据 → 绿; 手工/预设 → 橙; 其余 (模型/系统/默认) → 暗."""
+    if source in ("Wind", "行情", "历史", "利率"):
+        return GREEN
+    if source in ("手工", "预设"):
+        return ORANGE
+    return TEXT_DIM
 
 
 def _latest_finite_number(values):
@@ -48,12 +59,17 @@ def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
         extra_widget(ent_container).pack(side="left", padx=(6, 0))
 
     if show_source and source_var is not None:
-        ctk.CTkLabel(
-            ent_container, textvariable=source_var,
-            width=54, anchor="w",
-            text_color=TEXT_DIM,
-            font=(FONT_FAMILY, 11),
-        ).pack(side="left", padx=(6, 0))
+        src_lbl = ctk.CTkLabel(
+            ent_container, text=source_var.get(), width=40, anchor="w",
+            text_color=_source_label_color(source_var.get()),
+            font=(FONT_FAMILY, 10))
+        src_lbl.pack(side="left", padx=(4, 0))
+
+        def _on_src_change(*_, lbl=src_lbl, var=source_var):
+            val = var.get()
+            lbl.configure(text=val, text_color=get_color(_source_label_color(val)))
+
+        source_var.trace_add("write", _on_src_change)
 
     if tooltip:
         Tooltip(lbl, tooltip)
