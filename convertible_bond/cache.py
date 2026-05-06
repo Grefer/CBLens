@@ -19,10 +19,12 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict, replace
+from dataclasses import asdict, fields, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, get_args, get_origin, get_type_hints
+
+# 注: 类型标注统一使用 X | None / list[X] (PEP 604, Python 3.10+).
 
 from .data_providers import (
     BondTerms, CashflowSchedule, DataProvider, WindDataProvider, to_date,
@@ -45,6 +47,26 @@ def project_bundle_path() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "cb_data.json"
 
 
+def _unwrap_type_args(tp) -> tuple:
+    """返回类型注解里出现的具体类型 (剥掉 Optional/X|None 等 Union 包装)."""
+    origin = get_origin(tp)
+    if origin is None:
+        return (tp,)
+    return get_args(tp) or (tp,)
+
+
+# 通过 get_type_hints 把 PEP 563 字符串注解还原成真正类型, 用于驱动序列化
+_BOND_TERM_FIELDS = tuple(fields(BondTerms))
+_BOND_TERM_HINTS = get_type_hints(BondTerms)
+_DATE_FIELD_NAMES = frozenset(
+    f.name for f in _BOND_TERM_FIELDS
+    if any(t is date for t in _unwrap_type_args(_BOND_TERM_HINTS.get(f.name, f.type)))
+)
+_TUPLE_FIELD_NAMES = frozenset(
+    f.name for f in _BOND_TERM_FIELDS
+    if any(get_origin(t) is tuple for t in _unwrap_type_args(_BOND_TERM_HINTS.get(f.name, f.type)))
+)
+
 
 def _terms_to_json_dict(terms: BondTerms) -> dict:
     """BondTerms → JSON 可序列化 dict (date 转 ISO string)."""
@@ -58,44 +80,27 @@ def _terms_to_json_dict(terms: BondTerms) -> dict:
 
 
 def _json_dict_to_terms(d: dict) -> BondTerms:
-    """JSON dict → BondTerms (date 反序列化, tuple 还原)."""
-    coupons = d.get("coupon_rates")
-    if isinstance(coupons, list):
-        coupons = tuple(float(x) for x in coupons)
-    return BondTerms(
-        sec_name=d.get("sec_name"),
-        underlying_code=d.get("underlying_code"),
-        issue_date=to_date(d.get("issue_date")),
-        listing_date=to_date(d.get("listing_date")),
-        tradable_date=to_date(d.get("tradable_date")),
-        is_tradable=d.get("is_tradable"),
-        trading_status=d.get("trading_status"),
-        maturity_date=to_date(d.get("maturity_date")),
-        face_value=d.get("face_value"),
-        conversion_price=d.get("conversion_price"),
-        redemption_price=d.get("redemption_price"),
-        call_trigger_pct=d.get("call_trigger_pct"),
-        put_trigger_pct=d.get("put_trigger_pct"),
-        put_obs_months=d.get("put_obs_months"),
-        down_reset_block_until=to_date(d.get("down_reset_block_until")),
-        down_reset_p_scale=d.get("down_reset_p_scale"),
-        down_reset_note=d.get("down_reset_note"),
-        down_reset_cooldown_months=d.get("down_reset_cooldown_months"),
-        coupon_rates=coupons,
-        close=d.get("close"),
-        credit_rating=d.get("credit_rating"),
-        outstanding_balance=d.get("outstanding_balance"),
-        suspension_status=d.get("suspension_status"),
-        call_status=d.get("call_status"),
-        call_announce_date=to_date(d.get("call_announce_date")),
-        call_redemption_date=to_date(d.get("call_redemption_date")),
-        call_no_redemption_until=to_date(d.get("call_no_redemption_until")),
-        last_trading_date=to_date(d.get("last_trading_date")),
-        delisting_date=to_date(d.get("delisting_date")),
-        underlying_name=d.get("underlying_name"),
-        underlying_status=d.get("underlying_status"),
-        bond_turnover_amount=d.get("bond_turnover_amount"),
-    )
+    """JSON dict → BondTerms.
+
+    字段类型由 ``BondTerms`` dataclass 反射驱动: 声明里出现 ``date`` 的字段走
+    ``to_date`` 反序列化; 声明里出现 ``tuple`` 的字段把 list 还原为 tuple。
+    新增字段时无需修改本函数, 只要在 ``BondTerms`` 上加字段即可。
+    """
+    kwargs: dict = {}
+    for f in _BOND_TERM_FIELDS:
+        if f.name not in d:
+            continue
+        value = d[f.name]
+        if value is None:
+            kwargs[f.name] = None
+            continue
+        if f.name in _DATE_FIELD_NAMES:
+            kwargs[f.name] = to_date(value)
+        elif f.name in _TUPLE_FIELD_NAMES and isinstance(value, list):
+            kwargs[f.name] = tuple(float(x) for x in value)
+        else:
+            kwargs[f.name] = value
+    return BondTerms(**kwargs)
 
 
 class TermsBundle:
@@ -115,7 +120,7 @@ class TermsBundle:
 
     BUNDLE_META_KEY = "_bundle_meta"
 
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else project_bundle_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._data: dict = {}
@@ -149,14 +154,14 @@ class TermsBundle:
     def has(self, bond_code: str) -> bool:
         return bond_code in self._data
 
-    def list_bonds(self) -> List[str]:
+    def list_bonds(self) -> list[str]:
         return sorted(k for k in self._data if not k.startswith("_"))
 
     def bundle_meta(self) -> dict:
         return dict(self._data.get(self.BUNDLE_META_KEY, {}))
 
     # ── 读写 ─────────────────────────────────────────────
-    def get(self, bond_code: str) -> Optional[BondTerms]:
+    def get(self, bond_code: str) -> BondTerms | None:
         d = self._data.get(bond_code)
         if d is None:
             return None
@@ -182,7 +187,7 @@ class TermsBundle:
             self._data[code] = d
         self._save()
 
-    def fetched_at(self, bond_code: str) -> Optional[datetime]:
+    def fetched_at(self, bond_code: str) -> datetime | None:
         d = self._data.get(bond_code)
         if d is None:
             return None
@@ -211,7 +216,7 @@ class TermsBundle:
 class TermsCache:
     """转债条款 JSON 文件缓存 (一债一文件, 跨进程安全)."""
 
-    def __init__(self, root: Optional[Path] = None):
+    def __init__(self, root: Path | None = None):
         self.root = Path(root) if root else default_cache_root()
         self.terms_dir = self.root / "terms"
         self.terms_dir.mkdir(parents=True, exist_ok=True)
@@ -223,12 +228,12 @@ class TermsCache:
     def has(self, bond_code: str) -> bool:
         return self.path(bond_code).exists()
 
-    def list_bonds(self) -> List[str]:
+    def list_bonds(self) -> list[str]:
         """缓存中所有债代码 (按文件名)."""
         return sorted(p.stem for p in self.terms_dir.glob("*.json"))
 
     # ── 读写 ─────────────────────────────────────────────
-    def get(self, bond_code: str) -> Optional[BondTerms]:
+    def get(self, bond_code: str) -> BondTerms | None:
         p = self.path(bond_code)
         if not p.exists():
             return None
@@ -254,7 +259,7 @@ class TermsCache:
         tmp.replace(p)
         return p
 
-    def fetched_at(self, bond_code: str) -> Optional[datetime]:
+    def fetched_at(self, bond_code: str) -> datetime | None:
         p = self.path(bond_code)
         if not p.exists():
             return None
@@ -351,7 +356,7 @@ class CachingDataProvider(DataProvider):
     def get_bond_history(self, bond_code, start, end):
         return self.inner.get_bond_history(bond_code, start, end)
 
-    def get_cashflow(self, bond_code) -> Optional[CashflowSchedule]:
+    def get_cashflow(self, bond_code) -> CashflowSchedule | None:
         return self.inner.get_cashflow(bond_code)
 
     def get_risk_free_rate(self, on_date):
@@ -376,7 +381,7 @@ class CachedBondDataProvider(DataProvider):
         market: DataProvider,
         cache,
         *,
-        static_source: Optional[DataProvider] = None,
+        static_source: DataProvider | None = None,
         max_age_days: int = 365,
         auto_refresh: bool = False,
         with_cashflow: bool = True,
@@ -389,7 +394,7 @@ class CachedBondDataProvider(DataProvider):
         self.with_cashflow = with_cashflow
         self.name = f"cb_data+{market.name}"
         self._write_lock = threading.Lock()
-        self._risk_free_cache: dict[date, Optional[float]] = {}
+        self._risk_free_cache: dict[date, float | None] = {}
 
     def _merge_cashflow(self, bond_code: str, terms: BondTerms) -> BondTerms:
         if not self.with_cashflow:
@@ -436,7 +441,7 @@ class CachedBondDataProvider(DataProvider):
         """强制从 Wind 拉取静态字段并覆盖 cb_data."""
         return self._refresh_static_terms(bond_code, valuation_date)
 
-    def get_cashflow(self, bond_code) -> Optional[CashflowSchedule]:
+    def get_cashflow(self, bond_code) -> CashflowSchedule | None:
         terms = self.cache.get(bond_code)
         if terms is None:
             return None

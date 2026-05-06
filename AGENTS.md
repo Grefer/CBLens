@@ -80,8 +80,8 @@ python -m convertible_bond.cli.sync_tradable
 ## 编码风格
 
 - 跟随现有代码的中文/中英混合 docstring 和注释风格。
-- 使用 Python 3.10+ 类型语法，如 `X | None`。
-- 从具体子模块导入，不依赖 `__init__.py` 中转。
+- 使用 Python 3.10+ 类型语法，如 `X | None`、`list[X]`、`tuple[X, ...]`；不要再用 `Optional/List/Dict/Tuple`。
+- 包内部代码从具体子模块导入 (`from convertible_bond.pricer import ...`)；`convertible_bond/__init__.py` 仅维护对外公开 API, 包内不通过它互相中转。
 - 保持改动聚焦；不要顺手重构无关模块。
 - 对已有未提交改动保持尊重，不要回滚未确认的用户变更。
 

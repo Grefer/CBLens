@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Iterable, Sequence
 
 
 def watchlist_path() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "watchlist.json"
 
 
-def load_watchlist() -> List[dict]:
+def load_watchlist() -> list[dict]:
     path = watchlist_path()
     if not path.exists():
         return []
@@ -23,7 +23,7 @@ def load_watchlist() -> List[dict]:
     items = data.get("items") if isinstance(data, dict) else data
     if not isinstance(items, list):
         return []
-    cleaned: List[dict] = []
+    cleaned: list[dict] = []
     seen: set[str] = set()
     for item in items:
         if not isinstance(item, dict):
@@ -50,7 +50,7 @@ def save_watchlist(items: Sequence[dict]) -> Path:
     return path
 
 
-def add_to_watchlist(new_items: Iterable[dict]) -> tuple[List[dict], int]:
+def add_to_watchlist(new_items: Iterable[dict]) -> tuple[list[dict], int]:
     """新增关注; 已存在的代码会被跳过. 返回 (最新关注池, 新增条数)."""
     current = load_watchlist()
     by_code = {item["bond_code"]: item for item in current}
@@ -70,7 +70,7 @@ def add_to_watchlist(new_items: Iterable[dict]) -> tuple[List[dict], int]:
     return current, added
 
 
-def remove_from_watchlist(codes: Iterable[str]) -> List[dict]:
+def remove_from_watchlist(codes: Iterable[str]) -> list[dict]:
     code_set = {str(c) for c in codes if c}
     current = load_watchlist()
     kept = [item for item in current if item.get("bond_code") not in code_set]

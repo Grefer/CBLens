@@ -20,14 +20,14 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable
 
 import numpy as np
 
 
 def _retry(call: Callable, attempts: int = 3, delay: float = 0.8, label: str = "akshare"):
     """对瞬态网络错误 (RemoteDisconnected / ConnectionError / timeout) 重试 attempts 次."""
-    last_exc: Optional[BaseException] = None
+    last_exc: BaseException | None = None
     for i in range(attempts):
         try:
             return call()
@@ -59,51 +59,51 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BondTerms:
     """转债条款快照. 字段全部可选 (不同数据源能拉到的字段不一样)."""
-    sec_name: Optional[str] = None
-    underlying_code: Optional[str] = None
-    issue_date: Optional[date] = None
-    listing_date: Optional[date] = None             # 上市/挂牌日期
-    tradable_date: Optional[date] = None            # 可自由交易/关注日期
-    is_tradable: Optional[bool] = None              # valuation_date 视角是否可交易
-    trading_status: Optional[str] = None            # tradable/private_pending/pending/unknown
-    maturity_date: Optional[date] = None
-    face_value: Optional[float] = None              # 例: 100.0
-    conversion_price: Optional[float] = None        # 转股价 K
-    redemption_price: Optional[float] = None        # 到期赎回价 (例 107.0)
-    call_trigger_pct: Optional[float] = None        # 强赎触发 (例 130.0 = 130%K)
-    put_trigger_pct: Optional[float] = None         # 回售触发 (例 70.0)
-    put_obs_months: Optional[float] = None          # 回售观察期月数 (从发行起算)
-    down_reset_block_until: Optional[date] = None   # 公告不下修/不提议期间, 该日前不计下修
-    down_reset_p_scale: Optional[float] = None      # 单债下修强度缩放; 0 表示不计下修博弈
-    down_reset_note: Optional[str] = None           # 人工记录公告/判断来源
-    down_reset_cooldown_months: Optional[float] = None  # 募集说明书"再观察期", 决议不修正后的冻结月数
-    coupon_rates: Optional[Tuple[float, ...]] = None  # 已解析的小数 (例 (0.003, 0.005, ...))
-    close: Optional[float] = None                   # 转债现价
-    credit_rating: Optional[str] = None
-    outstanding_balance: Optional[float] = None     # 剩余规模 (亿)
-    suspension_status: Optional[str] = None          # 停复牌/交易状态补充
-    call_status: Optional[str] = None                # 强赎公告/执行状态
-    call_announce_date: Optional[date] = None        # 强赎公告日
-    call_redemption_date: Optional[date] = None      # 强赎登记/赎回日
-    call_no_redemption_until: Optional[date] = None  # "不提前赎回"承诺到期日, 该日前不计强赎博弈
-    last_trading_date: Optional[date] = None         # 最后交易日/摘牌前最后可交易日
-    delisting_date: Optional[date] = None            # 摘牌日
-    underlying_name: Optional[str] = None            # 正股名称
-    underlying_status: Optional[str] = None          # 正股 ST/退市风险/停牌等状态
-    bond_turnover_amount: Optional[float] = None     # 转债成交额, 口径由数据源决定
+    sec_name: str | None = None
+    underlying_code: str | None = None
+    issue_date: date | None = None
+    listing_date: date | None = None             # 上市/挂牌日期
+    tradable_date: date | None = None            # 可自由交易/关注日期
+    is_tradable: bool | None = None              # valuation_date 视角是否可交易
+    trading_status: str | None = None            # tradable/private_pending/pending/unknown
+    maturity_date: date | None = None
+    face_value: float | None = None              # 例: 100.0
+    conversion_price: float | None = None        # 转股价 K
+    redemption_price: float | None = None        # 到期赎回价 (例 107.0)
+    call_trigger_pct: float | None = None        # 强赎触发 (例 130.0 = 130%K)
+    put_trigger_pct: float | None = None         # 回售触发 (例 70.0)
+    put_obs_months: float | None = None          # 回售观察期月数 (从发行起算)
+    down_reset_block_until: date | None = None   # 公告不下修/不提议期间, 该日前不计下修
+    down_reset_p_scale: float | None = None      # 单债下修强度缩放; 0 表示不计下修博弈
+    down_reset_note: str | None = None           # 人工记录公告/判断来源
+    down_reset_cooldown_months: float | None = None  # 募集说明书"再观察期", 决议不修正后的冻结月数
+    coupon_rates: tuple[float, ...] | None = None  # 已解析的小数 (例 (0.003, 0.005, ...))
+    close: float | None = None                   # 转债现价
+    credit_rating: str | None = None
+    outstanding_balance: float | None = None     # 剩余规模 (亿)
+    suspension_status: str | None = None          # 停复牌/交易状态补充
+    call_status: str | None = None                # 强赎公告/执行状态
+    call_announce_date: date | None = None        # 强赎公告日
+    call_redemption_date: date | None = None      # 强赎登记/赎回日
+    call_no_redemption_until: date | None = None  # "不提前赎回"承诺到期日, 该日前不计强赎博弈
+    last_trading_date: date | None = None         # 最后交易日/摘牌前最后可交易日
+    delisting_date: date | None = None            # 摘牌日
+    underlying_name: str | None = None            # 正股名称
+    underlying_status: str | None = None          # 正股 ST/退市风险/停牌等状态
+    bond_turnover_amount: float | None = None     # 转债成交额, 口径由数据源决定
 
 
 @dataclass
 class CashflowSchedule:
     """完整付息计划. 通常比 BondTerms.coupon_rates 更准 (覆盖到期溢价)."""
-    coupon_rates: Optional[Tuple[float, ...]] = None
-    redemption_price: Optional[float] = None
-    maturity_date: Optional[date] = None
-    cashflows: List[Any] = field(default_factory=list)
+    coupon_rates: tuple[float, ...] | None = None
+    redemption_price: float | None = None
+    maturity_date: date | None = None
+    cashflows: list[Any] = field(default_factory=list)
 
 
 # ── 公共工具 ──────────────────────────────────────────────
-def to_date(v: Any) -> Optional[date]:
+def to_date(v: Any) -> date | None:
     if v is None:
         return None
     if isinstance(v, datetime):
@@ -146,7 +146,7 @@ def looks_private_cb_name(name: Any) -> bool:
 def infer_cb_trading_metadata(
     bond_code: str,
     terms: BondTerms,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
 ) -> BondTerms:
     """补齐交易状态字段.
 
@@ -190,7 +190,7 @@ def infer_cb_trading_metadata(
     )
 
 
-def parse_coupon_string(raw: Any) -> Optional[Tuple[float, ...]]:
+def parse_coupon_string(raw: Any) -> tuple[float, ...] | None:
     """解析 '0.3,0.5,0.8' 格式的票息字符串 (单位 %)."""
     if raw is None or raw == "":
         return None
@@ -201,7 +201,7 @@ def parse_coupon_string(raw: Any) -> Optional[Tuple[float, ...]]:
         return None
 
 
-def parse_coupon_chinese_text(text: Any) -> Optional[Tuple[float, ...]]:
+def parse_coupon_chinese_text(text: Any) -> tuple[float, ...] | None:
     """从 '第一年0.40%、第二年0.60%、第三年1.00%...' 这类中文描述里提取票息序列.
 
     返回按顺序的票息小数; 解析失败返回 None.
@@ -220,7 +220,7 @@ def parse_coupon_chinese_text(text: Any) -> Optional[Tuple[float, ...]]:
         return None
 
 
-def _latest_finite(values) -> Optional[float]:
+def _latest_finite(values) -> float | None:
     """返回序列里最后一个有限数值."""
     if not values:
         return None
@@ -236,7 +236,21 @@ def _latest_finite(values) -> Optional[float]:
     return None
 
 
-def _float_or_none(value: Any) -> Optional[float]:
+def finite_float(value: Any) -> float | None:
+    """转 float 并过滤 NaN/Inf; 失败或非有限数返回 None.
+
+    与 ``_float_or_none`` 不同, 不解析含非数字字符的字符串 (例如 '--'),
+    更适合上层定价/排序逻辑中对已经清洗过的数值做最后一道有限性校验。
+    """
+    import math
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _float_or_none(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -248,14 +262,14 @@ def _float_or_none(value: Any) -> Optional[float]:
         return None
 
 
-def _string_or_none(value: Any) -> Optional[str]:
+def _string_or_none(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text if text and text not in {"--", "nan", "None"} else None
 
 
-def _date_or_none(value: Any) -> Optional[date]:
+def _date_or_none(value: Any) -> date | None:
     if value is None:
         return None
     try:
@@ -271,13 +285,13 @@ def _date_or_none(value: Any) -> Optional[date]:
         return None
 
 
-def _wind_table_rows(res) -> List[dict]:
+def _wind_table_rows(res) -> list[dict]:
     try:
         fields = [str(f).lower() for f in res.Fields]
         rows = list(zip(*res.Data))
     except Exception:
         return []
-    out: List[dict] = []
+    out: list[dict] = []
     for row in rows:
         out.append({field: row[i] for i, field in enumerate(fields)})
     return out
@@ -312,18 +326,18 @@ class DataProvider(ABC):
         """正股某日收盘价 (未复权)."""
 
     @abstractmethod
-    def get_stock_history(self, stock_code: str, start: date, end: date) -> List[Tuple[date, Optional[float]]]:
+    def get_stock_history(self, stock_code: str, start: date, end: date) -> list[tuple[date, float | None]]:
         """正股 [start, end] 区间收盘价时序, 升序. 缺失值用 None."""
 
     @abstractmethod
-    def get_bond_history(self, bond_code: str, start: date, end: date) -> List[Tuple[date, Optional[float]]]:
+    def get_bond_history(self, bond_code: str, start: date, end: date) -> list[tuple[date, float | None]]:
         """转债 [start, end] 区间收盘价时序, 升序. 缺失值用 None."""
 
-    def get_cashflow(self, bond_code: str) -> Optional[CashflowSchedule]:
+    def get_cashflow(self, bond_code: str) -> CashflowSchedule | None:
         """完整付息计划. 默认 None, 让调用方回退到 BondTerms.coupon_rates."""
         return None
 
-    def get_risk_free_rate(self, on_date: date) -> Optional[float]:
+    def get_risk_free_rate(self, on_date: date) -> float | None:
         """无风险利率参考值 (%). 默认 None."""
         return None
 
@@ -331,7 +345,7 @@ class DataProvider(ABC):
         self,
         bond_code: str,
         valuation_date: date,
-        base_terms: Optional[BondTerms] = None,
+        base_terms: BondTerms | None = None,
     ) -> BondTerms:
         """拉取主池准入筛选所需的增量状态字段.
 
@@ -345,7 +359,7 @@ class DataProvider(ABC):
         bond_code: str,
         start: date,
         end: date,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """返回公告列表. 每项至少建议包含 ``title`` 与 ``date``.
 
         默认返回空列表, 让事件同步层可以在不支持公告接口的数据源上安全跳过。
@@ -365,8 +379,8 @@ class DataProvider(ABC):
         return float(np.std(log_ret, ddof=1) * np.sqrt(252))
 
     def list_tradable_cbs(
-        self, on_date: Optional[date] = None,
-    ) -> List[Tuple[str, Optional[str]]]:
+        self, on_date: date | None = None,
+    ) -> list[tuple[str, str | None]]:
         """返回某日仍在交易的所有可转债 ``(wind_code, sec_name)`` 列表.
 
         ``sec_name`` 用于上层按名字过滤定向转债; 数据源拿不到时填 ``None``。
@@ -666,7 +680,7 @@ class WindDataProvider(DataProvider):
             return []
         i_name = fields.index("sec_name") if "sec_name" in fields else None
         rows = list(zip(*res.Data))
-        out: List[Tuple[str, Optional[str]]] = []
+        out: list[tuple[str, str | None]] = []
         for r in rows:
             code = r[i_code]
             if not code:
@@ -718,11 +732,11 @@ def _row_value(row, *keys):
     return None
 
 
-def _stock_history_from_df(df) -> List[Tuple[date, Optional[float]]]:
+def _stock_history_from_df(df) -> list[tuple[date, float | None]]:
     """兼容 akshare 不同历史行情接口的列名差异."""
     if df is None or len(df) == 0:
         return []
-    out: List[Tuple[date, Optional[float]]] = []
+    out: list[tuple[date, float | None]] = []
     for _, row in df.iterrows():
         d_raw = _row_value(row, "日期", "date")
         if d_raw is None:
@@ -1014,7 +1028,7 @@ class AkshareDataProvider(DataProvider):
             (c for c in ("债券简称", "债券名称", "证券简称") if c in df.columns),
             None,
         )
-        out: List[Tuple[str, Optional[str]]] = []
+        out: list[tuple[str, str | None]] = []
         for idx, code in enumerate(df["债券代码"].astype(str)):
             c = code.strip().zfill(6)
             wind_code = f"{c}.SH" if c.startswith("11") else f"{c}.SZ"
@@ -1046,7 +1060,7 @@ class CSVDataProvider(DataProvider):
         if not self.root.exists():
             raise FileNotFoundError(f"CSV 数据根目录不存在: {root}")
 
-    def _read_price_csv(self, path) -> List[Tuple[date, Optional[float]]]:
+    def _read_price_csv(self, path) -> list[tuple[date, float | None]]:
         import csv
         out = []
         with open(path, "r", encoding="utf-8-sig") as f:
@@ -1137,12 +1151,12 @@ class CSVDataProvider(DataProvider):
 
 
 # ── 自动探测 ──────────────────────────────────────────────
-def detect_available_providers() -> List[str]:
+def detect_available_providers() -> list[str]:
     """返回当前环境可用的在线 provider 名字列表 (按优先级排序: Wind > akshare).
 
     仅做 import 检测, 不实例化, 不发起任何网络调用.
     """
-    available: List[str] = []
+    available: list[str] = []
     try:
         import WindPy  # type: ignore[import-not-found]  # noqa: F401
         available.append("Wind")
@@ -1156,7 +1170,7 @@ def detect_available_providers() -> List[str]:
     return available
 
 
-def auto_data_provider(prefer: Optional[str] = None) -> DataProvider:
+def auto_data_provider(prefer: str | None = None) -> DataProvider:
     """选择并实例化当前环境最合适的在线 provider.
 
     选择顺序: prefer (若指定且可用) → Wind → akshare.

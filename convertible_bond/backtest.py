@@ -7,7 +7,6 @@ import bisect
 import logging
 import numpy as np
 from datetime import date, timedelta
-from typing import Optional
 
 from .pricer import UniversalCBPricer, DEFAULT_REDEMPTION_PRICE, DEFAULT_FACE_VALUE
 from .data_providers import DataProvider, WindDataProvider, BondTerms
@@ -31,7 +30,7 @@ def backtest_theoretical_price(
     N=1000,
     solve_iv=False,
     progress_cb=None,
-    provider: Optional[DataProvider] = None,
+    provider: DataProvider | None = None,
     **pricer_overrides,
 ):
     """

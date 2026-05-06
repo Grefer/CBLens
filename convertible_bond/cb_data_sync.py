@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from datetime import date
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, Sequence
 
 from .cache import TermsBundle
 from .data_providers import (
@@ -39,10 +39,10 @@ _TERMINAL_STATUS_KEYWORDS = ("退市", "暂停上市", "违约")
 
 
 def filter_listed_codes(
-    codes_with_names: Sequence[Tuple[str, Optional[str]]],
+    codes_with_names: Sequence[tuple[str, str | None]],
     *,
     include_private: bool = False,
-) -> Tuple[List[str], List[Tuple[str, str]]]:
+) -> tuple[list[str], list[tuple[str, str]]]:
     """Stage 1: 过滤非沪深公募代码段 (124xxx/1108xx 等定向) 与名字含定向标识的债.
 
     返回 ``(kept_codes, dropped_with_reason)``. ``include_private=True`` 时不过滤,
@@ -50,8 +50,8 @@ def filter_listed_codes(
     """
     if include_private:
         return [c for c, _ in codes_with_names if c], []
-    kept: List[str] = []
-    dropped: List[Tuple[str, str]] = []
+    kept: list[str] = []
+    dropped: list[tuple[str, str]] = []
     for code, name in codes_with_names:
         if not code:
             continue
@@ -65,7 +65,7 @@ def filter_listed_codes(
     return kept, dropped
 
 
-def is_terminal_terms(terms: BondTerms, on_date: date) -> Optional[str]:
+def is_terminal_terms(terms: BondTerms, on_date: date) -> str | None:
     """Stage 2: 已到期 / 退市 / 违约 / 定向 (名字兜底) → 返回原因, 否则 None.
 
     退市/违约目前依赖数据源把状态写入 ``trading_status``; 未集成此字段时只能靠
@@ -126,7 +126,7 @@ def sync_cb_terms(
     provider: DataProvider,
     bond_codes: Iterable[str],
     store=None,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     with_cashflow: bool = True,
     drop_terminal: bool = True,
     on_progress=None,
@@ -138,10 +138,10 @@ def sync_cb_terms(
     """
     store = store or TermsBundle()
     val_date = valuation_date or date.today()
-    success: List[str] = []
-    failed: List[Tuple[str, str]] = []
-    dropped: List[Tuple[str, str]] = []
-    fresh_items: List[Tuple[str, BondTerms]] = []
+    success: list[str] = []
+    failed: list[tuple[str, str]] = []
+    dropped: list[tuple[str, str]] = []
+    fresh_items: list[tuple[str, BondTerms]] = []
     codes = list(bond_codes)
     for i, code in enumerate(codes):
         if on_progress:
@@ -178,7 +178,7 @@ def sync_cb_terms(
 def sync_cb_data(
     provider: DataProvider,
     bundle=None,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     with_cashflow: bool = True,
     include_private: bool = False,
     on_progress=None,
@@ -190,8 +190,8 @@ def sync_cb_data(
     """
     val_date = valuation_date or date.today()
     raw = provider.list_tradable_cbs(val_date)
-    # 兼容旧实现仍返回 List[str] 的情况 (无 sec_name, 名字过滤不会触发)
-    codes_with_names: List[Tuple[str, Optional[str]]] = []
+    # 兼容旧实现仍返回 list[str] 的情况 (无 sec_name, 名字过滤不会触发)
+    codes_with_names: list[tuple[str, str | None]] = []
     for item in raw or []:
         if isinstance(item, str):
             codes_with_names.append((item, None))
@@ -219,7 +219,7 @@ def refresh_one(
     provider: DataProvider,
     bond_code: str,
     store=None,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     with_cashflow: bool = True,
 ) -> BondTerms:
     """单只刷新 (GUI 🔄 按钮). 用户主动刷新即视为想要, 不做过滤."""

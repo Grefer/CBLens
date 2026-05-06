@@ -21,6 +21,8 @@ cb-gui = "convertible_bond.gui.app:main"
 cb-screen-pool = "convertible_bond.cli.screen_pool:main"
 cb-sync-admission-status = "convertible_bond.cli.sync_admission_status:main"
 cb-sync-events = "convertible_bond.cli.sync_events:main"
+cb-sync-tradable = "convertible_bond.cli.sync_tradable:main"
+cb-sync-terms = "convertible_bond.cli.sync_terms:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

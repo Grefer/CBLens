@@ -12,7 +12,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Sequence
 
 from .data_providers import BondTerms, _add_months, to_date
 
@@ -41,13 +41,13 @@ class CBEvent:
     event_date: date
     event_type: str
     raw_title: str
-    effective_start: Optional[date] = None
-    effective_end: Optional[date] = None
-    parsed_status: Optional[str] = None
+    effective_start: date | None = None
+    effective_end: date | None = None
+    parsed_status: str | None = None
     source: str = "manual"
-    url: Optional[str] = None
-    note: Optional[str] = None
-    commitment_months: Optional[int] = None
+    url: str | None = None
+    note: str | None = None
+    commitment_months: int | None = None
 
     def key(self) -> tuple:
         return (
@@ -61,7 +61,7 @@ class CBEvent:
 class CBEventStore:
     """JSON 事件表, 文件结构为 ``{"_meta": {...}, "events": [...]}``."""
 
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else project_events_path()
         self._events: list[CBEvent] = []
         self._meta: dict = {}
@@ -92,9 +92,9 @@ class CBEventStore:
 
     def list_events(
         self,
-        bond_code: Optional[str] = None,
-        event_type: Optional[str] = None,
-        through_date: Optional[date] = None,
+        bond_code: str | None = None,
+        event_type: str | None = None,
+        through_date: date | None = None,
     ) -> list[CBEvent]:
         events = list(self._events)
         if bond_code:
@@ -118,7 +118,7 @@ class CBEventStore:
             self._save()
         return added
 
-    def mark_synced(self, bond_codes: Iterable[str], synced_at: Optional[datetime] = None) -> None:
+    def mark_synced(self, bond_codes: Iterable[str], synced_at: datetime | None = None) -> None:
         """记录某些转债公告已完成同步, 即使本次没有新增事件也更新时间戳."""
         codes = sorted({str(code).strip().upper() for code in bond_codes if str(code).strip()})
         if not codes:
@@ -138,10 +138,10 @@ def parse_event_from_announcement(
     event_date: date,
     *,
     source: str = "announcement",
-    url: Optional[str] = None,
-    note: Optional[str] = None,
-    body: Optional[str] = None,
-) -> Optional[CBEvent]:
+    url: str | None = None,
+    note: str | None = None,
+    body: str | None = None,
+) -> CBEvent | None:
     """根据公告标题解析事件. 不相关公告返回 None.
 
     可选传入 ``body`` (公告 PDF 抽取的纯文本); 若事件类型为不下修/不强赎,
@@ -185,7 +185,7 @@ _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
            "七": 7, "八": 8, "九": 9, "十": 10, "十二": 12}
 
 
-def _cn_or_arabic_to_int(s: str) -> Optional[int]:
+def _cn_or_arabic_to_int(s: str) -> int | None:
     s = s.strip()
     if s.isdigit():
         return int(s)
@@ -219,7 +219,7 @@ def parse_commitment_period(
     text: str,
     *,
     event_type: str = "down_reset_rejected",
-) -> Optional[dict]:
+) -> dict | None:
     """从公告正文中解析"未来 X 个月内 (Y 起至 Z)"承诺期.
 
     支持两类公告:
@@ -275,7 +275,7 @@ def parse_commitment_period(
     return None
 
 
-def _safe_date(y, m, d) -> Optional[date]:
+def _safe_date(y, m, d) -> date | None:
     try:
         return date(int(y), int(m), int(d))
     except (ValueError, TypeError):
@@ -310,7 +310,7 @@ def apply_events_to_terms(
     terms: BondTerms,
     events: Sequence[CBEvent],
     *,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     down_reset_cooldown_months: int = 6,
 ) -> BondTerms:
     """把事件层合并到 ``BondTerms`` 中, 供筛选和定价使用."""
@@ -356,8 +356,8 @@ def apply_events_to_terms(
 def events_for_down_reset(
     bond_code: str,
     *,
-    store: Optional[CBEventStore] = None,
-    through_date: Optional[date] = None,
+    store: CBEventStore | None = None,
+    through_date: date | None = None,
 ) -> list[CBEvent]:
     event_store = store or default_event_store()
     return [
@@ -366,7 +366,7 @@ def events_for_down_reset(
     ]
 
 
-_default_event_store: Optional[CBEventStore] = None
+_default_event_store: CBEventStore | None = None
 
 
 def default_event_store() -> CBEventStore:
@@ -410,7 +410,7 @@ def _extract_dates(text: str) -> list[date]:
     return sorted(set(out))
 
 
-def _latest_event(events: Sequence[CBEvent], event_type: str) -> Optional[CBEvent]:
+def _latest_event(events: Sequence[CBEvent], event_type: str) -> CBEvent | None:
     matched = [e for e in events if e.event_type == event_type]
     return max(matched, key=_event_sort_key) if matched else None
 

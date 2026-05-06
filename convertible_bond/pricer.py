@@ -8,12 +8,12 @@ import numpy as np
 from scipy.linalg import solve_banded
 from scipy.optimize import brentq
 from datetime import date, timedelta
-from typing import Optional, Tuple, Dict, Union, Literal, overload
+from typing import Literal, overload
 
 logger = logging.getLogger(__name__)
 
 # ── 默认常量 ─────────────────────────────────────────────
-DEFAULT_COUPON_RATES: Tuple[float, ...] = (0.003, 0.004, 0.008, 0.015, 0.018, 0.02)
+DEFAULT_COUPON_RATES: tuple[float, ...] = (0.003, 0.004, 0.008, 0.015, 0.018, 0.02)
 DEFAULT_FACE_VALUE: float = 100.0
 DEFAULT_REDEMPTION_PRICE: float = 107.0
 
@@ -31,13 +31,13 @@ class UniversalCBPricer:
     """
     def __init__(self, S0: float, K: float, current_date: date, maturity_date: date,
                  face_value: float = 100.0, redemption_price: float = 107.0,
-                 issue_date: Optional[date] = None, conversion_start_date: Optional[date] = None,
-                 call_start_date: Optional[date] = None,
-                 coupon_rates: Optional[Tuple[float, ...]] = None, call_trigger_ratio: float = 1.3,
+                 issue_date: date | None = None, conversion_start_date: date | None = None,
+                 call_start_date: date | None = None,
+                 coupon_rates: tuple[float, ...] | None = None, call_trigger_ratio: float = 1.3,
                  put_trigger_ratio: float = 0.7,
                  put_active_years: int = 2,
                  down_reset_premium: float = 1.02,
-                 down_reset_block_until: Optional[date] = None,
+                 down_reset_block_until: date | None = None,
                  call_notice_days: int = 30):
         self._validate_inputs(S0, K, current_date, maturity_date, face_value)
         self.S0 = S0
@@ -158,7 +158,7 @@ class UniversalCBPricer:
 
     def _price_grid(self, sigma: float, r: float, base_spread: float,
                     p_down: float, distress_k: float,
-                    M: int, N: int) -> Tuple[np.ndarray, np.ndarray]:
+                    M: int, N: int) -> tuple[np.ndarray, np.ndarray]:
         """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心."""
         S_max_ref = max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))) * self.K
         S_max = max(S_max_ref, 1.5 * self.S0)
@@ -270,14 +270,22 @@ class UniversalCBPricer:
     def price(self, sigma: float, r: float, base_spread: float,
               p_down: float = ..., distress_k: float = ...,
               M: int = ..., N: int = ...,
-              *, return_greeks: Literal[True]) -> Dict[str, float]: ...
+              *, return_greeks: Literal[True]) -> dict[str, float]: ...
 
     def price(self, sigma: float, r: float, base_spread: float,
               p_down: float = 0.1,        # 下修博弈年化强度
               distress_k: float = 0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
               M: int = 500, N: int = 2000,
-              return_greeks: bool = False) -> Union[float, Dict[str, float]]:
-        """求解理论价. return_greeks=True 时返回 dict (含 Δ/Γ/ν/Θ + 价值分解)."""
+              return_greeks: bool = False) -> float | dict[str, float]:
+        """求解理论价. return_greeks=True 时返回 dict (含 Δ/Γ/ν/Θ + 价值分解).
+
+        说明:
+        - ``vega`` 单位是 "理论价 / +1pp σ" (已乘以 0.01).
+        - ``theta`` 单位是 "理论价 / +1 个日历日" (按实际/365 推进; 不剔除非交易日).
+        - ``option_premium = price - max(bond_floor, parity)``: 在深度 ITM 且强赎宽限期内,
+          模型 cap 把 V 截到 parity·(1+σ√t_grace), 数值上略低于 parity 时该字段可能为
+          小负数 (~ 0.x 元), 不是错误而是 cap 与离散网格的数值噪声边界。
+        """
         if sigma < 0 or r < 0 or base_spread < 0:
             raise ValueError("sigma, r and base_spread must be non-negative")
         if M < 3 or N < 1:
@@ -358,7 +366,11 @@ class UniversalCBPricer:
                           M: int = 300, N: int = 1000,
                           sigma_lo: float = 0.05, sigma_hi: float = 2.0,
                           tol: float = 1e-3) -> float:
-        """反解使理论价 == target_price 的隐含波动率 (年化, 小数). 失败返回 NaN."""
+        """反解使理论价 == target_price 的隐含波动率 (年化, 小数). 失败返回 NaN.
+
+        网格默认 M=300/N=1000 与批量定价一致, 比单只定价 (M=500/N=2000) 粗一档,
+        是为了在 brentq 多次求值时控制总耗时; 精度足以满足 IV 反解的 tol=1e-3。
+        """
         def diff(s: float) -> float:
             return float(self.price(sigma=s, r=r, base_spread=base_spread,
                                     p_down=p_down, distress_k=distress_k,

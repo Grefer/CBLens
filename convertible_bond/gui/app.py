@@ -30,6 +30,7 @@ matplotlib.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti TC', 'Arial Unic
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 from ..pricer import UniversalCBPricer, DEFAULT_COUPON_RATES
+from ..sensitivity import compute_sensitivity_grid
 from ..data_providers import (
     to_date, parse_coupon_string as parse_coupon,
     DataProvider, WindDataProvider, AkshareDataProvider, CSVDataProvider,
@@ -546,29 +547,21 @@ class CBPricerApp(ctk.CTk):
             sig_vals = np.linspace(sig_min, sig_max, steps)
             m = params["model"]
             m_fast = dict(m, M=max(100, m["M"] // 4), N=max(500, m["N"] // 4))
-            grid = np.zeros((steps, steps))
             total = steps * steps
-            done = [0]
 
-            def compute_one(i, j):
-                p = dict(params["pricer"], S0=float(S_vals[j]))
-                pricer = UniversalCBPricer(**p)
-                return i, j, float(pricer.price(
-                    sigma=float(sig_vals[i]), r=m_fast["r"],
-                    base_spread=m_fast["base_spread"], p_down=m_fast["p_down"],
-                    distress_k=m_fast["distress_k"], M=m_fast["M"], N=m_fast["N"]))
+            def progress(done, _total):
+                if done % max(1, total // 20) == 0:
+                    self.after(0, lambda d=done: self.v_sens_status.set(
+                        f"进度 {d}/{total} ..."))
 
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                futs = [pool.submit(compute_one, i, j)
-                        for i in range(steps) for j in range(steps)]
-                for fut in as_completed(futs):
-                    i, j, v = fut.result()
-                    grid[i, j] = v
-                    done[0] += 1
-                    if done[0] % max(1, total // 20) == 0:
-                        self.after(0, lambda d=done[0]: self.v_sens_status.set(
-                            f"进度 {d}/{total} ..."))
-
+            grid = compute_sensitivity_grid(
+                pricer_kwargs=params["pricer"],
+                model_kwargs=m_fast,
+                s_grid=S_vals,
+                sigma_grid=sig_vals,
+                max_workers=4,
+                progress_cb=progress,
+            )
             self.after(0, self._render_sensitivity_chart, S_vals, sig_vals, grid, K)
         except Exception as exc:
             self.after(0, lambda: self.v_sens_status.set(f"❌ 敏感性分析失败: {exc}"))

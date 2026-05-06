@@ -22,7 +22,7 @@ import logging
 import re
 import time
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -99,7 +99,7 @@ class CninfoAnnouncementProvider(DataProvider):
         self._session.headers.update(_HEADERS)
         self._last_request_ts: float = 0.0
         # orgId 缓存: plain_code → orgId
-        self._org_cache: Dict[str, str] = {}
+        self._org_cache: dict[str, str] = {}
 
     # ── DataProvider 必须实现的接口 (公告之外的都抛 NotImplementedError) ──
 
@@ -125,7 +125,7 @@ class CninfoAnnouncementProvider(DataProvider):
         bond_code: str,
         start: date,
         end: date,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """从巨潮查询某可转债的公告列表.
 
         返回 ``[{"title": ..., "date": ..., "url": ..., "pdf_url": ...}, ...]``.
@@ -138,7 +138,7 @@ class CninfoAnnouncementProvider(DataProvider):
         # 准备 stock 参数: 先尝试带 orgId, 再退化为纯代码
         stock_param = self._resolve_stock_param(plain_code)
 
-        all_rows: List[dict] = []
+        all_rows: list[dict] = []
         seen_keys: set = set()
 
         for category in _CB_CATEGORIES:
@@ -183,7 +183,7 @@ class CninfoAnnouncementProvider(DataProvider):
 
     # ── PDF 下载与文本提取 ──
 
-    def download_pdf_bytes(self, pdf_url: str) -> Optional[bytes]:
+    def download_pdf_bytes(self, pdf_url: str) -> bytes | None:
         """下载公告 PDF, 返回原始字节."""
         self._throttle()
         try:
@@ -204,7 +204,7 @@ class CninfoAnnouncementProvider(DataProvider):
             logger.warning("cninfo PDF 下载失败: %s — %s", pdf_url, exc)
             return None
 
-    def download_announcement_text(self, pdf_url: str) -> Optional[str]:
+    def download_announcement_text(self, pdf_url: str) -> str | None:
         """下载公告 PDF 并提取纯文本.
 
         依赖 ``pdfplumber`` (纯 Python, 不需要外部工具).
@@ -243,7 +243,7 @@ class CninfoAnnouncementProvider(DataProvider):
 
         return plain_code
 
-    def _fetch_org_id(self, plain_code: str) -> Optional[str]:
+    def _fetch_org_id(self, plain_code: str) -> str | None:
         """通过巨潮搜索接口获取 orgId."""
         self._throttle()
         try:
@@ -272,9 +272,9 @@ class CninfoAnnouncementProvider(DataProvider):
         column: str,
         category: str,
         searchkey: str = "",
-    ) -> List[dict]:
+    ) -> list[dict]:
         """分页查询公告列表."""
-        all_rows: List[dict] = []
+        all_rows: list[dict] = []
 
         for page_num in range(1, self._max_pages + 1):
             self._throttle()
@@ -342,7 +342,7 @@ class CninfoAnnouncementProvider(DataProvider):
         return all_rows
 
 
-def _parse_announcement_item(ann: dict) -> Optional[dict]:
+def _parse_announcement_item(ann: dict) -> dict | None:
     """解析巨潮单条公告 JSON 为统一格式."""
     title = ann.get("announcementTitle") or ""
     # 去掉巨潮返回的 <em> 高亮标签
@@ -389,7 +389,7 @@ def _parse_announcement_item(ann: dict) -> Optional[dict]:
 
 # ── PDF 文本提取 ──────────────────────────────────────────
 
-def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> Optional[str]:
+def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str | None:
     """从 PDF 字节流提取纯文本.
 
     依赖 ``pdfplumber``; 未安装时回退到 ``PyPDF2``; 都没有则返回 None.

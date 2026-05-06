@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Iterable, Optional
+from typing import Iterable
 
 from .cache import TermsBundle
 from .cb_events import (
@@ -29,7 +29,7 @@ def _needs_body(title: str) -> bool:
     return event_type in _BODY_REQUIRED_TYPES
 
 
-def _try_download_body(provider, pdf_url: str) -> Optional[str]:
+def _try_download_body(provider, pdf_url: str) -> str | None:
     """尝试从 provider 下载 PDF 并提取纯文本.
 
     优先使用 provider 自带的 ``download_announcement_text`` 方法
@@ -75,10 +75,10 @@ def _try_download_body(provider, pdf_url: str) -> Optional[str]:
 def sync_cb_events(
     provider: DataProvider,
     bond_codes: Iterable[str],
-    event_store: Optional[CBEventStore] = None,
+    event_store: CBEventStore | None = None,
     *,
-    start: Optional[date] = None,
-    end: Optional[date] = None,
+    start: date | None = None,
+    end: date | None = None,
     lookback_days: int = 180,
     on_progress=None,
     download_pdf: bool = True,
@@ -164,7 +164,7 @@ def apply_events_to_bundle(
     event_store: CBEventStore,
     bundle: TermsBundle,
     *,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     on_progress=None,
 ) -> dict:
     """把事件表应用回 cb_data bundle 的状态字段."""

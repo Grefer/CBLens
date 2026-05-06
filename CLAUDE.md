@@ -68,8 +68,8 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 ### 语言与风格
 
 - **语言**: 代码、注释、docstring 使用中文或中英混合 (项目惯例)
-- **类型标注**: 使用 Python 3.10+ 语法 (`X | None` 而非 `Optional[X]`)
-- **导入**: 从子模块直接导入，不通过 `__init__.py` 中转
+- **类型标注**: 使用 Python 3.10+ 语法 (`X | None` / `list[X]` / `tuple[X, ...]` / `dict[X, Y]`); 不要再用 `Optional/List/Dict/Tuple`
+- **导入**: 包内部代码从子模块直接导入; `convertible_bond/__init__.py` 仅作为对外公开 API 的聚合入口
 - **文档**: 每个模块开头有中文 docstring 说明职责
 
 ### 关键设计模式
@@ -85,8 +85,9 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 
 `BondTerms` dataclass 有 30+ 字段。新增字段需要同步更新:
 1. `data_providers.py` 中的 `BondTerms` dataclass
-2. `cache.py` 中的 `_json_dict_to_terms()` 反序列化函数
-3. 对应 Provider 的 `get_bond_terms()` 实现
+2. 对应 Provider 的 `get_bond_terms()` 实现
+
+序列化无需手动登记: `cache.py` 中的 `_json_dict_to_terms()` 通过 `dataclasses.fields(BondTerms) + get_type_hints` 自动识别 `date` 与 `tuple` 字段; 只要字段类型注解写对就会被正确反序列化。
 
 ### PDE 引擎要点
 

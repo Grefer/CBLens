@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Any, Iterable, List, Sequence
+from typing import Any, Iterable, Sequence
 
 from .cache import CachedBondDataProvider
 from .data_providers import (
@@ -24,6 +24,7 @@ from .data_providers import (
     CSVDataProvider,
     DataProvider,
     WindDataProvider,
+    finite_float,
     infer_cb_trading_metadata,
     is_standard_public_cb_code,
     looks_private_cb_name,
@@ -122,7 +123,7 @@ def project_batch_cache_path() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "batch_pricing_cache.json"
 
 
-def parse_bond_codes(raw: str | Iterable[str]) -> List[str]:
+def parse_bond_codes(raw: str | Iterable[str]) -> list[str]:
     """解析用户输入 / CSV 单元格中的转债代码, 去重并保持原始顺序."""
     if isinstance(raw, str):
         text = "\n".join(line for line in raw.splitlines() if not line.strip().startswith("#"))
@@ -136,7 +137,7 @@ def parse_bond_codes(raw: str | Iterable[str]) -> List[str]:
             )
             chunks.extend(_CODE_SPLIT_RE.split(text))
 
-    codes: List[str] = []
+    codes: list[str] = []
     seen = set()
     for chunk in chunks:
         code = chunk.strip().strip('"').strip("'")
@@ -156,7 +157,7 @@ def list_batch_codes_from_cache(
     *,
     include_nonstandard: bool = False,
     admission_config: AdmissionFilterConfig | None = None,
-) -> List[str]:
+) -> list[str]:
     """返回 cb_data 静态信息缓存中的批量定价代码池.
 
     默认只返回当前 A 股普通公募可转债常见代码段:
@@ -185,12 +186,12 @@ def split_batch_codes_from_cache(
     terms_cache,
     *,
     admission_config: AdmissionFilterConfig | None = None,
-) -> tuple[List[str], List[tuple[str, str]]]:
+) -> tuple[list[str], list[tuple[str, str]]]:
     """把缓存代码池拆成 (可批量定价代码, 被过滤代码及原因)."""
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return [], []
-    kept: List[str] = []
-    excluded: List[tuple[str, str]] = []
+    kept: list[str] = []
+    excluded: list[tuple[str, str]] = []
     for code in terms_cache.list_bonds():
         reason = batch_pricing_exclusion_reason(
             code,
@@ -394,7 +395,7 @@ def list_upcoming_tradable_from_cache(
     *,
     on_date: date | None = None,
     window_days: int = 7,
-) -> List[dict]:
+) -> list[dict]:
     """列出未来 window_days 天内即将上市/进入可交易窗口的转债.
 
     包含两类:
@@ -405,7 +406,7 @@ def list_upcoming_tradable_from_cache(
         return []
     check_date = on_date or date.today()
     end_date = check_date + timedelta(days=max(0, int(window_days)))
-    rows: List[dict] = []
+    rows: list[dict] = []
     for code in terms_cache.list_bonds():
         terms = _with_inferred_trading_metadata(code, _cached_terms(terms_cache, code), check_date)
         if terms is None:
@@ -443,10 +444,10 @@ def list_upcoming_tradable_from_cache(
 def merge_upcoming_pricing_results(
     upcoming_rows: Sequence[dict],
     pricing_results: Sequence[dict],
-) -> List[dict]:
+) -> list[dict]:
     """把关注池元数据与批量定价结果按代码合并."""
     priced_by_code = {row.get("bond_code"): row for row in pricing_results}
-    merged: List[dict] = []
+    merged: list[dict] = []
     for row in upcoming_rows:
         out = dict(row)
         priced = priced_by_code.get(row.get("bond_code"))
@@ -697,12 +698,12 @@ def annotate_batch_result(row: dict) -> dict:
     return out
 
 
-def annotate_batch_results(results: Sequence[dict]) -> List[dict]:
+def annotate_batch_results(results: Sequence[dict]) -> list[dict]:
     """补齐批量研究字段, 不改变输入列表."""
     return [annotate_batch_result(row) for row in results]
 
 
-def sort_batch_results_for_review(results: Sequence[dict]) -> List[dict]:
+def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
     """按实际复核价值排序: 成功行优先, 机会分降序, 偏差升序."""
     annotated = annotate_batch_results(results)
 
@@ -717,7 +718,7 @@ def sort_batch_results_for_review(results: Sequence[dict]) -> List[dict]:
     return sorted(annotated, key=key)
 
 
-def filter_batch_results_by_view(results: Sequence[dict], view: str | None) -> List[dict]:
+def filter_batch_results_by_view(results: Sequence[dict], view: str | None) -> list[dict]:
     """按批量页视图过滤结果, 并保持研究排序."""
     rows = sort_batch_results_for_review(results)
     view_name = view if view in BATCH_REVIEW_VIEWS else "综合机会"
@@ -854,12 +855,7 @@ def _restore_result_row(row: dict) -> dict:
     return restored
 
 
-def _finite_float(value) -> float | None:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
+_finite_float = finite_float
 
 
 def _dedupe_tags(tags: Sequence[str]) -> list[str]:

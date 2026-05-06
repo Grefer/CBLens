@@ -11,28 +11,23 @@ DataProvider 驱动的可转债定价辅助接口.
 from datetime import date, timedelta
 import math
 import os
-from typing import List, Optional, Dict, Any
+from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
 from .pricer import UniversalCBPricer, DEFAULT_FACE_VALUE, DEFAULT_REDEMPTION_PRICE
-from .data_providers import DataProvider, WindDataProvider, auto_data_provider
+from .data_providers import DataProvider, WindDataProvider, auto_data_provider, finite_float
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset
 
 
-def _finite_float(value) -> Optional[float]:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
+_finite_float = finite_float
 
 
-def _latest_price_on_or_before(history, on_date: date) -> Optional[float]:
-    latest: Optional[float] = None
-    latest_date: Optional[date] = None
+def _latest_price_on_or_before(history, on_date: date) -> float | None:
+    latest: float | None = None
+    latest_date: date | None = None
     for d, value in history or []:
         if d is None or d > on_date:
             continue
@@ -45,7 +40,7 @@ def _latest_price_on_or_before(history, on_date: date) -> Optional[float]:
     return latest
 
 
-def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, fallback) -> Optional[float]:
+def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, fallback) -> float | None:
     fallback_price = _finite_float(fallback)
     try:
         history = provider.get_bond_history(
@@ -189,7 +184,7 @@ def price_from_auto(bond_code, *, prefer=None, **kwargs):
     return price_from_provider(cb_data_provider_for_market(auto_data_provider(prefer=prefer)), bond_code, **kwargs)
 
 
-def _resolve_batch_workers(max_workers: Optional[int], total: int) -> int:
+def _resolve_batch_workers(max_workers: int | None, total: int) -> int:
     if total <= 0:
         return 1
     if max_workers is None:
@@ -217,12 +212,14 @@ class _BatchStockCache(DataProvider):
     def __init__(self, inner: DataProvider):
         self._inner = inner
         self.name = inner.name
-        self._close_cache: Dict[tuple, float] = {}
-        self._history_cache: Dict[tuple, list] = {}
-        self._bond_history_cache: Dict[tuple, list] = {}
-        self._vol_cache: Dict[tuple, float] = {}
+        self._close_cache: dict[tuple, float] = {}
+        self._history_cache: dict[tuple, list] = {}
+        self._bond_history_cache: dict[tuple, list] = {}
+        self._vol_cache: dict[tuple, float] = {}
         import threading
         self._lock = threading.Lock()
+        # 每个 hist_vol/history key 一把 Event, 避免并发重复打网络
+        self._inflight: dict[tuple, "threading.Event"] = {}
 
     # ── 缓存的接口 ────────────────────────────────────────
     def get_stock_close(self, stock_code, on_date):
@@ -245,25 +242,44 @@ class _BatchStockCache(DataProvider):
             return value
 
     def hist_vol(self, stock_code, end_date, window_days):
-        key = (stock_code, end_date, window_days)
+        import threading
+        cache_key = (stock_code, end_date, window_days)
+        inflight_key = ("vol", *cache_key)
         with self._lock:
-            if key in self._vol_cache:
-                return self._vol_cache[key]
-        lookback = max(window_days * 2, window_days + 15)
-        history = self.get_stock_history(stock_code, end_date - timedelta(days=lookback), end_date)
-        closes = np.array([v for _, v in history if v is not None], dtype=float)
-        if len(closes) > window_days + 1:
-            closes = closes[-(window_days + 1):]
-        if len(closes) < 5:
-            raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
-        log_ret = np.diff(np.log(closes))
-        value = float(np.std(log_ret, ddof=1) * np.sqrt(252))
-        latest_close = _latest_price_on_or_before(history, end_date)
-        with self._lock:
-            self._vol_cache.setdefault(key, value)
-            if latest_close is not None:
-                self._close_cache.setdefault((stock_code, end_date), latest_close)
-            return self._vol_cache[key]
+            if cache_key in self._vol_cache:
+                return self._vol_cache[cache_key]
+            event = self._inflight.get(inflight_key)
+            owner = event is None
+            if owner:
+                event = self._inflight[inflight_key] = threading.Event()
+        if not owner:
+            event.wait()
+            with self._lock:
+                if cache_key in self._vol_cache:
+                    return self._vol_cache[cache_key]
+            # owner 失败 → 当前线程重新进入 (此时 inflight 已被 owner 清掉)
+            return self.hist_vol(stock_code, end_date, window_days)
+        try:
+            lookback = max(window_days * 2, window_days + 15)
+            history = self.get_stock_history(
+                stock_code, end_date - timedelta(days=lookback), end_date)
+            closes = np.array([v for _, v in history if v is not None], dtype=float)
+            if len(closes) > window_days + 1:
+                closes = closes[-(window_days + 1):]
+            if len(closes) < 5:
+                raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
+            log_ret = np.diff(np.log(closes))
+            value = float(np.std(log_ret, ddof=1) * np.sqrt(252))
+            latest_close = _latest_price_on_or_before(history, end_date)
+            with self._lock:
+                self._vol_cache[cache_key] = value
+                if latest_close is not None:
+                    self._close_cache.setdefault((stock_code, end_date), latest_close)
+            return value
+        finally:
+            with self._lock:
+                self._inflight.pop(inflight_key, None)
+            event.set()
 
     # ── 直接透传的接口 ────────────────────────────────────
     def get_bond_terms(self, bond_code, valuation_date):
@@ -295,11 +311,11 @@ def _batch_result_from_provider(
     p_down: float,
     valuation_date: date,
     vol_window_days: int,
-    sigma: Optional[float],
+    sigma: float | None,
     M: int,
     N: int,
-    pricer_overrides: Dict[str, Any],
-) -> Dict[str, Any]:
+    pricer_overrides: dict[str, Any],
+) -> dict[str, Any]:
     try:
         res = price_from_provider(
             provider, code,
@@ -331,7 +347,7 @@ def _batch_result_from_provider(
         }
 
 
-def _sort_batch_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _sort_batch_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     results.sort(key=lambda x: x.get("deviation", float("inf"))
                  if not math.isnan(x.get("deviation", float("nan")))
                  else float("inf"))
@@ -340,21 +356,21 @@ def _sort_batch_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def batch_price_from_provider_threaded(
     provider: DataProvider,
-    bond_codes: List[str],
+    bond_codes: list[str],
     *,
     r: float = 0.022,
     base_spread: float = 0.03,
     distress_k: float = 0.05,
     p_down: float = 0.15,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     vol_window_days: int = 21,
-    sigma: Optional[float] = None,
+    sigma: float | None = None,
     M: int = 300,
     N: int = 1000,
-    max_workers: Optional[int] = None,
+    max_workers: int | None = None,
     progress_cb=None,
     **pricer_overrides,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     多线程批量定价入口: 自动或显式指定线程数, 供 GUI 批量计算调用.
 
@@ -373,10 +389,10 @@ def batch_price_from_provider_threaded(
     # 批量级正股数据缓存: 同一正股只拉一次, 显著减少网络请求
     cached_provider = _BatchStockCache(provider)
     workers = _resolve_batch_workers(max_workers, total)
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     done_count = 0
 
-    def _price_one(code: str) -> Dict[str, Any]:
+    def _price_one(code: str) -> dict[str, Any]:
         return _batch_result_from_provider(
             cached_provider, code,
             r=r, base_spread=base_spread,
@@ -408,27 +424,31 @@ def batch_price_from_provider_threaded(
 
 def batch_price_from_provider(
     provider: DataProvider,
-    bond_codes: List[str],
+    bond_codes: list[str],
     *,
     r: float = 0.022,
     base_spread: float = 0.03,
     distress_k: float = 0.05,
     p_down: float = 0.15,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
     vol_window_days: int = 21,
-    sigma: Optional[float] = None,
+    sigma: float | None = None,
     M: int = 300,
     N: int = 1000,
     max_workers: int = 4,
     progress_cb=None,
     **pricer_overrides,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     批量定价: 导入代码列表 → 并发定价 → 按理论价/市价基差排序返回.
 
+    本入口为 ``batch_price_from_provider_threaded`` 的兼容别名, 仍保留 legacy
+    默认 ``max_workers=4``。新代码建议直接调用
+    ``batch_price_from_provider_threaded`` (默认按 CPU 核数自动选择并发数)。
+
     参数:
         bond_codes: 转债代码列表, 例如 ['128009.SZ', '113050.SH']
-        max_workers: 并发线程数 (PDE 是 CPU-bound, 建议 ≤ CPU 核数)
+        max_workers: 并发线程数 (legacy 默认 4)
         progress_cb: callable(done, total) 进度回调
         其余参数同 price_from_provider
 

@@ -28,7 +28,6 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
 from .data_providers import BondTerms, _add_months, to_date
 
@@ -44,17 +43,17 @@ def project_overrides_path() -> Path:
 
 @dataclass
 class ResolvedDownReset:
-    block_until: Optional[date]
-    p_scale: Optional[float]
-    note: Optional[str]
-    cooldown_months: Optional[float]
-    announce_date: Optional[date]
+    block_until: date | None
+    p_scale: float | None
+    note: str | None
+    cooldown_months: float | None
+    announce_date: date | None
 
 
 class DownResetOverrides:
     """加载事件覆盖层 JSON 并按 bond_code 查询."""
 
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else project_overrides_path()
         self._data: dict = {}
         self._load()
@@ -70,7 +69,7 @@ class DownResetOverrides:
             logger.warning("down_reset_overrides %s 解析失败: %s; 视为空", self.path, e)
             self._data = {}
 
-    def get(self, bond_code: str) -> Optional[dict]:
+    def get(self, bond_code: str) -> dict | None:
         v = self._data.get(bond_code)
         return v if isinstance(v, dict) else None
 
@@ -85,9 +84,9 @@ class DownResetOverrides:
         tmp.replace(self.path)
 
     def set(self, bond_code: str, *,
-            announce_date: Optional[date],
-            p_scale_after_cooldown: Optional[float],
-            note: Optional[str] = None) -> None:
+            announce_date: date | None,
+            p_scale_after_cooldown: float | None,
+            note: str | None = None) -> None:
         """写入或更新一条事件覆盖. announce_date=None 等价于 delete."""
         if announce_date is None and p_scale_after_cooldown is None and not note:
             self.delete(bond_code)
@@ -110,7 +109,7 @@ class DownResetOverrides:
         return False
 
 
-_default_overrides: Optional[DownResetOverrides] = None
+_default_overrides: DownResetOverrides | None = None
 
 
 def default_overrides() -> DownResetOverrides:
@@ -130,9 +129,9 @@ def reload_default_overrides() -> DownResetOverrides:
 def resolve_down_reset(
     bond_code: str,
     terms: BondTerms,
-    overrides: Optional[DownResetOverrides] = None,
+    overrides: DownResetOverrides | None = None,
     *,
-    valuation_date: Optional[date] = None,
+    valuation_date: date | None = None,
 ) -> ResolvedDownReset:
     """合并条款 + 事件层, 给 pricer 一组现成参数.
 
