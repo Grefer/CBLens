@@ -201,6 +201,8 @@ def _changed_fields(before, after) -> list[str]:
         "call_no_redemption_until",
         "delisting_date",
         "suspension_status",
+        "underlying_status",
+        "underlying_trade_status",
         "down_reset_block_until",
         "down_reset_note",
     )

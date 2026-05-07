@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -27,8 +27,22 @@ EVENT_TYPES = (
     "rating_change",
     "delisting",
     "suspension",
+    "underlying_suspension",
+    "underlying_st_risk",
+    "underlying_st_clear",
     "unknown",
 )
+
+# 临时停牌类事件的默认 TTL: 公告未明示截止日期时, 按 event_date + N 天作为过期日,
+# 避免单日临停永久污染 cb_data 状态字段。窗口选 5 个自然日 ≈ 3-4 个交易日,
+# 真正的长停 (重组/退市) 一般会有明确日期或后续公告续期。
+_TRANSIENT_EVENT_TTL_DAYS = 5
+_TRANSIENT_EVENT_TYPES = frozenset({"suspension", "underlying_suspension"})
+# 临停事件过期后, 还要再观察一段时间才主动清空 cb_data 上的状态字段。
+# 这个 grace 是为了避免误伤 admission_status 层 (Wind 直刷) 同步到的实时停牌:
+# 流程上 admission_status 先跑、apply_events 后跑, 若上一轮临停事件刚过期,
+# 当天又被 Wind 标停, 没 grace 就会被旧事件误擦。30 天足够覆盖一次完整刷新周期。
+_TRANSIENT_CLEAR_GRACE_DAYS = 30
 
 
 def project_events_path() -> Path:
@@ -166,6 +180,10 @@ def parse_event_from_announcement(
             effective_end = commitment["end"]
             commitment_months = commitment["months"]
 
+    # 临停类事件没有明确截止日期时, 给一个保守 TTL, 防止永久污染状态字段
+    if effective_end is None and event_type in _TRANSIENT_EVENT_TYPES:
+        effective_end = event_date + timedelta(days=_TRANSIENT_EVENT_TTL_DAYS)
+
     return CBEvent(
         bond_code=bond_code,
         event_date=event_date,
@@ -300,9 +318,46 @@ def classify_announcement_title(title: str) -> str:
         return "rating_change"
     if re.search(r"摘牌|最后交易日", text):
         return "delisting"
+    # ── 正股风险 (反向事件优先, 避免被 ST risk 误判) ──
+    if _is_underlying_st_clear(text):
+        return "underlying_st_clear"
+    # ── 正股风险 ── 必须在转债停牌判断之前, 防止 ST 标题中"停牌"被误判
+    if _is_underlying_st_risk(text):
+        return "underlying_st_risk"
     if "停牌" in text:
-        return "suspension"
+        # "可转债停牌" 也命中 "转债.*停牌"  (.*  匹配空串), 不必单列
+        if re.search(r"转债.*停牌|停牌.*转债", text):
+            return "suspension"      # 转债自身停牌
+        # 仅在明确出现正股/股票/A股等线索时归为正股停牌, 否则保守留 unknown,
+        # 避免把券商笼统的"关于临时停牌的公告"误挂到正股侧。
+        if re.search(r"股票|正股|A股|公司股", text):
+            return "underlying_suspension"
+        return "unknown"
     return "unknown"
+
+
+def _is_underlying_st_risk(text: str) -> bool:
+    """正股 ST / 退市风险警示公告.
+
+    排除"撤销风险警示""申请撤销 *ST"等利好公告, 只保留风险确认型。
+    """
+    if re.search(r"撤销.*(?:风险警示|\*ST)|申请撤销.*ST", text):
+        return False
+    if re.search(r"实施.*退市风险|被实行退市风险|退市风险警示", text):
+        return True
+    if re.search(r"实施\*ST|被实施\*ST|实施其他风险警示|被实行其他风险警示", text):
+        return True
+    if re.search(r"股票.*被(?:实行|实施).{0,6}(?:风险警示|ST)", text):
+        return True
+    return False
+
+
+def _is_underlying_st_clear(text: str) -> bool:
+    """正股撤销风险警示 / *ST 利好公告.
+
+    用于反向清除 ``underlying_status``, 与 ``_is_underlying_st_risk`` 互斥。
+    """
+    return bool(re.search(r"撤销.*(?:退市)?风险警示|撤销.*\*?ST|申请撤销.*ST", text))
 
 
 def apply_events_to_terms(
@@ -335,9 +390,35 @@ def apply_events_to_terms(
     latest_delist = _latest_event(active, "delisting")
     if latest_delist:
         updates["delisting_date"] = latest_delist.effective_end or latest_delist.effective_start
+    # 临停类事件: 仅在 effective_end 仍在窗口内时才标记停牌;
+    # 过期超过 _TRANSIENT_CLEAR_GRACE_DAYS 才主动清空, 给 admission_status (Wind 直刷)
+    # 留写入窗口, 避免刚过期的旧事件擦掉当天 admission 同步到的真实"停牌"。
     latest_suspension = _latest_event(active, "suspension")
     if latest_suspension:
-        updates["suspension_status"] = latest_suspension.parsed_status or "停牌"
+        if _transient_still_active(latest_suspension, val_date):
+            updates["suspension_status"] = latest_suspension.parsed_status or "停牌"
+        elif (
+            terms.suspension_status is not None
+            and _transient_long_expired(latest_suspension, val_date)
+        ):
+            updates["suspension_status"] = None
+    latest_underlying_susp = _latest_event(active, "underlying_suspension")
+    if latest_underlying_susp:
+        if _transient_still_active(latest_underlying_susp, val_date):
+            updates["underlying_trade_status"] = "停牌"
+        elif (
+            terms.underlying_trade_status is not None
+            and _transient_long_expired(latest_underlying_susp, val_date)
+        ):
+            updates["underlying_trade_status"] = None
+    # ST 状态: 撤销公告日期晚于风险公告时, 显式清空 underlying_status
+    latest_st = _latest_event(active, "underlying_st_risk")
+    latest_st_clear = _latest_event(active, "underlying_st_clear")
+    if latest_st_clear and (latest_st is None or latest_st_clear.event_date >= latest_st.event_date):
+        if terms.underlying_status is not None:
+            updates["underlying_status"] = None
+    elif latest_st:
+        updates["underlying_status"] = latest_st.parsed_status or "ST/退市风险"
 
     latest_down_rejected = _latest_event(active, "down_reset_rejected")
     if latest_down_rejected and terms.down_reset_block_until is None:
@@ -382,6 +463,27 @@ def reload_default_event_store() -> CBEventStore:
     return _default_event_store
 
 
+def _transient_event_end(event: CBEvent) -> date:
+    """临停事件的有效截止日 (缺失时按 event_date + TTL 兜底)."""
+    return event.effective_end or (
+        event.event_date + timedelta(days=_TRANSIENT_EVENT_TTL_DAYS)
+    )
+
+
+def _transient_still_active(event: CBEvent, val_date: date) -> bool:
+    """判断临停类事件在 ``val_date`` 是否仍处于生效窗口."""
+    return _transient_event_end(event) >= val_date
+
+
+def _transient_long_expired(event: CBEvent, val_date: date) -> bool:
+    """临停事件已过期超过 GRACE 天: 视作真的失效, 可清空状态字段.
+
+    刚过期不清, 是为了给 admission_status 层留窗口写入实时 Wind 状态,
+    避免上一轮事件刚过期就把当天 admission 同步到的真实"停牌"擦掉。
+    """
+    return (val_date - _transient_event_end(event)).days > _TRANSIENT_CLEAR_GRACE_DAYS
+
+
 def _event_status(event_type: str) -> str:
     return {
         "down_reset_proposed": "提议下修",
@@ -393,6 +495,9 @@ def _event_status(event_type: str) -> str:
         "rating_change": "评级调整",
         "delisting": "临近摘牌",
         "suspension": "停牌",
+        "underlying_suspension": "正股停牌",
+        "underlying_st_risk": "ST/退市风险",
+        "underlying_st_clear": "撤销ST",
     }.get(event_type, event_type)
 
 

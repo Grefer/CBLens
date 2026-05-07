@@ -1,13 +1,13 @@
 {
   "_meta": {
-    "last_sync_at": "2026-05-07T10:06:45",
+    "last_sync_at": "2026-05-07T14:10:57",
     "synced_at_by_code": {
       "110081.SH": "2026-05-07T09:28:52",
-      "110092.SH": "2026-05-07T10:06:45",
+      "110092.SH": "2026-05-07T14:10:57",
       "118025.SH": "2026-04-29T19:08:17",
       "118027.SH": "2026-04-29T18:58:14"
     },
-    "updated_at": "2026-05-07T10:06:45"
+    "updated_at": "2026-05-07T14:10:57"
   },
   "events": [
     {
@@ -12106,9 +12106,9 @@
       "effective_end": null,
       "effective_start": "2026-04-29",
       "event_date": "2026-04-29",
-      "event_type": "suspension",
+      "event_type": "underlying_st_risk",
       "note": null,
-      "parsed_status": "停牌",
+      "parsed_status": "ST/退市风险",
       "raw_title": "江苏三房巷聚材股份有限公司关于实施退市风险警示及叠加其他风险警示暨停牌的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2026-04-29/1225233408.PDF"

@@ -1,8 +1,12 @@
-from datetime import date
+from datetime import date, timedelta
+
+import pytest
 
 from convertible_bond.cache import TermsBundle
 from convertible_bond.cb_event_sync import apply_events_to_bundle, sync_cb_events
 from convertible_bond.cb_events import (
+    _TRANSIENT_CLEAR_GRACE_DAYS,
+    _TRANSIENT_EVENT_TTL_DAYS,
     CBEvent,
     CBEventStore,
     apply_events_to_terms,
@@ -217,6 +221,214 @@ def test_event_store_marks_synced_even_without_new_events(tmp_path):
     reloaded = CBEventStore(tmp_path / "events.json")
     assert "113001.SH" in reloaded._meta["synced_at_by_code"]
     assert reloaded.list_events("113001.SH") == []
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("关于公司股票被实施退市风险警示的公告", "underlying_st_risk"),
+        ("关于公司股票被实行*ST的公告", "underlying_st_risk"),
+        ("关于公司股票被实行其他风险警示的公告", "underlying_st_risk"),
+        ("关于撤销退市风险警示的公告", "underlying_st_clear"),
+        ("关于申请撤销*ST的公告", "underlying_st_clear"),
+        ("关于撤销公司股票其他风险警示的公告", "underlying_st_clear"),
+    ],
+)
+def test_classify_underlying_st_risk_and_clear(title, expected):
+    """ST 风险 / 撤销 ST 的分类必须互斥."""
+    assert classify_announcement_title(title) == expected
+
+
+def test_classify_underlying_st_clear_evaluated_before_risk():
+    # 撤销 ST 公告里也常出现"风险警示"字样, 必须先于 risk 判定
+    assert classify_announcement_title(
+        "关于撤销公司股票退市风险警示及*ST的公告"
+    ) == "underlying_st_clear"
+
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        ("关于xx转债临时停牌的公告", "suspension"),
+        ("关于停牌xx转债的公告", "suspension"),
+        ("关于公司股票临时停牌的公告", "underlying_suspension"),
+        ("关于公司A股股票停牌的公告", "underlying_suspension"),
+        ("关于正股停牌的公告", "underlying_suspension"),
+        # 没有"转债""股票"等线索 → 不强行分类, 留 unknown
+        ("关于临时停牌的公告", "unknown"),
+    ],
+)
+def test_classify_suspension_routing(title, expected):
+    assert classify_announcement_title(title) == expected
+
+
+def test_parse_event_assigns_transient_ttl_when_no_explicit_end():
+    """临停事件在公告无明确结束日时, parse 应按 event_date+TTL 兜底."""
+    event_date = date(2026, 4, 15)
+    event = parse_event_from_announcement(
+        "128009.SZ",
+        "关于xx转债临时停牌的公告",
+        event_date,
+    )
+    assert event is not None
+    assert event.event_type == "suspension"
+    assert event.effective_end == event_date + timedelta(days=_TRANSIENT_EVENT_TTL_DAYS)
+
+
+def test_apply_events_underlying_suspension_within_window_sets_status():
+    val_date = date(2026, 4, 16)
+    event = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 4, 15),
+        event_type="underlying_suspension",
+        raw_title="关于公司股票临时停牌的公告",
+        effective_end=date(2026, 4, 18),    # 窗口内
+        parsed_status="正股停牌",
+    )
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        BondTerms(sec_name="测试转债"),
+        [event],
+        valuation_date=val_date,
+    )
+    assert patched.underlying_trade_status == "停牌"
+
+
+def test_apply_events_just_expired_suspension_does_not_clear_admission():
+    """刚过期临停事件不应擦掉 admission_status 当天写入的 '停牌'.
+
+    场景: 4/1 临停事件 (effective_end=4/6) 过期 10 天 (< grace 30 天), 当前 4/16
+    Wind admission 仍标 '停牌'. 事件层不应该清空.
+    """
+    val_date = date(2026, 4, 16)
+    expired_event = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 4, 1),
+        event_type="underlying_suspension",
+        raw_title="关于公司股票临时停牌的公告",
+        effective_end=date(2026, 4, 6),
+    )
+    terms = BondTerms(sec_name="测试转债", underlying_trade_status="停牌")
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        terms,
+        [expired_event],
+        valuation_date=val_date,
+    )
+    # admission 写入的状态仍保留, 没被旧事件擦掉
+    assert patched.underlying_trade_status == "停牌"
+
+
+def test_apply_events_long_expired_suspension_clears_status():
+    """过期超过 grace 的临停事件应清空 stale 状态字段."""
+    val_date = date(2026, 6, 15)
+    expired_event = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 4, 1),
+        event_type="underlying_suspension",
+        raw_title="关于公司股票临时停牌的公告",
+        effective_end=date(2026, 4, 6),
+    )
+    grace_days_diff = (val_date - expired_event.effective_end).days
+    assert grace_days_diff > _TRANSIENT_CLEAR_GRACE_DAYS    # sanity check
+
+    terms = BondTerms(sec_name="测试转债", underlying_trade_status="停牌")
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        terms,
+        [expired_event],
+        valuation_date=val_date,
+    )
+    assert patched.underlying_trade_status is None
+
+
+def test_apply_events_suspension_without_terms_no_op_when_clearing():
+    """terms 上字段已经是 None 时, 过期事件不应触发 update (避免无谓写盘)."""
+    val_date = date(2026, 6, 15)
+    expired_event = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 4, 1),
+        event_type="suspension",
+        raw_title="关于xx转债临时停牌的公告",
+        effective_end=date(2026, 4, 6),
+    )
+    base = BondTerms(sec_name="测试转债")    # suspension_status=None
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        base,
+        [expired_event],
+        valuation_date=val_date,
+    )
+    # 没变化, 仍是同一个对象 (apply 在没 update 时 return 原 terms)
+    assert patched is base
+
+
+def test_apply_events_underlying_st_risk_sets_status():
+    val_date = date(2026, 4, 20)
+    event = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 4, 15),
+        event_type="underlying_st_risk",
+        raw_title="关于公司股票被实施退市风险警示的公告",
+        parsed_status="ST/退市风险",
+    )
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        BondTerms(sec_name="测试转债"),
+        [event],
+        valuation_date=val_date,
+    )
+    assert patched.underlying_status == "ST/退市风险"
+
+
+def test_apply_events_underlying_st_clear_supersedes_earlier_risk():
+    val_date = date(2026, 5, 10)
+    risk = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 4, 15),
+        event_type="underlying_st_risk",
+        raw_title="关于公司股票被实施退市风险警示的公告",
+        parsed_status="ST/退市风险",
+    )
+    clear = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 5, 5),
+        event_type="underlying_st_clear",
+        raw_title="关于撤销退市风险警示的公告",
+    )
+    terms = BondTerms(sec_name="测试转债", underlying_status="ST/退市风险")
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        terms,
+        [risk, clear],
+        valuation_date=val_date,
+    )
+    assert patched.underlying_status is None
+
+
+def test_apply_events_st_risk_after_clear_re_arms_status():
+    """同一债先撤销再实施 ST: 最新 risk 公告应重新点亮状态."""
+    val_date = date(2026, 6, 1)
+    clear = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 5, 5),
+        event_type="underlying_st_clear",
+        raw_title="关于撤销退市风险警示的公告",
+    )
+    risk = CBEvent(
+        bond_code="128009.SZ",
+        event_date=date(2026, 5, 30),    # 比 clear 更新
+        event_type="underlying_st_risk",
+        raw_title="关于公司股票被实施*ST的公告",
+        parsed_status="ST/退市风险",
+    )
+    patched = apply_events_to_terms(
+        "128009.SZ",
+        BondTerms(sec_name="测试转债"),
+        [clear, risk],
+        valuation_date=val_date,
+    )
+    assert patched.underlying_status == "ST/退市风险"
 
 
 def test_sync_events_and_apply_to_bundle(tmp_path):

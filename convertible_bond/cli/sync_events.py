@@ -109,7 +109,8 @@ def main() -> int:
             extra = ""
             if event.commitment_months:
                 extra = f" [承诺{event.commitment_months}个月→{event.effective_end}]"
-            print(f"  {event.event_date} {event.bond_code} {event.event_type}: "
+            label = event.parsed_status or event.event_type
+            print(f"  {event.event_date} {event.bond_code} {label}: "
                   f"{event.raw_title[:40]}{extra}")
         if len(result["parsed_events"]) > 20:
             print(f"  ... 还有 {len(result['parsed_events']) - 20} 条")
