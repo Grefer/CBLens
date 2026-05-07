@@ -39,11 +39,11 @@ logger = logging.getLogger(__name__)
 # CLI 入口表: (菜单标签, python -m 模块名, 提示文案)
 _POOL_SYNC_TARGETS = (
     ("🌐 同步全市场基础信息", "convertible_bond.cli.sync_tradable",
-     "拉取全部可交易转债的发行条款 / 票息 / 转股价 / 评级 / 余额到 cb_data.json\n慢, 通常 5-15 分钟; 期间会占用 Wind 接口."),
+     "拉取全部可交易转债的发行条款 / 票息 / 转股价 / 评级 / 余额到本地条款库\n慢, 通常 5-15 分钟; 期间会占用 Wind 接口."),
     ("🚦 刷新准入状态", "convertible_bond.cli.sync_admission_status",
      "刷新停牌 / 强赎公告 / ST / 临近摘牌 / 成交额等准入字段\n通常 1-5 分钟."),
     ("📰 同步公告事件", "convertible_bond.cli.sync_events",
-     "下载并解析公告标题, 写入 cb_events.json\n通常 1-3 分钟."),
+     "下载并解析公告标题, 写入本地事件表\n通常 1-3 分钟."),
 )
 
 
@@ -182,7 +182,7 @@ class WindSyncMixin:
         elif auto:
             msg = f"自动同步 {code} ({source_name})"
         else:
-            msg = f"同步 {code} (基础信息优先读 cb_data)"
+            msg = f"同步 {code} (基础信息优先读本地条款库)"
         vol_window_label = self.v_vol_window.get()
         self._start_progress(msg)
         threading.Thread(
@@ -330,7 +330,7 @@ class WindSyncMixin:
 
             stock_code = terms.underlying_code
             if not stock_code:
-                raise ValueError("cb_data 未包含标的正股代码 — 请先用 Wind 刷新基础信息")
+                raise ValueError("本地条款库未包含标的正股代码 — 请先用 Wind 刷新基础信息")
 
             try:
                 S0 = provider.get_stock_close(stock_code, val_date)
@@ -528,19 +528,20 @@ class WindSyncMixin:
             ref_parts.append(f"缓存日期 {d['cache_age'].strftime('%Y-%m-%d')}")
         self.v_ref_info.set("  ·  ".join(ref_parts) if ref_parts else "已加载")
 
-        detail_parts = [f"条款: {origin_tag}", f"行情: {market_label}"]
+        detail_parts = [f"条款来源：{terms_label}", f"行情来源：{market_label}"]
         source_parts = []
         if d.get("S0") is not None:
-            source_parts.append(f"S={market_label}")
+            source_parts.append(f"正股价：{market_label}")
         if d.get("sigma") is not None:
-            source_parts.append(f"σ={market_label}历史{d.get('vol_window') or self.v_vol_window.get()}")
+            source_parts.append(
+                f"波动率：{market_label}历史 {d.get('vol_window') or self.v_vol_window.get()}")
         if d.get("shibor") is not None:
-            source_parts.append(f"r={market_label}")
+            source_parts.append(f"无风险利率：{market_label}")
         elif self.v_src_r.get() == "手工":
-            source_parts.append("r=手工")
-        source_parts.append(f"利差={self.v_src_spread.get()}")
-        source_parts.append("p/dk=模型")
-        detail_parts.append("参数来源: " + " / ".join(source_parts))
+            source_parts.append("无风险利率：手工")
+        source_parts.append(f"利差：{self.v_src_spread.get()}")
+        source_parts.append("下修与信用扩张：模型")
+        detail_parts.append("参数来源：" + "；".join(source_parts))
         self.v_ref_detail.set("\n".join(detail_parts))
 
         src_tag = "付息计划" if coupon_src == "cashflow" else "条款字段"

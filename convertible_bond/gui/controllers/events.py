@@ -8,12 +8,15 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from ...announcement_pdf import fetch_and_open as _fetch_and_open_announcement
+from ...announcement_pdf import (
+    fetch_only as _fetch_announcement,
+    open_with_system_viewer as _open_pdf_with_system_viewer,
+    render_pdf_pages as _render_pdf_pages,
+)
 from ...cb_event_sync import sync_cb_events
 from ...cb_events import (
     CBEvent,
     CBEventStore,
-    apply_events_to_terms,
     project_events_path,
     reload_default_event_store,
 )
@@ -49,14 +52,8 @@ class EventsMixin:
         self.btn_sync_events.pack(side="left", padx=(0, 6))
         Tooltip(self.btn_sync_events, "从巨潮资讯网抓取当前债的公告, 解析事件")
 
-        self.btn_apply_events = ctk.CTkButton(
-            toolbar, text="写回 cb_data", command=self._apply_events_to_current,
-            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
-            font=(FONT_FAMILY, 12), width=100, height=28, corner_radius=6)
-        self.btn_apply_events.pack(side="left", padx=(0, 6))
-        Tooltip(self.btn_apply_events,
-                "维护动作: 将事件表固化写回 cb_data\n"
-                "日常定价会直接读取 cb_events, 不需要点这里")
+        # "写回条款库" 按钮已移除: 日常定价直接读事件表, 不需要手工固化;
+        # 维护动作改为通过 ``apply_events_to_terms`` 公共函数 / CLI 触发。
 
         ctk.CTkLabel(toolbar, textvariable=self.v_event_summary,
                      text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(side="left", padx=(8, 0))
@@ -135,7 +132,7 @@ class EventsMixin:
                     font=(FONT_FAMILY, 13), width=22, height=18,
                     fg_color="transparent", cursor="hand2")
                 preview_btn.grid(row=0, column=3, padx=(2, 6), pady=4, sticky="e")
-                Tooltip(preview_btn, "预览公告 PDF (首次会下载到本地缓存)")
+                Tooltip(preview_btn, "预览公告原文 (首次会下载到本地缓存)")
                 handler = (lambda _e=None, _ev=ev: self._open_announcement_preview(_ev))
                 for w in (row_frame, badge, info_lbl, src_lbl, preview_btn):
                     w.bind("<Button-1>", handler)
@@ -180,7 +177,11 @@ class EventsMixin:
         }.get(event_type, event_type[:4])
 
     def _open_announcement_preview(self, event: CBEvent) -> None:
-        """点击事件行 → 下载 (按需) + 系统 PDF 阅读器打开公告."""
+        """点击事件行 → 在 APP 内开新窗口预览 PDF.
+
+        旧版直接调用系统阅读器, 现在改为 ``CTkToplevel`` 内嵌图片预览; 失败
+        时仍可单击 "↗ 系统阅读器打开" 切到系统阅读器作为兜底。
+        """
         url = event.url
         if not url:
             messagebox.showinfo(
@@ -192,25 +193,119 @@ class EventsMixin:
         self._announcement_preview_in_flight.add(url)
         self.v_event_summary.set("📄 公告下载中…")
 
-        def _worker():
+        win = self._build_pdf_preview_window(event)
+        threading.Thread(
+            target=self._announcement_preview_worker,
+            args=(event, url, win),
+            daemon=True,
+        ).start()
+
+    def _build_pdf_preview_window(self, event: CBEvent):
+        """组装 PDF 预览窗口 (顶部状态条 + 滚动正文), 返回 win 句柄字典."""
+        win = ctk.CTkToplevel(self)
+        win.title(f"📄 {event.bond_code} {event.event_date.isoformat()}")
+        win.geometry("840x920")
+        win.transient(self)
+
+        header = ctk.CTkFrame(win, fg_color="transparent")
+        header.pack(fill="x", padx=12, pady=(10, 6))
+        ctk.CTkLabel(
+            header,
+            text=f"{event.bond_code}  ·  {event.event_date.isoformat()}  ·  "
+                 f"{(event.raw_title or '')[:48]}",
+            font=(FONT_FAMILY, 13, "bold"), text_color=TEXT,
+        ).pack(side="left")
+
+        status_var = ctk.StringVar(value="📄 下载并渲染中…")
+        ctk.CTkLabel(
+            header, textvariable=status_var, text_color=TEXT_DIM,
+            font=(FONT_FAMILY, 11),
+        ).pack(side="left", padx=(10, 0))
+
+        sysbtn = ctk.CTkButton(
+            header, text="↗ 系统阅读器打开", width=140, height=26,
+            font=(FONT_FAMILY, 11), state="disabled",
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+        )
+        sysbtn.pack(side="right")
+
+        body = ctk.CTkScrollableFrame(win, fg_color=BG_INPUT)
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        # 把 image 引用挂到 frame 上, 防 GC
+        body._image_refs = []  # type: ignore[attr-defined]
+
+        return {"win": win, "body": body, "status_var": status_var, "sysbtn": sysbtn}
+
+    def _announcement_preview_worker(self, event: CBEvent, url: str, ui: dict):
+        """后台线程: 下载 → 渲染 → 主线程填充图片. 失败时回退系统阅读器."""
+        try:
+            path = _fetch_announcement(event.bond_code, event.event_date, url)
+            self.after(0, lambda: self._wire_pdf_sysbtn(ui, path))
+            self.after(0, lambda: ui["status_var"].set("📄 渲染中…"))
             try:
-                path = _fetch_and_open_announcement(
-                    event.bond_code, event.event_date, url)
-                self.after(0, lambda: self._on_announcement_preview_done(url, path, None))
-            except Exception as exc:
-                self.after(0, lambda: self._on_announcement_preview_done(url, None, exc))
+                images = _render_pdf_pages(path, dpi=110)
+            except RuntimeError as render_exc:
+                self.after(
+                    0,
+                    lambda exc=render_exc: ui["status_var"].set(
+                        f"⚠ 内嵌渲染失败 ({exc}), 已切到系统阅读器"))
+                try:
+                    _open_pdf_with_system_viewer(path)
+                except Exception as open_exc:
+                    self.after(
+                        0,
+                        lambda exc=open_exc: messagebox.showerror(
+                            "系统阅读器失败", str(exc)))
+                return
+            self.after(0, lambda: self._populate_pdf_pages(ui, images, path))
+            self.after(0, lambda: self.v_event_summary.set(f"📄 已打开: {path.name}"))
+        except Exception as exc:
+            self.after(0, lambda exc=exc: ui["status_var"].set(f"❌ 加载失败: {exc}"))
+            self.after(0, lambda exc=exc: self.v_event_summary.set(f"📄 预览失败: {exc}"))
+            self.after(
+                0,
+                lambda exc=exc: messagebox.showerror(
+                    "公告预览失败",
+                    f"无法下载公告 PDF:\n{exc}\n\nURL: {url}"))
+        finally:
+            self._announcement_preview_in_flight.discard(url)
 
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_announcement_preview_done(self, url: str, path, exc: Exception | None):
-        self._announcement_preview_in_flight.discard(url)
-        if exc is not None:
-            self.v_event_summary.set(f"📄 预览失败: {exc}")
-            messagebox.showerror(
-                "公告预览失败",
-                f"无法下载或打开公告 PDF:\n{exc}\n\nURL: {url}")
+    def _wire_pdf_sysbtn(self, ui: dict, path) -> None:
+        """下载完成后, 把 "系统阅读器打开" 按钮激活."""
+        btn = ui.get("sysbtn")
+        if btn is None:
             return
-        self.v_event_summary.set(f"📄 已打开: {path.name}")
+        try:
+            btn.configure(
+                state="normal", text_color=TEXT,
+                command=lambda p=path: self._open_pdf_in_system_viewer(p))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _open_pdf_in_system_viewer(path) -> None:
+        try:
+            _open_pdf_with_system_viewer(path)
+        except Exception as exc:
+            messagebox.showerror("系统阅读器失败", str(exc))
+
+    def _populate_pdf_pages(self, ui: dict, images, path) -> None:
+        """把渲染好的 PIL.Image 列表显示到滚动区, 自适应窗口宽度."""
+        body = ui.get("body")
+        status_var = ui.get("status_var")
+        if body is None or not body.winfo_exists():
+            return  # 窗口已关闭, 静默丢弃
+        target_w = 780  # ScrollableFrame 内部宽度 (840 - padding)
+        for idx, img in enumerate(images):
+            ratio = target_w / img.width if img.width else 1.0
+            out_h = max(1, int(img.height * ratio))
+            ctkimg = ctk.CTkImage(
+                light_image=img, dark_image=img, size=(target_w, out_h))
+            lbl = ctk.CTkLabel(body, image=ctkimg, text="")
+            lbl.pack(pady=(0, 6) if idx == len(images) - 1 else (0, 4))
+            body._image_refs.append(ctkimg)  # type: ignore[attr-defined]
+        if status_var is not None:
+            status_var.set(f"📄 共 {len(images)} 页  ·  {path.name}")
 
     def _event_last_synced_at(self, code: str) -> datetime | None:
         meta = getattr(self.event_store, "_meta", {}) or {}
@@ -342,47 +437,6 @@ class EventsMixin:
         self._reload_events_for_current_code(code)
         self._maybe_reprice_after_event_refresh(code)
 
-    def _apply_events_to_current(self):
-        """维护动作: 将事件表中的事件固化写回 cb_data."""
-        code = self._normalize_bond_code(self.v_bond_code.get())
-        if not code:
-            messagebox.showwarning("提示", "请先输入转债代码")
-            return
-        terms = self.terms_cache.get(code)
-        if terms is None:
-            messagebox.showwarning("提示", f"{code} 不在 cb_data, 先同步")
-            return
-
-        events = self.event_store.list_events(
-            bond_code=code, through_date=date.today())
-        if not events:
-            self.v_event_summary.set("无可应用的事件")
-            return
-
-        patched = apply_events_to_terms(code, terms, events)
-
-        # 更新 GUI 字段
-        changes = []
-        if patched.down_reset_block_until != terms.down_reset_block_until:
-            block_str = (patched.down_reset_block_until.isoformat()
-                         if patched.down_reset_block_until else "—")
-            self.v_dr_block_until.set(block_str)
-            changes.append("block_until")
-        if patched.down_reset_note != terms.down_reset_note and patched.down_reset_note:
-            self.v_dr_note.set(patched.down_reset_note)
-            changes.append("note")
-        if patched.call_status != terms.call_status and patched.call_status:
-            changes.append(f"call={patched.call_status}")
-        if patched.call_no_redemption_until != terms.call_no_redemption_until:
-            changes.append(f"不强赎至={patched.call_no_redemption_until}")
-
-        # 把更新写回 cb_data
-        self.terms_cache.set(code, patched, source="cb_events")
-
-        if changes:
-            self.v_event_summary.set(f"已写回 cb_data: {', '.join(changes)}")
-            self.v_dr_status.set(f"事件已写回 ({len(events)} 条)")
-            # 重新填充下修面板
-            self._populate_down_reset_from_resolver(code, patched)
-        else:
-            self.v_event_summary.set("事件无新变更")
+    # 注: ``_apply_events_to_current`` (写回事件到本地条款库) 已下线 —
+    # 该按钮在 GUI 上几乎没人点 (日常定价直接读事件表), 维护动作请走
+    # ``convertible_bond.cb_event_sync`` 公共函数 / CLI。

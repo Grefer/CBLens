@@ -103,7 +103,7 @@ def build(app, tab):
     ch.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 8))
     ctk.CTkLabel(ch, text="📦 批量定价 / 转债池筛选",
                  font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
-    ctk.CTkLabel(ch, text="基于 cb_data 全量转债池 → 并发定价 → 按机会分筛选复核",
+    ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按机会分筛选复核",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
 
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
@@ -190,7 +190,7 @@ def build(app, tab):
 
     codes, excluded = split_batch_codes_from_cache(getattr(app, "terms_cache", None))
     suffix = _excluded_status_suffix(excluded)
-    app.v_batch_status = ctk.StringVar(value=f"将基于本地 cb_data 普通转债池定价 ({len(codes)} 只{suffix})")
+    app.v_batch_status = ctk.StringVar(value=f"将基于本地条款库的普通转债池定价 ({len(codes)} 只{suffix})")
     ctk.CTkLabel(tab, textvariable=app.v_batch_status,
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).grid(
                      row=1, column=0, sticky="w", padx=16, pady=(0, 6))
@@ -267,7 +267,7 @@ def _create_table_section(parent, *, row, title, with_summary=False):
 def _run_batch(app):
     codes, excluded = split_batch_codes_from_cache(getattr(app, "terms_cache", None))
     if not codes:
-        messagebox.showwarning("提示", "本地 cb_data 普通转债池为空, 请先同步基础信息")
+        messagebox.showwarning("提示", "本地条款库的普通转债池为空, 请先同步基础信息")
         return
 
     source = app.v_batch_source.get()

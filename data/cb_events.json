@@ -1,15 +1,20 @@
 {
   "_meta": {
-    "last_sync_at": "2026-05-07T20:28:40",
+    "last_sync_at": "2026-05-07T22:40:05",
     "synced_at_by_code": {
+      "110025.SH": "2026-05-07T22:40:05",
+      "110073.SH": "2026-05-07T22:35:57",
       "110077.SH": "2026-05-07T20:08:09",
       "110081.SH": "2026-05-07T09:28:52",
       "110092.SH": "2026-05-07T14:10:57",
+      "110097.SH": "2026-05-07T20:46:21",
+      "111000.SH": "2026-05-07T22:31:01",
+      "111001.SH": "2026-05-07T21:59:48",
       "118025.SH": "2026-04-29T19:08:17",
       "118027.SH": "2026-04-29T18:58:14",
       "123225.SZ": "2026-05-07T20:28:40"
     },
-    "updated_at": "2026-05-07T20:28:40"
+    "updated_at": "2026-05-07T22:40:05"
   },
   "events": [
     {
@@ -24,6 +29,32 @@
       "raw_title": "关于不向下修正“宏图转债”转股价格的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-04-29/1223387421.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-05-08",
+      "event_date": "2025-05-08",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "起帆电缆关于不向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-05-08/1223488915.PDF"
+    },
+    {
+      "bond_code": "110073.SH",
+      "commitment_months": 3,
+      "effective_end": "2025-08-15",
+      "effective_start": "2025-05-16",
+      "event_date": "2025-05-16",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "国投资本股份有限公司关于不向下修正“国投转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-05-16/1223554799.PDF"
     },
     {
       "bond_code": "110081.SH",
@@ -78,6 +109,45 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-05-28/1223695379.PDF"
     },
     {
+      "bond_code": "110073.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-05-29",
+      "event_date": "2025-05-29",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "国投资本股份有限公司公开发行可转换公司债券2025年跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-05-29/1223714635.PDF"
+    },
+    {
+      "bond_code": "110073.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-05-29",
+      "event_date": "2025-05-29",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "国投资本股份有限公司关于可转换公司债券2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-05-29/1223714636.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-05-29",
+      "event_date": "2025-05-29",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "起帆电缆关于不向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-05-29/1223712787.PDF"
+    },
+    {
       "bond_code": "110081.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -102,6 +172,32 @@
       "raw_title": "关于“闻泰转债”回售结果的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-06/1223788148.PDF"
+    },
+    {
+      "bond_code": "111001.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-06",
+      "event_date": "2025-06-06",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "山东玻纤集团股份有限公司公开发行可转换公司债券2025年跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-06/1223787739.PDF"
+    },
+    {
+      "bond_code": "111001.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-06",
+      "event_date": "2025-06-06",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "山东玻纤集团股份有限公司关于“山玻转债”2025年跟踪评级结果公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-06/1223787738.PDF"
     },
     {
       "bond_code": "118025.SH",
@@ -156,6 +252,45 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-14/1223876939.PDF"
     },
     {
+      "bond_code": "110097.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-17",
+      "event_date": "2025-06-17",
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "新疆天润乳业股份有限公司关于实施2024年度权益分派时“天润转债”停止转股暨转股价格调整的提示性公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-17/1223887851.PDF"
+    },
+    {
+      "bond_code": "110097.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-17",
+      "event_date": "2025-06-17",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "新疆天润乳业股份有限公司2025年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-17/1223887850.PDF"
+    },
+    {
+      "bond_code": "110097.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-17",
+      "event_date": "2025-06-17",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "新疆天润乳业股份有限公司关于可转换公司债券2025年度跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-17/1223887849.PDF"
+    },
+    {
       "bond_code": "110081.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -182,6 +317,19 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-18/1223900562.PDF"
     },
     {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-20",
+      "event_date": "2025-06-20",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "起帆电缆关于不向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-20/1223933949.PDF"
+    },
+    {
       "bond_code": "118027.SH",
       "commitment_months": 1,
       "effective_end": "2025-07-19",
@@ -193,6 +341,32 @@
       "raw_title": "关于不向下修正“宏图转债”转股价格的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-20/1223934099.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-24",
+      "event_date": "2025-06-24",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "上海起帆电缆股份有限公司2025年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-24/1223957046.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-24",
+      "event_date": "2025-06-24",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "起帆电缆关于起帆转债2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-24/1223957045.PDF"
     },
     {
       "bond_code": "118025.SH",
@@ -219,6 +393,19 @@
       "raw_title": "奕瑞科技关于“奕瑞转债”跟踪信用评级结果的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-24/1223956907.PDF"
+    },
+    {
+      "bond_code": "110097.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-25",
+      "event_date": "2025-06-25",
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "中信建投证券股份有限公司关于新疆天润乳业股份有限公司可转换公司债券转股价格调整的临时受托管理事务报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-25/1223974702.PDF"
     },
     {
       "bond_code": "110077.SH",
@@ -273,6 +460,19 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-28/1224017930.PDF"
     },
     {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": "2025-07-03",
+      "effective_start": "2025-06-28",
+      "event_date": "2025-06-28",
+      "event_type": "suspension",
+      "note": null,
+      "parsed_status": "停牌",
+      "raw_title": "起帆电缆关于实施权益分派时“起帆转债”转股连续停牌的提示性公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-28/1224016017.PDF"
+    },
+    {
       "bond_code": "118027.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -297,6 +497,32 @@
       "raw_title": "关于不向下修正“闻泰转债”转股价格的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-07-04/1224071584.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-07-04",
+      "event_date": "2025-07-04",
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "起帆电缆关于“起帆转债”转股价格调整的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-07-04/1224071068.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-07-11",
+      "event_date": "2025-07-11",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "起帆电缆关于不向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-07-11/1224129595.PDF"
     },
     {
       "bond_code": "110077.SH",
@@ -351,6 +577,19 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-08-01/1224355214.PDF"
     },
     {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-08-01",
+      "event_date": "2025-08-01",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "起帆电缆关于不向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-08-01/1224353087.PDF"
+    },
+    {
       "bond_code": "118025.SH",
       "commitment_months": 6,
       "effective_end": "2026-02-07",
@@ -375,6 +614,84 @@
       "raw_title": "关于不向下修正“宏图转债”转股价格的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-08-09/1224440327.PDF"
+    },
+    {
+      "bond_code": "110097.SH",
+      "commitment_months": 3,
+      "effective_end": "2025-11-15",
+      "effective_start": "2025-08-16",
+      "event_date": "2025-08-16",
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "中信建投证券股份有限公司关于新疆天润乳业股份有限公司不提前赎回“天润转债”的核查意见",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-08-16/1224498822.PDF"
+    },
+    {
+      "bond_code": "110097.SH",
+      "commitment_months": 3,
+      "effective_end": "2025-11-15",
+      "effective_start": "2025-08-16",
+      "event_date": "2025-08-16",
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "新疆天润乳业股份有限公司关于不提前赎回“天润转债”的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-08-16/1224498820.PDF"
+    },
+    {
+      "bond_code": "110097.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-08-20",
+      "event_date": "2025-08-20",
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "中信建投证券股份有限公司关于新疆天润乳业股份有限公司可转换公司债券转股价格调整的临时受托管理事务报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-08-20/1224518844.PDF"
+    },
+    {
+      "bond_code": "111001.SH",
+      "commitment_months": 6,
+      "effective_end": "2026-02-19",
+      "effective_start": "2025-08-20",
+      "event_date": "2025-08-20",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "山东玻纤集团股份有限公司关于不向下修正“山玻转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-08-20/1224519124.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-08-22",
+      "event_date": "2025-08-22",
+      "event_type": "down_reset_proposed",
+      "note": null,
+      "parsed_status": "提议下修",
+      "raw_title": "起帆电缆关于董事会提议向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-08-22/1224532452.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-09-10",
+      "event_date": "2025-09-10",
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "起帆电缆关于向下修正“起帆转债”转股价格暨转股停牌的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-09-10/1224646510.PDF"
     },
     {
       "bond_code": "110081.SH",

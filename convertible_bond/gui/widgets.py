@@ -22,6 +22,11 @@ def _source_label_color(source: str):
     return TEXT_DIM
 
 
+def _source_label_text(source: str) -> str:
+    """字段级来源不显示在表单里, 保持输入区安静。"""
+    return ""
+
+
 def _latest_finite_number(values):
     """返回序列中最后一个可用有限数值，若无则返回 None。"""
     if not values:
@@ -38,44 +43,95 @@ def _latest_finite_number(values):
     return None
 
 
+ENTRY_HEIGHT = 28
+LABEL_SLOT_WIDTH = 130
+EXTRA_SLOT_WIDTH = 82
+SOURCE_SLOT_WIDTH = 50
+
+
 def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
-              width=130, source_var=None, tooltip=None, show_source=False):
+              width=130, source_var=None, tooltip=None, show_source=False,
+              *, compact=False, custom_widget=None):
+    """统一表单行布局.
+
+    列结构:
+
+        [label]                 [primary] [extra-slot] [source-slot]
+        ←── col 0 ──→     ←──────── ent_container (col 1, sticky=w) ────────→
+
+    - ``primary`` 默认是 ``CTkEntry``; 传 ``custom_widget`` (factory) 时换成它
+      自己创建的控件 — 例如波动率下拉、事件状态只读标签等。
+    - label 槽宽固定, 输入区从同一 x 坐标开始, 避免中文标签长短造成输入框参差。
+    - ``extra-slot`` / ``source-slot`` 即使没内容也保留固定宽度的空 spacer,
+      所以同一 section 内不同行的操作按钮、来源标签也垂直对齐。
+    - ``compact=True`` 时跳过两个 spacer (用于 各年票息 这种需要更长输入框的行,
+      但仍保持输入框左边沿对齐)。
+    """
     row_frame = ctk.CTkFrame(parent, fg_color="transparent")
     row_frame.grid(row=row, column=0, sticky="ew", padx=16, pady=4)
+    row_frame.grid_columnconfigure(0, minsize=LABEL_SLOT_WIDTH)
     row_frame.grid_columnconfigure(1, weight=1)
 
-    lbl = ctk.CTkLabel(row_frame, text=f"  {label_text}", text_color=TEXT_DIM, font=(FONT_FAMILY, 13))
+    lbl = ctk.CTkLabel(row_frame, text=f"  {label_text}", text_color=TEXT_DIM,
+                       font=(FONT_FAMILY, 13), width=LABEL_SLOT_WIDTH,
+                       anchor="w")
     lbl.grid(row=0, column=0, sticky="w")
 
     ent_container = ctk.CTkFrame(row_frame, fg_color="transparent")
-    ent_container.grid(row=0, column=1, sticky="e")
+    ent_container.grid(row=0, column=1, sticky="w")
 
-    ent = ctk.CTkEntry(ent_container, textvariable=var, width=width, font=(FONT_MONO, 13),
-                       border_width=0, corner_radius=6,
-                       fg_color=BG_INPUT, text_color=TEXT, height=28)
-    ent.pack(side="left")
+    if custom_widget is not None:
+        primary = custom_widget(ent_container)
+        primary.grid(row=0, column=0, sticky="e")
+    else:
+        primary = ctk.CTkEntry(
+            ent_container, textvariable=var, width=width, font=(FONT_MONO, 13),
+            border_width=0, corner_radius=6,
+            fg_color=BG_INPUT, text_color=TEXT, height=ENTRY_HEIGHT)
+        primary.grid(row=0, column=0, sticky="e")
 
-    if extra_widget:
-        extra_widget(ent_container).pack(side="left", padx=(6, 0))
+    if not compact:
+        # extra slot — 即使没内容也占位
+        extra_cell = ctk.CTkFrame(
+            ent_container, fg_color="transparent",
+            width=EXTRA_SLOT_WIDTH, height=ENTRY_HEIGHT)
+        extra_cell.grid(row=0, column=1, padx=(6, 0))
+        extra_cell.grid_propagate(False)
+        if extra_widget is not None:
+            extra_widget(extra_cell).pack(side="left")
 
-    if show_source and source_var is not None:
-        src_lbl = ctk.CTkLabel(
-            ent_container, text=source_var.get(), width=40, anchor="w",
-            text_color=_source_label_color(source_var.get()),
-            font=(FONT_FAMILY, 10))
-        src_lbl.pack(side="left", padx=(4, 0))
+        # source slot — 同上
+        src_cell = ctk.CTkFrame(
+            ent_container, fg_color="transparent",
+            width=SOURCE_SLOT_WIDTH, height=ENTRY_HEIGHT)
+        src_cell.grid(row=0, column=2, padx=(4, 0))
+        src_cell.grid_propagate(False)
+        if show_source and source_var is not None:
+            src_lbl = ctk.CTkLabel(
+                src_cell, text=_source_label_text(source_var.get()), anchor="w",
+                text_color=_source_label_color(source_var.get()),
+                font=(FONT_FAMILY, 10))
+            src_lbl.pack(side="left", fill="both", expand=True)
 
-        def _on_src_change(*_, lbl=src_lbl, var=source_var):
-            val = var.get()
-            lbl.configure(text=val, text_color=_source_label_color(val))
+            def _on_src_change(*_, lbl=src_lbl, var=source_var):
+                val = var.get()
+                lbl.configure(
+                    text=_source_label_text(val),
+                    text_color=_source_label_color(val),
+                )
 
-        source_var.trace_add("write", _on_src_change)
+            source_var.trace_add("write", _on_src_change)
+    else:
+        # compact: 没 spacer; 如果传了 extra_widget 就紧贴 entry 右侧
+        if extra_widget is not None:
+            extra_widget(ent_container).grid(row=0, column=1, padx=(6, 0))
 
     if tooltip:
         Tooltip(lbl, tooltip)
-        Tooltip(ent, tooltip)
+        if isinstance(primary, ctk.CTkEntry):
+            Tooltip(primary, tooltip)
 
-    return ent
+    return primary
 
 
 def create_card(parent, title, row, col, icon=""):

@@ -274,7 +274,7 @@ class CBPricerApp(
             dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT, corner_radius=6)
         self.data_source_menu.pack(side="left", padx=(0, 10))
         Tooltip(self.data_source_menu,
-                "选择动态行情/利率来源；转债基础信息固定读取 cb_data, 并由 Wind 刷新")
+                "选择行情和利率来源；转债基础信息固定读取本地条款库, 并可由 Wind 刷新")
 
         # 全市场 cb_data / 准入状态同步入口 — 替代命令行 cb-sync-* 调用
         self.btn_sync_pool = ctk.CTkButton(
@@ -284,7 +284,7 @@ class CBPricerApp(
             font=(FONT_FAMILY, 12), width=82, height=30, corner_radius=6)
         self.btn_sync_pool.pack(side="left", padx=(0, 10))
         Tooltip(self.btn_sync_pool,
-                "弹出菜单: 同步全市场基础信息 / 刷新停牌强赎ST状态 / 同步公告事件")
+                "弹出菜单: 同步全市场基础信息、刷新停牌强赎等准入状态、同步公告事件")
 
         AutocompleteEntry(
             right_frame, textvariable=self.v_bond_code,
@@ -298,7 +298,7 @@ class CBPricerApp(
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
             font=(FONT_FAMILY, 12, "bold"), width=76, height=30, corner_radius=6)
         self.btn_wind.pack(side="left", padx=(6, 0))
-        Tooltip(self.btn_wind, "读取 cb_data 静态信息 + 拉取正股 + 历史 σ")
+        Tooltip(self.btn_wind, "读取本地条款库, 拉取正股行情和历史波动率")
 
         self.btn_refresh_terms = ctk.CTkButton(
             right_frame, text="🔄", command=self._refresh_terms,
@@ -306,7 +306,7 @@ class CBPricerApp(
             font=(FONT_FAMILY, 14), width=30, height=30, corner_radius=6)
         self.btn_refresh_terms.pack(side="left", padx=(4, 0))
         Tooltip(self.btn_refresh_terms,
-                "强制用 Wind 刷新当前债的 cb_data\n(下修 / 评级变更后用)")
+                "强制用 Wind 刷新当前债的本地条款\n适用于下修或评级变更后")
 
         self.btn_save = ctk.CTkButton(right_frame, text="💾", command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_save.pack(side="left", padx=(8, 0))
@@ -351,9 +351,9 @@ class CBPricerApp(
         parts: list[str] = []
         if cb_path.exists():
             mtime = _dt.fromtimestamp(cb_path.stat().st_mtime)
-            parts.append(f"cb_data {self._humanize_age(mtime)}")
+            parts.append(f"条款库 {self._humanize_age(mtime)}")
         else:
-            parts.append("cb_data 未同步")
+            parts.append("条款库 未同步")
         if self._last_quote_fetch_ts is not None:
             parts.append(f"行情 {self._humanize_age(self._last_quote_fetch_ts)}")
         batch_ts = getattr(self, "_last_batch_saved_ts", None)
@@ -545,9 +545,9 @@ class CBPricerApp(
     def _cache_meta_source(self, code: str) -> str:
         try:
             raw = self.terms_cache._data.get(code, {})
-            return str(raw.get("_meta", {}).get("source") or "cb_data")
+            return str(raw.get("_meta", {}).get("source") or "条款库")
         except Exception:
-            return "cb_data"
+            return "条款库"
 
     @staticmethod
     def _provider_market_name(provider) -> str:
@@ -560,7 +560,7 @@ class CBPricerApp(
             return "条款"
         if "Wind" in origin:
             return "Wind"
-        return "cb_data"
+        return "条款库"
 
     # ── 快捷键 ────────────────────────────────────────────
     def _bind_shortcuts(self):

@@ -113,3 +113,42 @@ def fetch_and_open(
     fetch_announcement_pdf(url, path)
     open_with_system_viewer(path)
     return path
+
+
+def fetch_only(
+    bond_code: str,
+    event_date: date,
+    url: str,
+    *,
+    cache_dir: Path | None = None,
+) -> Path:
+    """下载 (按需) 但不打开外部阅读器, 返回本地路径. 供 APP 内嵌预览使用."""
+    if not url:
+        raise ValueError("公告 URL 为空, 无法预览")
+    path = announcement_pdf_path(bond_code, event_date, url, cache_dir=cache_dir)
+    fetch_announcement_pdf(url, path)
+    return path
+
+
+def render_pdf_pages(path: Path, *, dpi: int = 110, max_pages: int = 50):
+    """把 PDF 渲染成 PIL.Image 列表 (按页顺序).
+
+    用 ``pdfplumber.Page.to_image(...).original`` 获取 PIL 对象, 失败 / 缺依赖时抛
+    ``RuntimeError``, 上层应该 fallback 到系统阅读器。``max_pages`` 防止误开几百页
+    的招股书把内存打爆。
+    """
+    try:
+        import pdfplumber
+    except ImportError as exc:
+        raise RuntimeError("pdfplumber 不可用, 无法在 APP 内预览 PDF") from exc
+
+    images = []
+    with pdfplumber.open(str(path)) as doc:
+        for idx, page in enumerate(doc.pages):
+            if idx >= max_pages:
+                break
+            page_img = page.to_image(resolution=dpi)
+            images.append(page_img.original)
+    if not images:
+        raise RuntimeError(f"PDF 无可渲染页面: {path}")
+    return images

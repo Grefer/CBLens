@@ -33,15 +33,16 @@ class DownResetMixin:
         """
         card = create_card(parent, "下修事件参数", 0, 0, icon="🛡")
         _form_row(card, "不修正公告日", self.v_dr_announce_date, 0, width=130,
-                  tooltip="手工覆盖入口。日常定价优先读取 cb_events, 通常无需填写。")
-        _form_row(card, "再观察期", self.v_dr_cooldown, 1, width=80,
+                  tooltip="手工覆盖入口。日常定价优先读取本地事件表, 通常无需填写。")
+        _form_row(card, "再观察期", self.v_dr_cooldown, 1, width=130,
                   tooltip="单位: 月。没有公告正文承诺期时, 用公告日 + 再观察期推算冻结截止日。")
-        _form_row(card, "p_scale", self.v_dr_p_scale, 2, width=80,
-                  tooltip="冻结期结束后对下修强度 p_down 的乘子。留空表示不调整。")
-        _form_row(card, "备注", self.v_dr_note, 3, width=240,
+        _form_row(card, "强度乘数", self.v_dr_p_scale, 2, width=130,
+                  tooltip="冻结期结束后对下修强度的乘数。留空表示不调整。")
+        # 备注是长文本输入, compact 跳过右侧两槽以容纳更宽的输入框
+        _form_row(card, "备注", self.v_dr_note, 3, width=260, compact=True,
                   tooltip="手工记录覆盖依据。")
         _form_row(card, "屏蔽至", self.v_dr_block_until, 4, width=130,
-                  tooltip="下修价值在该日期前被屏蔽。事件表有 effective_end 时会自动填入。")
+                  tooltip="下修价值在该日期前被屏蔽。事件表有公告约定截止日时会自动填入。")
 
         status_row = ctk.CTkFrame(card, fg_color="transparent")
         status_row.grid(row=5, column=0, sticky="ew", padx=16, pady=(2, 4))
@@ -58,11 +59,8 @@ class DownResetMixin:
                       fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
                       font=(FONT_FAMILY, 12), width=85, height=28,
                       corner_radius=6).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(btns, text="cooldown→cb_data",
-                      command=self._save_down_reset_cooldown_to_cb_data,
-                      fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
-                      font=(FONT_FAMILY, 11), width=140, height=28,
-                      corner_radius=6).pack(side="left")
+        # "cooldown → 本地条款库" 按钮已下线 — 这是写文件的维护动作, 平日不需要;
+        # 仍保留 ``_save_down_reset_cooldown_to_cb_data`` 方法供脚本/CLI 调用。
 
     # ── 下修事件覆盖 ───────────────────────────────────────
     def _resolve_down_reset_for_pricing(self, valuation_date: date):
@@ -112,7 +110,7 @@ class DownResetMixin:
             try:
                 p_scale = float(ps_str)
             except ValueError:
-                raise ValueError(f"p_scale 应为数字或留空: '{ps_str}'")
+                raise ValueError(f"强度乘数应为数字或留空: '{ps_str}'")
 
         if update_display:
             self.v_dr_block_until.set(block_until.isoformat() if block_until else "—")
@@ -152,9 +150,9 @@ class DownResetMixin:
                 tag += " (cooldown 用默认值)"
             self.v_dr_status.set(tag)
         elif resolved.announce_date is not None:
-            self.v_dr_status.set(f"事件表: {resolved.announce_date}")
+            self.v_dr_status.set(f"本地事件表: {resolved.announce_date}")
         elif terms.down_reset_block_until is not None:
-            self.v_dr_status.set(f"硬 override: {terms.down_reset_block_until}")
+            self.v_dr_status.set(f"人工屏蔽至: {terms.down_reset_block_until}")
         else:
             self.v_dr_status.set("无事件")
 
@@ -177,7 +175,7 @@ class DownResetMixin:
             try:
                 ps = float(ps_str)
             except ValueError:
-                messagebox.showwarning("提示", f"p_scale 应为数字: {ps_str}")
+                messagebox.showwarning("提示", f"强度乘数应为数字: {ps_str}")
                 return
         try:
             default_overrides().set(
@@ -185,7 +183,7 @@ class DownResetMixin:
                 note=self.v_dr_note.get().strip() or None,
             )
             reload_default_overrides()
-            self.v_dr_status.set(f"已保存到 overrides.json ({code})")
+            self.v_dr_status.set(f"已保存到下修人工覆盖记录 ({code})")
         except Exception as exc:
             messagebox.showerror("保存失败", str(exc))
 
@@ -209,14 +207,14 @@ class DownResetMixin:
             return
         terms = self.terms_cache.get(code)
         if terms is None:
-            messagebox.showwarning("提示", f"{code} 不在 cb_data, 先 '同步' 拉取")
+            messagebox.showwarning("提示", f"{code} 不在条款库中, 先 '同步' 拉取")
             return
         cd_str = self.v_dr_cooldown.get().strip()
         try:
             cd_val = float(cd_str) if cd_str else None
         except ValueError:
-            messagebox.showwarning("提示", f"cooldown 应为数字或留空: {cd_str}")
+            messagebox.showwarning("提示", f"再观察期应为数字或留空: {cd_str}")
             return
         terms.down_reset_cooldown_months = cd_val
         self.terms_cache.set(code, terms, source="manual_gui")
-        self.v_dr_status.set(f"已写回 cb_data.json (cooldown={cd_val})")
+        self.v_dr_status.set(f"已写回条款库 (再观察期={cd_val})")
