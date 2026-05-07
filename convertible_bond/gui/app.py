@@ -156,6 +156,7 @@ class CBPricerApp(ctk.CTk):
 
         self._sens_figure     = None
         self._sens_canvas     = None
+        self._last_sens_args  = None
         self._bt_figure       = None
         self._bt_canvas       = None
         self._last_bt_result  = None
@@ -625,6 +626,7 @@ class CBPricerApp(ctk.CTk):
         canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
         self._sens_figure = fig
         self._sens_canvas = canvas
+        self._last_sens_args = (S_vals, sig_vals, grid, K)
         self.v_sens_status.set(
             f"✅ {len(S_vals)}×{len(sig_vals)} = {len(S_vals)*len(sig_vals)} 点  |  "
             f"价格范围 {float(np.min(grid)):.2f} ~ {float(np.max(grid)):.2f}")
@@ -639,10 +641,15 @@ class CBPricerApp(ctk.CTk):
         else:
             ctk.set_appearance_mode("Light")
             self.theme_switch.configure(text="浅色模式")
-            
+
+        # 刷新 ttk Treeview 样式 + 行标签色彩 (批量表 + 关注池)
+        batch_tab.refresh_theme(self)
+
         # 刷新 matplotlib 图表色彩
         if self._last_bt_result is not None:
             self._render_backtest_chart(self._last_bt_result)
+        if getattr(self, "_last_sens_args", None) is not None:
+            self._render_sensitivity_chart(*self._last_sens_args)
 
     # ── 进度动画 ────────────────────────────────────────
     def _start_progress(self, base_msg):

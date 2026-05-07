@@ -1,12 +1,13 @@
 {
   "_meta": {
-    "last_sync_at": "2026-04-30T09:47:09",
+    "last_sync_at": "2026-05-07T09:56:29",
     "synced_at_by_code": {
-      "110081.SH": "2026-04-30T09:47:09",
+      "110081.SH": "2026-05-07T09:28:52",
+      "110092.SH": "2026-05-07T09:56:29",
       "118025.SH": "2026-04-29T19:08:17",
       "118027.SH": "2026-04-29T18:58:14"
     },
-    "updated_at": "2026-04-30T09:47:09"
+    "updated_at": "2026-05-07T09:56:29"
   },
   "events": [
     {
@@ -192,6 +193,32 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-24/1223956907.PDF"
     },
     {
+      "bond_code": "110092.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-28",
+      "event_date": "2025-06-28",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "江苏三房巷聚材股份有限公司公开发行可转换公司债券2025年跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-28/1224017932.PDF"
+    },
+    {
+      "bond_code": "110092.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-28",
+      "event_date": "2025-06-28",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "江苏三房巷聚材股份有限公司关于“三房转债”评级调整公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-28/1224017930.PDF"
+    },
+    {
       "bond_code": "118027.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -216,6 +243,19 @@
       "raw_title": "关于不向下修正“闻泰转债”转股价格的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-07-04/1224071584.PDF"
+    },
+    {
+      "bond_code": "110092.SH",
+      "commitment_months": 3,
+      "effective_end": "2025-10-24",
+      "effective_start": "2025-07-25",
+      "event_date": "2025-07-25",
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "江苏三房巷聚材股份有限公司关于不向下修正“三房转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-07-25/1224281667.PDF"
     },
     {
       "bond_code": "110081.SH",

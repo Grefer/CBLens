@@ -156,9 +156,14 @@
   },
   "110081.SH": {
     "_meta": {
-      "fetched_at": "2026-04-28T00:56:18",
-      "source": "Wind"
+      "fetched_at": "2026-05-07T09:28:31",
+      "source": "cb_events"
     },
+    "bond_turnover_amount": null,
+    "call_announce_date": null,
+    "call_no_redemption_until": null,
+    "call_redemption_date": null,
+    "call_status": null,
     "call_trigger_pct": 130.0,
     "close": 90.9438,
     "conversion_price": 32.66,
@@ -171,9 +176,15 @@
       0.02
     ],
     "credit_rating": "AA+",
+    "delisting_date": null,
+    "down_reset_block_until": "2026-02-01",
+    "down_reset_cooldown_months": null,
+    "down_reset_note": "关于不向下修正“闻泰转债”转股价格的公告",
+    "down_reset_p_scale": null,
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-08-20",
+    "last_trading_date": null,
     "listing_date": "2021-08-20",
     "maturity_date": "2027-07-28",
     "outstanding_balance": 85.96194541,
@@ -181,9 +192,12 @@
     "put_trigger_pct": 70.0,
     "redemption_price": 108.0,
     "sec_name": "闻泰转债",
+    "suspension_status": "停牌",
     "tradable_date": "2021-08-20",
     "trading_status": "tradable",
-    "underlying_code": "600745.SH"
+    "underlying_code": "600745.SH",
+    "underlying_name": null,
+    "underlying_status": null
   },
   "110084.SH": {
     "_meta": {
@@ -10646,6 +10660,6 @@
   },
   "_bundle_meta": {
     "n_bonds": 344,
-    "updated_at": "2026-04-29T16:41:46"
+    "updated_at": "2026-05-07T09:28:31"
   }
 }

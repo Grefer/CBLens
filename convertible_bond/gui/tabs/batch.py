@@ -1,8 +1,11 @@
 """📦 批量定价 Tab — 基于 cb_data 转债池 → 并发定价 → 按基差排序导出."""
+from __future__ import annotations
+
 import threading
 import math
 import tkinter as tk
 from datetime import date
+from typing import TYPE_CHECKING
 import customtkinter as ctk
 from tkinter import messagebox, filedialog, ttk
 
@@ -28,6 +31,26 @@ from ...watchlist import (
     load_watchlist,
     remove_from_watchlist,
 )
+
+if TYPE_CHECKING:
+    from ..app import CBPricerApp
+
+# ── Treeview 行标签颜色 (集中定义, 初始渲染与主题切换共用) ──
+_TAG_COLORS: dict[str, tuple[str, str]] = {
+    "underpriced": GREEN,
+    "overpriced":  RED,
+    "failed":      TEXT_DIM,
+}
+# 已注册到 app 的树实例属性名, 主题切换时统一刷新.
+# 模块级集合: 假定单进程单 GUI 实例; 多实例场景下旧属性名会残留,
+# 但 refresh_theme 通过 getattr(app, attr, None) 兜底, 无害.
+_TREE_ATTRS: set[str] = set()
+
+
+def _apply_tag_colors(tree: ttk.Treeview) -> None:
+    """将 _TAG_COLORS 中的标签颜色写入 *tree*."""
+    for tag, color in _TAG_COLORS.items():
+        tree.tag_configure(tag, foreground=get_color(color))
 
 
 def build(app, tab):
@@ -318,10 +341,9 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         tree.heading(column, text=header)
         tree.column(column, width=width, minwidth=width, stretch=False, anchor="w")
 
-    tree.tag_configure("underpriced", foreground=get_color(GREEN))
-    tree.tag_configure("overpriced", foreground=get_color(RED))
-    tree.tag_configure("failed", foreground=get_color(TEXT_DIM))
+    _apply_tag_colors(tree)
     app._batch_main_tree = tree
+    _TREE_ATTRS.add("_batch_main_tree")
     _attach_main_context_menu(app, tree)
 
     for idx, r in enumerate(results):
@@ -380,7 +402,12 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         app.v_batch_status.set(f"{app.v_batch_status.get()}  |  缓存 {saved_at} / {source}")
 
 
-def _configure_tree_style():
+def _configure_tree_style() -> None:
+    """配置 ttk Treeview 全局样式 (idempotent).
+
+    设置 ``clam`` 主题并按当前 appearance mode 写入背景/边框/文字颜色.
+    初始渲染与主题切换均调用; ``style.theme_use`` 在已设置时为 no-op.
+    """
     style = ttk.Style()
     style.theme_use("clam")
     style.configure(
@@ -404,6 +431,18 @@ def _configure_tree_style():
         background=[("selected", get_color(BG_INPUT))],
         foreground=[("selected", get_color(TEXT))],
     )
+
+
+def refresh_theme(app: "CBPricerApp") -> None:
+    """主题切换后刷新 Treeview 样式 + 给所有已注册树重新染色.
+
+    ``app.py`` 的 ``_toggle_theme`` 在 ``ctk.set_appearance_mode`` 之后调用本函数.
+    """
+    _configure_tree_style()
+    for attr in _TREE_ATTRS:
+        tree = getattr(app, attr, None)
+        if tree is not None:
+            _apply_tag_colors(tree)
 
 
 def _auto_add_upcoming_to_watchlist(app, *, silent=False):
@@ -671,9 +710,7 @@ def _render_watchlist_table(app):
         tree.heading(column, text=header)
         tree.column(column, width=width, minwidth=width, stretch=False, anchor="w")
 
-    tree.tag_configure("underpriced", foreground=get_color(GREEN))
-    tree.tag_configure("overpriced", foreground=get_color(RED))
-    tree.tag_configure("failed", foreground=get_color(TEXT_DIM))
+    _apply_tag_colors(tree)
 
     if not rows:
         placeholder = ctk.CTkLabel(
@@ -714,6 +751,7 @@ def _render_watchlist_table(app):
         tree.insert("", "end", iid=code, values=vals, tags=tags)
 
     app._batch_watchlist_tree = tree
+    _TREE_ATTRS.add("_batch_watchlist_tree")
     _attach_watchlist_context_menu(app, tree)
 
 
