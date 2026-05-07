@@ -67,7 +67,7 @@ def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
 
         def _on_src_change(*_, lbl=src_lbl, var=source_var):
             val = var.get()
-            lbl.configure(text=val, text_color=get_color(_source_label_color(val)))
+            lbl.configure(text=val, text_color=_source_label_color(val))
 
         source_var.trace_add("write", _on_src_change)
 

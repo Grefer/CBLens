@@ -89,7 +89,9 @@ class BondTerms:
     last_trading_date: date | None = None         # 最后交易日/摘牌前最后可交易日
     delisting_date: date | None = None            # 摘牌日
     underlying_name: str | None = None            # 正股名称
-    underlying_status: str | None = None          # 正股 ST/退市风险/停牌等状态
+    underlying_status: str | None = None          # 正股 ST/退市风险等结构性状态
+    underlying_trade_status: str | None = None    # 正股临时停牌/暂停交易等日级状态
+    underlying_pct_change: float | None = None    # 正股最近一日涨跌幅 (%); 用于跌停识别
     bond_turnover_amount: float | None = None     # 转债成交额, 口径由数据源决定
 
 
@@ -498,14 +500,21 @@ class WindDataProvider(DataProvider):
             underlying_code = self._wss_value(bond_code, "underlyingcode", valuation_date)
 
         stock_data = {}
+        underlying_pct_change = None
         if underlying_code:
             stock_data = self._wss_candidates(
                 str(underlying_code),
                 {
                     "underlying_name": ("sec_name",),
-                    "underlying_status": ("trade_status", "riskwarning", "st_status", "specialtreatment"),
+                    # 结构性状态: ST/退市风险等, 一般通过专用字段返回, 不会随每日交易切换
+                    "underlying_status": ("riskwarning", "st_status", "specialtreatment"),
+                    # 日级交易状态: 停牌/暂停交易; trade_status 在 Wind 上对停牌正股返回 "停牌"
+                    "underlying_trade_status": ("trade_status", "tradestatus"),
                 },
                 valuation_date,
+            )
+            underlying_pct_change = self._wsd_latest_number(
+                str(underlying_code), "pct_chg", valuation_date,
             )
 
         terms = BondTerms(
@@ -517,6 +526,8 @@ class WindDataProvider(DataProvider):
             delisting_date=_date_or_none(bond_data.get("delisting_date")),
             underlying_name=_string_or_none(stock_data.get("underlying_name")),
             underlying_status=_string_or_none(stock_data.get("underlying_status")),
+            underlying_trade_status=_string_or_none(stock_data.get("underlying_trade_status")),
+            underlying_pct_change=underlying_pct_change,
             bond_turnover_amount=bond_turnover_amount,
             credit_rating=_string_or_none(bond_data.get("credit_rating")),
             outstanding_balance=_float_or_none(bond_data.get("outstanding_balance")),
@@ -1132,6 +1143,8 @@ class CSVDataProvider(DataProvider):
             delisting_date=to_date(d.get("delisting_date")),
             underlying_name=d.get("underlying_name"),
             underlying_status=d.get("underlying_status"),
+            underlying_trade_status=d.get("underlying_trade_status"),
+            underlying_pct_change=d.get("underlying_pct_change"),
             bond_turnover_amount=d.get("bond_turnover_amount"),
         )
         return infer_cb_trading_metadata(bond_code, terms, valuation_date)

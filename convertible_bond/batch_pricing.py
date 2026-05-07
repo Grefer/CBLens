@@ -64,6 +64,7 @@ BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核
 HARD_REVIEW_TAGS = {
     "高HV", "极小余额", "小余额", "余额异常", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
+    "正股跌停",
 }
 DEFAULT_DELIST_WINDOW_DAYS = 30
 DEFAULT_MIN_OUTSTANDING_BALANCE = 0.5
@@ -72,6 +73,7 @@ _SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "暂停上市")
 _CALL_ANNOUNCED_KEYWORDS = ("已公告强赎", "公告强赎", "强制赎回", "提前赎回", "赎回登记")
 _NO_CALL_KEYWORDS = ("不强赎", "不提前赎回", "暂不强赎", "暂不提前赎回")
 _UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "暂停上市", "终止上市", "退市")
+_UNDERLYING_SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "停止交易")
 _RATING_SCORES = {
     "C": 0,
     "CC": 1,
@@ -291,6 +293,8 @@ def batch_pricing_exclusion_reason(
         return delist_reason
     if _underlying_has_st_risk(terms):
         return "正股 ST/退市风险"
+    if _underlying_suspended(terms):
+        return "正股停牌"
     turnover = _finite_float(_terms_value(terms, "bond_turnover_amount"))
     if min_turnover_amount is not None and turnover is not None and turnover < min_turnover_amount:
         return "成交额过低"
@@ -370,6 +374,45 @@ def _underlying_has_st_risk(terms: Any) -> bool:
     status = str(_terms_value(terms, "underlying_status") or "").upper()
     text = f"{name} {status}"
     return any(keyword.upper() in text for keyword in _UNDERLYING_ST_KEYWORDS)
+
+
+def _underlying_suspended(terms: Any) -> bool:
+    """正股是否处于停牌/暂停交易状态.
+
+    优先看专用的 ``underlying_trade_status`` 字段; 数据源未拆分时退回到
+    ``underlying_status``。命中即代表正股端无法交易, PDE 的 S0 已失效,
+    应直接从主池剔除。
+    """
+    parts = [
+        str(_terms_value(terms, "underlying_trade_status") or "").upper(),
+        str(_terms_value(terms, "underlying_status") or "").upper(),
+    ]
+    text = " ".join(parts)
+    return any(keyword.upper() in text for keyword in _UNDERLYING_SUSPENSION_KEYWORDS)
+
+
+def _underlying_limit_down_threshold(stock_code: Any) -> float:
+    """正股跌停阈值 (%, 负数). 创业板/科创板 20%, 其余主板 10%.
+
+    ST 正股的 5% 限制不在此处理: ST 已在主池准入阶段直接剔除。
+    阈值留 0.5% 余量, 避免数据源 pct_chg 取整偏差导致漏识别。
+    """
+    raw = str(stock_code or "").upper().strip()
+    if "." in raw:
+        plain, _, _ = raw.partition(".")
+    else:
+        plain = raw
+    if plain.startswith(("30", "68")):
+        return -19.5
+    return -9.5
+
+
+def _underlying_at_limit_down(terms_or_row: Any, stock_code: Any = None) -> bool:
+    pct = _finite_float(_terms_value(terms_or_row, "underlying_pct_change"))
+    if pct is None:
+        return False
+    code = stock_code if stock_code is not None else _terms_value(terms_or_row, "underlying_code") or _terms_value(terms_or_row, "stock_code")
+    return pct <= _underlying_limit_down_threshold(code)
 
 
 def _rating_below(rating: Any, minimum: str) -> bool:
@@ -672,6 +715,11 @@ def annotate_batch_result(row: dict) -> dict:
         risk_tags.append("无评级")
         confidence_points -= 8.0
 
+    if _underlying_at_limit_down(out, out.get("stock_code")):
+        risk_tags.append("正股跌停")
+        score -= 15.0
+        confidence_points -= 18.0
+
     if market is None or market <= 0:
         risk_tags.append("无市价")
         confidence_points -= 25.0
@@ -910,6 +958,8 @@ def _review_notes(row: dict) -> list[str]:
         notes.append("核实到期兑付、回售和强赎时间表")
     if "低评级" in tags:
         notes.append("核实信用风险和信用利差假设")
+    if "正股跌停" in tags:
+        notes.append("正股当日跌停, S0 不稳定; 需等待正股恢复正常交易后再判断")
     if "模型低估" in tags and not notes:
         notes.append("优先核实条款、行情日期和模型参数后再进入单债分析")
     return _dedupe_tags(notes)

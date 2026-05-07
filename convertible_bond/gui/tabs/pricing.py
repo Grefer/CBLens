@@ -1,10 +1,12 @@
 """⚡ 定价 Tab UI 构建."""
+import tkinter as tk
+
 import customtkinter as ctk
 
 from ..theme import (
-    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM,
+    BG_APP, BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM,
     ACCENT, ACCENT_HOVER, BTN_CTRL, BTN_HOVER, ORANGE,
-    FONT_FAMILY, FONT_MONO,
+    FONT_FAMILY, FONT_MONO, get_color,
     VOL_WINDOW_MAP,
 )
 from ..widgets import _form_row, create_card, CollapsibleSection, Tooltip
@@ -12,12 +14,36 @@ from ..widgets import _form_row, create_card, CollapsibleSection, Tooltip
 
 def build(app, tab):
     """定价 Tab: 左列参数面板 + 右列结果仪表盘."""
-    tab.grid_columnconfigure(0, weight=0)
-    tab.grid_columnconfigure(1, weight=1)
+    tab.grid_columnconfigure(0, weight=1)
     tab.grid_rowconfigure(0, weight=1)
 
+    paned = tk.PanedWindow(
+        tab,
+        orient=tk.HORIZONTAL,
+        bd=0,
+        borderwidth=0,
+        bg=get_color(BORDER),
+        sashwidth=8,
+        sashrelief="flat",
+        showhandle=False,
+    )
+    paned.grid(row=0, column=0, sticky="nsew")
+    app.pricing_paned = paned
+
+    # paned 是 tk.PanedWindow, 子 CTkFrame 用 transparent 会把 master.cget("bg") 冻结成字符串, 主题切换不更新; 这里给 tuple 颜色避开
+    lp_host = ctk.CTkFrame(paned, fg_color=BG_APP, width=400)
+    lp_host.grid_columnconfigure(0, weight=1)
+    lp_host.grid_rowconfigure(0, weight=1)
+    rp_host = ctk.CTkFrame(paned, fg_color=BG_APP)
+    rp_host.grid_columnconfigure(0, weight=1)
+    rp_host.grid_rowconfigure(0, weight=1)
+
+    paned.add(lp_host, minsize=320)
+    paned.add(rp_host, minsize=540)
+    app.after(100, lambda: paned.sash_place(0, 410, 1))
+
     # ── 左列: 参数面板 (可滚动) ──
-    lp = ctk.CTkScrollableFrame(tab, fg_color="transparent", width=380,
+    lp = ctk.CTkScrollableFrame(lp_host, fg_color="transparent", width=400,
                                 scrollbar_button_color=BORDER)
     lp.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
     lp.grid_columnconfigure(0, weight=1)
@@ -131,8 +157,8 @@ def build(app, tab):
     app._build_events_panel(ev_sec.content)
 
     # ── 右列: 结果面板 ──
-    rp = ctk.CTkFrame(tab, fg_color="transparent")
-    rp.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+    rp = ctk.CTkFrame(rp_host, fg_color="transparent")
+    rp.grid(row=0, column=0, sticky="nsew", padx=(5, 0))
     rp.grid_columnconfigure(0, weight=1)
     rp.grid_rowconfigure(1, weight=1)
 
@@ -176,30 +202,37 @@ def build(app, tab):
     # IV 工具栏
     tb = ctk.CTkFrame(rc, fg_color="transparent")
     tb.grid(row=1, column=0, columnspan=2, sticky="ew", padx=30, pady=(0, 25))
+    tb.grid_columnconfigure(0, weight=1)
+    tb.grid_columnconfigure(1, weight=0)
 
-    ctk.CTkLabel(tb, text="🎯 隐含波动率反解", text_color=TEXT_DIM,
+    iv_tools = ctk.CTkFrame(tb, fg_color="transparent")
+    iv_tools.grid(row=0, column=0, sticky="w")
+    action_tools = ctk.CTkFrame(tb, fg_color="transparent")
+    action_tools.grid(row=0, column=1, sticky="e", padx=(12, 0))
+
+    ctk.CTkLabel(iv_tools, text="🎯 隐含波动率反解", text_color=TEXT_DIM,
                  font=(FONT_FAMILY, 13, "bold")).pack(side="left", padx=(0, 15))
-    ctk.CTkEntry(tb, textvariable=app.v_market_price, width=80,
+    ctk.CTkEntry(iv_tools, textvariable=app.v_market_price, width=80,
                  font=(FONT_MONO, 13), fg_color=BG_INPUT, border_width=0, corner_radius=6,
                  placeholder_text="市价 ¥").pack(side="left", padx=(0, 8))
     app.btn_iv = ctk.CTkButton(
-        tb, text="解 IV", command=app._solve_iv,
+        iv_tools, text="解 IV", command=app._solve_iv,
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=ORANGE,
         font=(FONT_FAMILY, 12, "bold"), width=70, height=28, corner_radius=6)
     app.btn_iv.pack(side="left", padx=(0, 15))
 
-    ctk.CTkLabel(tb, text="IV =", text_color=TEXT_DIM,
+    ctk.CTkLabel(iv_tools, text="IV =", text_color=TEXT_DIM,
                  font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 4))
-    ctk.CTkLabel(tb, textvariable=app.v_iv, text_color=ORANGE,
+    ctk.CTkLabel(iv_tools, textvariable=app.v_iv, text_color=ORANGE,
                  font=(FONT_MONO, 14, "bold"), width=70, anchor="w").pack(side="left", padx=(0, 20))
 
     app.btn_conv = ctk.CTkButton(
-        tb, text="🩺 收敛诊断", command=app._convergence_check,
+        action_tools, text="🩺 收敛诊断", command=app._convergence_check,
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
         font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
     app.btn_conv.pack(side="right")
     app.btn_cashflow = ctk.CTkButton(
-        tb, text="💰 现金流", command=app._show_cashflow,
+        action_tools, text="💰 现金流", command=app._show_cashflow,
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
         font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
     app.btn_cashflow.pack(side="right", padx=(0, 8))

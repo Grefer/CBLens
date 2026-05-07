@@ -44,10 +44,11 @@ from ..down_reset_overrides import (
 )
 from ..data_providers import _add_months
 from ..cb_events import (
-    CBEventStore,
+    CBEvent, CBEventStore,
     apply_events_to_terms, project_events_path, reload_default_event_store,
 )
 from ..cb_event_sync import sync_cb_events
+from ..announcement_pdf import fetch_and_open as _fetch_and_open_announcement
 
 from .tabs import batch as batch_tab
 from .tabs import pricing as pricing_tab
@@ -79,11 +80,16 @@ EVENT_SYNC_STALE_HOURS = 24
 class CBPricerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        ctk.set_appearance_mode("Dark") # 默认深色
+        ctk.set_appearance_mode("System")  # 跟随系统主题; 用户通过开关可手动覆盖
         
         self.title("CBPricer")
-        self.geometry("1280x900")
-        self.minsize(1100, 800)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        target_w = max(1280, int(screen_w * 0.76))
+        initial_w = min(1320, target_w, max(1120, screen_w - 80))
+        initial_h = min(920, max(760, int(screen_h * 0.86)))
+        self.geometry(f"{initial_w}x{initial_h}")
+        self.minsize(1120, 740)
         self.configure(fg_color=BG_APP)
         
         self.grid_columnconfigure(0, weight=1)
@@ -207,6 +213,7 @@ class CBPricerApp(ctk.CTk):
         self.v_event_summary = ctk.StringVar(value="加载转债后显示事件")
         self._event_widgets: list = []       # 动态构建的事件行 widget 列表
         self._event_sync_in_flight: set[str] = set()
+        self._announcement_preview_in_flight: set[str] = set()
 
         self._attach_manual_source_tracking()
         self._bond_code_trace = self.v_bond_code.trace_add("write", self._on_bond_code_write)
@@ -232,14 +239,20 @@ class CBPricerApp(ctk.CTk):
         header.grid_propagate(False)
 
         left_frame = ctk.CTkFrame(header, fg_color="transparent")
-        left_frame.grid(row=0, column=0, sticky="w", padx=20, pady=15)
+        left_frame.grid(row=0, column=0, sticky="w", padx=(18, 12), pady=15)
         ctk.CTkLabel(left_frame, text="CBPricer", font=(FONT_FAMILY, 20, "bold"), text_color=TEXT).pack(side="left")
         ctk.CTkLabel(left_frame, text="PRO", font=(FONT_FAMILY, 10, "bold"), text_color=ACCENT, 
                      fg_color=BG_INPUT, corner_radius=4, padx=6, pady=2).pack(side="left", padx=(8, 16), pady=(0, 2))
                      
-        self.theme_switch = ctk.CTkSwitch(left_frame, text="深色模式", command=self._toggle_theme, width=40, progress_color=ACCENT, font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        self.theme_switch = ctk.CTkSwitch(left_frame, text="深色模式" if is_dark else "浅色模式",
+                                          command=self._toggle_theme, width=40, progress_color=ACCENT,
+                                          font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
         self.theme_switch.pack(side="left")
-        self.theme_switch.select()
+        if is_dark:
+            self.theme_switch.select()
+        else:
+            self.theme_switch.deselect()
 
         self.tab_seg = ctk.CTkSegmentedButton(
             header, values=self._tab_names, command=self._switch_tab,
@@ -252,7 +265,7 @@ class CBPricerApp(ctk.CTk):
         self.tab_seg.grid(row=0, column=1, pady=15)
 
         right_frame = ctk.CTkFrame(header, fg_color="transparent")
-        right_frame.grid(row=0, column=2, sticky="e", padx=20, pady=15)
+        right_frame.grid(row=0, column=2, sticky="e", padx=(12, 18), pady=15)
         
         ctk.CTkLabel(right_frame, text="行情源", text_color=TEXT_DIM,
                      font=(FONT_FAMILY, 12, "bold")).pack(side="left", padx=(0, 4))
@@ -271,26 +284,26 @@ class CBPricerApp(ctk.CTk):
             right_frame, textvariable=self.v_bond_code,
             get_suggestions=self._search_bond_index,
             on_select=self._on_bond_code_selected,
-            width=140, font=(FONT_MONO, 13), placeholder_text="如 128009.SZ",
+            width=130, font=(FONT_MONO, 13), placeholder_text="如 128009.SZ",
             border_width=0, corner_radius=6, fg_color=BG_INPUT, height=30,
         ).pack(side="left")
         self.btn_wind = ctk.CTkButton(
             right_frame, text="📥 同步", command=self._fetch_wind,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
-            font=(FONT_FAMILY, 12, "bold"), width=80, height=30, corner_radius=6)
-        self.btn_wind.pack(side="left", padx=(8, 0))
+            font=(FONT_FAMILY, 12, "bold"), width=76, height=30, corner_radius=6)
+        self.btn_wind.pack(side="left", padx=(6, 0))
         Tooltip(self.btn_wind, "读取 cb_data 静态信息 + 拉取正股 + 历史 σ")
 
         self.btn_refresh_terms = ctk.CTkButton(
             right_frame, text="🔄", command=self._refresh_terms,
             fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
-            font=(FONT_FAMILY, 14), width=32, height=30, corner_radius=6)
+            font=(FONT_FAMILY, 14), width=30, height=30, corner_radius=6)
         self.btn_refresh_terms.pack(side="left", padx=(4, 0))
         Tooltip(self.btn_refresh_terms,
                 "强制用 Wind 刷新当前债的 cb_data\n(下修 / 评级变更后用)")
         
         self.btn_save = ctk.CTkButton(right_frame, text="💾", command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
-        self.btn_save.pack(side="left", padx=(12, 0))
+        self.btn_save.pack(side="left", padx=(8, 0))
         Tooltip(self.btn_save, "保存当前参数预设  (Ctrl+S)")
         self.btn_load = ctk.CTkButton(right_frame, text="📂", command=self._load_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_load.pack(side="left", padx=(6, 0))
@@ -644,6 +657,11 @@ class CBPricerApp(ctk.CTk):
 
         # 刷新 ttk Treeview 样式 + 行标签色彩 (批量表 + 关注池)
         batch_tab.refresh_theme(self)
+        if hasattr(self, "pricing_paned"):
+            self.pricing_paned.configure(
+                bg=get_color(BORDER),
+                sashrelief="flat",
+            )
 
         # 刷新 matplotlib 图表色彩
         if self._last_bt_result is not None:
@@ -1135,7 +1153,7 @@ class CBPricerApp(ctk.CTk):
         if code:
             self._maybe_sync_events_background(code)
         self.v_result.set("…")
-        self.lbl_result.configure(text_color=get_color(TEXT_DIM))
+        self.lbl_result.configure(text_color=TEXT_DIM)
         self.btn_calc.configure(state="disabled")
         self._start_progress("正在计算理论价格")
         threading.Thread(target=self._pricing_worker, daemon=True).start()
@@ -1460,6 +1478,23 @@ class CBPricerApp(ctk.CTk):
                 font=(FONT_FAMILY, 10))
             src_lbl.grid(row=0, column=2, padx=(2, 8), pady=4, sticky="e")
 
+            # 公告 PDF 预览: 整行可点击 + 右侧 📄 affordance
+            if ev.url:
+                preview_btn = ctk.CTkLabel(
+                    row_frame, text="📄", text_color=ACCENT,
+                    font=(FONT_FAMILY, 13), width=22, height=18,
+                    fg_color="transparent", cursor="hand2")
+                preview_btn.grid(row=0, column=3, padx=(2, 6), pady=4, sticky="e")
+                Tooltip(preview_btn, "预览公告 PDF (首次会下载到本地缓存)")
+                handler = (lambda _e=None, _ev=ev: self._open_announcement_preview(_ev))
+                for w in (row_frame, badge, info_lbl, src_lbl, preview_btn):
+                    w.bind("<Button-1>", handler)
+                try:
+                    row_frame.configure(cursor="hand2")
+                    info_lbl.configure(cursor="hand2")
+                except Exception:
+                    pass
+
     @staticmethod
     def _event_type_color(event_type: str) -> str:
         return {
@@ -1487,6 +1522,39 @@ class CBPricerApp(ctk.CTk):
             "delisting":           "摘牌",
             "suspension":          "停牌",
         }.get(event_type, event_type[:4])
+
+    def _open_announcement_preview(self, event: CBEvent) -> None:
+        """点击事件行 → 下载 (按需) + 系统 PDF 阅读器打开公告."""
+        url = event.url
+        if not url:
+            messagebox.showinfo(
+                "无 PDF 链接",
+                "该事件没有 URL — 可能是手工录入或来源 provider 未提供.")
+            return
+        if url in self._announcement_preview_in_flight:
+            return
+        self._announcement_preview_in_flight.add(url)
+        self.v_event_summary.set("📄 公告下载中…")
+
+        def _worker():
+            try:
+                path = _fetch_and_open_announcement(
+                    event.bond_code, event.event_date, url)
+                self.after(0, lambda: self._on_announcement_preview_done(url, path, None))
+            except Exception as exc:
+                self.after(0, lambda: self._on_announcement_preview_done(url, None, exc))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_announcement_preview_done(self, url: str, path, exc: Exception | None):
+        self._announcement_preview_in_flight.discard(url)
+        if exc is not None:
+            self.v_event_summary.set(f"📄 预览失败: {exc}")
+            messagebox.showerror(
+                "公告预览失败",
+                f"无法下载或打开公告 PDF:\n{exc}\n\nURL: {url}")
+            return
+        self.v_event_summary.set(f"📄 已打开: {path.name}")
 
     def _event_last_synced_at(self, code: str) -> datetime | None:
         meta = getattr(self.event_store, "_meta", {}) or {}
@@ -1713,14 +1781,13 @@ class CBPricerApp(ctk.CTk):
             if mkt > 0:
                 dev = (theo - mkt) / theo * 100
                 self.v_deviation.set(f"{dev:+.2f}%")
-                dev_color = get_color(GREEN) if dev > 0 else get_color(RED)
-                self.lbl_deviation.configure(text_color=dev_color)
+                self.lbl_deviation.configure(text_color=GREEN if dev > 0 else RED)
             else:
                 raise ValueError
         except (ValueError, AttributeError):
             self.v_deviation.set("—")
             if hasattr(self, "lbl_deviation"):
-                self.lbl_deviation.configure(text_color=get_color(TEXT_DIM))
+                self.lbl_deviation.configure(text_color=TEXT_DIM)
 
 
     def _on_error(self, msg, show_dialog=True):

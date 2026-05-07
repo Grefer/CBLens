@@ -56,6 +56,11 @@ def _apply_tag_colors(tree: ttk.Treeview) -> None:
 def build(app, tab):
     """在 tab frame 上构建批量定价面板."""
     tab.grid_columnconfigure(0, weight=1)
+    # _build_tabview 默认给 row 0 weight=1 (定价 tab 需要); 这里显式归零, 否则
+    # 表格行(row 2)的 Treeview 自然高度过大时, tkinter 会按权重同步压缩 row 0,
+    # 把工具栏 ctrl 从 98px 压到 52px, cc 按钮行被裁出可视区域.
+    tab.grid_rowconfigure(0, weight=0)
+    tab.grid_rowconfigure(1, weight=0)
     tab.grid_rowconfigure(2, weight=1)
 
     # 控制栏
@@ -93,33 +98,28 @@ def build(app, tab):
         font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
     app.btn_batch_run.pack(side="left")
 
+    # 次要按钮用 BTN_CTRL 而非 BG_INPUT: 浅色模式下 BG_INPUT(#e6e9ef) 与 BG_CARD(#eff1f5) 几乎同色, 按钮看不见
     app.btn_batch_load_cache = ctk.CTkButton(
         cc, text="📂 加载缓存", command=lambda: _load_result_cache(app),
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6)
     app.btn_batch_load_cache.pack(side="left", padx=(8, 0))
 
     app.btn_batch_upcoming = ctk.CTkButton(
         cc, text="刷新关注池", command=lambda: _refresh_watchlist_with_upcoming(app),
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=96, height=32, corner_radius=6)
     app.btn_batch_upcoming.pack(side="left", padx=(8, 0))
 
     app.btn_batch_add_watch = ctk.CTkButton(
         cc, text="⭐ 加入关注池", command=lambda: _add_selection_to_watchlist(app),
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
     app.btn_batch_add_watch.pack(side="left", padx=(8, 0))
 
-    app.btn_batch_save_cache = ctk.CTkButton(
-        cc, text="💾 保存缓存", command=lambda: _save_result_cache(app),
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6, state="disabled")
-    app.btn_batch_save_cache.pack(side="left", padx=(8, 0))
-
     app.btn_batch_export = ctk.CTkButton(
         cc, text="📝 导出 CSV", command=lambda: _export_csv(app),
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6, state="disabled")
     app.btn_batch_export.pack(side="left", padx=(8, 0))
 
@@ -393,7 +393,6 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     if excluded_count:
         app.v_batch_status.set(f"{app.v_batch_status.get()}  |  准入过滤 {excluded_count} 只")
     app.btn_batch_export.configure(state="normal")
-    app.btn_batch_save_cache.configure(state="normal")
     if cache_path is not None:
         app.v_batch_status.set(f"{app.v_batch_status.get()}  |  已刷新缓存 {cache_path}")
     elif cache_meta:
@@ -474,24 +473,6 @@ def _refresh_watchlist_with_upcoming(app):
     """'刷新关注池' 按钮: 检测即将上市新债 → 自动加入关注池 → 刷新显示."""
     _auto_add_upcoming_to_watchlist(app, silent=False)
     _render_watchlist_table(app)
-
-
-def _save_result_cache(app):
-    results = getattr(app, "_batch_all_results", None) or getattr(app, "_batch_results", [])
-    if not results:
-        messagebox.showinfo("提示", "当前没有可保存的批量定价结果")
-        return
-    try:
-        path = save_batch_results_cache(
-            results,
-            source=getattr(app, "_last_batch_source", None)
-            or (getattr(app, "v_batch_source", None).get() if hasattr(app, "v_batch_source") else None),
-            params=getattr(app, "_last_batch_params", None),
-            upcoming_results=getattr(app, "_batch_upcoming_results", []),
-        )
-        app.v_batch_status.set(f"已保存批量定价缓存: {path}")
-    except Exception as exc:
-        messagebox.showerror("保存缓存失败", str(exc))
 
 
 def _load_result_cache(app):

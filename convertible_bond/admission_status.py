@@ -27,6 +27,8 @@ ADMISSION_STATUS_FIELDS = (
     "delisting_date",
     "underlying_name",
     "underlying_status",
+    "underlying_trade_status",
+    "underlying_pct_change",
     "bond_turnover_amount",
     "credit_rating",
     "outstanding_balance",

@@ -19,3 +19,6 @@ venv/
 
 # Claude Code — 保留可提交的配置, 忽略本地文件
 .claude/settings.local.json
+
+# 公告 PDF 本地缓存 (按需下载, 不入版本库)
+data/announcement_pdfs/
