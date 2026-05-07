@@ -50,6 +50,15 @@ def save_watchlist(items: Sequence[dict]) -> Path:
     return path
 
 
+# 加入时持久化的可选快照字段 (由 GUI 提供): 让用户回头能看到加入瞬间的研究信号
+_WATCHLIST_SNAPSHOT_FIELDS = (
+    "snapshot_deviation",        # 加入瞬间的 (理论 − 市价) / 理论
+    "snapshot_opportunity_score",
+    "snapshot_market_price",
+    "snapshot_theoretical_price",
+)
+
+
 def add_to_watchlist(new_items: Iterable[dict]) -> tuple[list[dict], int]:
     """新增关注; 已存在的代码会被跳过. 返回 (最新关注池, 新增条数)."""
     current = load_watchlist()
@@ -59,7 +68,8 @@ def add_to_watchlist(new_items: Iterable[dict]) -> tuple[list[dict], int]:
         code = item.get("bond_code") if isinstance(item, dict) else None
         if not code or code in by_code:
             continue
-        entry = {k: v for k, v in item.items() if k in {"bond_code", "bond_name", "stock_code"}}
+        keep = ("bond_code", "bond_name", "stock_code", *_WATCHLIST_SNAPSHOT_FIELDS)
+        entry = {k: v for k, v in item.items() if k in keep and v is not None}
         entry["bond_code"] = code
         entry["added_at"] = datetime.now().isoformat(timespec="seconds")
         current.append(entry)

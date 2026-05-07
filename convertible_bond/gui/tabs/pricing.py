@@ -160,7 +160,7 @@ def build(app, tab):
     rp = ctk.CTkFrame(rp_host, fg_color="transparent")
     rp.grid(row=0, column=0, sticky="nsew", padx=(5, 0))
     rp.grid_columnconfigure(0, weight=1)
-    rp.grid_rowconfigure(1, weight=1)
+    rp.grid_rowconfigure(2, weight=1)  # 仪表盘行才需要拉伸
 
     # 英雄结果卡
     rc = ctk.CTkFrame(rp, fg_color=BG_CARD, corner_radius=16)
@@ -226,20 +226,19 @@ def build(app, tab):
     ctk.CTkLabel(iv_tools, textvariable=app.v_iv, text_color=ORANGE,
                  font=(FONT_MONO, 14, "bold"), width=70, anchor="w").pack(side="left", padx=(0, 20))
 
-    app.btn_conv = ctk.CTkButton(
-        action_tools, text="🩺 收敛诊断", command=app._convergence_check,
-        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
-        font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
-    app.btn_conv.pack(side="right")
+    # 现金流按钮 (常用) 留在右侧, 收敛诊断属于开发者工具, 已迁移到状态栏右键菜单
     app.btn_cashflow = ctk.CTkButton(
         action_tools, text="💰 现金流", command=app._show_cashflow,
-        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=ORANGE,
         font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
-    app.btn_cashflow.pack(side="right", padx=(0, 8))
+    app.btn_cashflow.pack(side="right")
+
+    # ── 🎯 What-if 快算 (σ ±2pp/±5pp · S ±5%/±10%) ──
+    _build_what_if_row(app, rp)
 
     # 指标仪表盘 (8 tiles)
     dc = ctk.CTkFrame(rp, fg_color="transparent")
-    dc.grid(row=1, column=0, sticky="nsew", pady=(0, 6))
+    dc.grid(row=2, column=0, sticky="nsew", pady=(0, 6))
     dc.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="dec")
     dc.grid_rowconfigure((0, 1), weight=1, uniform="r")
 
@@ -264,3 +263,59 @@ def build(app, tab):
     _tile(dc, 1, 1, "ν Vega", app.v_vega)
     _tile(dc, 1, 2, "Θ Theta", app.v_theta)
     _tile(dc, 1, 3, "🎯 隐含波动率", app.v_iv)
+
+
+# ── What-if 快算: σ ±pp 与 S ±% 微扰 ─────────────────────────
+WHAT_IF_SIGMA_DELTAS_PP = (-5, -2, +2, +5)   # 百分点
+WHAT_IF_S_DELTAS_PCT    = (-10, -5, +5, +10) # 相对百分比
+
+
+def _build_what_if_row(app, parent):
+    """在右栏 hero 与 dashboard 之间插入一行 σ/S 快扫按钮."""
+    card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
+    card.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+    card.grid_columnconfigure(2, weight=1)
+
+    ctk.CTkLabel(card, text="🎯 What-if", text_color=TEXT_DIM,
+                 font=(FONT_FAMILY, 13, "bold")).grid(
+        row=0, column=0, rowspan=2, padx=(16, 12), pady=12, sticky="w")
+
+    # σ 行
+    ctk.CTkLabel(card, text="σ", text_color=TEXT_DIM,
+                 font=(FONT_FAMILY, 12, "bold")).grid(
+        row=0, column=1, padx=(0, 8), pady=(10, 2), sticky="w")
+    sig_box = ctk.CTkFrame(card, fg_color="transparent")
+    sig_box.grid(row=0, column=2, sticky="w", padx=(0, 16), pady=(8, 2))
+
+    app._wf_sigma_buttons = {}
+    for delta in WHAT_IF_SIGMA_DELTAS_PP:
+        var = ctk.StringVar(value=f"{delta:+d}pp")
+        btn = ctk.CTkButton(
+            sig_box, textvariable=var,
+            command=lambda d=delta: app._run_what_if("sigma", d),
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+            font=(FONT_MONO, 11, "bold"), width=80, height=26, corner_radius=6,
+            state="disabled",  # 等待主结果出来后才解锁, 避免 base=NaN 时点了无响应
+        )
+        btn.pack(side="left", padx=(0, 4))
+        app._wf_sigma_buttons[delta] = (btn, var)
+
+    # S 行
+    ctk.CTkLabel(card, text="S", text_color=TEXT_DIM,
+                 font=(FONT_FAMILY, 12, "bold")).grid(
+        row=1, column=1, padx=(0, 8), pady=(2, 10), sticky="w")
+    s_box = ctk.CTkFrame(card, fg_color="transparent")
+    s_box.grid(row=1, column=2, sticky="w", padx=(0, 16), pady=(2, 8))
+
+    app._wf_s_buttons = {}
+    for delta in WHAT_IF_S_DELTAS_PCT:
+        var = ctk.StringVar(value=f"{delta:+d}%")
+        btn = ctk.CTkButton(
+            s_box, textvariable=var,
+            command=lambda d=delta: app._run_what_if("S", d),
+            fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+            font=(FONT_MONO, 11, "bold"), width=80, height=26, corner_radius=6,
+            state="disabled",
+        )
+        btn.pack(side="left", padx=(0, 4))
+        app._wf_s_buttons[delta] = (btn, var)

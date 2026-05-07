@@ -1,8 +1,11 @@
-"""📦 批量定价 Tab — 基于 cb_data 转债池 → 并发定价 → 按基差排序导出."""
+"""📦 批量定价 Tab — 基于 cb_data 转债池 → 并发定价 → 按基差排序导出.
+
+关注池子表 / 事件横幅 / 摘要条已抽到 :mod:`batch_watchlist`,
+公共 helper (染色 / 主题刷新 / 数值格式化) 集中在 :mod:`batch_common`。
+"""
 from __future__ import annotations
 
 import threading
-import math
 import tkinter as tk
 from datetime import date
 from typing import TYPE_CHECKING
@@ -12,11 +15,11 @@ from tkinter import messagebox, filedialog, ttk
 from ..theme import *
 from ...batch_pricing import (
     BATCH_REVIEW_VIEWS,
+    DEFAULT_UNDERVALUED_SCORE_THRESHOLD,
     annotate_batch_results,
     batch_pricing_exclusion_reason,
     build_batch_provider,
     filter_batch_results_by_view,
-    list_upcoming_tradable_from_cache,
     load_batch_results_cache,
     save_batch_results_cache,
     sort_batch_results_for_review,
@@ -26,42 +29,71 @@ from ...batch_pricing import (
     write_batch_results_csv,
 )
 from ...pricing_api import batch_price_from_provider_threaded
-from ...watchlist import (
-    add_to_watchlist,
-    load_watchlist,
-    remove_from_watchlist,
+from ...watchlist import load_watchlist
+from .batch_common import (
+    _TREE_ATTRS,
+    _apply_tag_colors,
+    _configure_tree_style,
+    _format_tags,
+    _is_finite,
+    _resolve_row_tag,
+    refresh_theme as _refresh_theme_impl,
+)
+from .batch_watchlist import (
+    _add_selection_to_watchlist,
+    _auto_add_upcoming_to_watchlist,
+    _refresh_watchlist_pricing,
+    _refresh_watchlist_with_upcoming,
+    _render_watchlist_table,
+    _show_events_banner_full,
 )
 
 if TYPE_CHECKING:
     from ..app import CBPricerApp
 
-# ── Treeview 行标签颜色 (集中定义, 初始渲染与主题切换共用) ──
-_TAG_COLORS: dict[str, tuple[str, str]] = {
-    "underpriced": GREEN,
-    "overpriced":  RED,
-    "failed":      TEXT_DIM,
+# 列预设: 简洁视图只保留投资决策最常看的字段, 完整视图沿用所有字段
+_BATCH_COLS_FULL = (
+    ("代码", 100), ("名称", 80), ("正股", 80), ("机会分", 70), ("可信", 45),
+    ("转股价值", 70), ("转股溢价(%)", 80), ("σ(%)", 55), ("理论价", 65),
+    ("市价", 65), ("偏差(%)", 70), ("评级", 50), ("敏感性", 90),
+    ("标签", 180), ("复核建议", 260), ("状态", 120),
+)
+_BATCH_COLS_SIMPLE = (
+    ("代码", 100), ("名称", 90), ("机会分", 70), ("可信", 45),
+    ("理论价", 70), ("市价", 70), ("偏差(%)", 75), ("评级", 50),
+    ("标签", 220), ("状态", 100),
+)
+# 列名 → 取值函数, 简洁/完整共用
+_BATCH_COL_GETTERS = {
+    "代码":         lambda r: r.get("bond_code", ""),
+    "名称":         lambda r: r.get("bond_name", ""),
+    "正股":         lambda r: r.get("stock_code", ""),
+    "机会分":       lambda r: f"{float(r['opportunity_score']):.1f}" if _is_finite(r.get("opportunity_score")) else "—",
+    "可信":         lambda r: r.get("confidence", "") if r.get("status") == "ok" else "—",
+    "转股价值":     lambda r: f"{float(r['parity']):.2f}" if r.get("status") == "ok" and _is_finite(r.get("parity")) else "—",
+    "转股溢价(%)":  lambda r: f"{float(r['conversion_premium'])*100:+.1f}" if _is_finite(r.get("conversion_premium")) else "—",
+    "σ(%)":         lambda r: f"{r['sigma']*100:.1f}" if r.get("status") == "ok" and "sigma" in r else "—",
+    "理论价":       lambda r: f"{r['theoretical_price']:.2f}" if r.get("status") == "ok" else "—",
+    "市价":         lambda r: f"{float(r['market_price']):.2f}" if r.get("status") == "ok" and r.get("market_price") is not None else "—",
+    "偏差(%)":      lambda r: f"{float(r['deviation'])*100:+.2f}" if _is_finite(r.get("deviation")) else "—",
+    "评级":         lambda r: r.get("credit_rating", ""),
+    "敏感性":       lambda r: r.get("sensitivity_status", ""),
+    "标签":         lambda r: _format_tags(r.get("risk_tags")),
+    "复核建议":     lambda r: _format_tags(r.get("review_notes")),
+    "状态":         lambda r: r.get("status", ""),
 }
-# 已注册到 app 的树实例属性名, 主题切换时统一刷新.
-# 模块级集合: 假定单进程单 GUI 实例; 多实例场景下旧属性名会残留,
-# 但 refresh_theme 通过 getattr(app, attr, None) 兜底, 无害.
-_TREE_ATTRS: set[str] = set()
-
-
-def _apply_tag_colors(tree: ttk.Treeview) -> None:
-    """将 _TAG_COLORS 中的标签颜色写入 *tree*."""
-    for tag, color in _TAG_COLORS.items():
-        tree.tag_configure(tag, foreground=get_color(color))
 
 
 def build(app, tab):
     """在 tab frame 上构建批量定价面板."""
     tab.grid_columnconfigure(0, weight=1)
     # _build_tabview 默认给 row 0 weight=1 (定价 tab 需要); 这里显式归零, 否则
-    # 表格行(row 2)的 Treeview 自然高度过大时, tkinter 会按权重同步压缩 row 0,
+    # 表格行的 Treeview 自然高度过大时, tkinter 会按权重同步压缩 row 0,
     # 把工具栏 ctrl 从 98px 压到 52px, cc 按钮行被裁出可视区域.
-    tab.grid_rowconfigure(0, weight=0)
-    tab.grid_rowconfigure(1, weight=0)
-    tab.grid_rowconfigure(2, weight=1)
+    tab.grid_rowconfigure(0, weight=0)  # ctrl
+    tab.grid_rowconfigure(1, weight=0)  # status
+    tab.grid_rowconfigure(2, weight=0)  # events banner (默认隐藏)
+    tab.grid_rowconfigure(3, weight=1)  # results frame
 
     # 控制栏
     ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
@@ -83,13 +115,39 @@ def build(app, tab):
                       width=90, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
                       text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT).pack(side="left", padx=(0, 12))
 
-    app.v_batch_view = ctk.StringVar(value="综合机会")
+    # 默认进入"低估候选"视图: 评分高、可信度高、无硬复核风险的精选 (偏差异常自动排除)
+    # canonical 名 (v_batch_view) 永远是 BATCH_REVIEW_VIEWS 之一; 菜单显示带 "(N)" 计数
+    # 后缀的 display var 与之分离, 避免回写 canonical 引发字符串不一致.
+    app.v_batch_view = ctk.StringVar(value="低估候选")
+    app._batch_view_display_var = ctk.StringVar(value="低估候选")
     ctk.CTkLabel(cc, text="视图", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
-    ctk.CTkOptionMenu(
-        cc, variable=app.v_batch_view, values=list(BATCH_REVIEW_VIEWS),
-        command=lambda _v: _change_batch_view(app),
-        width=96, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
+    app._batch_view_menu = ctk.CTkOptionMenu(
+        cc, variable=app._batch_view_display_var, values=list(BATCH_REVIEW_VIEWS),
+        command=lambda label: _on_view_menu_select(app, label),
+        width=130, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
         text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
+    )
+    app._batch_view_menu.pack(side="left", padx=(0, 6))
+
+    # 低估阈值: 仅在"低估候选"视图生效, 数值改变后立即重新过滤
+    app.v_batch_score_threshold = ctk.StringVar(value=f"{DEFAULT_UNDERVALUED_SCORE_THRESHOLD:g}")
+    ctk.CTkLabel(cc, text="score≥", text_color=TEXT_DIM, font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 2))
+    threshold_entry = ctk.CTkEntry(
+        cc, textvariable=app.v_batch_score_threshold, width=46,
+        font=(FONT_MONO, 12), fg_color=BG_INPUT, border_width=0, corner_radius=6, height=28)
+    threshold_entry.pack(side="left", padx=(0, 12))
+    threshold_entry.bind("<Return>", lambda _e: _change_batch_view(app))
+    threshold_entry.bind("<FocusOut>", lambda _e: _change_batch_view(app))
+
+    app.v_batch_cols = ctk.StringVar(value="简洁")
+    ctk.CTkLabel(cc, text="列", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+    ctk.CTkSegmentedButton(
+        cc, variable=app.v_batch_cols, values=["简洁", "完整"],
+        command=lambda _v: _change_batch_view(app),
+        font=(FONT_FAMILY, 12), height=28,
+        selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
+        unselected_color=BG_INPUT, unselected_hover_color=BTN_HOVER,
+        text_color=TEXT, corner_radius=6,
     ).pack(side="left", padx=(0, 12))
 
     app.btn_batch_run = ctk.CTkButton(
@@ -105,10 +163,17 @@ def build(app, tab):
         font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6)
     app.btn_batch_load_cache.pack(side="left", padx=(8, 0))
 
-    app.btn_batch_upcoming = ctk.CTkButton(
-        cc, text="刷新关注池", command=lambda: _refresh_watchlist_with_upcoming(app),
+    # ⚡ 仅定价关注池: 跳过全市场 322 只, 几秒级反馈
+    app.btn_batch_refresh_watch = ctk.CTkButton(
+        cc, text="⚡ 刷新关注池", command=lambda: _refresh_watchlist_pricing(app),
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=96, height=32, corner_radius=6)
+        font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
+    app.btn_batch_refresh_watch.pack(side="left", padx=(8, 0))
+
+    app.btn_batch_upcoming = ctk.CTkButton(
+        cc, text="🆕 扫新债", command=lambda: _refresh_watchlist_with_upcoming(app),
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
+        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6)
     app.btn_batch_upcoming.pack(side="left", padx=(8, 0))
 
     app.btn_batch_add_watch = ctk.CTkButton(
@@ -130,17 +195,30 @@ def build(app, tab):
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).grid(
                      row=1, column=0, sticky="w", padx=16, pady=(0, 6))
 
+    # 事件 banner (近 30 天关注池内事件), 仅在有内容时显示; 单击弹窗展开全部
+    app.v_batch_events_banner = ctk.StringVar(value="")
+    app._batch_events_banner_full: list[tuple[str, str, "date"]] = []
+    app.lbl_batch_events_banner = ctk.CTkLabel(
+        tab, textvariable=app.v_batch_events_banner,
+        font=(FONT_FAMILY, 12, "bold"), text_color=ORANGE,
+        anchor="w", justify="left", wraplength=1080, cursor="hand2")
+    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 4))
+    app.lbl_batch_events_banner.grid_remove()
+    app.lbl_batch_events_banner.bind(
+        "<Button-1>", lambda _e: _show_events_banner_full(app))
+
     # 结果表格区: 主批量列表 + 我的关注池 (含自动发现的即将上市新债)
     app.batch_results_frame = ctk.CTkFrame(tab, fg_color="transparent")
-    app.batch_results_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+    app.batch_results_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
     app.batch_results_frame.grid_columnconfigure(0, weight=1)
     app.batch_results_frame.grid_rowconfigure(0, weight=3)
     app.batch_results_frame.grid_rowconfigure(1, weight=2)
 
     app.batch_table_frame = _create_table_section(
         app.batch_results_frame, row=0, title="主批量定价结果")
-    app.batch_watchlist_table_frame = _create_table_section(
-        app.batch_results_frame, row=1, title="⭐ 我的关注池 (右键删除)")
+    app.batch_watchlist_table_frame, app.v_batch_watchlist_summary = _create_table_section(
+        app.batch_results_frame, row=1, title="⭐ 我的关注池 (右键删除)",
+        with_summary=True)
 
     app._batch_results = []
     app._batch_all_results = []
@@ -148,26 +226,41 @@ def build(app, tab):
     app._batch_watchlist = load_watchlist()
     # 自动发现即将上市/可交易的新债并加入关注池
     _auto_add_upcoming_to_watchlist(app, silent=True)
-    _render_watchlist_table(app)
+    _render_watchlist_table(app)  # 内部已调用 _refresh_watchlist_summary + _refresh_events_banner
+    # 启动时异步加载上次的批量定价缓存; 缓存文件 ~440KB, 同步读会让窗口出现前停顿
+    # 80ms 延迟让 mainloop 先完成首屏绘制, 主表加载后再调一次 _render_batch_views 不影响关注池
+    app.after(80, lambda: _load_result_cache(app, silent=True))
 
 
-def _create_table_section(parent, *, row, title):
+def _create_table_section(parent, *, row, title, with_summary=False):
     section = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=16)
     section.grid(row=row, column=0, sticky="nsew", pady=(0, 8) if row == 0 else (0, 0))
     section.grid_columnconfigure(0, weight=1)
-    section.grid_rowconfigure(1, weight=1)
 
+    header = ctk.CTkFrame(section, fg_color="transparent")
+    header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 0))
+    header.grid_columnconfigure(1, weight=1)
     ctk.CTkLabel(
-        section,
-        text=title,
-        font=(FONT_FAMILY, 13, "bold"),
-        text_color=TEXT,
-    ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 0))
+        header, text=title,
+        font=(FONT_FAMILY, 13, "bold"), text_color=TEXT,
+    ).grid(row=0, column=0, sticky="w")
 
+    summary_var = None
+    if with_summary:
+        summary_var = ctk.StringVar(value="")
+        ctk.CTkLabel(
+            header, textvariable=summary_var,
+            font=(FONT_FAMILY, 11), text_color=TEXT_DIM, anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=(12, 0))
+
+    body_row = 1
+    section.grid_rowconfigure(body_row, weight=1)
     body = ctk.CTkFrame(section, fg_color="transparent")
-    body.grid(row=1, column=0, sticky="nsew")
+    body.grid(row=body_row, column=0, sticky="nsew")
     body.grid_columnconfigure(0, weight=1)
     body.grid_rowconfigure(0, weight=1)
+    if with_summary:
+        return body, summary_var
     return body
 
 
@@ -282,6 +375,14 @@ def _excluded_status_suffix(excluded):
     return f", 准入过滤 {len(excluded)} 只 ({top})"
 
 
+def _canonical_view_name(label: str) -> str:
+    """剥离视图标签里的 ' (24)' 计数后缀, 还原为 BATCH_REVIEW_VIEWS 里的标准名."""
+    if not label:
+        return "综合机会"
+    name = label.split(" (")[0]
+    return name if name in BATCH_REVIEW_VIEWS else "综合机会"
+
+
 def _render_batch_views(
     app,
     results=None,
@@ -293,12 +394,60 @@ def _render_batch_views(
     if results is not None:
         app._batch_all_results = sort_batch_results_for_review(results)
     base_results = getattr(app, "_batch_all_results", None) or []
-    view = getattr(app, "v_batch_view", None).get() if hasattr(app, "v_batch_view") else "综合机会"
-    display_results = filter_batch_results_by_view(base_results, view)
+    view = _canonical_view_name(
+        app.v_batch_view.get() if hasattr(app, "v_batch_view") else "综合机会")
+    threshold = _resolve_score_threshold(app)
+    display_results = filter_batch_results_by_view(
+        base_results, view, undervalued_score_threshold=threshold)
     app._batch_results = display_results
+    _refresh_view_menu_labels(app, base_results, threshold)
     _render_table(app, display_results, total_results=len(base_results), view=view, cache_path=cache_path,
                   cache_meta=cache_meta, excluded_count=excluded_count)
     _render_watchlist_table(app)
+
+
+def _resolve_score_threshold(app) -> float:
+    raw = getattr(app, "v_batch_score_threshold", None)
+    if raw is None:
+        return DEFAULT_UNDERVALUED_SCORE_THRESHOLD
+    try:
+        return float(raw.get().strip() or DEFAULT_UNDERVALUED_SCORE_THRESHOLD)
+    except ValueError:
+        return DEFAULT_UNDERVALUED_SCORE_THRESHOLD
+
+
+def _refresh_view_menu_labels(app, base_results, threshold):
+    """根据当前结果实时计算各视图条数, 仅写入 *display var* (e.g. '低估候选 (24)').
+
+    canonical 名 ``v_batch_view`` 始终保持纯净的 ``BATCH_REVIEW_VIEWS`` 之一,
+    避免被 ``(N)`` 计数后缀污染。
+    """
+    menu = getattr(app, "_batch_view_menu", None)
+    display_var = getattr(app, "_batch_view_display_var", None)
+    if menu is None or display_var is None:
+        return
+    counts = {
+        view: len(filter_batch_results_by_view(
+            base_results, view, undervalued_score_threshold=threshold))
+        for view in BATCH_REVIEW_VIEWS
+    }
+    canonical = list(BATCH_REVIEW_VIEWS)
+    decorated = [f"{name} ({counts.get(name, 0)})" for name in canonical]
+
+    current_name = _canonical_view_name(app.v_batch_view.get())
+    target_label = decorated[canonical.index(current_name)]
+    menu.configure(values=decorated)
+    # 程式化 set 不会触发 CTkOptionMenu 的 command, 因此不会递归回到这里
+    if display_var.get() != target_label:
+        display_var.set(target_label)
+
+
+def _on_view_menu_select(app, label: str) -> None:
+    """用户从下拉菜单选择 → 把 canonical 名写回 ``v_batch_view`` 并刷新."""
+    canonical = _canonical_view_name(label)
+    if app.v_batch_view.get() != canonical:
+        app.v_batch_view.set(canonical)
+    _change_batch_view(app)
 
 
 def _change_batch_view(app):
@@ -315,11 +464,11 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         app.v_batch_status.set("无结果")
         return
 
-    headers = [
-        "代码", "名称", "正股", "机会分", "可信", "转股价值", "转股溢价(%)",
-        "σ(%)", "理论价", "市价", "偏差(%)", "评级", "敏感性", "标签", "复核建议", "状态",
-    ]
-    col_widths = [100, 80, 80, 70, 45, 70, 80, 55, 65, 65, 70, 50, 90, 180, 260, 120]
+    cols_preset = (app.v_batch_cols.get()
+                   if hasattr(app, "v_batch_cols") else "简洁")
+    schema = _BATCH_COLS_SIMPLE if cols_preset == "简洁" else _BATCH_COLS_FULL
+    headers = [name for name, _ in schema]
+    col_widths = [w for _, w in schema]
     columns = [f"c{i}" for i in range(len(headers))]
 
     _configure_tree_style()
@@ -337,9 +486,14 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
     x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
 
-    for column, header, width in zip(columns, headers, col_widths):
+    last_idx = len(columns) - 1
+    for idx, (column, header, width) in enumerate(zip(columns, headers, col_widths)):
         tree.heading(column, text=header)
-        tree.column(column, width=width, minwidth=width, stretch=False, anchor="w")
+        # 用户可拖宽; 末列 stretch=True 占用剩余宽度, 其他列保持初始宽度但允许拖
+        tree.column(
+            column, width=width, minwidth=max(40, width // 2),
+            stretch=(idx == last_idx), anchor="w",
+        )
 
     _apply_tag_colors(tree)
     app._batch_main_tree = tree
@@ -347,89 +501,32 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     _attach_main_context_menu(app, tree)
 
     for idx, r in enumerate(results):
-        is_ok = r.get("status") == "ok"
-        dev = r.get("deviation", float("nan"))
-        dev_str = f"{float(dev)*100:+.2f}" if _is_finite(dev) else "—"
-        conv_premium = r.get("conversion_premium")
-        conv_str = f"{float(conv_premium)*100:+.1f}" if _is_finite(conv_premium) else "—"
-        score = r.get("opportunity_score")
-        score_str = f"{float(score):.1f}" if _is_finite(score) else "—"
-        tags_str = _format_tags(r.get("risk_tags"))
-        notes_str = _format_tags(r.get("review_notes"))
-
-        vals = [
-            r.get("bond_code", ""),
-            r.get("bond_name", ""),
-            r.get("stock_code", ""),
-            score_str,
-            r.get("confidence", "") if is_ok else "—",
-            f"{float(r['parity']):.2f}" if is_ok and _is_finite(r.get("parity")) else "—",
-            conv_str,
-            f"{r['sigma']*100:.1f}" if is_ok and "sigma" in r else "—",
-            f"{r['theoretical_price']:.2f}" if is_ok else "—",
-            f"{float(r['market_price']):.2f}" if is_ok and r.get("market_price") is not None else "—",
-            dev_str,
-            r.get("credit_rating", ""),
-            r.get("sensitivity_status", ""),
-            tags_str,
-            notes_str,
-            r.get("status", ""),
-        ]
-        tags = []
-        if not is_ok:
-            tags.append("failed")
-        elif _is_finite(dev) and float(dev) < -0.03:
-            tags.append("underpriced")
-        elif _is_finite(dev) and float(dev) > 0.05:
-            tags.append("overpriced")
+        vals = [_BATCH_COL_GETTERS[name](r) for name, _ in schema]
+        row_tag = _resolve_row_tag(r)
+        tags = [row_tag] if row_tag else []
         tree.insert("", "end", iid=str(idx), values=vals, tags=tags)
 
     summary = summarize_batch_results(results)
     total = total_results if total_results is not None else summary["total"]
     view_name = view or "综合机会"
-    app.v_batch_status.set(
-        f"✅ {view_name}: 展示 {summary['total']}/{total} 只  |  成功 {summary['success']}  失败 {summary['failed']}  |  "
-        f"按机会分排序 (兼顾低估、转股折价、余额/评级/HV风险)")
+    parts = [
+        f"✅ {view_name}: 展示 {summary['total']}/{total} 只",
+        f"成功 {summary['success']}  失败 {summary['failed']}",
+    ]
     if excluded_count:
-        app.v_batch_status.set(f"{app.v_batch_status.get()}  |  准入过滤 {excluded_count} 只")
+        parts.append(f"准入过滤 {excluded_count} 只")
+    app.v_batch_status.set("  |  ".join(parts))
     app.btn_batch_export.configure(state="normal")
+
+    # 缓存时效信息搬到状态栏 (左侧 _data_freshness 区), 不再挤占复核状态行
+    saved_at_iso: str | None = None
     if cache_path is not None:
-        app.v_batch_status.set(f"{app.v_batch_status.get()}  |  已刷新缓存 {cache_path}")
+        from datetime import datetime as _dt
+        saved_at_iso = _dt.now().isoformat(timespec="seconds")
     elif cache_meta:
-        saved_at = cache_meta.get("saved_at", "未知时间")
-        source = cache_meta.get("source") or "未知数据源"
-        app.v_batch_status.set(f"{app.v_batch_status.get()}  |  缓存 {saved_at} / {source}")
-
-
-def _configure_tree_style() -> None:
-    """配置 ttk Treeview 全局样式 (idempotent).
-
-    设置 ``clam`` 主题并按当前 appearance mode 写入背景/边框/文字颜色.
-    初始渲染与主题切换均调用; ``style.theme_use`` 在已设置时为 no-op.
-    """
-    style = ttk.Style()
-    style.theme_use("clam")
-    style.configure(
-        "Treeview",
-        background=get_color(BG_CARD),
-        fieldbackground=get_color(BG_CARD),
-        foreground=get_color(TEXT),
-        rowheight=26,
-        borderwidth=0,
-        font=(FONT_MONO, 11),
-    )
-    style.configure(
-        "Treeview.Heading",
-        background=get_color(BORDER),
-        foreground=get_color(TEXT),
-        borderwidth=0,
-        font=(FONT_FAMILY, 11, "bold"),
-    )
-    style.map(
-        "Treeview",
-        background=[("selected", get_color(BG_INPUT))],
-        foreground=[("selected", get_color(TEXT))],
-    )
+        saved_at_iso = cache_meta.get("saved_at")
+    if hasattr(app, "_set_batch_freshness"):
+        app._set_batch_freshness(saved_at_iso)
 
 
 def refresh_theme(app: "CBPricerApp") -> None:
@@ -437,52 +534,19 @@ def refresh_theme(app: "CBPricerApp") -> None:
 
     ``app.py`` 的 ``_toggle_theme`` 在 ``ctk.set_appearance_mode`` 之后调用本函数.
     """
-    _configure_tree_style()
-    for attr in _TREE_ATTRS:
-        tree = getattr(app, attr, None)
-        if tree is not None:
-            _apply_tag_colors(tree)
+    _refresh_theme_impl(app)
 
 
-def _auto_add_upcoming_to_watchlist(app, *, silent=False):
-    """自动发现即将上市/可交易的新债并加入关注池."""
-    upcoming = list_upcoming_tradable_from_cache(
-        getattr(app, "terms_cache", None))
-    if upcoming:
-        new_items = [
-            {"bond_code": r["bond_code"],
-             "bond_name": r.get("bond_name"),
-             "stock_code": r.get("stock_code")}
-            for r in upcoming
-        ]
-        app._batch_watchlist, added = add_to_watchlist(new_items)
-        if not silent:
-            if added:
-                app.v_batch_status.set(
-                    f"已自动添加 {added} 只即将上市/可交易转债到关注池")
-            else:
-                app.v_batch_status.set(
-                    "关注池已包含所有即将上市/可交易转债, 无新增")
-    else:
-        app._batch_watchlist = load_watchlist()
-        if not silent:
-            app.v_batch_status.set("暂无即将上市/可交易的新债")
-
-
-def _refresh_watchlist_with_upcoming(app):
-    """'刷新关注池' 按钮: 检测即将上市新债 → 自动加入关注池 → 刷新显示."""
-    _auto_add_upcoming_to_watchlist(app, silent=False)
-    _render_watchlist_table(app)
-
-
-def _load_result_cache(app):
+def _load_result_cache(app, *, silent: bool = False):
     try:
         loaded = load_batch_results_cache()
     except FileNotFoundError as exc:
-        messagebox.showinfo("提示", str(exc))
+        if not silent:
+            messagebox.showinfo("提示", str(exc))
         return
     except Exception as exc:
-        messagebox.showerror("加载缓存失败", str(exc))
+        if not silent:
+            messagebox.showerror("加载缓存失败", str(exc))
         return
 
     results, excluded_count = _filter_nonstandard_results(
@@ -534,18 +598,11 @@ def _filter_nonstandard_results(results, terms_cache=None):
     return kept, excluded_count
 
 
-def _is_finite(value) -> bool:
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError):
-        return False
-
-
 def _attach_main_context_menu(app, tree):
     menu = tk.Menu(tree, tearoff=0)
     menu.add_command(label="⭐ 加入关注池",
                      command=lambda: _add_selection_to_watchlist(app))
-    menu.add_command(label="载入单债定价页",
+    menu.add_command(label="载入单债定价页 (双击)",
                      command=lambda: _load_selection_in_pricing_tab(app))
 
     def _popup(event):
@@ -559,42 +616,16 @@ def _attach_main_context_menu(app, tree):
         finally:
             menu.grab_release()
 
+    def _on_double_click(event):
+        clicked = tree.identify_row(event.y)
+        if not clicked:
+            return
+        tree.selection_set(clicked)
+        _load_selection_in_pricing_tab(app)
+
     tree.bind("<Button-3>", _popup)
     tree.bind("<Button-2>", _popup)
-
-
-def _add_selection_to_watchlist(app):
-    tree = getattr(app, "_batch_main_tree", None)
-    if tree is None or not app._batch_results:
-        messagebox.showinfo("提示", "请先运行或加载批量定价结果, 再选择转债")
-        return
-    selection = tree.selection()
-    if not selection:
-        messagebox.showinfo("提示", "请先在主批量列表中选择一只或多只转债")
-        return
-    new_items = []
-    for iid in selection:
-        try:
-            row = app._batch_results[int(iid)]
-        except (ValueError, IndexError):
-            continue
-        code = row.get("bond_code")
-        if not code:
-            continue
-        new_items.append({
-            "bond_code": code,
-            "bond_name": row.get("bond_name"),
-            "stock_code": row.get("stock_code"),
-        })
-    if not new_items:
-        return
-    app._batch_watchlist, added = add_to_watchlist(new_items)
-    _render_watchlist_table(app)
-    skipped = len(new_items) - added
-    msg = f"已加入关注池: {added} 只"
-    if skipped:
-        msg += f" (已存在 {skipped} 只跳过)"
-    app.v_batch_status.set(msg)
+    tree.bind("<Double-1>", _on_double_click)
 
 
 def _load_selection_in_pricing_tab(app):
@@ -619,148 +650,3 @@ def _load_selection_in_pricing_tab(app):
         app._switch_tab("⚡ 定价")
     app.v_batch_status.set(f"已载入单债定价页: {code}")
 
-
-def _remove_selected_from_watchlist(app):
-    tree = getattr(app, "_batch_watchlist_tree", None)
-    if tree is None:
-        return
-    selection = tree.selection()
-    if not selection:
-        return
-    codes = [iid for iid in selection if iid]
-    if not codes:
-        return
-    app._batch_watchlist = remove_from_watchlist(codes)
-    _render_watchlist_table(app)
-    app.v_batch_status.set(f"已从关注池移除 {len(codes)} 只")
-
-
-def _watchlist_display_rows(app):
-    # 合并主批量定价结果 + 关注池额外定价结果
-    by_code = {row.get("bond_code"): row for row in (app._batch_results or [])}
-    for row in (getattr(app, "_batch_upcoming_results", None) or []):
-        code = row.get("bond_code")
-        if code and code not in by_code:
-            by_code[code] = row
-    rows = []
-    for entry in app._batch_watchlist:
-        code = entry.get("bond_code")
-        merged = dict(entry)
-        priced = by_code.get(code)
-        if priced:
-            for key in ("bond_name", "stock_code", "K", "theoretical_price",
-                        "market_price", "deviation", "credit_rating", "status",
-                        "parity", "conversion_premium", "opportunity_score",
-                        "confidence", "risk_tags", "sensitivity_status",
-                        "review_bucket", "review_notes"):
-                value = priced.get(key)
-                if value is not None:
-                    merged[key] = value
-        rows.append(merged)
-    return rows
-
-
-def _render_watchlist_table(app):
-    frame = getattr(app, "batch_watchlist_table_frame", None)
-    if frame is None:
-        return
-    for child in frame.winfo_children():
-        child.destroy()
-
-    rows = _watchlist_display_rows(app)
-    headers = ["代码", "名称", "正股", "机会分", "可信", "理论价", "市价", "偏差(%)", "敏感性", "标签", "状态", "加入时间"]
-    col_widths = [100, 90, 80, 70, 45, 70, 70, 70, 90, 160, 90, 150]
-    columns = [f"w{i}" for i in range(len(headers))]
-
-    _configure_tree_style()
-    tree = ttk.Treeview(
-        frame,
-        columns=columns,
-        show="headings",
-        selectmode="extended",
-    )
-    y_scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-    x_scroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-    tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
-    tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
-    y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
-    x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
-
-    for column, header, width in zip(columns, headers, col_widths):
-        tree.heading(column, text=header)
-        tree.column(column, width=width, minwidth=width, stretch=False, anchor="w")
-
-    _apply_tag_colors(tree)
-
-    if not rows:
-        placeholder = ctk.CTkLabel(
-            frame,
-            text="尚未关注任何转债 — 在主批量列表中选中一只或多只, 点击 \"⭐ 加入关注池\" 或右键添加",
-            font=(FONT_FAMILY, 12),
-            text_color=TEXT_DIM,
-        )
-        placeholder.grid(row=2, column=0, sticky="w", padx=12, pady=(2, 8))
-
-    for entry in rows:
-        code = entry.get("bond_code", "")
-        dev = entry.get("deviation", float("nan"))
-        dev_str = f"{float(dev) * 100:+.2f}" if _is_finite(dev) else "—"
-        is_ok = entry.get("status") == "ok"
-        score = entry.get("opportunity_score")
-        vals = [
-            code,
-            entry.get("bond_name", "") or "",
-            entry.get("stock_code", "") or "",
-            f"{float(score):.1f}" if _is_finite(score) else "—",
-            entry.get("confidence", "") if is_ok else "—",
-            f"{float(entry['theoretical_price']):.2f}" if is_ok and entry.get("theoretical_price") is not None else "—",
-            f"{float(entry['market_price']):.2f}" if entry.get("market_price") is not None else "—",
-            dev_str,
-            entry.get("sensitivity_status", "") if is_ok else "—",
-            _format_tags(entry.get("risk_tags")),
-            entry.get("status") or "—",
-            entry.get("added_at", "") or "",
-        ]
-        tags = []
-        if entry.get("status") and not is_ok:
-            tags.append("failed")
-        elif _is_finite(dev) and float(dev) < -0.03:
-            tags.append("underpriced")
-        elif _is_finite(dev) and float(dev) > 0.05:
-            tags.append("overpriced")
-        tree.insert("", "end", iid=code, values=vals, tags=tags)
-
-    app._batch_watchlist_tree = tree
-    _TREE_ATTRS.add("_batch_watchlist_tree")
-    _attach_watchlist_context_menu(app, tree)
-
-
-def _attach_watchlist_context_menu(app, tree):
-    menu = tk.Menu(tree, tearoff=0)
-    menu.add_command(label="🗑 从关注池移除",
-                     command=lambda: _remove_selected_from_watchlist(app))
-
-    def _popup(event):
-        clicked = tree.identify_row(event.y)
-        if clicked and clicked not in tree.selection():
-            tree.selection_set(clicked)
-        if not tree.selection():
-            return
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    tree.bind("<Button-3>", _popup)
-    tree.bind("<Button-2>", _popup)
-    tree.bind("<Delete>", lambda _e: _remove_selected_from_watchlist(app))
-    tree.bind("<BackSpace>", lambda _e: _remove_selected_from_watchlist(app))
-
-
-def _format_tags(tags) -> str:
-    if not tags:
-        return ""
-    if isinstance(tags, str):
-        return tags
-    return " / ".join(str(tag) for tag in tags if tag)

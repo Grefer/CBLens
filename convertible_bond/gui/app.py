@@ -93,16 +93,17 @@ class CBPricerApp(
 
     # ── 变量 ──────────────────────────────────────────────
     def _build_vars(self):
+        # 转债特定字段保持空白, 避免虚构默认值被当成真实示例债; 输入代码后自动填充
         self.v_bond_code = ctk.StringVar()
-        self.v_S0        = ctk.StringVar(value="55.0")
-        self.v_K         = ctk.StringVar(value="52.77")
+        self.v_S0        = ctk.StringVar(value="")
+        self.v_K         = ctk.StringVar(value="")
         self.v_face      = ctk.StringVar(value="100")
-        self.v_redemp    = ctk.StringVar(value="107")
+        self.v_redemp    = ctk.StringVar(value="")
         self.v_cur_date  = ctk.StringVar(value=date.today().isoformat())
-        self.v_mat_date  = ctk.StringVar(value="2026-07-30")
-        self.v_iss_date  = ctk.StringVar(value="2020-07-30")
-        self.v_conv_date = ctk.StringVar(value="2021-02-06")
-        self.v_coupons   = ctk.StringVar(value="0.3,0.4,0.8,1.5,1.8,2.0")
+        self.v_mat_date  = ctk.StringVar(value="")
+        self.v_iss_date  = ctk.StringVar(value="")
+        self.v_conv_date = ctk.StringVar(value="")
+        self.v_coupons   = ctk.StringVar(value="")
         self.v_sigma     = ctk.StringVar(value="28")
         self.v_r         = ctk.StringVar(value="2.2")
         self.v_spread    = ctk.StringVar(value="3.0")
@@ -222,7 +223,8 @@ class CBPricerApp(
         self._bind_shortcuts()
 
     def _build_header(self):
-        self._tab_names = ["⚡ 定价", "📈 回测", "🔥 敏感性", "📦 批量"]
+        # 投资者工作流: 先筛候选 → 钻单债 → 验模型 → 做压力测试
+        self._tab_names = ["📦 批量", "⚡ 定价", "📈 回测", "🔥 敏感性"]
 
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
@@ -254,7 +256,8 @@ class CBPricerApp(
             unselected_color=BG_INPUT, unselected_hover_color=BTN_HOVER,
             text_color=TEXT, text_color_disabled=TEXT_DIM,
             corner_radius=8)
-        self.tab_seg.set("⚡ 定价")
+        # 启动默认进入批量复核页 — 投资入口先看候选池, 再钻到单债
+        self.tab_seg.set("📦 批量")
         self.tab_seg.grid(row=0, column=1, pady=15)
 
         right_frame = ctk.CTkFrame(header, fg_color="transparent")
@@ -272,6 +275,16 @@ class CBPricerApp(
         self.data_source_menu.pack(side="left", padx=(0, 10))
         Tooltip(self.data_source_menu,
                 "选择动态行情/利率来源；转债基础信息固定读取 cb_data, 并由 Wind 刷新")
+
+        # 全市场 cb_data / 准入状态同步入口 — 替代命令行 cb-sync-* 调用
+        self.btn_sync_pool = ctk.CTkButton(
+            right_frame, text="🌐 同步池",
+            command=self._open_pool_sync_menu,
+            fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
+            font=(FONT_FAMILY, 12), width=82, height=30, corner_radius=6)
+        self.btn_sync_pool.pack(side="left", padx=(0, 10))
+        Tooltip(self.btn_sync_pool,
+                "弹出菜单: 同步全市场基础信息 / 刷新停牌强赎ST状态 / 同步公告事件")
 
         AutocompleteEntry(
             right_frame, textvariable=self.v_bond_code,
@@ -305,15 +318,86 @@ class CBPricerApp(
     def _build_statusbar(self):
         sb = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=28)
         sb.grid(row=2, column=0, sticky="ew")
-        sb.grid_columnconfigure(1, weight=1)
+        sb.grid_columnconfigure(2, weight=1)
         sb.grid_propagate(False)
 
-        ctk.CTkLabel(sb, text="信息", text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).grid(row=0, column=0, sticky="w", padx=15, pady=4)
-        self.lbl_ref = ctk.CTkLabel(sb, textvariable=self.v_ref_info, text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
-        self.lbl_ref.grid(row=0, column=1, sticky="w", padx=15, pady=4)
+        # 左: 数据时效 (cb_data 文件 mtime + 最近一次行情拉取相对时间)
+        self.v_data_freshness = ctk.StringVar(value="")
+        self.lbl_data_freshness = ctk.CTkLabel(
+            sb, textvariable=self.v_data_freshness,
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
+        self.lbl_data_freshness.grid(row=0, column=0, sticky="w", padx=15, pady=4)
+
+        ctk.CTkLabel(sb, text="信息", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11)).grid(row=0, column=1, sticky="w", padx=(8, 8), pady=4)
+        self.lbl_ref = ctk.CTkLabel(sb, textvariable=self.v_ref_info,
+                                     text_color=TEXT_DIM, font=(FONT_FAMILY, 11))
+        self.lbl_ref.grid(row=0, column=2, sticky="w", padx=(0, 15), pady=4)
         Tooltip(self.lbl_ref, self.v_ref_detail)
-        self.lbl_status = ctk.CTkLabel(sb, textvariable=self.v_status, text_color=TEXT, font=(FONT_FAMILY, 11, "bold"))
-        self.lbl_status.grid(row=0, column=2, sticky="e", padx=15, pady=4)
+        self.lbl_status = ctk.CTkLabel(sb, textvariable=self.v_status,
+                                        text_color=TEXT, font=(FONT_FAMILY, 11, "bold"))
+        self.lbl_status.grid(row=0, column=3, sticky="e", padx=15, pady=4)
+
+        self._last_quote_fetch_ts = None  # 由 wind_sync 等模块在拉取行情时更新
+        self._last_batch_saved_ts = None  # 由 batch tab 加载/保存缓存时更新
+        self._update_data_freshness()
+        self._schedule_data_freshness_tick()
+
+    # ── 数据时效 ──────────────────────────────────────────
+    def _update_data_freshness(self):
+        from pathlib import Path
+        from datetime import datetime as _dt
+        cb_path = Path(project_bundle_path())
+        parts: list[str] = []
+        if cb_path.exists():
+            mtime = _dt.fromtimestamp(cb_path.stat().st_mtime)
+            parts.append(f"cb_data {self._humanize_age(mtime)}")
+        else:
+            parts.append("cb_data 未同步")
+        if self._last_quote_fetch_ts is not None:
+            parts.append(f"行情 {self._humanize_age(self._last_quote_fetch_ts)}")
+        batch_ts = getattr(self, "_last_batch_saved_ts", None)
+        if batch_ts is not None:
+            parts.append(f"批量 {self._humanize_age(batch_ts)}")
+        self.v_data_freshness.set("  ·  ".join(parts))
+
+    def _set_batch_freshness(self, saved_at_iso: str | None) -> None:
+        """缓存元数据中的 saved_at (ISO) → 状态栏 '批量 Xh前'."""
+        from datetime import datetime as _dt
+        if not saved_at_iso:
+            self._last_batch_saved_ts = None
+        else:
+            try:
+                self._last_batch_saved_ts = _dt.fromisoformat(saved_at_iso)
+            except ValueError:
+                self._last_batch_saved_ts = None
+        if hasattr(self, "v_data_freshness"):
+            self._update_data_freshness()
+
+    def _schedule_data_freshness_tick(self):
+        # 每 60s 刷新一次相对时间
+        self.after(60_000, self._on_data_freshness_tick)
+
+    def _on_data_freshness_tick(self):
+        try:
+            self._update_data_freshness()
+        finally:
+            self._schedule_data_freshness_tick()
+
+    @staticmethod
+    def _humanize_age(ts) -> str:
+        from datetime import datetime as _dt
+        delta = _dt.now() - ts
+        secs = int(delta.total_seconds())
+        if secs < 60:
+            return "刚刚"
+        if secs < 3600:
+            return f"{secs // 60}min前"
+        if secs < 86400:
+            hours = secs / 3600
+            return f"{hours:.1f}h前" if hours < 10 else f"{int(hours)}h前"
+        days = secs / 86400
+        return f"{int(days)}d前"
 
     def _build_tabview(self):
         self._tab_frames = {}
@@ -328,11 +412,12 @@ class CBPricerApp(
             f.grid_rowconfigure(0, weight=1)
             self._tab_frames[name] = f
 
-        self._tab_frames["⚡ 定价"].grid(row=0, column=0, sticky="nsew")
+        # 默认显示批量页 (与 tab_seg 初始选中一致)
         pricing_tab.build(self, self._tab_frames["⚡ 定价"])
         backtest_tab.build(self, self._tab_frames["📈 回测"])
         sensitivity_tab.build(self, self._tab_frames["🔥 敏感性"])
         batch_tab.build(self, self._tab_frames["📦 批量"])
+        self._tab_frames["📦 批量"].grid(row=0, column=0, sticky="nsew")
 
     def _switch_tab(self, selected):
         for name, f in self._tab_frames.items():
@@ -482,6 +567,8 @@ class CBPricerApp(
         self.bind_all("<Control-Return>", lambda e: self._run_pricing())
         self.bind_all("<Control-s>", lambda e: self._save_preset())
         self.bind_all("<Control-o>", lambda e: self._load_preset())
+        # 收敛诊断 (开发者工具): UI 已下线, 仅保留快捷键供调试时触发
+        self.bind_all("<Control-d>", lambda e: self._convergence_check())
 
     # ── 主题切换 ──────────────────────────────────────────
     def _toggle_theme(self):

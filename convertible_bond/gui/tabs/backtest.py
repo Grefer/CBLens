@@ -81,7 +81,33 @@ def build(app, tab):
         font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
     app.lbl_bt_status.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 6))
 
+    # 统计指标条 (回测完成后填充): 均偏差 / RMSE / 最大|偏差| / 命中率 / 相关系数 / IV-HV
+    tab.grid_rowconfigure(2, weight=0)
+    tab.grid_rowconfigure(3, weight=1)
+    app._bt_stat_vars = {}
+    stats_card = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
+    stats_card.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 8))
+    for col in range(6):
+        stats_card.grid_columnconfigure(col, weight=1, uniform="bts")
+
+    def _stat_tile(col, key, title):
+        var = ctk.StringVar(value="—")
+        cell = ctk.CTkFrame(stats_card, fg_color="transparent")
+        cell.grid(row=0, column=col, sticky="nsew", padx=8, pady=10)
+        ctk.CTkLabel(cell, text=title, text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11)).pack(anchor="w")
+        ctk.CTkLabel(cell, textvariable=var, text_color=TEXT,
+                     font=(FONT_FAMILY, 16, "bold")).pack(anchor="w")
+        app._bt_stat_vars[key] = var
+
+    _stat_tile(0, "mean_dev",  "均偏差 (理论−市价, %)")
+    _stat_tile(1, "rmse",      "RMSE (%)")
+    _stat_tile(2, "max_abs",   "最大|偏差| (%)")
+    _stat_tile(3, "hit_rate",  "命中率 ±5%")
+    _stat_tile(4, "corr",      "相关系数")
+    _stat_tile(5, "iv_hv",     "IV − HV 均值 (pp)")
+
     app.bt_chart_frame = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
-    app.bt_chart_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(0, 6))
+    app.bt_chart_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
     app.bt_chart_frame.grid_columnconfigure(0, weight=1)
     app.bt_chart_frame.grid_rowconfigure(0, weight=1)

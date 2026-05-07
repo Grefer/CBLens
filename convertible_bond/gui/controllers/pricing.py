@@ -117,6 +117,8 @@ class PricingMixin:
     def _show_result(self, result, pricer, sigma_used):
         theo = result["price"] if isinstance(result, dict) else result
         self.v_result.set(f"{theo:.3f}")
+        self._reset_what_if_labels()
+        self._set_what_if_enabled(True)
         info = (
             f"S₀={pricer.S0:.3f}  K={pricer.K:.2f}  "
             f"T={pricer.T:.4f}年  "
@@ -199,6 +201,84 @@ class PricingMixin:
         finally:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_iv.configure(state="normal"))
+
+    # ── What-if 快算 (σ ±pp / S ±%) ──────────────────────────
+    @staticmethod
+    def _what_if_base_label(kind: str, delta) -> str:
+        return f"{delta:+d}pp" if kind == "sigma" else f"{delta:+d}%"
+
+    def _run_what_if(self, kind: str, delta):
+        """微扰 σ 或 S 后重算理论价, 结果回写到对应按钮上.
+
+        kind ∈ {"sigma", "S"}; delta 单位:
+            sigma → 百分点 (例如 +2 表示 σ 由 28% 涨到 30%)
+            S     → 相对百分比 (例如 -5 表示正股价下跌 5%)
+
+        显示形如 "+5% → 130.40 (+2.1%)", 第二项为相对当前理论价的变化幅度。
+        """
+        button_map = (getattr(self, "_wf_sigma_buttons", None) if kind == "sigma"
+                      else getattr(self, "_wf_s_buttons", None))
+        if not button_map or delta not in button_map:
+            return
+        btn, var = button_map[delta]
+        base_label = self._what_if_base_label(kind, delta)
+        # 抓主结果作为对照基准 (而非 var 当前值, 避免连续点击累积成 "+5% → 130 → 132")
+        try:
+            base_price = float(self.v_result.get())
+        except (TypeError, ValueError):
+            base_price = float("nan")
+        var.set(f"{base_label} …")
+        btn.configure(state="disabled")
+
+        def worker():
+            try:
+                params = self._collect_params()
+                pricer_kwargs = dict(params["pricer"])
+                model_kwargs = dict(params["model"])
+                if kind == "sigma":
+                    model_kwargs["sigma"] = max(0.001, model_kwargs["sigma"] + delta / 100.0)
+                else:  # S
+                    pricer_kwargs["S0"] = max(0.001, pricer_kwargs["S0"] * (1 + delta / 100.0))
+                # what-if 不需要 greeks, 同时降低网格精度以加速
+                model_kwargs["M"] = max(150, model_kwargs["M"] // 2)
+                model_kwargs["N"] = max(500, model_kwargs["N"] // 2)
+                pricer = UniversalCBPricer(**pricer_kwargs)
+                price = float(pricer.price(**model_kwargs))
+                if base_price == base_price and base_price > 0:
+                    rel_pp = (price - base_price) / base_price * 100.0
+                    label = f"{base_label} → {price:.2f} ({rel_pp:+.1f}%)"
+                else:
+                    label = f"{base_label} → {price:.2f}"
+                self.after(0, lambda: var.set(label))
+            except Exception as exc:
+                self.after(0, lambda: var.set(base_label))
+                self.after(0, lambda: self.v_status.set(f"What-if 失败: {exc}"))
+            finally:
+                self.after(0, lambda: btn.configure(state="normal"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _reset_what_if_labels(self):
+        """主定价完成后清掉 what-if 上一次的结果, 让下一轮微扰从干净状态开始."""
+        for kind, button_map_attr in (
+            ("sigma", "_wf_sigma_buttons"),
+            ("S",     "_wf_s_buttons"),
+        ):
+            button_map = getattr(self, button_map_attr, None)
+            if not button_map:
+                continue
+            for delta, (_btn, var) in button_map.items():
+                var.set(self._what_if_base_label(kind, delta))
+
+    def _set_what_if_enabled(self, enabled: bool) -> None:
+        """主定价成功后启用 what-if 按钮; 出错或重置时禁用."""
+        target = "normal" if enabled else "disabled"
+        for attr in ("_wf_sigma_buttons", "_wf_s_buttons"):
+            button_map = getattr(self, attr, None)
+            if not button_map:
+                continue
+            for _delta, (btn, _var) in button_map.items():
+                btn.configure(state=target)
 
     # ── 现金流可视化 ────────────────────────────────────────
     def _show_cashflow(self):
@@ -284,9 +364,11 @@ class PricingMixin:
             win, text=f"现金流合计 (未折现) = {total:.2f}  ·  共 {len(labels)} 笔",
             text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(pady=(0, 10))
 
-    # ── 收敛诊断 ────────────────────────────────────────────
+    # ── 收敛诊断 (开发者工具, 不绑定到 UI; 可通过 Ctrl+D 快捷键触发) ─────
     def _convergence_check(self):
-        self.btn_conv.configure(state="disabled")
+        btn = getattr(self, "btn_conv", None)
+        if btn is not None:
+            btn.configure(state="disabled")
         self._start_progress("收敛诊断 (M, N → 2M, 2N)")
         threading.Thread(target=self._convergence_worker, daemon=True).start()
 
@@ -310,7 +392,9 @@ class PricingMixin:
             self.after(0, self._on_error, f"收敛诊断失败: {exc}")
         finally:
             self.after(0, self._stop_progress)
-            self.after(0, lambda: self.btn_conv.configure(state="normal"))
+            btn = getattr(self, "btn_conv", None)
+            if btn is not None:
+                self.after(0, lambda b=btn: b.configure(state="normal"))
 
 
 # 让模块级 import 仍能拿到 FONT_MONO/FONT_FAMILY 等 (legacy: 部分回调期望 module 上有)

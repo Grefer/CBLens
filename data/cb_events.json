@@ -1,13 +1,15 @@
 {
   "_meta": {
-    "last_sync_at": "2026-05-07T14:10:57",
+    "last_sync_at": "2026-05-07T20:28:40",
     "synced_at_by_code": {
+      "110077.SH": "2026-05-07T20:08:09",
       "110081.SH": "2026-05-07T09:28:52",
       "110092.SH": "2026-05-07T14:10:57",
       "118025.SH": "2026-04-29T19:08:17",
-      "118027.SH": "2026-04-29T18:58:14"
+      "118027.SH": "2026-04-29T18:58:14",
+      "123225.SZ": "2026-05-07T20:28:40"
     },
-    "updated_at": "2026-05-07T14:10:57"
+    "updated_at": "2026-05-07T20:28:40"
   },
   "events": [
     {
@@ -128,6 +130,32 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-13/1223858731.PDF"
     },
     {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-14",
+      "event_date": "2025-06-14",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "江西洪城环境股份有限公司主体及“洪城转债”2025年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-14/1223876938.PDF"
+    },
+    {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-14",
+      "event_date": "2025-06-14",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "江西洪城环境股份有限公司关于可转换公司债券2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-14/1223876939.PDF"
+    },
+    {
       "bond_code": "110081.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -193,6 +221,32 @@
       "url": "http://static.cninfo.com.cn/finalpage/2025-06-24/1223956907.PDF"
     },
     {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-27",
+      "event_date": "2025-06-27",
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "江西洪城环境股份有限公司关于“洪城转债”转股价格调整暨转股复牌的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-27/1223997870.PDF"
+    },
+    {
+      "bond_code": "123225.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-06-27",
+      "event_date": "2025-06-27",
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "上海市翔丰华科技股份有限公司相关债券2025年跟踪评级报告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-06-27/1224014752.PDF"
+    },
+    {
       "bond_code": "110092.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -243,6 +297,32 @@
       "raw_title": "关于不向下修正“闻泰转债”转股价格的公告",
       "source": "cninfo",
       "url": "http://static.cninfo.com.cn/finalpage/2025-07-04/1224071584.PDF"
+    },
+    {
+      "bond_code": "110077.SH",
+      "commitment_months": 12,
+      "effective_end": "2026-07-11",
+      "effective_start": "2025-07-12",
+      "event_date": "2025-07-12",
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "江西洪城环境股份有限公司关于不提前赎回“洪城转债”的公告",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-07-12/1224144181.PDF"
+    },
+    {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-07-12",
+      "event_date": "2025-07-12",
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "申万宏源证券承销保荐有限责任公司关于江西洪城环境股份有限公司不行使“洪城转债”提前赎回权利的核查意见",
+      "source": "cninfo",
+      "url": "http://static.cninfo.com.cn/finalpage/2025-07-12/1224144180.PDF"
     },
     {
       "bond_code": "110092.SH",

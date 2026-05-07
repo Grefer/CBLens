@@ -208,23 +208,54 @@ class BacktestMixin:
         self._bt_figure = fig
         self._bt_canvas = canvas
 
-        mean_basis = float(np.mean(mkt_arr - theo_arr))
+        # 统计指标: 偏差 = (理论 − 市价) / 市价  (相对值, 投资者角度更直观)
+        valid = (mkt_arr > 0) & np.isfinite(mkt_arr) & np.isfinite(theo_arr)
+        rel_dev = np.full(theo_arr.shape, np.nan)
+        rel_dev[valid] = (theo_arr[valid] - mkt_arr[valid]) / mkt_arr[valid]
+        rel_clean = rel_dev[np.isfinite(rel_dev)]
+        mean_basis_abs = float(np.mean(mkt_arr - theo_arr))
         corr = float(np.corrcoef(theo_arr, mkt_arr)[0, 1]) if len(theo) > 1 else float("nan")
-        status_parts = [
-            f"✅ {len(dates)} 个采样点",
-            f"平均基差(市价-理论)={mean_basis:+.2f}",
-            f"相关系数={corr:.3f}",
-        ]
+        if rel_clean.size:
+            mean_dev = float(np.mean(rel_clean))
+            rmse = float(np.sqrt(np.mean(rel_clean ** 2)))
+            max_abs = float(np.max(np.abs(rel_clean)))
+            hit_rate = float(np.mean(np.abs(rel_clean) <= 0.05))
+        else:
+            mean_dev = rmse = max_abs = hit_rate = float("nan")
+
+        iv_hv_pp: float | None = None
         if has_iv:
             iv_valid = iv_arr[np.isfinite(iv_arr)]
             hv_arr = np.array(sigmas)
             hv_for_iv = hv_arr[np.isfinite(iv_arr)]
             if iv_valid.size:
-                mean_iv_hv = float(np.mean(iv_valid - hv_for_iv)) * 100
-                status_parts.append(f"IV-HV 均值={mean_iv_hv:+.2f}pp")
+                iv_hv_pp = float(np.mean(iv_valid - hv_for_iv)) * 100
+
+        self._update_backtest_stats(mean_dev, rmse, max_abs, hit_rate, corr, iv_hv_pp)
+        status_parts = [
+            f"✅ {len(dates)} 个采样点",
+            f"平均基差(市价−理论)={mean_basis_abs:+.2f}",
+        ]
         self.v_bt_status.set("  ·  ".join(status_parts))
         self.btn_bt_png.configure(state="normal")
         self.btn_bt_csv.configure(state="normal")
+
+    def _update_backtest_stats(self, mean_dev, rmse, max_abs, hit_rate, corr, iv_hv_pp):
+        stats = getattr(self, "_bt_stat_vars", None)
+        if not stats:
+            return
+
+        def _fmt_pct(v, sign=False):
+            if not np.isfinite(v):
+                return "—"
+            return f"{v*100:+.2f}%" if sign else f"{v*100:.2f}%"
+
+        stats["mean_dev"].set(_fmt_pct(mean_dev, sign=True))
+        stats["rmse"].set(_fmt_pct(rmse))
+        stats["max_abs"].set(_fmt_pct(max_abs))
+        stats["hit_rate"].set(f"{hit_rate*100:.1f}%" if np.isfinite(hit_rate) else "—")
+        stats["corr"].set(f"{corr:.3f}" if np.isfinite(corr) else "—")
+        stats["iv_hv"].set(f"{iv_hv_pp:+.2f}pp" if iv_hv_pp is not None and np.isfinite(iv_hv_pp) else "—")
 
     # ── 回测结果导出 ──────────────────────────────────────
     def _export_bt_png(self):

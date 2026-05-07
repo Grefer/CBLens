@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 import threading
+import tkinter as tk
 from datetime import date, timedelta
 from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
 
 from ...cache import CachedBondDataProvider
 from ...data_providers import (
@@ -20,13 +25,26 @@ from ..constants import (
     DEFAULT_P_DOWN_PCT,
 )
 from ..theme import (
+    BG_CARD, BG_INPUT, BTN_HOVER,
     CREDIT_SPREAD_TABLE,
+    FONT_FAMILY, FONT_MONO, TEXT, TEXT_DIM,
     VOL_WINDOW_DEFAULT,
     VOL_WINDOW_MAP,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+# CLI 入口表: (菜单标签, python -m 模块名, 提示文案)
+_POOL_SYNC_TARGETS = (
+    ("🌐 同步全市场基础信息", "convertible_bond.cli.sync_tradable",
+     "拉取全部可交易转债的发行条款 / 票息 / 转股价 / 评级 / 余额到 cb_data.json\n慢, 通常 5-15 分钟; 期间会占用 Wind 接口."),
+    ("🚦 刷新准入状态", "convertible_bond.cli.sync_admission_status",
+     "刷新停牌 / 强赎公告 / ST / 临近摘牌 / 成交额等准入字段\n通常 1-5 分钟."),
+    ("📰 同步公告事件", "convertible_bond.cli.sync_events",
+     "下载并解析公告标题, 写入 cb_events.json\n通常 1-3 分钟."),
+)
 
 
 class WindSyncMixin:
@@ -181,6 +199,116 @@ class WindSyncMixin:
             return
         self._force_refresh_terms = True
         self._fetch_wind()
+
+    # ── 全市场池同步 (替代命令行 cb-sync-* 调用) ─────────────────
+    def _open_pool_sync_menu(self):
+        """弹出菜单选择: 同步基础 / 准入状态 / 公告事件."""
+        menu = tk.Menu(self, tearoff=0)
+        for label, module, _desc in _POOL_SYNC_TARGETS:
+            menu.add_command(
+                label=label,
+                command=lambda m=module, l=label: self._run_pool_sync(m, l),
+            )
+        try:
+            x = self.btn_sync_pool.winfo_rootx()
+            y = self.btn_sync_pool.winfo_rooty() + self.btn_sync_pool.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _run_pool_sync(self, module: str, label: str):
+        """运行 python -m <module>, 在弹窗里实时显示输出."""
+        desc = next((d for lbl, mod, d in _POOL_SYNC_TARGETS if mod == module), "")
+        confirm = messagebox.askokcancel(
+            label,
+            f"{desc}\n\n继续执行?",
+        )
+        if not confirm:
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title(f"{label} — 运行中")
+        win.geometry("760x460")
+        win.transient(self)
+
+        ctk.CTkLabel(
+            win, text=f"{label}", text_color=TEXT,
+            font=(FONT_FAMILY, 14, "bold")).pack(anchor="w", padx=14, pady=(12, 4))
+        status_var = ctk.StringVar(value="启动中…")
+        ctk.CTkLabel(
+            win, textvariable=status_var, text_color=TEXT_DIM,
+            font=(FONT_FAMILY, 12)).pack(anchor="w", padx=14)
+
+        text_box = ctk.CTkTextbox(
+            win, fg_color=BG_INPUT, text_color=TEXT,
+            font=(FONT_MONO, 11), wrap="word")
+        text_box.pack(fill="both", expand=True, padx=14, pady=10)
+
+        btn_row = ctk.CTkFrame(win, fg_color="transparent")
+        btn_row.pack(fill="x", padx=14, pady=(0, 12))
+        close_btn = ctk.CTkButton(
+            btn_row, text="关闭", state="disabled", width=80,
+            fg_color=BG_CARD, hover_color=BTN_HOVER, text_color=TEXT,
+            command=win.destroy)
+        close_btn.pack(side="right")
+
+        proc_holder: dict = {}
+
+        def _kill():
+            proc = proc_holder.get("proc")
+            if proc is None or proc.poll() is not None:
+                return
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    # 卡死 / 忽略 SIGTERM 的子进程, 升级到 SIGKILL
+                    proc.kill()
+            except Exception:
+                logger.exception("终止池同步子进程失败 (PID=%s)",
+                                 getattr(proc, "pid", "?"))
+
+        cancel_btn = ctk.CTkButton(
+            btn_row, text="终止", width=80,
+            fg_color=BG_CARD, hover_color=BTN_HOVER, text_color=TEXT,
+            command=_kill)
+        cancel_btn.pack(side="right", padx=(0, 8))
+
+        win.protocol("WM_DELETE_WINDOW", lambda: (_kill(), win.destroy()))
+
+        def append(line: str):
+            text_box.insert("end", line)
+            text_box.see("end")
+
+        def worker():
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-u", "-m", module],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                proc_holder["proc"] = proc
+                self.after(0, lambda: status_var.set(f"PID {proc.pid} · 运行中…"))
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    self.after(0, append, line)
+                rc = proc.wait()
+                if rc == 0:
+                    self.after(0, lambda: status_var.set("✅ 完成"))
+                else:
+                    self.after(0, lambda: status_var.set(f"❌ 退出码 {rc}"))
+            except Exception as exc:
+                self.after(0, lambda: status_var.set(f"❌ 启动失败: {exc}"))
+            finally:
+                self.after(0, lambda: cancel_btn.configure(state="disabled"))
+                self.after(0, lambda: close_btn.configure(state="normal"))
+                if hasattr(self, "_update_data_freshness"):
+                    self.after(0, self._update_data_freshness)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _fetch_wind_worker(self, code, auto=False, source_name=None, vol_window_label=None):
         force = self._force_refresh_terms
@@ -420,6 +548,11 @@ class WindSyncMixin:
         self.v_status.set(
             f"已加载 {self.v_bond_code.get()} (正股 {d.get('stock_code', '?')}, {s0_text}, 票息: {src_tag})"
         )
+        # 标记最近一次行情拉取时间, 状态栏 "行情 Nmin前" 由此驱动
+        from datetime import datetime as _dt
+        self._last_quote_fetch_ts = _dt.now()
+        if hasattr(self, "_update_data_freshness"):
+            self._update_data_freshness()
 
     # ── 波动率窗口切换 ────────────────────────────────────
     def _on_vol_window_change(self, choice):

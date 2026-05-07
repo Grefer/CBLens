@@ -64,8 +64,11 @@ BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核
 HARD_REVIEW_TAGS = {
     "高HV", "极小余额", "小余额", "余额异常", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
-    "正股跌停",
+    "正股跌停", "偏差异常",
 }
+# |偏差| 超过该阈值时打 "偏差异常" 标签 — 多数情况是市价/正股价不同日、
+# 强赎/停牌未应用、转股价未刷新等数据问题, 而非真正的低估机会
+DEVIATION_ANOMALY_THRESHOLD = 0.20
 DEFAULT_DELIST_WINDOW_DAYS = 30
 DEFAULT_MIN_OUTSTANDING_BALANCE = 0.5
 DEFAULT_MIN_CREDIT_RATING = "A+"
@@ -433,6 +436,19 @@ def _rating_score(rating: Any) -> int | None:
     return None
 
 
+def average_rating_label(ratings: Iterable[Any]) -> str | None:
+    """对一组评级 (字符串或可转为字符串的对象) 求平均, 返回最接近的评级标签.
+
+    无法识别的评级会被忽略; 全部识别失败时返回 None。供 GUI 汇总使用,
+    避免外部模块直接依赖 ``_RATING_SCORES`` 私有字典。
+    """
+    scores = [s for s in (_rating_score(r) for r in ratings) if s is not None]
+    if not scores:
+        return None
+    avg = sum(scores) / len(scores)
+    return min(_RATING_SCORES.items(), key=lambda kv: abs(kv[1] - avg))[0]
+
+
 def list_upcoming_tradable_from_cache(
     terms_cache,
     *,
@@ -653,6 +669,9 @@ def annotate_batch_result(row: dict) -> dict:
             risk_tags.append("模型低估")
         if deviation > 0.08:
             score -= min(20.0, deviation * 60.0)
+        if abs(deviation) >= DEVIATION_ANOMALY_THRESHOLD:
+            risk_tags.append("偏差异常")
+            confidence_points -= 25
     else:
         risk_tags.append("无偏差")
         confidence_points -= 20
@@ -766,18 +785,33 @@ def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
     return sorted(annotated, key=key)
 
 
-def filter_batch_results_by_view(results: Sequence[dict], view: str | None) -> list[dict]:
-    """按批量页视图过滤结果, 并保持研究排序."""
+DEFAULT_UNDERVALUED_SCORE_THRESHOLD = 8.0
+
+
+def filter_batch_results_by_view(
+    results: Sequence[dict],
+    view: str | None,
+    *,
+    undervalued_score_threshold: float | None = None,
+) -> list[dict]:
+    """按批量页视图过滤结果, 并保持研究排序.
+
+    *undervalued_score_threshold* 仅作用于"低估候选"视图; None 时使用
+    ``DEFAULT_UNDERVALUED_SCORE_THRESHOLD``。
+    """
     rows = sort_batch_results_for_review(results)
     view_name = view if view in BATCH_REVIEW_VIEWS else "综合机会"
     if view_name == "综合机会":
         return rows
     if view_name == "低估候选":
+        threshold = (DEFAULT_UNDERVALUED_SCORE_THRESHOLD
+                     if undervalued_score_threshold is None
+                     else float(undervalued_score_threshold))
         return [
             row for row in rows
             if row.get("status") == "ok"
             and _finite_float(row.get("opportunity_score")) is not None
-            and float(row["opportunity_score"]) >= 8.0
+            and float(row["opportunity_score"]) >= threshold
             and row.get("confidence") in {"高", "中"}
             and "转股折价" not in (row.get("risk_tags") or [])
             and not (set(row.get("risk_tags") or []) & HARD_REVIEW_TAGS)
@@ -960,6 +994,8 @@ def _review_notes(row: dict) -> list[str]:
         notes.append("核实信用风险和信用利差假设")
     if "正股跌停" in tags:
         notes.append("正股当日跌停, S0 不稳定; 需等待正股恢复正常交易后再判断")
+    if "偏差异常" in tags:
+        notes.append("|偏差|>20%, 多为正股/转债不同日或停牌/强赎未应用; 重新拉取行情和事件后再判断")
     if "模型低估" in tags and not notes:
         notes.append("优先核实条款、行情日期和模型参数后再进入单债分析")
     return _dedupe_tags(notes)
