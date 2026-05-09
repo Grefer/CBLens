@@ -48,6 +48,10 @@ def main():
                         help="限制最多同步 N 只 (调试用, 0=不限制)")
     parser.add_argument("--codes", nargs="*", default=[],
                         help="只同步指定代码 (绕过 list_tradable_cbs)")
+    parser.add_argument("--incremental", "-i", action="store_true",
+                        help="增量更新: 跳过本地条款库中近期已刷新的债, 只拉新债 / 过期债")
+    parser.add_argument("--max-age-days", type=int, default=7,
+                        help="增量模式下视为新鲜的最大天数 (默认 7)")
     args = parser.parse_args()
 
     bundle_path = Path(args.bundle) if args.bundle else project_bundle_path()
@@ -96,7 +100,10 @@ def main():
         print("❌ 无可同步的代码", file=sys.stderr)
         return 1
 
-    print(f"开始同步基础信息到 {bundle.path}")
+    mode_label = "增量" if args.incremental else "全量"
+    print(f"开始 {mode_label} 同步基础信息到 {bundle.path}")
+    if args.incremental:
+        print(f"  增量模式: 跳过本地条款库中 {args.max_age_days} 天内已刷新的债")
     print(f"  注: 每只债 2 次 Wind 接口调用 (基础字段 + 完整付息计划), 预计 ~{len(codes)*0.6:.0f}s")
 
     start = time.time()
@@ -110,14 +117,22 @@ def main():
             print(f"  [{i+1:>4}/{total}]  {code:<14}  {rate:.1f}/s  ETA {eta:.0f}s",
                   flush=True)
 
-    result = sync_cb_terms(provider, codes, store=bundle, on_progress=progress)
+    result = sync_cb_terms(
+        provider, codes, store=bundle, on_progress=progress,
+        incremental=args.incremental, max_age_days=args.max_age_days)
     elapsed = time.time() - start
 
     success = result["success"]
     failed = result["failed"]
     dropped = result.get("dropped", [])
-    print(f"\n✅ 成功 {len(success)} 只, ⚠️  剔除 {len(dropped)} 只 (已到期/异常),"
-          f" ❌ 失败 {len(failed)} 只, 耗时 {elapsed:.1f}s")
+    skipped = result.get("skipped", [])
+    parts = [f"✅ 成功 {len(success)} 只"]
+    if skipped:
+        parts.append(f"⏭️  跳过 {len(skipped)} 只 (近期已刷新)")
+    parts.append(f"⚠️  剔除 {len(dropped)} 只 (已到期/异常)")
+    parts.append(f"❌ 失败 {len(failed)} 只")
+    parts.append(f"耗时 {elapsed:.1f}s")
+    print(f"\n{', '.join(parts)}")
     print(f"   bundle 文件: {bundle.path}")
     if dropped:
         print("\n剔除列表 (前 20):")

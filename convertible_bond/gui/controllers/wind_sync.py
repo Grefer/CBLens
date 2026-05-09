@@ -36,13 +36,15 @@ from ..theme import (
 logger = logging.getLogger(__name__)
 
 
-# CLI 入口表: (菜单标签, python -m 模块名, 提示文案)
+# CLI 入口表: (菜单标签, python -m 模块名, 额外 CLI 参数, 提示文案)
 _POOL_SYNC_TARGETS = (
-    ("🌐 同步全市场基础信息", "convertible_bond.cli.sync_tradable",
+    ("🔄 增量更新基础信息 (推荐)", "convertible_bond.cli.sync_tradable", ["--incremental"],
+     "只拉本地条款库中超过 7 天未刷新或新发行的债, 显著比全量快\n通常 1-3 分钟."),
+    ("🌐 全量同步基础信息", "convertible_bond.cli.sync_tradable", [],
      "拉取全部可交易转债的发行条款 / 票息 / 转股价 / 评级 / 余额到本地条款库\n慢, 通常 5-15 分钟; 期间会占用 Wind 接口."),
-    ("🚦 刷新准入状态", "convertible_bond.cli.sync_admission_status",
+    ("🚦 刷新准入状态", "convertible_bond.cli.sync_admission_status", [],
      "刷新停牌 / 强赎公告 / ST / 临近摘牌 / 成交额等准入字段\n通常 1-5 分钟."),
-    ("📰 同步公告事件", "convertible_bond.cli.sync_events",
+    ("📰 同步公告事件", "convertible_bond.cli.sync_events", [],
      "下载并解析公告标题, 写入本地事件表\n通常 1-3 分钟."),
 )
 
@@ -204,10 +206,10 @@ class WindSyncMixin:
     def _open_pool_sync_menu(self):
         """弹出菜单选择: 同步基础 / 准入状态 / 公告事件."""
         menu = tk.Menu(self, tearoff=0)
-        for label, module, _desc in _POOL_SYNC_TARGETS:
+        for label, module, extra_args, _desc in _POOL_SYNC_TARGETS:
             menu.add_command(
                 label=label,
-                command=lambda m=module, l=label: self._run_pool_sync(m, l),
+                command=lambda m=module, l=label, a=tuple(extra_args): self._run_pool_sync(m, l, a),
             )
         try:
             x = self.btn_sync_pool.winfo_rootx()
@@ -216,9 +218,11 @@ class WindSyncMixin:
         finally:
             menu.grab_release()
 
-    def _run_pool_sync(self, module: str, label: str):
-        """运行 python -m <module>, 在弹窗里实时显示输出."""
-        desc = next((d for lbl, mod, d in _POOL_SYNC_TARGETS if mod == module), "")
+    def _run_pool_sync(self, module: str, label: str, extra_args: tuple = ()):
+        """运行 python -m <module> [extra_args...], 在弹窗里实时显示输出."""
+        # 同一 module 可能对应多个菜单项 (全量 / 增量), 用 label 精确匹配 desc
+        desc = next((d for lbl, mod, _, d in _POOL_SYNC_TARGETS
+                     if mod == module and lbl == label), "")
         confirm = messagebox.askokcancel(
             label,
             f"{desc}\n\n继续执行?",
@@ -284,7 +288,7 @@ class WindSyncMixin:
         def worker():
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-u", "-m", module],
+                    [sys.executable, "-u", "-m", module, *extra_args],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,

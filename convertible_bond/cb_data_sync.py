@@ -130,19 +130,36 @@ def sync_cb_terms(
     with_cashflow: bool = True,
     drop_terminal: bool = True,
     on_progress=None,
+    incremental: bool = False,
+    max_age_days: int = 7,
 ) -> dict:
-    """指定代码批量同步, 返回 ``{success, failed, dropped, store_path}``.
+    """指定代码批量同步, 返回 ``{success, failed, dropped, skipped, store_path}``.
 
     ``drop_terminal=True`` 时在条款层做 Stage 2 过滤 (剔已到期/违约).
     Bundle 模式下一次性 ``set_many()`` 提交; 中途失败不会留下半截 bundle。
+
+    ``incremental=True`` 时跳过本地 store 中已在 ``max_age_days`` 天内刷新的债;
+    跳过的代码进入 ``skipped`` 列表, 不消耗 Wind 调用. 全量同步用 False.
     """
     store = store or TermsBundle()
     val_date = valuation_date or date.today()
     success: list[str] = []
     failed: list[tuple[str, str]] = []
     dropped: list[tuple[str, str]] = []
+    skipped: list[tuple[str, str]] = []
     fresh_items: list[tuple[str, BondTerms]] = []
     codes = list(bond_codes)
+
+    # 增量过滤: store 提供 is_stale 时按时效跳过, 否则忽略 incremental 标志
+    if incremental and hasattr(store, "is_stale"):
+        to_fetch: list[str] = []
+        for code in codes:
+            if store.is_stale(code, max_age_days):
+                to_fetch.append(code)
+            else:
+                skipped.append((code, f"已在 {max_age_days} 天内更新"))
+        codes = to_fetch
+
     for i, code in enumerate(codes):
         if on_progress:
             on_progress(i, len(codes), code)
@@ -171,6 +188,7 @@ def sync_cb_terms(
         "success": success,
         "failed": failed,
         "dropped": dropped,
+        "skipped": skipped,
         "store_path": str(store_path) if store_path else None,
     }
 
@@ -182,11 +200,14 @@ def sync_cb_data(
     with_cashflow: bool = True,
     include_private: bool = False,
     on_progress=None,
+    incremental: bool = False,
+    max_age_days: int = 7,
 ) -> dict:
     """全市场同步: 拉清单 → 过滤定向 → 拉条款 → 过滤到期/违约 → 落盘.
 
-    返回 ``{success, failed, dropped, codes_total, codes_kept, store_path}``.
+    返回 ``{success, failed, dropped, skipped, codes_total, codes_kept, store_path}``.
     ``dropped`` 合并了 Stage 1 (代码层) 与 Stage 2 (条款层) 两阶段被剔除的债。
+    ``incremental=True`` 时只刷新 ``max_age_days`` 天前/缺失的债。
     """
     val_date = valuation_date or date.today()
     raw = provider.list_tradable_cbs(val_date)
@@ -208,6 +229,8 @@ def sync_cb_data(
         valuation_date=val_date,
         with_cashflow=with_cashflow,
         on_progress=on_progress,
+        incremental=incremental,
+        max_age_days=max_age_days,
     )
     result["dropped"] = dropped_at_list + result.get("dropped", [])
     result["codes_total"] = len(codes_with_names)
