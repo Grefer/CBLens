@@ -7,6 +7,7 @@
   - get_bond_terms(code, valuation_date) -> BondTerms
   - get_stock_close(stock_code, on_date) -> float
   - get_stock_history(stock_code, start, end) -> [(date, float|None), ...]
+  - get_stock_dividend_yield(stock_code, on_date) -> float | None  (单位: %, 例如 2.50)
   - get_bond_history(bond_code, start, end) -> [(date, float|None), ...]
   - get_cashflow(bond_code) -> CashflowSchedule | None
   - get_risk_free_rate(on_date) -> float | None  (单位: %, 例如 2.20)

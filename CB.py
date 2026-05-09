@@ -53,6 +53,7 @@ def _cli_price(argv):
     print(f"转股价 K: {result['K']:.3f}")
     print(f"剩余期限 T: {result['T']:.4f} 年")
     print(f"历史波动率: {result['sigma']:.4%}")
+    print(f"股息率 q: {result.get('q', 0.0):.4%}")
     print(f"理论价值: {result['theoretical_price']:.3f}")
     if result.get("market_price") is not None:
         diff = result["market_price"] - result["theoretical_price"]

@@ -15,7 +15,7 @@ def _source_label_color(source: str):
     """根据参数来源字符串返回配色元组 (浅色, 深色).
 
     行情/历史数据 → 绿; 手工/预设 → 橙; 其余 (模型/系统/默认) → 暗."""
-    if source in ("Wind", "行情", "历史", "利率"):
+    if source in ("Wind", "行情", "历史", "利率", "股息"):
         return GREEN
     if source in ("手工", "预设"):
         return ORANGE

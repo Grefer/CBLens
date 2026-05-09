@@ -212,6 +212,10 @@ class DataProvider(ABC):
     def get_stock_history(self, stock_code: str, start: date, end: date) -> list[tuple[date, float | None]]:
         """正股 [start, end] 区间收盘价时序, 升序. 缺失值用 None."""
 
+    def get_stock_dividend_yield(self, stock_code: str, on_date: date) -> float | None:
+        """正股股息率参考值 (%). 默认 None, 上层回退到 q=0."""
+        return None
+
     @abstractmethod
     def get_bond_history(self, bond_code: str, start: date, end: date) -> list[tuple[date, float | None]]:
         """转债 [start, end] 区间收盘价时序, 升序. 缺失值用 None."""

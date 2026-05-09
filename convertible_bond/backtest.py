@@ -23,6 +23,7 @@ def backtest_theoretical_price(
     freq="W",
     vol_window_days=21,
     r=0.022,
+    q=0.0,
     base_spread=0.03,
     distress_k=0.05,
     p_down=0.0,
@@ -171,7 +172,7 @@ def backtest_theoretical_price(
 
             pricer = UniversalCBPricer(
                 S0=S0, current_date=val_date, **point_kwargs)  # type: ignore[arg-type]
-            theo = pricer.price(sigma=sigma, r=r, base_spread=base_spread,
+            theo = pricer.price(sigma=sigma, r=r, q=q, base_spread=base_spread,
                                 distress_k=distress_k, p_down=effective_p_down, M=M, N=N)
         except Exception as exc:
             logger.debug("回测采样日 %s 定价失败: %s", val_date, exc)
@@ -185,7 +186,8 @@ def backtest_theoretical_price(
             try:
                 iv_val = float(pricer.solve_implied_vol(
                     target_price=float(market_px), r=r, base_spread=base_spread,
-                    p_down=effective_p_down, distress_k=distress_k, M=iv_M, N=iv_N))
+                    p_down=effective_p_down, distress_k=distress_k,
+                    M=iv_M, N=iv_N, q=q))
             except Exception as exc:
                 logger.debug("回测采样日 %s IV 反解失败: %s", val_date, exc)
 

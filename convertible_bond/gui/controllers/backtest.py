@@ -45,6 +45,7 @@ class BacktestMixin:
         try:
             params = dict(
                 r=float(self.v_r.get()) / 100.0,
+                q=float(self.v_q.get()) / 100.0,
                 base_spread=float(self.v_spread.get()) / 100.0,
                 p_down=float(self.v_p_down.get()) / 100.0,
                 distress_k=float(self.v_dk.get()) / 100.0,

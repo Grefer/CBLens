@@ -74,7 +74,7 @@ CBLens 把 **静态条款** 和 **动态行情** 分开处理：
 | 转债条款、转股价、票息、评级、余额 | Wind | `data/cb_data.json` | 半静态信息，建议定期同步 |
 | 公告事件 | cninfo | `data/cb_events.json` | 默认不需要 Wind |
 | 停牌、强赎、摘牌、ST、成交额 | Wind | `data/cb_data.json` | 每日增量刷新 |
-| 正股/转债行情、历史波动率、利率 | Wind / akshare / CSV | 不固定落盘 | 按行情源选择实时获取 |
+| 正股/转债行情、历史波动率、股息率、利率 | Wind / akshare / CSV | 不固定落盘 | 按行情源选择实时获取 |
 | 关注池 | 本地维护 | `data/watchlist.json` | GUI 批量页管理 |
 
 > [!IMPORTANT]
@@ -132,7 +132,7 @@ python gui.py
 | **行情源** | 选择 Wind 或 akshare |
 | **🌐 同步池** | 全市场基础信息、准入状态、公告事件同步入口 |
 | **代码输入** | 输入 `128009.SZ` 或六位代码，命中条款库时自动补全 |
-| **📥 同步** | 读取本地条款库 + 拉取正股行情与历史波动率 |
+| **📥 同步** | 读取本地条款库 + 拉取正股行情、历史波动率与股息率 |
 | **🔄 刷新** | 强制用 Wind 刷新当前债条款（下修/评级变更后使用） |
 | **💾 / 📂** | 保存/加载参数预设 (Ctrl+S / Ctrl+O) |
 
@@ -185,7 +185,7 @@ python gui.py
 
 1. 输入转债代码 → 点击 **📥 同步**
 2. 确认自动填充的条款参数（正股价、转股价、票息、到期日等）
-3. 调整模型参数：`sigma`、`r`、`base_spread`、`distress_k`、`p_down`
+3. 调整模型参数：`sigma`、`r`、`q`、`base_spread`、`distress_k`、`p_down`
 4. 点击 **开始计算**（或 `Ctrl + Enter`）
 5. 查看结果：
    - 理论价与市价偏离
@@ -197,6 +197,19 @@ python gui.py
 **参数来源标签**：
 
 每个输入字段旁标注数据来源（手工 / 条款库 / Wind / akshare / 模型 / 预设），方便追溯。
+
+**核心模型参数**：
+
+| 参数 | 含义 | 单位与默认 |
+| :--- | :--- | :--- |
+| `sigma` | 正股年化历史波动率 | 百分数，默认按窗口历史价估算 |
+| `r` | 无风险利率 | 百分数，可用 Shibor 参考 |
+| `q` | 正股连续股息率 | 百分数，默认从数据源读取，缺失时为 0 |
+| `base_spread` | 信用利差 | 百分数，可按评级填入 |
+| `p_down` | 下修事件年化强度 | 百分数/年 |
+| `distress_k` | 正股下跌时信用利差扩张参数 | 百分数 |
+
+PDE 中股价风险中性漂移使用 `r - q`，折现仍使用 `r + credit_spread(S)`。因此提高 `q` 通常会压低转股权相关价值。
 
 ---
 
@@ -216,6 +229,8 @@ python gui.py
    - IV / HV spread
    - 统计偏差指标
 
+回测会沿用定价页中的 `r`、`q`、信用利差、下修强度和强赎宽限天数。历史正股价与滚动 `sigma` 从数据源取数，`q` 当前作为固定输入参与整段回测。
+
 > [!NOTE]
 > 历史回测默认使用当前条款。发生过下修的债可能出现历史转股价跳点偏差。
 
@@ -233,6 +248,8 @@ python gui.py
 4. 点击 **运行分析**
 5. 查看热力图：颜色深浅对应理论价变化
 6. 点击 **PNG** 导出报告图
+
+敏感性热力图只扫描 `S` 与 `sigma`，`r`、`q`、信用利差和下修参数保持定价页当前值不变。
 
 ---
 
@@ -311,8 +328,10 @@ pricer = UniversalCBPricer(
     redemption_price=107.0,
 )
 
-price = pricer.price(sigma=0.28, r=0.022, base_spread=0.03)
+price = pricer.price(sigma=0.28, r=0.022, q=0.015, base_spread=0.03)
 ```
+
+`q` 为连续股息率，小数形式。例如 `0.015` 表示 1.5%/年。
 
 ### 自动取数定价
 
@@ -320,8 +339,10 @@ price = pricer.price(sigma=0.28, r=0.022, base_spread=0.03)
 from convertible_bond.pricing_api import price_from_auto
 
 row = price_from_auto("128009.SZ", prefer="akshare")
-print(row["theoretical_price"], row["market_price"], row["sigma"])
+print(row["theoretical_price"], row["market_price"], row["sigma"], row["q"])
 ```
+
+自动取数定价会调用行情源的 `get_stock_dividend_yield()`。该接口返回百分数，例如 `2.5` 表示 2.5%/年；`price_from_auto()` 返回结果里的 `q` 已经转换为模型小数，例如 `0.025`。如果行情源没有返回有效股息率，`q` 会回退为 `0.0`。
 
 ### 批量定价
 
@@ -401,7 +422,12 @@ cb-sync-events --limit 50 --apply
 - [ ] 是否已公告强赎、摘牌或停牌
 - [ ] 正股价、转债市价和估值日是否同日
 - [ ] HV 是否异常高，导致期权价值被放大
+- [ ] 股息率 `q` 是否缺失或口径异常，尤其是高股息正股
 - [ ] 余额、评级、转股溢价是否触发风险标签
+
+### ❓ 股息率 q 为什么是 0
+
+Wind 或 akshare 未返回有效股息率时，系统会保守回退到 `0`，避免数据缺口直接阻断定价。可以在定价页手工输入 `q (%)` 后重新计算；保存参数预设时，`q` 也会一并保存。
 
 ---
 

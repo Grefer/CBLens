@@ -295,7 +295,7 @@ class CachingDataProvider(DataProvider):
     """装饰器: 把 inner provider 的 get_bond_terms / get_cashflow 包一层本地缓存.
 
     - 条款 (get_bond_terms): 命中且未过期 → 返回缓存; 否则透传 inner 并写回缓存
-    - 动态数据 (价格/历史/Shibor): 全部透传 inner, 不缓存
+    - 动态数据 (价格/历史/股息率/Shibor): 全部透传 inner, 不缓存
     - inner 调用失败时, 若缓存里有旧数据, 仍返回旧数据 + 记 warning
 
     构造:
@@ -353,6 +353,9 @@ class CachingDataProvider(DataProvider):
     def get_stock_history(self, stock_code, start, end):
         return self.inner.get_stock_history(stock_code, start, end)
 
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        return self.inner.get_stock_dividend_yield(stock_code, on_date)
+
     def get_bond_history(self, bond_code, start, end):
         return self.inner.get_bond_history(bond_code, start, end)
 
@@ -370,7 +373,7 @@ class CachedBondDataProvider(DataProvider):
     """组合 provider: Wind 静态 cb_data + 可选动态行情源.
 
     - get_bond_terms / get_cashflow: 优先从 cb_data 读取; 缓存缺失或强制刷新时只用 Wind
-    - get_stock_close / get_stock_history / get_bond_history: 透传到 market provider
+    - get_stock_close / get_stock_history / get_stock_dividend_yield / get_bond_history: 透传到 market provider
     - get_risk_free_rate: 透传到 market provider, 并按日期缓存一次结果
 
     这让 akshare 只负责它擅长的动态行情, 不再参与转债条款补全。
@@ -459,6 +462,9 @@ class CachedBondDataProvider(DataProvider):
 
     def get_stock_history(self, stock_code, start, end):
         return self.market.get_stock_history(stock_code, start, end)
+
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        return self.market.get_stock_dividend_yield(stock_code, on_date)
 
     def get_bond_history(self, bond_code, start, end):
         return self.market.get_bond_history(bond_code, start, end)

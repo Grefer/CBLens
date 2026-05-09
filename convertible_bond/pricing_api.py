@@ -68,13 +68,14 @@ def price_from_provider(provider: DataProvider, bond_code,
                         r=0.022, base_spread=0.03,
                         distress_k=0.05, p_down=0.15,
                         valuation_date=None, vol_window_days=21,
-                        sigma=None,
+                        sigma=None, q=None,
                         M=500, N=2000,
                         **pricer_overrides):
     """
     输入转债代码 (例如 '128009.SZ') + 一个 DataProvider 实例, 自动拉参数并定价.
 
     σ 默认为正股最近 vol_window_days 个交易日的年化历史波动率;
+    q 默认从 provider.get_stock_dividend_yield() 读取 (返回百分数), 缺失时回退 0;
     如需覆盖直接传 sigma=0.30 或其他 pricer kwarg (K/maturity_date/...).
     """
     val_date = valuation_date or date.today()
@@ -87,6 +88,14 @@ def price_from_provider(provider: DataProvider, bond_code,
     if sigma is None:
         sigma = provider.hist_vol(stock_code, val_date, vol_window_days)
     S0 = provider.get_stock_close(stock_code, val_date)
+    if q is None:
+        try:
+            q_pct = _finite_float(provider.get_stock_dividend_yield(stock_code, val_date))
+        except Exception:
+            q_pct = None
+        effective_q = (q_pct / 100.0) if q_pct is not None else 0.0
+    else:
+        effective_q = float(q)
     market_price = _latest_bond_close(provider, bond_code, val_date, terms.close)
 
     issue_dt = terms.issue_date
@@ -145,7 +154,8 @@ def price_from_provider(provider: DataProvider, bond_code,
         effective_p_down *= max(0.0, float(resolved.p_scale))
 
     theo = pricer.price(sigma=sigma, r=r, base_spread=base_spread,
-                        distress_k=distress_k, p_down=effective_p_down, M=M, N=N)
+                        distress_k=distress_k, p_down=effective_p_down,
+                        M=M, N=N, q=effective_q)
     return {
         "bond_code": bond_code,
         "bond_name": terms.sec_name,
@@ -155,6 +165,7 @@ def price_from_provider(provider: DataProvider, bond_code,
         "K": pricer.K,
         "T": pricer.T,
         "sigma": sigma,
+        "q": effective_q,
         "p_down": effective_p_down,
         "down_reset_block_until": resolved.block_until,
         "down_reset_p_scale": resolved.p_scale,
@@ -208,6 +219,7 @@ class _BatchStockCache(DataProvider):
     本装饰器在一次 batch run 的生命周期内:
       - get_stock_close(stock, date) → 按 (stock, date) 缓存
       - get_stock_history(stock, start, end) → 按 (stock, start, end) 缓存
+      - get_stock_dividend_yield(stock, date) → 按 (stock, date) 缓存
       - hist_vol(stock, end_date, window) → 按 (stock, end_date, window) 缓存
 
     线程安全 (多线程并发定价时不会重复请求, 先到的线程写入, 后到的直接读缓存).
@@ -220,6 +232,7 @@ class _BatchStockCache(DataProvider):
         self._history_cache: dict[tuple, list] = {}
         self._bond_history_cache: dict[tuple, list] = {}
         self._vol_cache: dict[tuple, float] = {}
+        self._dividend_yield_cache: dict[tuple, float | None] = {}
         import threading
         self._lock = threading.Lock()
         # 每个 hist_vol/history key 一把 Event, 避免并发重复打网络
@@ -243,6 +256,16 @@ class _BatchStockCache(DataProvider):
                 return self._history_cache[key]
             value = self._inner.get_stock_history(stock_code, start, end)
             self._history_cache[key] = value
+            return value
+
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        key = (stock_code, on_date)
+        with self._lock:
+            if key in self._dividend_yield_cache:
+                return self._dividend_yield_cache[key]
+            getter = getattr(self._inner, "get_stock_dividend_yield", None)
+            value = getter(stock_code, on_date) if getter is not None else None
+            self._dividend_yield_cache[key] = value
             return value
 
     def hist_vol(self, stock_code, end_date, window_days):
@@ -316,6 +339,7 @@ def _batch_result_from_provider(
     valuation_date: date,
     vol_window_days: int,
     sigma: float | None,
+    q: float | None,
     M: int,
     N: int,
     pricer_overrides: dict[str, Any],
@@ -327,7 +351,7 @@ def _batch_result_from_provider(
             distress_k=distress_k, p_down=p_down,
             valuation_date=valuation_date,
             vol_window_days=vol_window_days,
-            sigma=sigma, M=M, N=N,
+            sigma=sigma, q=q, M=M, N=N,
             **pricer_overrides,
         )
         mkt = res.get("market_price")
@@ -369,6 +393,7 @@ def batch_price_from_provider_threaded(
     valuation_date: date | None = None,
     vol_window_days: int = 21,
     sigma: float | None = None,
+    q: float | None = None,
     M: int = 300,
     N: int = 1000,
     max_workers: int | None = None,
@@ -403,7 +428,7 @@ def batch_price_from_provider_threaded(
             distress_k=distress_k, p_down=p_down,
             valuation_date=val_date,
             vol_window_days=vol_window_days,
-            sigma=sigma, M=M, N=N,
+            sigma=sigma, q=q, M=M, N=N,
             pricer_overrides=pricer_overrides,
         )
 
@@ -437,6 +462,7 @@ def batch_price_from_provider(
     valuation_date: date | None = None,
     vol_window_days: int = 21,
     sigma: float | None = None,
+    q: float | None = None,
     M: int = 300,
     N: int = 1000,
     max_workers: int = 4,
@@ -467,7 +493,7 @@ def batch_price_from_provider(
         distress_k=distress_k, p_down=p_down,
         valuation_date=valuation_date,
         vol_window_days=vol_window_days,
-        sigma=sigma, M=M, N=N,
+        sigma=sigma, q=q, M=M, N=N,
         max_workers=max_workers,
         progress_cb=progress_cb,
         **pricer_overrides,

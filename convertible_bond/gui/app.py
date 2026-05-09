@@ -219,6 +219,7 @@ class CBPricerApp(
         self.v_coupons   = ctk.StringVar(value="")
         self.v_sigma     = ctk.StringVar(value="28")
         self.v_r         = ctk.StringVar(value="2.2")
+        self.v_q         = ctk.StringVar(value="0")
         self.v_spread    = ctk.StringVar(value="3.0")
         self.v_p_down    = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
         self.v_dk        = ctk.StringVar(value=f"{DEFAULT_DISTRESS_K_PCT:g}")
@@ -288,6 +289,7 @@ class CBPricerApp(
         self.v_src_coupons     = ctk.StringVar(value="手工")
         self.v_src_sigma       = ctk.StringVar(value="手工")
         self.v_src_r           = ctk.StringVar(value="手工")
+        self.v_src_q           = ctk.StringVar(value="默认")
         self.v_src_spread      = ctk.StringVar(value="手工")
         self.v_src_p_down      = ctk.StringVar(value="模型")
         self.v_src_dk          = ctk.StringVar(value="模型")
@@ -624,6 +626,7 @@ class CBPricerApp(
             (self.v_coupons, self.v_src_coupons),
             (self.v_sigma, self.v_src_sigma),
             (self.v_r, self.v_src_r),
+            (self.v_q, self.v_src_q),
             (self.v_spread, self.v_src_spread),
             (self.v_p_down, self.v_src_p_down),
             (self.v_dk, self.v_src_dk),
@@ -831,7 +834,7 @@ class CBPricerApp(
     _PRESET_VARS = (
         "v_bond_code", "v_S0", "v_K", "v_face", "v_redemp",
         "v_cur_date", "v_mat_date", "v_iss_date", "v_conv_date",
-        "v_coupons", "v_sigma", "v_r", "v_spread", "v_p_down", "v_dk",
+        "v_coupons", "v_sigma", "v_r", "v_q", "v_spread", "v_p_down", "v_dk",
         "v_call_ratio", "v_put_ratio", "v_put_years", "v_call_notice", "v_M", "v_N",
         "v_vol_window", "v_market_price",
         "v_bt_start", "v_bt_end", "v_bt_freq",
@@ -878,7 +881,7 @@ class CBPricerApp(
                 self.v_src_S0, self.v_src_K, self.v_src_face, self.v_src_redemp,
                 self.v_src_cur_date, self.v_src_mat_date, self.v_src_iss_date,
                 self.v_src_conv_date, self.v_src_coupons, self.v_src_sigma,
-                self.v_src_r, self.v_src_spread, self.v_src_p_down, self.v_src_dk,
+                self.v_src_r, self.v_src_q, self.v_src_spread, self.v_src_p_down, self.v_src_dk,
                 self.v_src_call_ratio, self.v_src_put_ratio, self.v_src_put_years,
                 self.v_src_call_notice,
             ):

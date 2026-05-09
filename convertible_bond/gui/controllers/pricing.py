@@ -94,6 +94,7 @@ class PricingMixin:
         model = dict(
             sigma=pf(self.v_sigma, "波动率 σ") / 100.0,
             r=pf(self.v_r, "无风险利率 r") / 100.0,
+            q=pf(self.v_q, "股息率 q") / 100.0,
             base_spread=pf(self.v_spread, "信用利差") / 100.0,
             p_down=p_down,
             distress_k=pf(self.v_dk, "信用扩张系数") / 100.0,
@@ -123,6 +124,7 @@ class PricingMixin:
             f"S₀={pricer.S0:.3f}  K={pricer.K:.2f}  "
             f"T={pricer.T:.4f}年  "
             f"σ={sigma_used*100:.1f}%  "
+            f"q={float(self.v_q.get() or 0):.2f}%  "
             f"转股比例={pricer.ratio:.4f}"
         )
         self.v_status.set(info)
@@ -184,6 +186,7 @@ class PricingMixin:
                 target_price=target, r=m["r"], base_spread=m["base_spread"],
                 p_down=m["p_down"], distress_k=m["distress_k"],
                 M=max(150, m["M"] // 3), N=max(500, m["N"] // 3),
+                q=m["q"],
             )
             if iv != iv:  # NaN
                 self.after(0, lambda: self.v_iv.set("—"))

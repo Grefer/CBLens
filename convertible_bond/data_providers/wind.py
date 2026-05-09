@@ -336,6 +336,24 @@ class WindDataProvider(DataProvider):
             for t, v in zip(res.Times, res.Data[0])
         ]
 
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        """取正股股息率 (%).
+
+        Wind 不同终端的字段名存在差异, 这里沿用候选字段模式; 拿不到则返回 None,
+        上层定价会退回 q=0。
+        """
+        value = self._wss_first_available(
+            stock_code,
+            (
+                "dividendyield2",
+                "dividendyield",
+                "dividendyield_ttm",
+                "dividend_yield",
+            ),
+            on_date,
+        )
+        return _float_or_none(value)
+
     def get_bond_history(self, bond_code, start, end):
         w = self._ensure()
         res = w.wsd(bond_code, "close", start.isoformat(), end.isoformat())

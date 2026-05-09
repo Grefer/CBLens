@@ -153,6 +153,7 @@ class WindSyncMixin:
             "coupons_tuple": terms.coupon_rates,
             "coupon_src": "terms",
             "sigma": None,
+            "q": None,
             "shibor": None,
             "stock_code": terms.underlying_code,
             "sec_name": terms.sec_name,
@@ -342,6 +343,15 @@ class WindSyncMixin:
                 logger.warning("正股现价获取失败: %s", exc)
                 S0 = float("nan")
 
+            try:
+                dividend_yield = provider.get_stock_dividend_yield(stock_code, val_date)
+                dividend_yield = float(dividend_yield) if dividend_yield is not None else None
+                if dividend_yield is not None and dividend_yield != dividend_yield:
+                    dividend_yield = None
+            except Exception as exc:
+                logger.warning("正股股息率获取失败: %s", exc)
+                dividend_yield = None
+
             vol_win_days = VOL_WINDOW_MAP.get(vol_window_label, 126)
             try:
                 sigma = provider.hist_vol(stock_code, val_date, vol_win_days)
@@ -394,6 +404,7 @@ class WindSyncMixin:
                 "coupons_tuple": coupons_tuple,
                 "coupon_src": coupon_src,
                 "sigma": sigma,
+                "q": dividend_yield,
                 "shibor": shibor_rate,
                 "stock_code": stock_code,
                 "sec_name": terms.sec_name,
@@ -475,6 +486,10 @@ class WindSyncMixin:
             self._set_field(self.v_sigma, "", self.v_src_sigma, "待历史")
         if d.get("shibor") is not None:
             self._set_field(self.v_r, f"{d['shibor']:.2f}", self.v_src_r, "利率")
+        if d.get("q") is not None:
+            self._set_field(self.v_q, f"{float(d['q']):.2f}", self.v_src_q, "股息")
+        elif "q" in d:
+            self._set_field(self.v_q, "0", self.v_src_q, "默认")
 
         parsed = d.get("coupons_tuple")
         if parsed:
@@ -543,6 +558,12 @@ class WindSyncMixin:
             source_parts.append(f"无风险利率：{market_label}")
         elif self.v_src_r.get() == "手工":
             source_parts.append("无风险利率：手工")
+        if d.get("q") is not None:
+            source_parts.append(f"股息率：{market_label}")
+        elif self.v_src_q.get() == "手工":
+            source_parts.append("股息率：手工")
+        else:
+            source_parts.append("股息率：默认 0")
         source_parts.append(f"利差：{self.v_src_spread.get()}")
         source_parts.append("下修与信用扩张：模型")
         detail_parts.append("参数来源：" + "；".join(source_parts))

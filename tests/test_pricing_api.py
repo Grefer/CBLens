@@ -101,3 +101,23 @@ def test_batch_stock_cache_hist_vol_uses_shared_history_and_fills_close_cache():
     assert inner.history_calls == 1
     assert inner.close_calls == 0
     assert inner.hist_vol_calls == 0
+
+
+def test_batch_stock_cache_caches_dividend_yield():
+    class DividendProvider:
+        name = "dividend"
+
+        def __init__(self):
+            self.calls = 0
+
+        def get_stock_dividend_yield(self, stock_code, on_date):
+            self.calls += 1
+            return 2.5
+
+    inner = DividendProvider()
+    cached = pricing_api._BatchStockCache(inner)
+    end = date(2026, 4, 28)
+
+    assert cached.get_stock_dividend_yield("000001.SZ", end) == 2.5
+    assert cached.get_stock_dividend_yield("000001.SZ", end) == 2.5
+    assert inner.calls == 1

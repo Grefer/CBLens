@@ -226,6 +226,83 @@ class AkshareDataProvider(DataProvider):
         logger.warning("akshare 正股历史 %s 全部失败: %s", stock_code, " | ".join(errors))
         return []
 
+    @staticmethod
+    def _dividend_yield_value(value) -> float | None:
+        if value is None:
+            return None
+        text = str(value).replace("%", "").strip()
+        pct = _float_or_none(text)
+        if pct is None or pct < 0:
+            return None
+        return pct
+
+    @staticmethod
+    def _dividend_yield_columns(df) -> list:
+        cols = []
+        if df is None:
+            return cols
+        for col in df.columns:
+            raw = str(col)
+            key = raw.lower().replace(" ", "").replace("-", "_")
+            if (
+                "股息" in raw
+                or key in {"dv_ratio", "dv_ttm", "dv_ratio_ttm", "dividend_yield"}
+            ):
+                cols.append(col)
+        return cols
+
+    @staticmethod
+    def _safe_date_value(value):
+        try:
+            return to_date(value)
+        except Exception:
+            return None
+
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        """取正股股息率 (%), 优先使用乐咕估值指标, 失败时尝试实时快照字段."""
+        plain = _wind_to_ak_stock(stock_code).zfill(6)
+
+        if hasattr(self._ak, "stock_a_indicator_lg"):
+            try:
+                df = _retry(
+                    lambda: self._ak.stock_a_indicator_lg(symbol=plain),
+                    label=f"stock_a_indicator_lg({plain})",
+                )
+                cols = self._dividend_yield_columns(df)
+                if df is not None and len(df) > 0 and cols:
+                    date_col = next(
+                        (c for c in df.columns if str(c).lower() in {"trade_date", "date", "日期"}),
+                        None,
+                    )
+                    rows_df = df
+                    if date_col is not None:
+                        rows_df = df.copy()
+                        rows_df["_d"] = rows_df[date_col].apply(self._safe_date_value)
+                        rows_df = rows_df[rows_df["_d"].notna() & (rows_df["_d"] <= on_date)]
+                        rows_df = rows_df.sort_values("_d")
+                    if len(rows_df) > 0:
+                        for _, row in rows_df.iloc[::-1].iterrows():
+                            for col in cols:
+                                pct = self._dividend_yield_value(row.get(col))
+                                if pct is not None:
+                                    return pct
+            except Exception as e:
+                logger.warning("akshare 股息率取 %s 失败: %s", stock_code, e)
+
+        try:
+            spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em")
+            if spot is not None and len(spot) > 0:
+                mask = spot["代码"].astype(str).str.zfill(6) == plain
+                if mask.any():
+                    row = spot[mask].iloc[0]
+                    for col in self._dividend_yield_columns(spot):
+                        pct = self._dividend_yield_value(row.get(col))
+                        if pct is not None:
+                            return pct
+        except Exception as e:
+            logger.warning("akshare 正股实时股息率取 %s 失败: %s", stock_code, e)
+        return None
+
     def get_bond_history(self, bond_code, start, end):
         ak_code = _wind_to_ak_bond(bond_code)
         try:

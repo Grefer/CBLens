@@ -1,24 +1,28 @@
-# CBLens
+<div align="center">
 
-![CBLens](assets/cblens-banner.svg)
+<img src="assets/cblens-banner.svg" alt="CBLens Banner" width="100%">
 
-[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-pytest-blue.svg)](#测试)
-[![Docs](https://img.shields.io/badge/docs-使用文档-orange.svg)](docs/USAGE.md)
-[![Last Commit](https://img.shields.io/github/last-commit/Grefer/ConvertibleBond)](https://github.com/Grefer/ConvertibleBond/commits/master)
-[![Issues](https://img.shields.io/github/issues/Grefer/ConvertibleBond)](https://github.com/Grefer/ConvertibleBond/issues)
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+  <a href="#测试"><img src="https://img.shields.io/badge/tests-pytest-blue.svg" alt="Tests"></a>
+  <a href="docs/USAGE.md"><img src="https://img.shields.io/badge/docs-使用文档-orange.svg" alt="Docs"></a>
+  <a href="https://github.com/Grefer/ConvertibleBond/commits/master"><img src="https://img.shields.io/github/last-commit/Grefer/ConvertibleBond" alt="Last Commit"></a>
+  <a href="https://github.com/Grefer/ConvertibleBond/issues"><img src="https://img.shields.io/github/issues/Grefer/ConvertibleBond" alt="Issues"></a>
+</p>
 
-> 基于 Crank-Nicolson PDE 引擎的 A 股可转债定价与机会筛选工作台，支持多数据源接入、公告事件解析、主池准入筛选以及完整的 GUI / CLI 研究工作流。把转债条款、公告事件、正股行情、信用利差和数值定价模型串成一条可重复的研究管线。
+**基于 Crank-Nicolson PDE 引擎的 A 股可转债定价与机会筛选工作台**<br/>
+支持多数据源接入、公告事件解析、主池准入筛选以及完整的 GUI / CLI 研究工作流。<br/>
+把转债条款、公告事件、正股行情、信用利差和数值定价模型串成一条可重复的研究管线。
+
+</div>
 
 
 ---
 
 ## ✨ 项目定位
 
-CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，也不是投资建议——它的目标是帮助你更快发现 *"值得人工复核"* 的低估、转股折价、事件风险和数据异常标的。
-
-> **关于命名**：产品名和文档品牌统一使用 **CBLens**。Python 包名仍为 `convertible_bond`，安装名仍为 `convertible-bond-pricer`，CLI 入口继续使用 `cb-*`，避免破坏已有 import 与脚本。
+CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，也不是投资建议——它的目标是帮助你更快发现 *"值得人工复核"* 的低估、转股折价、事件风险和异常标的。
 
 ---
 
@@ -29,10 +33,11 @@ CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，
 <td width="50%">
 
 ### 🔬 PDE 定价引擎
-`UniversalCBPricer` 使用 **Crank-Nicolson 有限差分法**，完整支持：
+使用 **Crank-Nicolson 有限差分法**，支持：
 - 强赎 / 回售 / 下修博弈
 - 阶梯票息与应计利息
 - 强赎宽限期与信用利差折现
+- 连续股息率 `q`，股价漂移采用 `r - q`
 - 希腊值 (Δ, Γ, ν, Θ) 与价值分解
 
 </td>
@@ -178,7 +183,7 @@ flowchart LR
 | :---: | --- | --- |
 | **① 基础信息** | 发行条款、转股价、票息、强赎/回售规则、评级、余额 | `data_providers`, `cache` |
 | **② 事件状态** | 公告事件、停牌、强赎、ST、成交额等准入字段 | `cb_events`, `admission_status` |
-| **③ 动态行情** | 正股/转债价格、历史波动率、无风险利率 | `data_providers` |
+| **③ 动态行情** | 正股/转债价格、历史波动率、股息率、无风险利率 | `data_providers` |
 | **④ 模型定价** | 理论价、希腊值、纯债底、转股价值、期权溢价 | `pricer` |
 | **⑤ 筛选打分** | 低估率、转股溢价、机会分、风险标签、置信度 | `batch_pricing` |
 
@@ -207,6 +212,7 @@ pricer = UniversalCBPricer(
 result = pricer.price(
     sigma=0.28,
     r=0.022,
+    q=0.015,
     base_spread=0.03,
     distress_k=0.05,
     p_down=0.0,
@@ -221,8 +227,10 @@ print(result["price"], result["delta"], result["bond_floor"])
 from convertible_bond.pricing_api import price_from_auto
 
 row = price_from_auto("128009.SZ", prefer="akshare")
-print(row["bond_name"], row["theoretical_price"], row["market_price"])
+print(row["bond_name"], row["theoretical_price"], row["market_price"], row["q"])
 ```
+
+`q` 为连续股息率，模型中使用小数形式，例如 `0.015` 表示 1.5%/年。Provider 驱动定价会默认从行情源读取正股股息率，行情源返回值按百分数解释；如果数据源取不到，则回退为 `0`，GUI 中也会显示为默认值。
 
 ---
 
@@ -289,7 +297,7 @@ pytest tests/test_batch_pricing.py -x -q
 
 - **强赎路径依赖**：强赎触发是单点判断，尚未完整建模"30 个交易日中 15 日"的路径依赖。
 - **利率结构**：当前为标量利率，未建完整期限结构。
-- **股息率**：无股息率参数，正股分红可能影响期权价值。
+- **股息率口径**：`q` 按连续股息率处理，数据源缺失时默认 0；不同数据源的股息率口径可能不同，建议对高股息正股做人工复核。
 - **历史回测**：默认使用当前条款，历史下修发生过的债可能出现转股价跳点偏差。
 - **排序局限**：批量排序用于研究复核，不能替代流动性、公告、成交约束和组合风险判断。
 

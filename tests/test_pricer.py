@@ -183,6 +183,22 @@ class TestBoundary:
         assert p_high > p_low, \
             f"高 σ 价格 {p_high:.3f} 应 > 低 σ 价格 {p_low:.3f}"
 
+    def test_higher_dividend_yield_lowers_price(self):
+        """股息率 q 提高会降低未转股状态下的正股风险中性漂移, 理论价不应升高."""
+        pricer = UniversalCBPricer(
+            S0=50.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        p_no_q = pricer.price(sigma=0.28, r=0.022, q=0.0, base_spread=0.03,
+                              distress_k=0.0, p_down=0.0, M=200, N=500)
+        p_high_q = pricer.price(sigma=0.28, r=0.022, q=0.05, base_spread=0.03,
+                                distress_k=0.0, p_down=0.0, M=200, N=500)
+        assert p_high_q <= p_no_q + 0.01
+
 
 # ── 3. 应计利息与票息 ────────────────────────────────────
 class TestCoupons:
@@ -660,6 +676,21 @@ class TestPriceFromProvider:
         assert result["data_source"] == "fake"
         assert 60 < result["theoretical_price"] < 200
         assert result["sigma"] > 0
+        assert result["q"] == 0.0
+
+    def test_price_from_provider_reads_dividend_yield(self, fake_provider):
+        """provider 返回的股息率是百分数, price_from_provider 应转成模型小数 q."""
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        provider.get_stock_dividend_yield = lambda stock_code, on_date: 2.5  # type: ignore[method-assign]
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, M=80, N=200,
+        )
+
+        assert result["q"] == pytest.approx(0.025)
 
     def test_price_from_provider_uses_latest_bond_history_close(self, fake_provider):
         """market_price 应来自估值日前最近转债收盘价, 而不是静态 terms.close."""
@@ -1054,6 +1085,24 @@ class TestAkshareStockFallbacks:
         assert provider.get_risk_free_rate(date(2025, 12, 31)) == 2.50
         # 早于全部数据 → None (没有可参考的历史值)
         assert provider.get_risk_free_rate(date(2023, 1, 1)) is None
+
+    def test_dividend_yield_uses_lg_indicator_on_date(self):
+        """股息率应取估值日之前最近一条指标, 单位保持为百分数."""
+        import pandas as pd
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        class FakeAk:
+            def stock_a_indicator_lg(self, symbol):
+                assert symbol == "000001"
+                return pd.DataFrame({
+                    "trade_date": ["2025-01-02", "2025-01-10", "2025-02-01"],
+                    "dv_ratio": [1.2, "2.5%", 3.0],
+                })
+
+        provider = object.__new__(AkshareDataProvider)
+        provider._ak = FakeAk()
+
+        assert provider.get_stock_dividend_yield("000001.SZ", date(2025, 1, 15)) == 2.5
 
 
 # ── 15. TermsBundle (单文件项目级 snapshot) ─────────────────

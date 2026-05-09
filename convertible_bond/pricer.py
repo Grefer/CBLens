@@ -156,7 +156,7 @@ class UniversalCBPricer:
         self.ratio = self.face_value / self.K
         return self.K
 
-    def _price_grid(self, sigma: float, r: float, base_spread: float,
+    def _price_grid(self, sigma: float, r: float, q: float, base_spread: float,
                     p_down: float, distress_k: float,
                     M: int, N: int) -> tuple[np.ndarray, np.ndarray]:
         """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心."""
@@ -164,6 +164,7 @@ class UniversalCBPricer:
         S_max = max(S_max_ref, 1.5 * self.S0)
         dt = self.T / N
         S_grid = np.linspace(0, S_max, M + 1)
+        risk_neutral_drift = r - q
 
         V = np.maximum(self.redemption_price, S_grid * self.ratio)
 
@@ -182,12 +183,12 @@ class UniversalCBPricer:
             j = np.arange(1, M)
             r_mid = r_total[1:M]
 
-            # 设计决策: alpha/gamma 的漂移项使用无风险利率 r (风险中性漂移),
+            # 设计决策: alpha/gamma 的漂移项使用 r-q (含连续股息率的风险中性漂移),
             # 而 beta 的折现项使用 r_total = r + credit_spread.
             # 即: 信用利差仅影响折现 ("额外折现" 模型), 不影响标的的风险中性漂移率.
-            alpha = 0.25 * dt * (sigma**2 * j**2 - r * j)
+            alpha = 0.25 * dt * (sigma**2 * j**2 - risk_neutral_drift * j)
             beta  = -0.5 * dt * (sigma**2 * j**2 + r_mid)
-            gamma = 0.25 * dt * (sigma**2 * j**2 + r * j)
+            gamma = 0.25 * dt * (sigma**2 * j**2 + risk_neutral_drift * j)
 
             A = np.zeros((3, M - 1))
             A[0, 1:] = -gamma[:-1]
@@ -265,33 +266,37 @@ class UniversalCBPricer:
     def price(self, sigma: float, r: float, base_spread: float,
               p_down: float = ..., distress_k: float = ...,
               M: int = ..., N: int = ...,
-              return_greeks: Literal[False] = ...) -> float: ...
+              return_greeks: Literal[False] = ...,
+              q: float = ...) -> float: ...
     @overload
     def price(self, sigma: float, r: float, base_spread: float,
               p_down: float = ..., distress_k: float = ...,
               M: int = ..., N: int = ...,
-              *, return_greeks: Literal[True]) -> dict[str, float]: ...
+              *, return_greeks: Literal[True],
+              q: float = ...) -> dict[str, float]: ...
 
     def price(self, sigma: float, r: float, base_spread: float,
               p_down: float = 0.1,        # 下修博弈年化强度
               distress_k: float = 0.0,    # 信用扩张系数 (优化 3: 股价下跌导致利差增加)
               M: int = 500, N: int = 2000,
-              return_greeks: bool = False) -> float | dict[str, float]:
+              return_greeks: bool = False,
+              q: float = 0.0) -> float | dict[str, float]:
         """求解理论价. return_greeks=True 时返回 dict (含 Δ/Γ/ν/Θ + 价值分解).
 
         说明:
+        - ``q`` 为连续股息率 (小数, 例如 0.02 表示 2%/年), 进入股价漂移 ``r-q``。
         - ``vega`` 单位是 "理论价 / +1pp σ" (已乘以 0.01).
         - ``theta`` 单位是 "理论价 / +1 个日历日" (按实际/365 推进; 不剔除非交易日).
         - ``option_premium = price - max(bond_floor, parity)``: 在深度 ITM 且强赎宽限期内,
           模型 cap 把 V 截到 parity·(1+σ√t_grace), 数值上略低于 parity 时该字段可能为
           小负数 (~ 0.x 元), 不是错误而是 cap 与离散网格的数值噪声边界。
         """
-        if sigma < 0 or r < 0 or base_spread < 0:
-            raise ValueError("sigma, r and base_spread must be non-negative")
+        if sigma < 0 or r < 0 or q < 0 or base_spread < 0:
+            raise ValueError("sigma, r, q and base_spread must be non-negative")
         if M < 3 or N < 1:
             raise ValueError("M must be >= 3 and N must be >= 1")
 
-        S_grid, V = self._price_grid(sigma, r, base_spread, p_down, distress_k, M, N)
+        S_grid, V = self._price_grid(sigma, r, q, base_spread, p_down, distress_k, M, N)
         theo = float(np.interp(self.S0, S_grid, V))
 
         if not return_greeks:
@@ -313,7 +318,7 @@ class UniversalCBPricer:
 
         # Vega: σ +1pp 整局重算; 单位为 "理论价 / 1pp σ"
         d_sigma = 0.01
-        S_grid_v, V_v = self._price_grid(sigma + d_sigma, r, base_spread,
+        S_grid_v, V_v = self._price_grid(sigma + d_sigma, r, q, base_spread,
                                          p_down, distress_k, M, N)
         theo_vol = float(np.interp(S0, S_grid_v, V_v))
         vega = (theo_vol - theo)  # / d_sigma * 0.01 = / 1, 即每 1pp σ 的价格变化
@@ -338,7 +343,7 @@ class UniversalCBPricer:
                 call_notice_days=self.call_notice_days,
             )
             S_grid_t, V_t = tomorrow_pricer._price_grid(
-                sigma, r, base_spread, p_down, distress_k, M, N)
+                sigma, r, q, base_spread, p_down, distress_k, M, N)
             theo_tomorrow = float(np.interp(S0, S_grid_t, V_t))
             theta = theo_tomorrow - theo
         else:
@@ -365,7 +370,8 @@ class UniversalCBPricer:
                           p_down: float = 0.0, distress_k: float = 0.0,
                           M: int = 300, N: int = 1000,
                           sigma_lo: float = 0.05, sigma_hi: float = 2.0,
-                          tol: float = 1e-3) -> float:
+                          tol: float = 1e-3,
+                          q: float = 0.0) -> float:
         """反解使理论价 == target_price 的隐含波动率 (年化, 小数). 失败返回 NaN.
 
         网格默认 M=300/N=1000 与批量定价一致, 比单只定价 (M=500/N=2000) 粗一档,
@@ -374,7 +380,7 @@ class UniversalCBPricer:
         def diff(s: float) -> float:
             return float(self.price(sigma=s, r=r, base_spread=base_spread,
                                     p_down=p_down, distress_k=distress_k,
-                                    M=M, N=N)) - target_price
+                                    M=M, N=N, q=q)) - target_price
 
         try:
             f_lo = diff(sigma_lo)

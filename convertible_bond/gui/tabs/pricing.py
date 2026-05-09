@@ -100,11 +100,14 @@ def build(app, tab):
     _form_row(sec1, "无风险利率 r (%)", app.v_r, 4, width=130,
               extra_widget=make_shi, source_var=app.v_src_r, show_source=True,
               tooltip="无风险利率, 默认可用 1 年期银行间同业拆借利率近似。")
-    _form_row(sec1, "信用利差 (%)", app.v_spread, 5, width=130,
+    _form_row(sec1, "股息率 q (%)", app.v_q, 5, width=130,
+              source_var=app.v_src_q, show_source=True,
+              tooltip="正股连续股息率, 进入风险中性漂移 r-q。数据源缺失时默认 0。")
+    _form_row(sec1, "信用利差 (%)", app.v_spread, 6, width=130,
               extra_widget=make_spr,
               source_var=app.v_src_spread, show_source=True,
               tooltip="用于纯债折现和信用风险调整。可按评级经验表自动填入。")
-    _form_row(sec1, "事件状态", None, 6, custom_widget=make_event_status)
+    _form_row(sec1, "事件状态", None, 7, custom_widget=make_event_status)
 
     adv_terms = CollapsibleSection(lp, "条款明细", expanded=False)
     adv_terms.grid(row=1, column=0, sticky="ew", padx=6, pady=5)
