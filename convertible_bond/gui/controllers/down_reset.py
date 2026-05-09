@@ -31,7 +31,8 @@ class DownResetMixin:
         事件字段 (announce_date / p_scale / note) 写到 down_reset_overrides.json.
         触发 announce_date + cooldown → block_until 自动推算并显示.
         """
-        card = create_card(parent, "下修事件参数", 0, 0, icon="🛡")
+        # row=1: parent 顶部 (row=0) 已被 pricing.py 的"事件模型参数"卡片占用
+        card = create_card(parent, "下修事件参数", 1, 0, icon="🛡")
         _form_row(card, "不修正公告日", self.v_dr_announce_date, 0, width=130,
                   tooltip="手工覆盖入口。日常定价优先读取本地事件表, 通常无需填写。")
         _form_row(card, "再观察期", self.v_dr_cooldown, 1, width=130,

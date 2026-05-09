@@ -34,7 +34,9 @@ class WindDataProvider(DataProvider):
     name = "Wind"
 
     _BOND_FIELDS = (
-        "sec_name", "underlyingcode", "ipo_date", "listdate", "maturitydate",
+        # 注: listdate 在某些 Wind 终端版本/账户上被拒 (CWSSService: invalid indicators),
+        # 而 ipo_date 总是返回; listing_date 已统一兜底到 ipo_date, 因此不再请求 listdate.
+        "sec_name", "underlyingcode", "ipo_date", "maturitydate",
         "latestpar",
         "clause_conversion2_swapshareprice",
         "clause_calloption_redemptionprice",
@@ -47,6 +49,9 @@ class WindDataProvider(DataProvider):
 
     def __init__(self):
         self._w = None
+        # Wind 字段在不同终端版本/账户权限下偶尔会失效 (返回 "CWSSService: invalid indicators").
+        # 首次批量调用失败时探测一次, 把坏字段缓存到此集合, 后续直接跳过, 避免每只债都重复探测.
+        self._bad_bond_fields: set[str] = set()
 
     def _ensure(self):
         if self._w is not None:
@@ -67,9 +72,36 @@ class WindDataProvider(DataProvider):
     def get_bond_terms(self, bond_code, valuation_date):
         w = self._ensure()
         val_str = valuation_date.strftime("%Y%m%d")
-        res = w.wss(bond_code, ",".join(self._BOND_FIELDS), f"tradeDate={val_str}")
+        fields = [f for f in self._BOND_FIELDS if f not in self._bad_bond_fields]
+        if not fields:
+            raise RuntimeError(
+                f"Wind 取 {bond_code} 条款失败: 所有候选字段都被 Wind 拒绝, "
+                f"已知失效字段 = {sorted(self._bad_bond_fields)}")
+        res = w.wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
         if res.ErrorCode != 0:
-            raise RuntimeError(f"Wind 取 {bond_code} 条款失败: {res.Data}")
+            # "invalid indicators" → 单字段探测找出失效字段, 缓存后用剩余字段重试一次
+            err_str = str(getattr(res, "Data", "") or "").lower()
+            if "invalid indicators" in err_str:
+                newly_bad = self._probe_invalid_bond_fields(bond_code, fields, val_str)
+                if newly_bad:
+                    self._bad_bond_fields.update(newly_bad)
+                    logger.warning(
+                        "Wind 拒绝以下条款字段, 后续同步将自动跳过: %s", sorted(newly_bad))
+                    fields = [f for f in fields if f not in newly_bad]
+                    if not fields:
+                        raise RuntimeError(
+                            f"Wind 取 {bond_code} 条款失败: 探测后无可用字段, "
+                            f"失效字段 = {sorted(newly_bad)}")
+                    res = w.wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
+                    if res.ErrorCode != 0:
+                        raise RuntimeError(
+                            f"Wind 取 {bond_code} 条款失败 (重试后仍报错): {res.Data}")
+                else:
+                    raise RuntimeError(
+                        f"Wind 取 {bond_code} 条款失败: {res.Data} "
+                        f"(单字段探测未发现具体失效字段, 可能是 tradeDate / 权限问题)")
+            else:
+                raise RuntimeError(f"Wind 取 {bond_code} 条款失败: {res.Data}")
         d = {f.lower(): v[0] for f, v in zip(res.Fields, res.Data)}
 
         def _f(key):
@@ -94,6 +126,25 @@ class WindDataProvider(DataProvider):
             outstanding_balance=_f("outstandingbalance"),
         )
         return infer_cb_trading_metadata(bond_code, terms, valuation_date)
+
+    def _probe_invalid_bond_fields(self, code, fields, val_str):
+        """单字段试探, 返回 Wind 报 'invalid indicators' 的字段集合.
+
+        仅在批量 wss 失败时被调用一次; 用于一次性识别失效字段并缓存到
+        ``self._bad_bond_fields``, 避免后续每只债都重复批量失败.
+        """
+        bad: set[str] = set()
+        for field in fields:
+            try:
+                res = self._w.wss(code, field, f"tradeDate={val_str}")
+            except Exception:
+                continue
+            if getattr(res, "ErrorCode", -1) == 0:
+                continue
+            data_str = str(getattr(res, "Data", "") or "").lower()
+            if "invalid indicators" in data_str:
+                bad.add(field)
+        return bad
 
     def get_admission_status(self, bond_code, valuation_date, base_terms=None):
         """增量刷新主池准入状态字段.
@@ -300,12 +351,33 @@ class WindDataProvider(DataProvider):
 
     def get_risk_free_rate(self, on_date):
         w = self._ensure()
-        rr = w.edb("SHIBOR1Y.IR",
+        # SHIBOR1Y.IR 用 w.wsd (证券日频接口) 而不是 w.edb: 后者需要 EDB (经济数据库)
+        # 订阅, 普通账户会返回 ErrorCode=-40521007 "权限验证不通过"; wsd 仅需基础行情权限.
+        rr = w.wsd("SHIBOR1Y.IR", "close",
                    (on_date - timedelta(days=10)).isoformat(),
                    on_date.isoformat())
-        if rr.ErrorCode != 0 or not rr.Data or not rr.Data[0]:
-            return None
-        return _latest_finite(rr.Data[0])
+        if rr.ErrorCode == 0:
+            if not rr.Data or not rr.Data[0]:
+                return None
+            return _latest_finite(rr.Data[0])
+        # Wind 也失败时退回 akshare 的公开 Shibor 数据 (央行授权全国银行间同业拆借中心
+        # 发布, akshare 与 Wind 数值一致).
+        diag = ""
+        try:
+            if rr.Data and rr.Data[0]:
+                diag = f": {rr.Data[0]}"
+        except Exception:
+            pass
+        wind_err = f"Wind SHIBOR1Y.IR 拉取失败 (ErrorCode={rr.ErrorCode}{diag})"
+        try:
+            from .akshare import AkshareDataProvider
+            ak_rate = AkshareDataProvider().get_risk_free_rate(on_date)
+        except Exception as ak_exc:
+            raise RuntimeError(f"{wind_err}; akshare 兜底也失败: {ak_exc}") from ak_exc
+        if ak_rate is None:
+            raise RuntimeError(f"{wind_err}; akshare 兜底返回空")
+        logger.info("%s, 已 fallback 到 akshare Shibor: %.4f%%", wind_err, ak_rate)
+        return ak_rate
 
     def list_tradable_cbs(self, on_date=None):
         """通过 wset('sectorconstituent') 拉某日的"沪深可转债"成分.

@@ -49,56 +49,56 @@ class PricingMixin:
             self.after(0, lambda: self.btn_calc.configure(state="normal"))
 
     def _collect_params(self):
-        def pf(v):
+        def pf(v, label):
             val = v.get().strip()
             try:
                 return float(val)
             except ValueError:
-                raise ValueError(f"请输入有效数字，当前值: '{val}'")
-        def pd(v):
+                raise ValueError(f"{label} 需要有效数字, 当前值: '{val}'") from None
+        def pd(v, label):
             val = v.get().strip()
             try:
                 return date.fromisoformat(val)
             except ValueError:
-                raise ValueError(f"日期格式应为 YYYY-MM-DD，当前值: '{val}'")
+                raise ValueError(f"{label} 日期格式应为 YYYY-MM-DD, 当前值: '{val}'") from None
 
         coupon_str = self.v_coupons.get().strip()
         coupon_rates = tuple(float(x.strip()) / 100.0
                              for x in coupon_str.split(",") if x.strip())
 
-        current_date = pd(self.v_cur_date)
+        current_date = pd(self.v_cur_date, "估值日期")
         pricer = dict(
-            S0=pf(self.v_S0),
-            K=pf(self.v_K),
-            face_value=pf(self.v_face),
-            redemption_price=pf(self.v_redemp),
+            S0=pf(self.v_S0, "正股价 S"),
+            K=pf(self.v_K, "转股价 K"),
+            face_value=pf(self.v_face, "面值"),
+            redemption_price=pf(self.v_redemp, "到期赎回价"),
             current_date=current_date,
-            maturity_date=pd(self.v_mat_date),
-            issue_date=pd(self.v_iss_date),
-            conversion_start_date=pd(self.v_conv_date),
+            maturity_date=pd(self.v_mat_date, "到期日期"),
+            issue_date=pd(self.v_iss_date, "发行日期"),
+            conversion_start_date=pd(self.v_conv_date, "转股起始日"),
             coupon_rates=coupon_rates,
-            call_trigger_ratio=pf(self.v_call_ratio) / 100.0,
-            put_trigger_ratio=pf(self.v_put_ratio) / 100.0,
-            put_active_years=int(pf(self.v_put_years)),
-            call_notice_days=int(pf(self.v_call_notice)),
+            call_trigger_ratio=pf(self.v_call_ratio, "强赎触发") / 100.0,
+            put_trigger_ratio=pf(self.v_put_ratio, "回售触发") / 100.0,
+            put_active_years=int(pf(self.v_put_years, "回售生效年数")),
+            call_notice_days=int(pf(self.v_call_notice, "强赎宽限天数")),
         )
 
         block_until, p_scale = self._resolve_down_reset_for_pricing(current_date)
         if block_until is not None:
             pricer["down_reset_block_until"] = block_until
 
-        p_down = pf(self.v_p_down) / 100.0
+        p_down = pf(self.v_p_down, "下修强度 p") / 100.0
         if p_scale is not None:
             p_down *= max(0.0, p_scale)
 
         model = dict(
-            sigma=pf(self.v_sigma) / 100.0,
-            r=pf(self.v_r) / 100.0,
-            base_spread=pf(self.v_spread) / 100.0,
+            sigma=pf(self.v_sigma, "波动率 σ") / 100.0,
+            r=pf(self.v_r, "无风险利率 r") / 100.0,
+            base_spread=pf(self.v_spread, "信用利差") / 100.0,
             p_down=p_down,
-            distress_k=pf(self.v_dk) / 100.0,
-            M=int(pf(self.v_M)),
-            N=int(pf(self.v_N)),
+            distress_k=pf(self.v_dk, "信用扩张系数") / 100.0,
+            M=int(pf(self.v_M, "空间节点 M")),
+            N=int(pf(self.v_N, "时间步数 N")),
         )
         return {"pricer": pricer, "model": model}
 

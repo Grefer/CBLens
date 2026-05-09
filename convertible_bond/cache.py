@@ -464,12 +464,11 @@ class CachedBondDataProvider(DataProvider):
         return self.market.get_bond_history(bond_code, start, end)
 
     def get_risk_free_rate(self, on_date):
+        # 不再静默吞错: GUI Shibor 按钮 / 单点定价需要看到底层 Wind/akshare 的诊断,
+        # 否则只能看到 "未返回有效无风险利率" 的笼统提示. 已知 batch/wind_sync 调用方
+        # 自行做了 try/except, 不会因抛出而崩溃.
         if on_date not in self._risk_free_cache:
-            try:
-                self._risk_free_cache[on_date] = self.market.get_risk_free_rate(on_date)
-            except Exception as e:
-                logger.warning("%s 无风险利率获取失败: %s", self.market.name, e)
-                self._risk_free_cache[on_date] = None
+            self._risk_free_cache[on_date] = self.market.get_risk_free_rate(on_date)
         return self._risk_free_cache[on_date]
 
     def hist_vol(self, stock_code, end_date, window_days):

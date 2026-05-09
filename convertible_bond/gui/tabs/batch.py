@@ -52,16 +52,17 @@ if TYPE_CHECKING:
     from ..app import CBPricerApp
 
 # 列预设: 简洁视图只保留投资决策最常看的字段, 完整视图沿用所有字段
+# 状态列: 成功 → ✓ (单字符即可), 失败行保留错误文本, 故宽度大幅收窄
 _BATCH_COLS_FULL = (
     ("代码", 100), ("名称", 80), ("正股", 80), ("机会分", 70), ("可信", 45),
     ("转股价值", 70), ("转股溢价(%)", 80), ("σ(%)", 55), ("理论价", 65),
     ("市价", 65), ("偏差(%)", 70), ("评级", 50), ("敏感性", 90),
-    ("标签", 180), ("复核建议", 260), ("状态", 120),
+    ("标签", 180), ("复核建议", 260), ("状态", 60),
 )
 _BATCH_COLS_SIMPLE = (
     ("代码", 100), ("名称", 90), ("机会分", 70), ("可信", 45),
     ("理论价", 70), ("市价", 70), ("偏差(%)", 75), ("评级", 50),
-    ("标签", 220), ("状态", 100),
+    ("标签", 220), ("状态", 50),
 )
 # 列名 → 取值函数, 简洁/完整共用
 _BATCH_COL_GETTERS = {
@@ -80,7 +81,7 @@ _BATCH_COL_GETTERS = {
     "敏感性":       lambda r: r.get("sensitivity_status", ""),
     "标签":         lambda r: _format_tags(r.get("risk_tags")),
     "复核建议":     lambda r: _format_tags(r.get("review_notes")),
-    "状态":         lambda r: r.get("status", ""),
+    "状态":         lambda r: "✓" if r.get("status") == "ok" else r.get("status", ""),
 }
 
 
@@ -137,6 +138,7 @@ def build(app, tab):
         font=(FONT_MONO, 12), fg_color=BG_INPUT, border_width=0, corner_radius=6, height=28)
     threshold_entry.pack(side="left", padx=(0, 12))
     threshold_entry.bind("<Return>", lambda _e: _change_batch_view(app))
+    threshold_entry.bind("<KP_Enter>", lambda _e: _change_batch_view(app))
     threshold_entry.bind("<FocusOut>", lambda _e: _change_batch_view(app))
 
     app.v_batch_cols = ctk.StringVar(value="简洁")
@@ -157,19 +159,6 @@ def build(app, tab):
     app.btn_batch_run.pack(side="left")
 
     # 次要按钮用 BTN_CTRL 而非 BG_INPUT: 浅色模式下 BG_INPUT(#e6e9ef) 与 BG_CARD(#eff1f5) 几乎同色, 按钮看不见
-    app.btn_batch_load_cache = ctk.CTkButton(
-        cc, text="📂 加载缓存", command=lambda: _load_result_cache(app),
-        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6)
-    app.btn_batch_load_cache.pack(side="left", padx=(8, 0))
-
-    # ⚡ 仅定价关注池: 跳过全市场 322 只, 几秒级反馈
-    app.btn_batch_refresh_watch = ctk.CTkButton(
-        cc, text="⚡ 刷新关注池", command=lambda: _refresh_watchlist_pricing(app),
-        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
-    app.btn_batch_refresh_watch.pack(side="left", padx=(8, 0))
-
     app.btn_batch_upcoming = ctk.CTkButton(
         cc, text="🆕 扫新债", command=lambda: _refresh_watchlist_with_upcoming(app),
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
@@ -182,6 +171,13 @@ def build(app, tab):
         font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
     app.btn_batch_add_watch.pack(side="left", padx=(8, 0))
 
+    # ⚡ 仅定价关注池: 跳过全市场 322 只, 几秒级反馈; 紧邻 ⭐ 加入关注池
+    app.btn_batch_refresh_watch = ctk.CTkButton(
+        cc, text="⚡ 关注池重算", command=lambda: _refresh_watchlist_pricing(app),
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
+        font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
+    app.btn_batch_refresh_watch.pack(side="left", padx=(8, 0))
+
     app.btn_batch_export = ctk.CTkButton(
         cc, text="📝 导出 CSV", command=lambda: _export_csv(app),
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
@@ -192,8 +188,8 @@ def build(app, tab):
     suffix = _excluded_status_suffix(excluded)
     app.v_batch_status = ctk.StringVar(value=f"将基于本地条款库的普通转债池定价 ({len(codes)} 只{suffix})")
     ctk.CTkLabel(tab, textvariable=app.v_batch_status,
-                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM).grid(
-                     row=1, column=0, sticky="w", padx=16, pady=(0, 6))
+                 font=(FONT_FAMILY, 13, "bold"), text_color=TEXT).grid(
+                     row=1, column=0, sticky="w", padx=16, pady=(2, 8))
 
     # 事件 banner (近 30 天关注池内事件), 仅在有内容时显示; 单击弹窗展开全部
     app.v_batch_events_banner = ctk.StringVar(value="")

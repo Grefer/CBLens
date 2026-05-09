@@ -257,7 +257,7 @@ def _render_watchlist_table(app):
     rows = _watchlist_display_rows(app)
     headers = ["代码", "名称", "正股", "机会分", "可信", "理论价", "市价", "偏差(%)",
                "加入时偏差(%)", "市价变化(%)", "敏感性", "标签", "状态", "加入时间"]
-    col_widths = [100, 90, 80, 70, 45, 70, 70, 70, 95, 95, 90, 160, 90, 150]
+    col_widths = [100, 90, 80, 70, 45, 70, 70, 70, 95, 95, 90, 160, 50, 150]
     columns = [f"w{i}" for i in range(len(headers))]
 
     _configure_tree_style()
@@ -322,7 +322,7 @@ def _render_watchlist_table(app):
             mkt_chg_str,
             entry.get("sensitivity_status", "") if is_ok else "—",
             _format_tags(entry.get("risk_tags")),
-            entry.get("status") or "—",
+            "✓" if is_ok else (entry.get("status") or "—"),
             entry.get("added_at", "") or "",
         ]
         row_tag = _resolve_row_tag(entry)

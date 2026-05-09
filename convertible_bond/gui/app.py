@@ -501,6 +501,21 @@ class CBPricerApp(
         finally:
             self._suppress_bond_autoload = False
 
+    def _flush_pending_bond_autoload(self):
+        """立即触发挂起的 650ms 自动加载防抖, 让缓存字段同步可用.
+
+        用于 sensitivity / pricing 等运行入口, 场景: 用户输代码后立刻点运行,
+        防抖还没到, 字段仍是空 → _collect_params 报错. 调用此方法可同步触发
+        cache fill (K, dates 等); 行情 S0/σ 仍走异步 Wind/akshare.
+        """
+        if getattr(self, "_auto_fetch_after", None) is None:
+            return
+        self.after_cancel(self._auto_fetch_after)
+        self._auto_fetch_after = None
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if code and BOND_CODE_RE.match(code):
+            self._auto_load_bond_code(code)
+
     def _on_bond_code_write(self, *_):
         if self._suppress_bond_autoload:
             return
@@ -565,6 +580,7 @@ class CBPricerApp(
     # ── 快捷键 ────────────────────────────────────────────
     def _bind_shortcuts(self):
         self.bind_all("<Control-Return>", lambda e: self._run_pricing())
+        self.bind_all("<Control-KP_Enter>", lambda e: self._run_pricing())
         self.bind_all("<Control-s>", lambda e: self._save_preset())
         self.bind_all("<Control-o>", lambda e: self._load_preset())
         # 收敛诊断 (开发者工具): UI 已下线, 仅保留快捷键供调试时触发

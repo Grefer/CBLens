@@ -1,4 +1,15 @@
 {
-  "saved_at": "2026-04-29T11:23:52",
-  "items": []
+  "saved_at": "2026-05-09T15:53:54",
+  "items": [
+    {
+      "bond_code": "111010.SH",
+      "bond_name": "立昂转债",
+      "stock_code": "605358.SH",
+      "snapshot_deviation": -0.09520655873953812,
+      "snapshot_opportunity_score": 17.520655873953814,
+      "snapshot_market_price": 150.6607,
+      "snapshot_theoretical_price": 166.51391702189568,
+      "added_at": "2026-05-09T15:53:54"
+    }
+  ]
 }

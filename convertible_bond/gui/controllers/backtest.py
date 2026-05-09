@@ -271,11 +271,58 @@ class BacktestMixin:
         if not path:
             return
         try:
-            self._bt_figure.savefig(path, dpi=150, bbox_inches="tight",
-                                    facecolor=self._bt_figure.get_facecolor())
+            # 把上方的 6 个统计指标压成一行附到图顶, 让导出图自带摘要;
+            # 用 fig.text + bbox_extra_artists 而不是 suptitle, 避免改动现有 tight_layout
+            extra_artists = []
+            stats_line = self._compose_bt_stats_line()
+            bond_code = self.v_bond_code.get().strip()
+            header_lines = []
+            if bond_code:
+                header_lines.append(bond_code)
+            if stats_line:
+                header_lines.append(stats_line)
+            if header_lines:
+                txt = self._bt_figure.text(
+                    0.5, 1.0, "\n".join(header_lines),
+                    ha="center", va="bottom",
+                    fontsize=10,
+                    color=get_color(TEXT),
+                )
+                extra_artists.append(txt)
+            try:
+                self._bt_figure.savefig(
+                    path, dpi=150, bbox_inches="tight",
+                    bbox_extra_artists=extra_artists,
+                    facecolor=self._bt_figure.get_facecolor())
+            finally:
+                for artist in extra_artists:
+                    artist.remove()
             self.v_bt_status.set(f"已导出图表到 {path}")
         except Exception as exc:
             messagebox.showerror("导出失败", str(exc))
+
+    def _compose_bt_stats_line(self) -> str:
+        """把 6 个统计指标 StringVar 压成一行 '标签 值  ·  标签 值 ...'."""
+        stats = getattr(self, "_bt_stat_vars", None)
+        if not stats:
+            return ""
+        pairs = (
+            ("均偏差",     stats.get("mean_dev")),
+            ("RMSE",       stats.get("rmse")),
+            ("最大|偏差|", stats.get("max_abs")),
+            ("命中率±5%",  stats.get("hit_rate")),
+            ("相关",       stats.get("corr")),
+            ("IV−HV",      stats.get("iv_hv")),
+        )
+        parts = []
+        for label, var in pairs:
+            if var is None:
+                continue
+            val = var.get()
+            if not val or val == "—":
+                continue
+            parts.append(f"{label} {val}")
+        return "  ·  ".join(parts)
 
     def _export_bt_csv(self):
         if not self._last_bt_result or not self._last_bt_result.get("dates"):

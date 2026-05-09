@@ -271,6 +271,7 @@ class AutocompleteEntry(ctk.CTkFrame):
         self.entry.bind("<Down>", self._on_down)
         self.entry.bind("<Up>", self._on_up)
         self.entry.bind("<Return>", self._on_return)
+        self.entry.bind("<KP_Enter>", self._on_return)
         self.entry.bind("<Escape>", lambda _e: self._hide())
         self.entry.bind("<FocusOut>", self._on_focus_out)
 
@@ -304,6 +305,7 @@ class AutocompleteEntry(ctk.CTkFrame):
         lb.pack(fill="both", expand=True, padx=1, pady=1)
         lb.bind("<Button-1>", self._on_lb_click)
         lb.bind("<Return>", self._on_return)
+        lb.bind("<KP_Enter>", self._on_return)
         self._popup = top
         self._listbox = lb
 

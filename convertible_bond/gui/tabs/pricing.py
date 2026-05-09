@@ -97,11 +97,14 @@ def build(app, tab):
     _form_row(sec1, "波动率 σ (%)", app.v_sigma, 3, wind=True, width=130,
               source_var=app.v_src_sigma, show_source=True,
               tooltip="年化历史波动率。窗口长度由上方「波动率窗口」控制。")
-    _form_row(sec1, "信用利差 (%)", app.v_spread, 4, width=130,
+    _form_row(sec1, "无风险利率 r (%)", app.v_r, 4, width=130,
+              extra_widget=make_shi, source_var=app.v_src_r, show_source=True,
+              tooltip="无风险利率, 默认可用 1 年期银行间同业拆借利率近似。")
+    _form_row(sec1, "信用利差 (%)", app.v_spread, 5, width=130,
               extra_widget=make_spr,
               source_var=app.v_src_spread, show_source=True,
               tooltip="用于纯债折现和信用风险调整。可按评级经验表自动填入。")
-    _form_row(sec1, "事件状态", None, 5, custom_widget=make_event_status)
+    _form_row(sec1, "事件状态", None, 6, custom_widget=make_event_status)
 
     adv_terms = CollapsibleSection(lp, "条款明细", expanded=False)
     adv_terms.grid(row=1, column=0, sticky="ew", padx=6, pady=5)
@@ -132,23 +135,21 @@ def build(app, tab):
 
     adv_model = CollapsibleSection(lp, "高级模型参数", expanded=False)
     adv_model.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
-    sec2 = create_card(adv_model.content, "利率与风险参数", 0, 0, icon="⚙️")
-
-    _form_row(sec2, "无风险利率 r (%)", app.v_r, 0, width=130,
-              extra_widget=make_shi, source_var=app.v_src_r, show_source=True,
-              tooltip="无风险利率, 默认可用 1 年期银行间同业拆借利率近似。")
-    _form_row(sec2, "下修强度 p (%/年)", app.v_p_down, 1, source_var=app.v_src_p_down,
-              tooltip="年化下修事件强度。公告不下修冻结期内会被事件表自动屏蔽。")
-    _form_row(sec2, "信用扩张系数 (%)", app.v_dk, 2, source_var=app.v_src_dk,
-              tooltip="正股越低时信用利差扩张的幅度参数。")
-    sec4 = create_card(adv_model.content, "数值网格", 1, 0, icon="🧮")
+    sec4 = create_card(adv_model.content, "数值网格", 0, 0, icon="🧮")
     _form_row(sec4, "空间节点 M", app.v_M, 0,
               tooltip="价格区间网格。越大越精细, 也越慢。")
     _form_row(sec4, "时间步数 N", app.v_N, 1,
               tooltip="定价时间步网格。越大越精细, 也越慢。")
 
-    dr_sec = CollapsibleSection(lp, "维护: 下修覆盖", expanded=False)
+    dr_sec = CollapsibleSection(lp, "下修事件", expanded=False)
     dr_sec.grid(row=3, column=0, sticky="ew", padx=6, pady=5)
+    # p_down 直接对应"下修事件强度", distress_k 与下修触发的信用恶化耦合,
+    # 一并放进下修事件区作为模型参数, 与下面的"事件覆盖"配合使用.
+    sec_dr_model = create_card(dr_sec.content, "事件模型参数", 0, 0, icon="🎲")
+    _form_row(sec_dr_model, "下修强度 p (%/年)", app.v_p_down, 0, source_var=app.v_src_p_down,
+              tooltip="年化下修事件强度。公告不下修冻结期内会被事件表自动屏蔽。")
+    _form_row(sec_dr_model, "信用扩张系数 (%)", app.v_dk, 1, source_var=app.v_src_dk,
+              tooltip="正股越低时信用利差扩张的幅度参数。")
     app._build_down_reset_panel(dr_sec.content)
 
     ev_sec = CollapsibleSection(lp, "公告事件", expanded=False)

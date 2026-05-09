@@ -21,8 +21,28 @@ class SensitivityMixin:
     """敏感性 tab 的业务逻辑."""
 
     def _run_sensitivity(self):
+        # 场景: 用户在敏感性 tab 输入代码后立刻点运行, 650ms 防抖还没触发 →
+        # K/dates 这些缓存字段都没填, _collect_params 会报 "需要有效数字, 当前值: ''".
+        # 主动 flush 防抖, 让条款缓存字段同步可用; 行情 (S0/σ) 仍走异步 Wind/akshare.
+        self._flush_pending_bond_autoload()
+        # S0 仍空 (Wind 行情未返回) → 退回到 K 作为初始锚. 敏感性遍历 S 网格,
+        # S0 在 compute_sensitivity_grid 内被逐点覆盖, 退回到 K 不影响结果.
+        if not self.v_S0.get().strip() and self.v_K.get().strip():
+            self.v_S0.set(self.v_K.get().strip())
         try:
             params = self._collect_params()
+        except ValueError as exc:
+            if "当前值: ''" in str(exc):
+                messagebox.showwarning(
+                    "参数缺失",
+                    f"{exc}\n\n"
+                    "可能原因:\n"
+                    "  · 转债代码尚未输入或本地条款库未收录\n"
+                    "  · 行情拉取还在进行中, 等右上角进度停止后重试\n"
+                    "  · 在 ⚡ 定价 标签页点 📥 同步获取 把字段填齐再返回敏感性")
+            else:
+                messagebox.showerror("参数错误", str(exc))
+            return
         except Exception as exc:
             messagebox.showerror("参数错误", str(exc))
             return
@@ -38,12 +58,62 @@ class SensitivityMixin:
         if steps < 3 or steps > 30:
             messagebox.showwarning("提示", "网格步数建议 3~30")
             return
+        # 自动扩展范围以确保包含当前 S/K (默认 70~130%K) 和当前 σ/IV (默认 10~60%);
+        # 否则星标可能落在网格外, 用户也看不到当前点附近的等高线走势.
+        s_min, s_max, sig_min, sig_max = self._expand_sens_bounds_for_current(
+            params["pricer"]["K"], s_min, s_max, sig_min, sig_max)
         self.btn_sensitivity.configure(state="disabled")
         self._start_progress("正在计算敏感性网格")
         threading.Thread(
             target=self._sensitivity_worker,
             args=(params, s_min, s_max, sig_min, sig_max, steps),
             daemon=True).start()
+
+    def _expand_sens_bounds_for_current(self, K, s_min, s_max, sig_min, sig_max):
+        """若当前 S/σ/IV 落在网格外, 自动扩展边界并把新值写回 StringVar 让用户看到.
+
+        S 用 %K 表示 (与 entry 单位一致); σ/IV 用百分比. 留 5pp 边距防止当前点压在边缘.
+        """
+        margin = 0.05  # 5pp 缓冲
+
+        # S/K — 来自当前 v_S0 / K
+        try:
+            cur_s_ratio = float(self.v_S0.get()) / float(K)
+        except (ValueError, ZeroDivisionError, TypeError):
+            cur_s_ratio = None
+        if cur_s_ratio is not None and cur_s_ratio > 0:
+            if cur_s_ratio < s_min:
+                s_min = max(0.05, cur_s_ratio - margin)
+                self.v_sens_s_min.set(f"{s_min*100:.0f}")
+            if cur_s_ratio > s_max:
+                s_max = cur_s_ratio + margin
+                self.v_sens_s_max.set(f"{s_max*100:.0f}")
+
+        # σ — HV (v_sigma) 和 IV (v_iv) 都纳入考量
+        sig_targets: list[float] = []
+        try:
+            sig_targets.append(float(self.v_sigma.get()) / 100.0)
+        except (ValueError, AttributeError):
+            pass
+        iv_raw = ""
+        if hasattr(self, "v_iv"):
+            iv_raw = (self.v_iv.get() or "").strip().rstrip("%").strip()
+        if iv_raw and iv_raw not in {"—", "-", "N/A"}:
+            try:
+                sig_targets.append(float(iv_raw) / 100.0)
+            except ValueError:
+                pass
+        for tgt in sig_targets:
+            if tgt <= 0:
+                continue
+            if tgt < sig_min:
+                sig_min = max(0.01, tgt - margin)
+                self.v_sens_sig_min.set(f"{sig_min*100:.0f}")
+            if tgt > sig_max:
+                sig_max = tgt + margin
+                self.v_sens_sig_max.set(f"{sig_max*100:.0f}")
+
+        return s_min, s_max, sig_min, sig_max
 
     def _sensitivity_worker(self, params, s_min, s_max, sig_min, sig_max, steps):
         try:
