@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 
 def watchlist_path() -> Path:
@@ -41,13 +41,26 @@ def save_watchlist(items: Sequence[dict]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "items": [dict(item) for item in items],
+        "items": [_json_ready(dict(item)) for item in items],
     }
     tmp = path.with_suffix(".json.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     tmp.replace(path)
     return path
+
+
+def _json_ready(value: Any) -> Any:
+    """转成 watchlist.json 可安全保存的结构."""
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: _json_ready(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(v) for v in value]
+    return value
 
 
 # 加入时持久化的可选快照字段 (由 GUI 提供): 让用户回头能看到加入瞬间的研究信号
@@ -59,23 +72,55 @@ _WATCHLIST_SNAPSHOT_FIELDS = (
 )
 
 
+# 扫新债/批量结果带来的条款与状态字段. 这些字段用于关注池展示与复盘,
+# 不覆盖加入瞬间的 snapshot_* 研究信号。
+_WATCHLIST_METADATA_FIELDS = (
+    "issue_date",
+    "listing_date",
+    "tradable_date",
+    "days_to_trade",
+    "K",
+    "market_price",
+    "credit_rating",
+    "outstanding_balance",
+    "maturity_date",
+    "is_tradable",
+    "trading_status",
+    "underlying_name",
+)
+
+
 def add_to_watchlist(new_items: Iterable[dict]) -> tuple[list[dict], int]:
     """新增关注; 已存在的代码会被跳过. 返回 (最新关注池, 新增条数)."""
     current = load_watchlist()
     by_code = {item["bond_code"]: item for item in current}
     added = 0
+    changed = False
     for item in new_items:
         code = item.get("bond_code") if isinstance(item, dict) else None
-        if not code or code in by_code:
+        if not code:
             continue
-        keep = ("bond_code", "bond_name", "stock_code", *_WATCHLIST_SNAPSHOT_FIELDS)
+        keep = (
+            "bond_code", "bond_name", "stock_code",
+            *_WATCHLIST_METADATA_FIELDS,
+            *_WATCHLIST_SNAPSHOT_FIELDS,
+        )
+        if code in by_code:
+            entry = by_code[code]
+            for key in ("bond_name", "stock_code", *_WATCHLIST_METADATA_FIELDS):
+                value = item.get(key)
+                if value is not None and _json_ready(entry.get(key)) != _json_ready(value):
+                    entry[key] = value
+                    changed = True
+            continue
         entry = {k: v for k, v in item.items() if k in keep and v is not None}
         entry["bond_code"] = code
         entry["added_at"] = datetime.now().isoformat(timespec="seconds")
         current.append(entry)
         by_code[code] = entry
         added += 1
-    if added:
+        changed = True
+    if changed:
         save_watchlist(current)
     return current, added
 

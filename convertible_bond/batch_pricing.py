@@ -490,10 +490,17 @@ def list_upcoming_tradable_from_cache(
             "bond_code": code,
             "bond_name": name,
             "stock_code": _terms_value(terms, "underlying_code"),
+            "underlying_name": _terms_value(terms, "underlying_name"),
+            "issue_date": _terms_date(terms, "issue_date"),
+            "listing_date": _terms_date(terms, "listing_date"),
             "tradable_date": tradable_date,
             "days_to_trade": (tradable_date - check_date).days,
             "K": _terms_value(terms, "conversion_price"),
             "market_price": _terms_value(terms, "close"),
+            "credit_rating": _terms_value(terms, "credit_rating"),
+            "outstanding_balance": _terms_value(terms, "outstanding_balance"),
+            "maturity_date": _terms_date(terms, "maturity_date"),
+            "is_tradable": _terms_value(terms, "is_tradable"),
             "trading_status": trading_status,
         })
     rows.sort(key=lambda row: (row["tradable_date"], row["bond_code"]))

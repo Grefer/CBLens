@@ -15,7 +15,6 @@ from tkinter import messagebox, filedialog, ttk
 from ..theme import *
 from ...batch_pricing import (
     BATCH_REVIEW_VIEWS,
-    DEFAULT_UNDERVALUED_SCORE_THRESHOLD,
     annotate_batch_results,
     batch_pricing_exclusion_reason,
     build_batch_provider,
@@ -33,6 +32,7 @@ from ...watchlist import load_watchlist
 from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
+    _attach_column_sort,
     _configure_tree_style,
     _format_tags,
     _is_finite,
@@ -129,17 +129,6 @@ def build(app, tab):
         text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
     )
     app._batch_view_menu.pack(side="left", padx=(0, 6))
-
-    # 低估阈值: 仅在"低估候选"视图生效, 数值改变后立即重新过滤
-    app.v_batch_score_threshold = ctk.StringVar(value=f"{DEFAULT_UNDERVALUED_SCORE_THRESHOLD:g}")
-    ctk.CTkLabel(cc, text="score≥", text_color=TEXT_DIM, font=(FONT_FAMILY, 12)).pack(side="left", padx=(0, 2))
-    threshold_entry = ctk.CTkEntry(
-        cc, textvariable=app.v_batch_score_threshold, width=46,
-        font=(FONT_MONO, 12), fg_color=BG_INPUT, border_width=0, corner_radius=6, height=28)
-    threshold_entry.pack(side="left", padx=(0, 12))
-    threshold_entry.bind("<Return>", lambda _e: _change_batch_view(app))
-    threshold_entry.bind("<KP_Enter>", lambda _e: _change_batch_view(app))
-    threshold_entry.bind("<FocusOut>", lambda _e: _change_batch_view(app))
 
     app.v_batch_cols = ctk.StringVar(value="简洁")
     ctk.CTkLabel(cc, text="列", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
@@ -392,27 +381,15 @@ def _render_batch_views(
     base_results = getattr(app, "_batch_all_results", None) or []
     view = _canonical_view_name(
         app.v_batch_view.get() if hasattr(app, "v_batch_view") else "综合机会")
-    threshold = _resolve_score_threshold(app)
-    display_results = filter_batch_results_by_view(
-        base_results, view, undervalued_score_threshold=threshold)
+    display_results = filter_batch_results_by_view(base_results, view)
     app._batch_results = display_results
-    _refresh_view_menu_labels(app, base_results, threshold)
+    _refresh_view_menu_labels(app, base_results)
     _render_table(app, display_results, total_results=len(base_results), view=view, cache_path=cache_path,
                   cache_meta=cache_meta, excluded_count=excluded_count)
     _render_watchlist_table(app)
 
 
-def _resolve_score_threshold(app) -> float:
-    raw = getattr(app, "v_batch_score_threshold", None)
-    if raw is None:
-        return DEFAULT_UNDERVALUED_SCORE_THRESHOLD
-    try:
-        return float(raw.get().strip() or DEFAULT_UNDERVALUED_SCORE_THRESHOLD)
-    except ValueError:
-        return DEFAULT_UNDERVALUED_SCORE_THRESHOLD
-
-
-def _refresh_view_menu_labels(app, base_results, threshold):
+def _refresh_view_menu_labels(app, base_results):
     """根据当前结果实时计算各视图条数, 仅写入 *display var* (e.g. '低估候选 (24)').
 
     canonical 名 ``v_batch_view`` 始终保持纯净的 ``BATCH_REVIEW_VIEWS`` 之一,
@@ -423,8 +400,7 @@ def _refresh_view_menu_labels(app, base_results, threshold):
     if menu is None or display_var is None:
         return
     counts = {
-        view: len(filter_batch_results_by_view(
-            base_results, view, undervalued_score_threshold=threshold))
+        view: len(filter_batch_results_by_view(base_results, view))
         for view in BATCH_REVIEW_VIEWS
     }
     canonical = list(BATCH_REVIEW_VIEWS)
@@ -492,6 +468,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         )
 
     _apply_tag_colors(tree)
+    _attach_column_sort(tree, columns, headers)
     app._batch_main_tree = tree
     _TREE_ATTRS.add("_batch_main_tree")
     _attach_main_context_menu(app, tree)

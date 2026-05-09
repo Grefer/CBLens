@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -30,6 +30,7 @@ from ...watchlist import (
 from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
+    _attach_column_sort,
     _configure_tree_style,
     _format_tags,
     _is_finite,
@@ -44,12 +45,7 @@ def _auto_add_upcoming_to_watchlist(app, *, silent=False):
     upcoming = list_upcoming_tradable_from_cache(
         getattr(app, "terms_cache", None))
     if upcoming:
-        new_items = [
-            {"bond_code": r["bond_code"],
-             "bond_name": r.get("bond_name"),
-             "stock_code": r.get("stock_code")}
-            for r in upcoming
-        ]
+        new_items = [dict(r) for r in upcoming]
         app._batch_watchlist, added = add_to_watchlist(new_items)
         if not silent:
             if added:
@@ -187,7 +183,7 @@ def _add_selection_to_watchlist(app):
         if not code:
             continue
         # 加入瞬间快照 — 让回头看时能复盘"我当时为什么觉得这债便宜"
-        new_items.append({
+        item = {
             "bond_code": code,
             "bond_name": row.get("bond_name"),
             "stock_code": row.get("stock_code"),
@@ -195,7 +191,16 @@ def _add_selection_to_watchlist(app):
             "snapshot_opportunity_score": row.get("opportunity_score") if _is_finite(row.get("opportunity_score")) else None,
             "snapshot_market_price": row.get("market_price") if _is_finite(row.get("market_price")) else None,
             "snapshot_theoretical_price": row.get("theoretical_price") if _is_finite(row.get("theoretical_price")) else None,
-        })
+        }
+        for key in (
+            "listing_date", "tradable_date", "is_tradable", "trading_status",
+            "credit_rating", "outstanding_balance", "underlying_name", "K",
+            "market_price",
+        ):
+            value = row.get(key)
+            if value is not None:
+                item[key] = value
+        new_items.append(item)
     if not new_items:
         return
     app._batch_watchlist, added = add_to_watchlist(new_items)
@@ -239,12 +244,46 @@ def _watchlist_display_rows(app):
                         "market_price", "deviation", "credit_rating", "status",
                         "parity", "conversion_premium", "opportunity_score",
                         "confidence", "risk_tags", "sensitivity_status",
-                        "review_bucket", "review_notes"):
+                        "review_bucket", "review_notes", "listing_date",
+                        "tradable_date", "is_tradable", "trading_status",
+                        "underlying_name", "outstanding_balance",
+                        "maturity_date"):
                 value = priced.get(key)
                 if value is not None:
                     merged[key] = value
         rows.append(merged)
     return rows
+
+
+def _parse_watchlist_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_watchlist_date(value):
+    parsed = _parse_watchlist_date(value)
+    return parsed.isoformat() if parsed else "—"
+
+
+def _format_days_to_trade(entry):
+    tradable_date = _parse_watchlist_date(entry.get("tradable_date"))
+    if tradable_date is not None:
+        days = (tradable_date - date.today()).days
+    else:
+        days = entry.get("days_to_trade")
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            return "—"
+    return "0" if days == 0 else f"{days:+d}"
 
 
 def _render_watchlist_table(app):
@@ -255,9 +294,10 @@ def _render_watchlist_table(app):
         child.destroy()
 
     rows = _watchlist_display_rows(app)
-    headers = ["代码", "名称", "正股", "机会分", "可信", "理论价", "市价", "偏差(%)",
+    headers = ["代码", "名称", "正股", "上市日", "可交易日", "距交易",
+               "机会分", "可信", "理论价", "市价", "偏差(%)",
                "加入时偏差(%)", "市价变化(%)", "敏感性", "标签", "状态", "加入时间"]
-    col_widths = [100, 90, 80, 70, 45, 70, 70, 70, 95, 95, 90, 160, 50, 150]
+    col_widths = [100, 90, 80, 90, 90, 58, 70, 45, 70, 70, 70, 95, 95, 90, 160, 50, 150]
     columns = [f"w{i}" for i in range(len(headers))]
 
     _configure_tree_style()
@@ -284,6 +324,7 @@ def _render_watchlist_table(app):
         )
 
     _apply_tag_colors(tree)
+    _attach_column_sort(tree, columns, headers)
 
     if not rows:
         placeholder = ctk.CTkLabel(
@@ -313,6 +354,9 @@ def _render_watchlist_table(app):
             code,
             entry.get("bond_name", "") or "",
             entry.get("stock_code", "") or "",
+            _format_watchlist_date(entry.get("listing_date")),
+            _format_watchlist_date(entry.get("tradable_date")),
+            _format_days_to_trade(entry),
             f"{float(score):.1f}" if _is_finite(score) else "—",
             entry.get("confidence", "") if is_ok else "—",
             f"{float(entry['theoretical_price']):.2f}" if is_ok and entry.get("theoretical_price") is not None else "—",

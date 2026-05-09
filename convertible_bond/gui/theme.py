@@ -17,6 +17,7 @@ ACCENT    = ("#1e66f5", "#89b4fa")     # Blue
 GREEN     = ("#40a02b", "#a6e3a1")     # Green
 RED       = ("#d20f39", "#f38ba8")     # Red
 ORANGE    = ("#fe640b", "#fab387")     # Peach
+MAUVE     = ("#8839ef", "#cba6f7")     # Mauve (用于新债等需要醒目但不告警的标识)
 
 BTN_CTRL  = ("#ccd0da", "#313244")
 BTN_HOVER = ("#bcc0cc", "#45475a")

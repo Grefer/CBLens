@@ -202,8 +202,62 @@ def test_upcoming_tradable_cache_finds_private_bonds_in_window():
     )
 
     assert [row["bond_code"] for row in rows] == ["124025.SZ"]
+    assert rows[0]["listing_date"] == date(2026, 3, 9)
     assert rows[0]["tradable_date"] == date(2026, 9, 9)
     assert rows[0]["days_to_trade"] == 5
+    assert rows[0]["K"] == 16.14
+    assert rows[0]["market_price"] == 99.99
+
+
+def test_upcoming_tradable_cache_includes_public_listing_metadata():
+    class FakeTermsCache:
+        data = {
+            "123269.SZ": BondTerms(
+                sec_name="金杨转债",
+                underlying_code="301210.SZ",
+                underlying_name="金杨精密",
+                issue_date=date(2026, 5, 11),
+                listing_date=date(2026, 5, 11),
+                tradable_date=date(2026, 5, 11),
+                trading_status="pending",
+                conversion_price=39.8,
+                credit_rating="AA-",
+                outstanding_balance=9.8,
+                maturity_date=date(2032, 4, 20),
+            ),
+        }
+
+        def list_bonds(self):
+            return list(self.data)
+
+        def get(self, code):
+            return self.data[code]
+
+    rows = list_upcoming_tradable_from_cache(
+        FakeTermsCache(),
+        on_date=date(2026, 5, 9),
+        window_days=7,
+    )
+
+    assert rows == [
+        {
+            "bond_code": "123269.SZ",
+            "bond_name": "金杨转债",
+            "stock_code": "301210.SZ",
+            "underlying_name": "金杨精密",
+            "issue_date": date(2026, 5, 11),
+            "listing_date": date(2026, 5, 11),
+            "tradable_date": date(2026, 5, 11),
+            "days_to_trade": 2,
+            "K": 39.8,
+            "market_price": None,
+            "credit_rating": "AA-",
+            "outstanding_balance": 9.8,
+            "maturity_date": date(2032, 4, 20),
+            "is_tradable": False,
+            "trading_status": "pending",
+        }
+    ]
 
 
 def test_merge_upcoming_pricing_results_adds_theoretical_price():
