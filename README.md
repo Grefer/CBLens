@@ -230,8 +230,6 @@ row = price_from_auto("128009.SZ", prefer="akshare")
 print(row["bond_name"], row["theoretical_price"], row["market_price"], row["q"])
 ```
 
-`q` 为连续股息率，模型中使用小数形式，例如 `0.015` 表示 1.5%/年。Provider 驱动定价会默认从行情源读取正股股息率，行情源返回值按百分数解释；如果数据源取不到，则回退为 `0`，GUI 中也会显示为默认值。
-
 ---
 
 ## 📁 项目结构
