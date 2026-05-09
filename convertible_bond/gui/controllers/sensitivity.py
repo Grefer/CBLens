@@ -197,7 +197,7 @@ class SensitivityMixin:
         fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=self.sens_chart_frame)
         canvas.draw()
-        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         self._sens_figure = fig
         self._sens_canvas = canvas
         self._last_sens_args = (S_vals, sig_vals, grid, K)

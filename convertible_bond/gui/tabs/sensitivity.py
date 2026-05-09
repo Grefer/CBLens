@@ -11,6 +11,8 @@ from ..theme import (
 def build(app, tab):
     """敏感性 Tab: 控制栏 (参数范围) + 热力图区 + PNG 导出."""
     tab.grid_columnconfigure(0, weight=1)
+    tab.grid_rowconfigure(0, weight=0)
+    tab.grid_rowconfigure(1, weight=0)
     tab.grid_rowconfigure(2, weight=1)
 
     ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)

@@ -203,7 +203,7 @@ class BacktestMixin:
 
         canvas = FigureCanvasTkAgg(fig, master=self.bt_chart_frame)
         canvas.draw()
-        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
 
         self._bt_figure = fig
         self._bt_canvas = canvas

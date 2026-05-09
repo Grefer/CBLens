@@ -11,7 +11,10 @@ from ..theme import (
 def build(app, tab):
     """回测 Tab: 控制栏 + 图表区."""
     tab.grid_columnconfigure(0, weight=1)
-    tab.grid_rowconfigure(2, weight=1)
+    tab.grid_rowconfigure(0, weight=0)
+    tab.grid_rowconfigure(1, weight=0)
+    tab.grid_rowconfigure(2, weight=0)
+    tab.grid_rowconfigure(3, weight=1)
 
     # 控制栏
     ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
