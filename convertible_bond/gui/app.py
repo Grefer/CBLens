@@ -74,7 +74,7 @@ class CBPricerApp(
         super().__init__()
         ctk.set_appearance_mode("System")  # 跟随系统主题; 用户通过开关可手动覆盖
 
-        self.title("CBPricer")
+        self.title("CBLens — 可转债定价工作台")
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         target_w = max(1280, int(screen_w * 0.76))
@@ -235,8 +235,8 @@ class CBPricerApp(
 
         left_frame = ctk.CTkFrame(header, fg_color="transparent")
         left_frame.grid(row=0, column=0, sticky="w", padx=(18, 12), pady=15)
-        ctk.CTkLabel(left_frame, text="CBPricer", font=(FONT_FAMILY, 20, "bold"), text_color=TEXT).pack(side="left")
-        ctk.CTkLabel(left_frame, text="PRO", font=(FONT_FAMILY, 10, "bold"), text_color=ACCENT,
+        ctk.CTkLabel(left_frame, text="CBLens", font=(FONT_FAMILY, 20, "bold"), text_color=TEXT).pack(side="left")
+        ctk.CTkLabel(left_frame, text="PDE", font=(FONT_FAMILY, 10, "bold"), text_color=ACCENT,
                      fg_color=BG_INPUT, corner_radius=4, padx=6, pady=2).pack(side="left", padx=(8, 16), pady=(0, 2))
 
         is_dark = ctk.get_appearance_mode() == "Dark"

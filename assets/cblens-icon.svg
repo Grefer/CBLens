@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="cblens-title cblens-desc">
+  <title id="cblens-title">CBLens</title>
+  <desc id="cblens-desc">A magnifying lens inspecting a convertible bond certificate with convexity curve — the CBLens brand icon.</desc>
+
+  <defs>
+    <!-- Background gradient: deep navy → teal-navy -->
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1929"/>
+      <stop offset="0.45" stop-color="#0F2C3D"/>
+      <stop offset="1" stop-color="#1A4A4A"/>
+    </linearGradient>
+
+    <!-- Bond paper gradient -->
+    <linearGradient id="paper" x1="100" y1="110" x2="340" y2="370" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8F4EB"/>
+      <stop offset="1" stop-color="#E8EDDE"/>
+    </linearGradient>
+
+    <!-- Lens glass gradient -->
+    <radialGradient id="lens-glass" cx="290" cy="240" r="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#DDFFF7" stop-opacity="0.70"/>
+      <stop offset="0.5" stop-color="#7ED9CC" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#F8C96A" stop-opacity="0.20"/>
+    </radialGradient>
+
+    <!-- Lens rim gradient -->
+    <linearGradient id="lens-rim" x1="190" y1="140" x2="390" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A0F0E0"/>
+      <stop offset="0.5" stop-color="#5AD3C7"/>
+      <stop offset="1" stop-color="#3DB8AB"/>
+    </linearGradient>
+
+    <!-- Handle gradient: teal → gold -->
+    <linearGradient id="handle" x1="355" y1="310" x2="445" y2="405" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5AD3C7"/>
+      <stop offset="0.4" stop-color="#E8B84A"/>
+      <stop offset="1" stop-color="#F8C96A"/>
+    </linearGradient>
+
+    <!-- Convexity curve gradient -->
+    <linearGradient id="curve" x1="140" y1="330" x2="340" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E8A830"/>
+      <stop offset="1" stop-color="#F8C96A"/>
+    </linearGradient>
+
+    <!-- Subtle glow behind lens -->
+    <radialGradient id="glow" cx="290" cy="250" r="130" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5AD3C7" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#5AD3C7" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="shadow-soft" x="-15%" y="-10%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#040C18" flood-opacity="0.40"/>
+    </filter>
+    <filter id="shadow-heavy" x="-20%" y="-15%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#040C18" flood-opacity="0.50"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+
+  <!-- Subtle decorative grid lines (bond/financial feel) -->
+  <g opacity="0.04" stroke="#5AD3C7" stroke-width="1">
+    <line x1="80" y1="140" x2="80" y2="420"/>
+    <line x1="160" y1="100" x2="160" y2="430"/>
+    <line x1="320" y1="100" x2="320" y2="430"/>
+    <line x1="400" y1="140" x2="400" y2="420"/>
+    <line x1="70" y1="200" x2="440" y2="200"/>
+    <line x1="70" y1="300" x2="440" y2="300"/>
+  </g>
+
+  <!-- Ambient glow -->
+  <circle cx="290" cy="250" r="130" fill="url(#glow)"/>
+
+  <!-- Bond certificate (paper document) -->
+  <g filter="url(#shadow-soft)">
+    <rect x="98" y="118" width="248" height="278" rx="22" fill="url(#paper)"/>
+    <!-- Text lines — representing bond terms -->
+    <g opacity="0.70" stroke="#1C3854" stroke-linecap="round" fill="none">
+      <line x1="132" y1="170" x2="260" y2="170" stroke-width="13"/>
+      <line x1="132" y1="206" x2="296" y2="206" stroke-width="11"/>
+      <line x1="132" y1="238" x2="230" y2="238" stroke-width="10"/>
+      <line x1="132" y1="268" x2="270" y2="268" stroke-width="9" opacity="0.45"/>
+    </g>
+
+    <!-- Convexity payoff curve (the signature CB convex shape) -->
+    <path d="M132 340 C162 298, 194 284, 236 296 C268 306, 292 278, 330 248"
+          fill="none" stroke="url(#curve)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Baseline (par axis) -->
+    <line x1="132" y1="340" x2="335" y2="340" stroke="#1C3854" stroke-width="5" stroke-linecap="round" opacity="0.15"/>
+
+    <!-- Small "CB" badge on certificate -->
+    <rect x="290" y="155" r="5" width="42" height="28" rx="8" fill="#164E57" opacity="0.85"/>
+    <text x="311" y="174" font-family="SF Pro Display, Segoe UI, sans-serif" font-size="15" font-weight="700"
+          fill="#E8F8F4" text-anchor="middle" opacity="0.95">CB</text>
+  </g>
+
+  <!-- Magnifying lens -->
+  <g filter="url(#shadow-heavy)">
+    <!-- Glass circle -->
+    <circle cx="294" cy="248" r="96" fill="url(#lens-glass)" stroke="url(#lens-rim)" stroke-width="16"/>
+    <!-- Specular highlight -->
+    <path d="M235 212 C258 192, 290 188, 318 204"
+          fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" opacity="0.45"/>
+    <!-- Secondary highlight -->
+    <path d="M244 226 C260 218, 278 216, 294 220"
+          fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" opacity="0.25"/>
+    <!-- Handle -->
+    <line x1="366" y1="322" x2="436" y2="396" stroke="url(#handle)" stroke-width="32" stroke-linecap="round"/>
+  </g>
+
+  <!-- Floating accent dot (representing opportunity signal) -->
+  <circle cx="370" cy="170" r="10" fill="#F8C96A" opacity="0.75"/>
+  <circle cx="370" cy="170" r="5" fill="#FFFFFF" opacity="0.50"/>
+</svg>

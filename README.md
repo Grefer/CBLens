@@ -1,198 +1,311 @@
-# ConvertibleBond — 可转债理论定价引擎
+<div align="center">
+  <img src="assets/cblens-banner.png" alt="CBLens — A 股可转债定价与机会筛选工作台" width="720" />
+  <br /><br />
 
-A 股可转债的理论定价工具：Crank-Nicolson PDE 求解 + 强赎/回售/下修博弈 + Wind 数据集成 + Apple 风格 GUI。
+  <a href="#快速开始"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="MIT License" /></a>
+  <a href="#测试"><img src="https://img.shields.io/badge/Tests-pytest-0A9EDC?style=flat-square&logo=pytest&logoColor=white" alt="pytest" /></a>
+  <a href="docs/USAGE.md"><img src="https://img.shields.io/badge/Docs-使用文档-F8C96A?style=flat-square" alt="Usage Docs" /></a>
 
-## 特性
+  <br /><br />
+  <b>Crank-Nicolson PDE 定价 · 公告事件解析 · 主池准入筛选 · GUI / CLI 研究流</b>
+  <br />
+  <sub>把转债条款、公告事件、正股行情、信用利差和数值定价模型串成一条可重复的研究工作流。</sub>
+</div>
 
-- **完整研究链路**：Wind 基础信息 → 主池准入筛选 → 批量理论定价 → 低估率/风险/流动性打分 → 复核视图
-- **PDE 定价引擎**：Crank-Nicolson 隐式格式，三对角系统 `solve_banded` 加速
-- **完整条款建模**：阶梯票息、强赎/回售触发、下修博弈、强赎宽限期 (notice window) 的 stock optionality
-- **风险中性漂移 + 信用利差折现**：基础利差 + 股价驱动的 distress 扩张
-- **完整希腊值**：Δ / Γ / ν / Θ + 价值分解 (纯债/转股/期权溢价)
-- **隐含波动率反解**：Brent 求解, 自动避开越界目标
-- **历史回测**：周/月频对比"理论价 vs 收盘价 vs 纯债底 vs 转股价值"，支持 IV vs HV 时序
-- **现金流可视化**：完整付息计划 + 末期兑付一图展示
-- **σ-S 敏感性热力图**：固定其他参数，遍历 (波动率, 正股价) 网格
-- **分层自动取数**：转债基础信息固定由 Wind 写入 `cb_data`，正股行情 / Shibor 可选 Wind 或 akshare
-- **主池准入过滤**：剔除不可交易、停牌、已公告强赎、临近摘牌、正股 ST/退市风险、低成交额、小余额、低评级等标的
-- **GUI**：CustomTkinter + Catppuccin 配色 + 深浅色无缝切换
+<br />
 
-## 安装
+---
+
+## ✨ 项目定位
+
+CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，也不是投资建议——它的目标是帮助你更快发现 *"值得人工复核"* 的低估、转股折价、事件风险和数据异常标的。
+
+> **关于命名**：产品名和文档品牌统一使用 **CBLens**。Python 包名仍为 `convertible_bond`，安装名仍为 `convertible-bond-pricer`，CLI 入口继续使用 `cb-*`，避免破坏已有 import 与脚本。
+
+---
+
+## 🧩 核心能力
+
+<table>
+<tr>
+<td width="50%">
+
+### 🔬 PDE 定价引擎
+`UniversalCBPricer` 使用 **Crank-Nicolson 有限差分法**，完整支持：
+- 强赎 / 回售 / 下修博弈
+- 阶梯票息与应计利息
+- 强赎宽限期与信用利差折现
+- 希腊值 (Δ, Γ, ν, Θ) 与价值分解
+
+</td>
+<td width="50%">
+
+### 📦 批量筛选与打分
+从全市场条款库出发，自动完成：
+- 主池准入筛选（停牌、强赎、ST、低流动性等）
+- 批量 PDE 定价与多线程加速
+- 机会分 / 置信度 / 风险标签
+- 转股溢价率 / 低估率排序
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 📰 事件驱动分析
+解析巨潮 (cninfo) 或 Wind 公告，维护结构化事件：
+- 下修提议 / 通过 / 否决
+- 强赎 / 不强赎公告
+- 回售 / 评级变更 / 停牌 / 摘牌
+- 事件自动应用回条款库
+
+</td>
+<td>
+
+### 🖥️ 研究界面
+CustomTkinter GUI 覆盖完整研究流：
+- **批量页**：候选筛选 → 关注池管理
+- **定价页**：单债钻取 + 隐含波动率反解
+- **回测页**：历史模型偏差复盘
+- **敏感性页**：σ-S 热力图 + 报告导出
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 🔌 多数据源架构
+灵活切换数据来源：
+- **Wind**：全字段条款同步 + 实时行情
+- **akshare**：免费动态行情替代
+- **CSV**：自定义数据导入
+- 静态条款与动态行情解耦设计
+
+</td>
+<td>
+
+### ✅ 可测试模型
+核心模块均有 pytest 覆盖：
+- PDE 引擎精度与收敛性
+- 数据缓存 / 事件解析 / 准入筛选
+- 批量定价 / API 调用链
+- Wind mock 测试（无需真实连接）
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🚀 快速开始
+
+### 安装
 
 ```bash
 git clone https://github.com/your/ConvertibleBond.git
 cd ConvertibleBond
+
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install -U pip
 pip install -e ".[dev]"
 ```
 
-> **WindPy 不通过 pip 发布**，需在 Wind 终端"插件管理"中将 Python 接口安装到当前 venv。
-> 仅离线使用 `convertible_bond.pricer.UniversalCBPricer` 时无需 Wind。
+> [!NOTE]
+> **WindPy** 不通过 pip 发布。如需同步全市场条款或使用 Wind 行情，需在 Wind 终端的插件管理中把 Python 接口安装到当前虚拟环境。仅使用离线 PDE 模型、已有 `data/cb_data.json` 或 akshare 动态行情时，无需连接 Wind。
 
-## 快速使用
-
-### GUI
+### 启动 GUI
 
 ```bash
-cb-gui          # 通过 console_script 入口
+cb-gui
 # 或
 python -m convertible_bond.gui.app
 ```
 
-界面三个 tab：
-
-- **⚡ 定价**：手填条款 / Wind 一键同步 → 单点定价 + 希腊值 + 隐含波动率
-- **📈 回测**：历史区间逐点定价 → 理论 vs 市价对比 + IV/HV spread
-- **🔥 敏感性**：σ-S 网格热力图
-
-### CLI
+### 命令行定价
 
 ```bash
-# 兼容入口: 输入转债代码自动定价 (需 Wind)
+# 指定转债代码
 python CB.py 128009.SZ
-python CB.py 128009.SZ 2025-06-30   # 指定估值日
 
-# 同步 Wind 基础信息到 data/cb_data.json
-python -m convertible_bond.cli.sync_tradable
+# 指定估值日和行情源
+python CB.py 128009.SZ 2026-04-20 --source akshare
 
-# 刷新停牌/强赎/摘牌/ST/成交额等主池准入状态字段
-python -m convertible_bond.cli.sync_admission_status
-cb-sync-admission-status --limit 50
-
-# 同步公告标题并解析为结构化事件表
-python -m convertible_bond.cli.sync_events --limit 50
-python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
-
-# 查看批量定价前的主池准入筛选报告
-python -m convertible_bond.cli.screen_pool
-cb-screen-pool --min-rating AA- --min-balance 1
+# 离线模型示例（无需数据源）
+python CB.py
 ```
 
-### Python API
+---
+
+## 📅 每日研究流
+
+一个典型的日常使用流程：
+
+```bash
+# ① 查看本地条款库状态
+cb-sync-tradable --info
+
+# ② 月初或新债/退市/下修集中变化后，全量同步基础条款
+cb-sync-tradable
+
+# ③ 每日刷新停牌、强赎、摘牌、正股 ST、成交额、余额、评级等准入字段
+cb-sync-admission-status
+
+# ④ 同步公告事件，并把事件状态应用回 cb_data
+cb-sync-events --apply
+
+# ⑤ 批量定价前查看主池准入报告
+cb-screen-pool --min-rating A+ --min-balance 0.5
+
+# ⑥ 打开 GUI 做批量复核、单债钻取和敏感性分析
+cb-gui
+```
+
+---
+
+## 🏗️ 架构
+
+```mermaid
+flowchart LR
+    A["🌐 Wind / cninfo / akshare / CSV"] --> B["💾 data/*.json<br/>条款与事件缓存"]
+    B --> C["🔍 准入筛选<br/>admission_status + batch_pricing"]
+    C --> D["⚙️ PDE 定价<br/>UniversalCBPricer"]
+    D --> E["📊 机会分 / 风险标签<br/>复核视图"]
+    E --> F["🖥️ GUI / CLI / Python API"]
+```
+
+**五层职责**：
+
+| 层级 | 职责 | 核心模块 |
+| :---: | --- | --- |
+| **① 基础信息** | 发行条款、转股价、票息、强赎/回售规则、评级、余额 | `data_providers`, `cache` |
+| **② 事件状态** | 公告事件、停牌、强赎、ST、成交额等准入字段 | `cb_events`, `admission_status` |
+| **③ 动态行情** | 正股/转债价格、历史波动率、无风险利率 | `data_providers` |
+| **④ 模型定价** | 理论价、希腊值、纯债底、转股价值、期权溢价 | `pricer` |
+| **⑤ 筛选打分** | 低估率、转股溢价、机会分、风险标签、置信度 | `batch_pricing` |
+
+---
+
+## 🐍 Python API
+
+### 离线定价（无需数据源）
 
 ```python
 from datetime import date
 from convertible_bond.pricer import UniversalCBPricer
 
 pricer = UniversalCBPricer(
-    S0=55.0, K=52.77,
+    S0=55.0,
+    K=52.77,
     current_date=date(2026, 4, 20),
     maturity_date=date(2026, 7, 30),
     issue_date=date(2020, 7, 30),
     conversion_start_date=date(2021, 2, 6),
     coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
     redemption_price=107.0,
-    call_notice_days=30,        # 强赎宽限期 (新)
+    call_notice_days=30,
 )
 
-theo = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
-                    distress_k=0.05, p_down=0.0)
-
-# 含希腊值 + 价值分解
-detailed = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
-                        return_greeks=True)
-
-# 反解隐含波动率
-iv = pricer.solve_implied_vol(target_price=110.5, r=0.022, base_spread=0.03)
+result = pricer.price(
+    sigma=0.28,
+    r=0.022,
+    base_spread=0.03,
+    distress_k=0.05,
+    p_down=0.0,
+    return_greeks=True,
+)
+print(result["price"], result["delta"], result["bond_floor"])
 ```
 
-### 历史回测
+### Provider 驱动定价
 
 ```python
-from datetime import date
-from convertible_bond.backtest import backtest_theoretical_price
+from convertible_bond.pricing_api import price_from_auto
 
-result = backtest_theoretical_price(
-    bond_code="128009.SZ",
-    start_date=date(2025, 1, 1),
-    end_date=date(2025, 8, 31),
-    freq="W",                # 日 / 周 / 月
-    solve_iv=True,           # 反解每日 IV (~5x 计算量)
-)
-# result 包含: dates, theo_prices, market_prices, stock_prices,
-#             sigmas, bond_floors, parities, ivs
+row = price_from_auto("128009.SZ", prefer="akshare")
+print(row["bond_name"], row["theoretical_price"], row["market_price"])
 ```
 
-## 项目主线
+---
 
-项目按五层组织，避免把“能定价”和“能筛选”混在一起：
-
-1. **基础信息层**：WindPy 获取转债发行条款、票息、转股价、强赎/回售规则、评级、余额等半静态信息，写入 `data/cb_data.json`。
-2. **事件状态层**：`data/cb_events.json` 记录下修、不下修、强赎、回售、摘牌等公告事件；`sync_admission_status` 刷新停牌、ST、成交额等状态字段；字段明确命中风险时先从主池剔除。
-3. **动态行情层**：Wind 或 akshare 获取正股/转债收盘价、正股历史波动率、无风险利率等定价输入。
-4. **模型定价层**：`UniversalCBPricer` 输出理论价、希腊值、纯债/转股/期权价值分解。
-5. **筛选打分层**：批量结果计算 `undervaluation_rate = (理论价 - 市价) / 理论价`，再结合转股溢价、HV、余额、评级、剩余期限等生成 `opportunity_score`、`risk_tags`、`confidence` 和复核视图。
-
-每日推荐流程：
-
-```text
-Wind 同步基础信息
-→ 刷新停牌/强赎/摘牌/ST/成交额等准入状态
-→ 同步公告事件并应用到 cb_data
-→ 主池准入筛选
-→ 更新行情/利率/HV
-→ 批量理论定价
-→ 计算低估率和机会分
-→ 输出低估候选、转股折价、需复核、关注池
-```
-
-## 模型说明
-
-### PDE
-
-求解 Black-Scholes-Merton 类型的可转债 PDE：
-
-```text
-∂V/∂t + ½σ²S² ∂²V/∂S² + rS ∂V/∂S − (r + s(S))V + 票息 = 0
-```
-
-设计取舍：
-
-- **风险中性漂移用 r**, **折现用 r + spread(S)**：信用利差仅参与折现，不污染漂移
-- **信用利差 distress 扩张**：`s(S) = base_spread + distress_k · max(0, 1 − S/K)`
-- **下修概率 S-依赖**：`p_down` 按年化强度解释并折算到 PDE 时间步；S ≥ K 时为 0，S = 0 时取当期步进概率，线性插值
-- **强赎宽限期**：触发后持有人留有 `call_notice_days` 行权窗口，cap 上抬 `parity·(1 + σ√t_grace)`，对应实务里 5–10% 的转股溢价
-- **回售边界**：仅在到期前 `put_active_years` 年内生效
-
-### 票息
-
-使用半开区间 `(start, end]` 累计票息现金流，避免边界双计。末期 `is_final` 通过 `redemption_price` 一次性返还（含末期利息+面值+赎回溢价）。
-
-## 项目结构
+## 📁 项目结构
 
 ```text
 ConvertibleBond/
-├── convertible_bond/    # 主包
-│   ├── pricer.py        # PDE 定价引擎
-│   ├── pricing_api.py   # 自动取参与批量定价 helper
-│   ├── backtest.py      # 历史回测与 Wind 辅助
-│   ├── data_providers.py # Wind / akshare / CSV 数据源抽象
-│   ├── cache.py          # cb_data 静态信息缓存 + 动态行情组合 provider
-│   └── gui/             # CustomTkinter GUI 包
-├── CB.py                # 顶层兼容入口
-├── gui.py               # 顶层 GUI 启动入口
-├── tests/
-│   └── test_pricer.py   # pytest 套件
-├── pyproject.toml
-├── requirements.txt
-└── README.md
+├── assets/                     # CBLens 图标与品牌资产
+├── docs/                       # 使用文档与品牌说明
+├── convertible_bond/           # 主包
+│   ├── pricer.py               # PDE 定价引擎
+│   ├── pricing_api.py          # provider 驱动的单只/批量定价 helper
+│   ├── data_providers.py       # Wind / akshare / CSV 数据源
+│   ├── cache.py                # TermsBundle / TermsCache / CachedBondDataProvider
+│   ├── batch_pricing.py        # 准入筛选、机会分、风险标签、批量结果缓存
+│   ├── admission_status.py     # 停牌、强赎、摘牌、ST、成交额等状态刷新
+│   ├── cb_events.py            # 公告事件模型与解析
+│   ├── cb_event_sync.py        # 公告同步和事件应用
+│   ├── cninfo_provider.py      # 巨潮公告 provider
+│   ├── backtest.py             # 历史回测
+│   ├── cli/                    # 同步、筛选等 CLI
+│   └── gui/                    # CustomTkinter GUI
+├── data/                       # 条款、事件、关注池、批量缓存
+├── tests/                      # pytest 测试
+├── CB.py                       # 兼容 CLI 入口
+├── gui.py                      # 兼容 GUI 入口
+└── pyproject.toml
 ```
 
-## 测试
+---
+
+## 📖 文档
+
+| 文档 | 说明 |
+| --- | --- |
+| 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 四大页面、CLI 命令、Python API、常见问题排障 |
+| 🎨 [品牌说明](docs/BRAND.md) | 项目名称由来、图标含义、调色板与使用建议 |
+| 📦 [数据说明](data/README.md) | `cb_data.json`、`cb_events.json` 字段定义与刷新节奏 |
+| 🔧 [维护约定](AGENTS.md) | 给 agent 和维护者看的项目级上下文与编码规范 |
+
+---
+
+## 🧪 测试
 
 ```bash
-pytest                  # 覆盖回归 / 边界 / 票息 / IV / 希腊 / 强赎宽限期 / 回测
-pytest -v              # 详细输出
-pytest -k "Greeks"     # 只跑某一类
+# 全量测试
+pytest
+
+# 快速失败模式
+pytest -x -q
+
+# 按模块
+pytest tests/test_pricer.py -x -q
+pytest tests/test_pricing_api.py -x -q
+pytest tests/test_batch_pricing.py -x -q
 ```
 
-## 已知限制
+---
 
-1. **强赎触发是单点判断**，未建"30 个交易日中 15 日"的累积条款 — 倾向于高估强赎概率
-2. **利率为标量** — 长期限债对利率曲线形状的敏感度未捕获
-3. **无股息率参数** — A 股有分红时会系统性低估期权价值
-4. **下修后立即重定 K** — 未建董事会决议+股东大会通过率
-5. **历史回测忽略历史下修** — 用当前 K 反算所有日期，下修发生过的债会出现 K 跳点
+## ⚠️ 模型边界
 
-## 许可
+> [!WARNING]
+> CBLens 是研究工具，不是交易系统。以下模型局限需要在使用时注意：
 
-MIT
+- **强赎路径依赖**：强赎触发是单点判断，尚未完整建模"30 个交易日中 15 日"的路径依赖。
+- **利率结构**：当前为标量利率，未建完整期限结构。
+- **股息率**：无股息率参数，正股分红可能影响期权价值。
+- **历史回测**：默认使用当前条款，历史下修发生过的债可能出现转股价跳点偏差。
+- **排序局限**：批量排序用于研究复核，不能替代流动性、公告、成交约束和组合风险判断。
+
+---
+
+## 📄 许可
+
+本项目基于 [MIT 许可证](LICENSE) 开源。
+
+---
+
+<div align="center">
+  <sub>Built with 🔬 by quantitative bond researchers</sub>
+  <br />
+  <sub><b>CBLens</b> — 看清转债的每一面</sub>
+</div>

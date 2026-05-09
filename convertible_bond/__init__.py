@@ -1,4 +1,4 @@
-"""Convertible Bond pricer package."""
+"""CBLens convertible bond pricing package."""
 
 from .pricer import (
     UniversalCBPricer,
