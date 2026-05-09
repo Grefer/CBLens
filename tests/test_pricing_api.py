@@ -1,6 +1,9 @@
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+
+import pytest
 
 from convertible_bond import pricing_api
 
@@ -121,3 +124,67 @@ def test_batch_stock_cache_caches_dividend_yield():
     assert cached.get_stock_dividend_yield("000001.SZ", end) == 2.5
     assert cached.get_stock_dividend_yield("000001.SZ", end) == 2.5
     assert inner.calls == 1
+
+
+def test_batch_stock_cache_waiter_retries_after_owner_failure():
+    class FlakyCloseProvider:
+        name = "flaky"
+
+        def __init__(self):
+            self.calls = 0
+            self.lock = threading.Lock()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def get_stock_close(self, stock_code, on_date):
+            with self.lock:
+                self.calls += 1
+                call_no = self.calls
+            if call_no == 1:
+                self.started.set()
+                self.release.wait(timeout=1.0)
+                raise RuntimeError("first fetch failed")
+            return 10.0
+
+    inner = FlakyCloseProvider()
+    cached = pricing_api._BatchStockCache(inner)
+    end = date(2026, 4, 28)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(cached.get_stock_close, "000001.SZ", end)
+        assert inner.started.wait(timeout=1.0)
+        waiter = pool.submit(cached.get_stock_close, "000001.SZ", end)
+        inner.release.set()
+
+        with pytest.raises(RuntimeError, match="first fetch failed"):
+            owner.result(timeout=1.0)
+        assert waiter.result(timeout=1.0) == 10.0
+
+    assert inner.calls == 2
+
+
+def test_batch_stock_cache_waiter_timeout_is_explicit():
+    class SlowCloseProvider:
+        name = "slow"
+
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def get_stock_close(self, stock_code, on_date):
+            self.started.set()
+            self.release.wait(timeout=1.0)
+            return 10.0
+
+    inner = SlowCloseProvider()
+    cached = pricing_api._BatchStockCache(inner)
+    cached._INFLIGHT_TIMEOUT = 0.01
+    end = date(2026, 4, 28)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        owner = pool.submit(cached.get_stock_close, "000001.SZ", end)
+        assert inner.started.wait(timeout=1.0)
+        with pytest.raises(TimeoutError, match="批量缓存等待超时"):
+            cached.get_stock_close("000001.SZ", end)
+        inner.release.set()
+        assert owner.result(timeout=1.0) == 10.0

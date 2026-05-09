@@ -16,7 +16,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from .cache import CachedBondDataProvider
 from .data_providers import (

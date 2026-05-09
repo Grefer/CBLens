@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Iterable
+from collections.abc import Iterable
 
 from .cache import TermsBundle
 from .cb_events import (

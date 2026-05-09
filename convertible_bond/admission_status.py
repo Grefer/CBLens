@@ -5,9 +5,9 @@
 """
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import fields, replace
 from datetime import date
-from typing import Iterable, Sequence
 
 from .batch_pricing import (
     batch_pricing_exclusion_reason,

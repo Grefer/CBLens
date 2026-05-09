@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from datetime import date
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from .cache import TermsBundle
 from .data_providers import (

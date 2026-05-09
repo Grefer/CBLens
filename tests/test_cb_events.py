@@ -195,6 +195,42 @@ def test_apply_events_uses_parsed_commitment_end_over_hardcode():
     assert patched.call_status == "不强赎"
 
 
+def test_apply_events_to_terms_supersedes_old_down_reset_event_state():
+    """旧 cb_events 写回 cb_data 后, 后续不下修公告仍应能覆盖冻结期."""
+    old_title = "关于不向下修正旧转债转股价格的公告"
+    new_title = "关于不向下修正新转债转股价格的公告"
+    terms = BondTerms(
+        down_reset_block_until=date(2026, 7, 15),
+        down_reset_note=old_title,
+    )
+    events = [
+        CBEvent(
+            bond_code="113001.SH",
+            event_date=date(2026, 4, 15),
+            event_type="down_reset_rejected",
+            raw_title=old_title,
+            effective_end=date(2026, 7, 15),
+        ),
+        CBEvent(
+            bond_code="113001.SH",
+            event_date=date(2026, 8, 1),
+            event_type="down_reset_rejected",
+            raw_title=new_title,
+            effective_end=date(2026, 11, 1),
+        ),
+    ]
+
+    patched = apply_events_to_terms(
+        "113001.SH",
+        terms,
+        events,
+        valuation_date=date(2026, 8, 2),
+    )
+
+    assert patched.down_reset_block_until == date(2026, 11, 1)
+    assert patched.down_reset_note == new_title
+
+
 def test_event_store_round_trips_commitment_months(tmp_path):
     store = CBEventStore(tmp_path / "events.json")
     event = CBEvent(

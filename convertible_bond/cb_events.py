@@ -12,7 +12,8 @@ import re
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from .data_providers import BondTerms, _add_months, to_date
 
@@ -421,14 +422,11 @@ def apply_events_to_terms(
         updates["underlying_status"] = latest_st.parsed_status or "ST/退市风险"
 
     latest_down_rejected = _latest_event(active, "down_reset_rejected")
-    if latest_down_rejected and terms.down_reset_block_until is None:
-        if latest_down_rejected.effective_end:
-            updates["down_reset_block_until"] = latest_down_rejected.effective_end
-        else:
-            updates["down_reset_block_until"] = _add_months(
-                latest_down_rejected.event_date,
-                int(down_reset_cooldown_months),
-            )
+    if latest_down_rejected:
+        updates["down_reset_block_until"] = _down_reset_block_until_from_event(
+            latest_down_rejected,
+            cooldown_months=int(down_reset_cooldown_months),
+        )
         updates["down_reset_note"] = latest_down_rejected.raw_title
 
     return replace(terms, **updates) if updates else terms
@@ -518,6 +516,12 @@ def _extract_dates(text: str) -> list[date]:
 def _latest_event(events: Sequence[CBEvent], event_type: str) -> CBEvent | None:
     matched = [e for e in events if e.event_type == event_type]
     return max(matched, key=_event_sort_key) if matched else None
+
+
+def _down_reset_block_until_from_event(event: CBEvent, *, cooldown_months: int) -> date:
+    if event.effective_end:
+        return event.effective_end
+    return _add_months(event.event_date, int(cooldown_months))
 
 
 def _event_sort_key(event: CBEvent) -> tuple:

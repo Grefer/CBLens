@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import re
 import time
@@ -32,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ─────────────────────────────────────────────────
 
-_QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
-_STATIC_BASE = "http://static.cninfo.com.cn/"
-_SEARCH_URL = "http://www.cninfo.com.cn/new/information/topSearch/query"
+_QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
+_STATIC_BASE = "https://static.cninfo.com.cn/"
+_SEARCH_URL = "https://www.cninfo.com.cn/new/information/topSearch/query"
 
 _HEADERS = {
     "User-Agent": (
@@ -45,8 +46,8 @@ _HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
     "Accept": "application/json, text/plain, */*",
     "X-Requested-With": "XMLHttpRequest",
-    "Origin": "http://www.cninfo.com.cn",
-    "Referer": "http://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice",
+    "Origin": "https://www.cninfo.com.cn",
+    "Referer": "https://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice",
 }
 
 # 可转债相关公告分类 (先精确后兜底; 配合 break-if-results 逻辑)
@@ -318,7 +319,7 @@ class CninfoAnnouncementProvider(DataProvider):
 
             try:
                 body = resp.json()
-            except Exception:
+            except (ValueError, json.JSONDecodeError):
                 msg = f"cninfo 公告查询返回非 JSON (stock={stock})"
                 logger.warning(msg)
                 if not all_rows:

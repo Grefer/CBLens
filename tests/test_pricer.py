@@ -249,8 +249,12 @@ class TestValidation:
                               maturity_date=date(2025, 1, 1))
 
     def test_negative_sigma_raises(self, base_pricer):
-        with pytest.raises(ValueError, match="non-negative"):
+        with pytest.raises(ValueError, match="positive"):
             base_pricer.price(sigma=-0.1, r=0.02, base_spread=0.03)
+
+    def test_zero_sigma_raises(self, base_pricer):
+        with pytest.raises(ValueError, match="positive"):
+            base_pricer.price(sigma=0.0, r=0.02, base_spread=0.03)
 
     def test_small_M_raises(self, base_pricer):
         with pytest.raises(ValueError, match="M must"):
@@ -504,6 +508,24 @@ class TestCallNotice:
         # theta 是数值差分, 不应是 NaN
         assert not np.isnan(result["theta"]), "theta 不应为 NaN"
 
+    def test_call_no_redemption_until_suppresses_call_cap(self, itm_kwargs):
+        """不强赎承诺期内不应套用强赎 cap; 过期承诺不影响强赎边界."""
+        capped = UniversalCBPricer(call_notice_days=0, **itm_kwargs).price(
+            sigma=0.30, r=0.022, base_spread=0.03, M=200, N=500)
+        blocked = UniversalCBPricer(
+            call_notice_days=0,
+            call_no_redemption_until=date(2025, 12, 31),
+            **itm_kwargs,
+        ).price(sigma=0.30, r=0.022, base_spread=0.03, M=200, N=500)
+        expired = UniversalCBPricer(
+            call_notice_days=0,
+            call_no_redemption_until=date(2024, 12, 31),
+            **itm_kwargs,
+        ).price(sigma=0.30, r=0.022, base_spread=0.03, M=200, N=500)
+
+        assert blocked > capped + 0.5
+        assert expired == pytest.approx(capped)
+
 
 # ── 12. 回测 (backtest with FakeProvider) ────────────────────
 from convertible_bond.data_providers import DataProvider, BondTerms, CashflowSchedule
@@ -658,6 +680,35 @@ class TestBacktest:
         assert seen_p_down
         assert all(p == 0.0 for p in seen_p_down)
 
+    def test_backtest_passes_call_no_redemption_until(self, fake_provider, monkeypatch):
+        """回测也要把不强赎承诺窗口传给 UniversalCBPricer."""
+        import convertible_bond.backtest as bt
+
+        provider, start, end = fake_provider
+        provider.terms.call_no_redemption_until = date(2025, 12, 31)
+        seen_until = []
+
+        class SpyPricer:
+            def __init__(self, *args, **kwargs):
+                seen_until.append(kwargs.get("call_no_redemption_until"))
+                self.ratio = 100.0 / float(kwargs["K"])
+
+            def price(self, **_kwargs):
+                return 100.0
+
+            def bond_floor_value(self, *_args, **_kwargs):
+                return 95.0
+
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+
+        bt.backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", p_down=0.15, M=80, N=200, provider=provider,
+        )
+
+        assert seen_until
+        assert all(d == date(2025, 12, 31) for d in seen_until)
+
 
 # ── 13. price_from_provider (provider 通用入口) ────────────
 class TestPriceFromProvider:
@@ -722,6 +773,20 @@ class TestPriceFromProvider:
         assert result["p_down"] == 0.0
         assert result["down_reset_block_until"] == date(2025, 9, 30)
         assert result["down_reset_note"] == "公告不向下修正"
+
+    def test_price_from_provider_passes_call_no_redemption_until(self, fake_provider):
+        """单只定价应把不强赎承诺窗口传入模型, 并在结果里暴露."""
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        provider.terms.call_no_redemption_until = date(2025, 12, 31)
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, M=80, N=200,
+        )
+
+        assert result["call_no_redemption_until"] == date(2025, 12, 31)
 
     def test_price_from_provider_resolves_event_overrides(self, fake_provider, tmp_path, monkeypatch):
         """事件层 announce_date + cooldown_months → block_until 自动推算, p_scale 衰减 p_down."""
@@ -798,6 +863,42 @@ class TestPriceFromProvider:
         assert result["down_reset_cooldown_months"] == 3
         assert "event_end=2025-07-12" in result["down_reset_note"]
         assert "不向下修正测试转债" in result["down_reset_note"]
+
+    def test_price_from_provider_prefers_latest_event_over_stale_cb_data(self, fake_provider, tmp_path, monkeypatch):
+        """cb_data 里旧不下修字段存在时, cb_events 最新公告仍应覆盖它."""
+        from convertible_bond import cb_events as cbe
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        provider.terms.down_reset_block_until = date(2025, 6, 30)
+        provider.terms.down_reset_note = "旧不下修公告"
+
+        store = cbe.CBEventStore(tmp_path / "cb_events.json")
+        store.add_many([
+            cbe.CBEvent(
+                bond_code="123001.SZ",
+                event_date=date(2025, 7, 1),
+                event_type="down_reset_rejected",
+                raw_title="关于不向下修正测试转债转股价格的新公告",
+                effective_end=date(2025, 10, 1),
+                commitment_months=3,
+            ),
+        ])
+        monkeypatch.setattr(cbe, "_default_event_store", store)
+        monkeypatch.setattr(
+            dro,
+            "_default_overrides",
+            dro.DownResetOverrides(tmp_path / "down_reset_overrides.json"),
+        )
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_block_until"] == date(2025, 10, 1)
+        assert "新公告" in result["down_reset_note"]
 
 
 # ── 14. 条款本地缓存 + CachingDataProvider ──────────────────
@@ -1199,6 +1300,7 @@ class TestCSVDataProvider:
             "down_reset_p_scale": 0.25,
             "down_reset_note": "csv override",
             "down_reset_cooldown_months": 6,
+            "call_no_redemption_until": "2025-12-31",
         }), encoding="utf-8")
 
         provider = CSVDataProvider(tmp_path)
@@ -1208,3 +1310,156 @@ class TestCSVDataProvider:
         assert terms.down_reset_p_scale == 0.25
         assert terms.down_reset_note == "csv override"
         assert terms.down_reset_cooldown_months == 6
+        assert terms.call_no_redemption_until == date(2025, 12, 31)
+
+
+# ── 16. PDE 收敛性与应力测试 ────────────────────────────────
+class TestPDEConvergence:
+
+    def test_mesh_refinement_converges(self):
+        """M×N 翻倍后理论价变化应足够小 (< 0.5 元), 即网格已收敛."""
+        pricer = UniversalCBPricer(
+            S0=50.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
+            redemption_price=107.0,
+        )
+        p0 = pricer.price(sigma=0.28, r=0.022, q=0.01, base_spread=0.03,
+                          p_down=0.05, distress_k=0.03, M=200, N=500)
+        p1 = pricer.price(sigma=0.28, r=0.022, q=0.01, base_spread=0.03,
+                          p_down=0.05, distress_k=0.03, M=400, N=1000)
+        p2 = pricer.price(sigma=0.28, r=0.022, q=0.01, base_spread=0.03,
+                          p_down=0.05, distress_k=0.03, M=800, N=2000)
+
+        # M=400→800 的变化应 < M=200→400 的变化 (收敛)
+        d1 = abs(p1 - p0)
+        d2 = abs(p2 - p1)
+        assert d1 < 3.0, f"粗网格 → 中网格 变动 {d1:.2f} 元, 超出预期"
+        assert d2 < 0.5, f"中网格 → 细网格 变动 {d2:.2f} 元, 未收敛"
+
+    def test_default_grids_produce_similar_price(self):
+        """批量 (M=300/N=1000) 与单只 (M=500/N=2000) 默认网格定价接近."""
+        pricer = UniversalCBPricer(
+            S0=50.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        p_batch = pricer.price(sigma=0.28, r=0.022, q=0.0, base_spread=0.03,
+                               M=300, N=1000)
+        p_single = pricer.price(sigma=0.28, r=0.022, q=0.0, base_spread=0.03,
+                                M=500, N=2000)
+        assert abs(p_single - p_batch) < 0.3, \
+            f"批量 {p_batch:.3f} vs 单只 {p_single:.3f}, 偏差 {abs(p_single - p_batch):.4f} > 0.3"
+
+
+class TestPDEStress:
+
+    def test_low_sigma_behaves_sensibly(self):
+        """极低波动率 (1%) 下, 定价仍合理且不崩溃."""
+        pricer = UniversalCBPricer(
+            S0=100.0, K=100.0,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2025, 12, 31),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            coupon_rates=(0.01,),
+            redemption_price=107.0,
+        )
+        p = pricer.price(sigma=0.01, r=0.02, q=0.0, base_spread=0.02,
+                         M=300, N=1000)
+        assert p > 0
+        bf = pricer.bond_floor_value(date(2025, 1, 1), 0.02 + 0.02)
+        assert p > bf * 0.95
+
+    def test_high_sigma_behaves_sensibly(self):
+        """极高波动率 (200%) 下, 定价不崩溃且 ≥ 转股价值."""
+        pricer = UniversalCBPricer(
+            S0=100.0, K=100.0,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2025, 12, 31),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            coupon_rates=(0.01,),
+            redemption_price=107.0,
+        )
+        p = pricer.price(sigma=2.0, r=0.02, q=0.0, base_spread=0.02,
+                         M=300, N=1000)
+        assert p > 0
+        parity = 100.0 / 100.0 * 100
+        assert p >= parity * 0.95, f"高 σ 定价 {p:.2f} 不应远低于转股价值 {parity:.2f}"
+
+    def test_very_short_maturity(self):
+        """极短剩余期限 (1 天) 定价不 crash, 应接近 max(parity, redeem)."""
+        pricer = UniversalCBPricer(
+            S0=100.0, K=100.0,
+            current_date=date(2025, 12, 30),
+            maturity_date=date(2025, 12, 31),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            coupon_rates=(0.02,),
+            redemption_price=107.0,
+        )
+        p = pricer.price(sigma=0.30, r=0.02, q=0.0, base_spread=0.02,
+                         M=200, N=500)
+        parity = 100.0
+        assert abs(p - max(107.0, parity)) < 5.0, \
+            f"T=1天 定价 {p:.1f} 远离 max(redeem, parity)={max(107.0, parity):.1f}"
+
+    def test_deep_otm_approaches_bond_floor(self):
+        """深度虚值 (S≪K) 时, 理论价接近纯债价值."""
+        pricer = UniversalCBPricer(
+            S0=10.0, K=100.0,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2025, 12, 31),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            coupon_rates=(0.02,),
+            redemption_price=107.0,
+        )
+        p = pricer.price(sigma=0.30, r=0.02, q=0.0, base_spread=0.03,
+                         M=300, N=1000)
+        bf = pricer.bond_floor_value(date(2025, 1, 1), 0.02 + 0.03)
+        assert p >= bf * 0.9
+        assert p < 120, f"深度虚值定价 {p:.1f} 不应显著高于纯债值 {bf:.1f}"
+
+    def test_deep_itm_tracks_parity(self):
+        """深度实值 (S≫K) 时, 定价应接近转股价值."""
+        pricer = UniversalCBPricer(
+            S0=300.0, K=100.0,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2025, 12, 31),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            coupon_rates=(0.01,),
+            redemption_price=107.0,
+        )
+        p = pricer.price(sigma=0.30, r=0.02, q=0.0, base_spread=0.03,
+                         M=300, N=1000)
+        parity = 300.0 / 100.0 * 100  # 300
+        # 深度 ITM 会触发强赎 cap, price 不应远超 parity
+        assert abs(p - parity) / parity < 0.20, \
+            f"深度 ITM 定价 {p:.1f} 距转股价值 {parity:.1f} 偏差 {(abs(p-parity)/parity)*100:.1f}%"
+
+    def test_high_dividend_yield_reduces_drift(self):
+        """q 接近 r 时股价漂移趋零, OTM 定价应明显低于 q=0 情形."""
+        pricer = UniversalCBPricer(
+            S0=80.0, K=100.0,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2025, 12, 31),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            coupon_rates=(0.01,),
+            redemption_price=107.0,
+        )
+        p_no_q = pricer.price(sigma=0.30, r=0.03, q=0.0, base_spread=0.02,
+                              M=300, N=1000)
+        p_high_q = pricer.price(sigma=0.30, r=0.03, q=0.025, base_spread=0.02,
+                                M=300, N=1000)
+        assert p_high_q < p_no_q, \
+            f"高股息率应降低 OTM 定价: q=0 → {p_no_q:.2f}, q=0.025 → {p_high_q:.2f}"

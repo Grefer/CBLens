@@ -83,7 +83,7 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 
 这些字段不会由 Wind 自动同步，适合记录“不下修”等公告事件：
 
-- `down_reset_block_until`: 该日期前不计下修博弈，例如公告未来一个月不提议下修
+- `down_reset_block_until`: 该日期前不计下修博弈；无 `cb_events` / `down_reset_overrides.json` 时作为 fallback
 - `down_reset_p_scale`: 单债下修强度缩放，`0` 表示完全不计下修博弈，`0.25` 表示按模型默认强度的 25%
 - `down_reset_note`: 覆盖原因或公告摘要
 
@@ -135,5 +135,7 @@ python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
 ```
 
 `--apply` 会把事件表应用回 `cb_data.json` 的状态字段，例如强赎公告会写入
-`call_status / call_announce_date / call_redemption_date`，不下修公告会写入
-`down_reset_block_until / down_reset_note`。
+`call_status / call_announce_date / call_redemption_date`，不强赎公告会写入
+`call_no_redemption_until`，不下修公告会写入 `down_reset_block_until / down_reset_note`。
+定价时以 `down_reset_overrides.json` 和 `cb_events.json` 中的最新公告为准，避免旧
+`cb_data` 字段挡住后续事件。

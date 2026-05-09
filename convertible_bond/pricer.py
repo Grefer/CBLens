@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_COUPON_RATES: tuple[float, ...] = (0.003, 0.004, 0.008, 0.015, 0.018, 0.02)
 DEFAULT_FACE_VALUE: float = 100.0
 DEFAULT_REDEMPTION_PRICE: float = 107.0
+_DAYS_PER_YEAR: float = 365.0
+_S_MAX_CAP: float = 50.0  # 网格上界 S_max/K 的上限, 防止极端 σ/T 下内存爆炸
 
 
 class UniversalCBPricer:
@@ -34,6 +36,7 @@ class UniversalCBPricer:
                  issue_date: date | None = None, conversion_start_date: date | None = None,
                  call_start_date: date | None = None,
                  coupon_rates: tuple[float, ...] | None = None, call_trigger_ratio: float = 1.3,
+                 call_no_redemption_until: date | None = None,
                  put_trigger_ratio: float = 0.7,
                  put_active_years: int = 2,
                  down_reset_premium: float = 1.02,
@@ -49,6 +52,7 @@ class UniversalCBPricer:
         self.conversion_start_date = conversion_start_date or current_date
         self.call_start_date = call_start_date or self.conversion_start_date
         self.call_trigger_ratio = call_trigger_ratio
+        self.call_no_redemption_until = call_no_redemption_until
         self.put_trigger_ratio = put_trigger_ratio
         self.put_active_years = put_active_years
         self.down_reset_premium = down_reset_premium
@@ -56,16 +60,41 @@ class UniversalCBPricer:
         self.call_notice_days = max(0, int(call_notice_days))
         self.coupon_rates = tuple(coupon_rates or DEFAULT_COUPON_RATES)
 
-        self.T = (maturity_date - current_date).days / 365.0
+        self.T = (maturity_date - current_date).days / _DAYS_PER_YEAR
         self.current_date = current_date
         self.maturity_date = maturity_date
         self.put_start_date = self._add_years(self.maturity_date, -self.put_active_years)
         self.coupon_periods = self._build_coupon_periods()
 
+        # 预计算连续时间上的关键事件点, 避免 PDE 步内 round(t*365) 日期量化导致事件漏判.
+        # 当 N 较大时 dt*365 < 0.5, 连续多个 PDE 步的 round(t*365) 映射到同一日历日,
+        # 票息/强赎/回售/下修等事件可能被跨越的步骤跳过.
+        self._coupon_payment_events: list[tuple[float, float]] = []
+        for p in self.coupon_periods:
+            if not p["is_final"]:
+                t_pay = (p["end"] - current_date).days / _DAYS_PER_YEAR
+                if 0 < t_pay <= self.T:
+                    self._coupon_payment_events.append((t_pay, p["coupon_amount"]))
+        self._conv_start_t = (self.conversion_start_date - current_date).days / _DAYS_PER_YEAR
+        self._call_start_t = (self.call_start_date - current_date).days / _DAYS_PER_YEAR
+        self._call_no_redemption_until_t: float | None = None
+        if self.call_no_redemption_until is not None:
+            self._call_no_redemption_until_t = (
+                self.call_no_redemption_until - current_date
+            ).days / _DAYS_PER_YEAR
+        self._put_start_t = (self.put_start_date - current_date).days / _DAYS_PER_YEAR
+        self._down_reset_block_until_t: float | None = None
+        if self.down_reset_block_until is not None:
+            self._down_reset_block_until_t = (self.down_reset_block_until - current_date).days / _DAYS_PER_YEAR
+
     @staticmethod
     def _validate_inputs(S0, K, current_date, maturity_date, face_value):
+        if not isinstance(S0, (int, float)) or (S0 != S0) or (S0 != 0 and abs(S0) == float("inf")):
+            raise ValueError(f"S0 must be a finite number, got {S0!r}")
         if S0 <= 0:
             raise ValueError("S0 must be positive")
+        if not isinstance(K, (int, float)) or (K != K) or (K != 0 and abs(K) == float("inf")):
+            raise ValueError(f"K must be a finite number, got {K!r}")
         if K <= 0:
             raise ValueError("K must be positive")
         if face_value <= 0:
@@ -114,7 +143,7 @@ class UniversalCBPricer:
         for period in self.coupon_periods:
             if period["start"] <= capped_date <= period["end"]:
                 accrual_days = (capped_date - period["start"]).days
-                return self.face_value * period["rate"] * accrual_days / 365.0
+                return self.face_value * period["rate"] * accrual_days / _DAYS_PER_YEAR
         return 0.0
 
     def discrete_coupon_amount(self, interval_start: date, interval_end: date) -> float:
@@ -133,11 +162,11 @@ class UniversalCBPricer:
         return cash
 
     def bond_floor_value(self, valuation_date, discount_rate):
-        value = self.redemption_price / np.exp(discount_rate * max(0.0, (self.maturity_date - valuation_date).days / 365.0))
+        value = self.redemption_price / np.exp(discount_rate * max(0.0, (self.maturity_date - valuation_date).days / _DAYS_PER_YEAR))
         for period in self.coupon_periods:
             if period["is_final"] or period["end"] <= valuation_date:
                 continue
-            tau = (period["end"] - valuation_date).days / 365.0
+            tau = (period["end"] - valuation_date).days / _DAYS_PER_YEAR
             value += period["coupon_amount"] / np.exp(discount_rate * max(0.0, tau))
         return value
 
@@ -150,9 +179,14 @@ class UniversalCBPricer:
             raise ValueError("rights_issue_price is required when rights_issue_ratio > 0")
 
         adjusted = self.K - cash_dividend
+        if adjusted <= 0:
+            raise ValueError(f"调整后转股价分子 {adjusted:.4f} <= 0, cash_dividend={cash_dividend!r} 不能超过当前转股价 {self.K}")
         denominator = 1.0 + stock_dividend_ratio + rights_issue_ratio
         numerator = adjusted + (rights_issue_price or 0.0) * rights_issue_ratio
-        self.K = round(numerator / denominator, 2)
+        new_K = round(numerator / denominator, 2)
+        if new_K <= 0:
+            raise ValueError(f"调整后的转股价 {new_K} <= 0, 请检查参数 (K={self.K}, cash_dividend={cash_dividend!r})")
+        self.K = new_K
         self.ratio = self.face_value / self.K
         return self.K
 
@@ -160,7 +194,8 @@ class UniversalCBPricer:
                     p_down: float, distress_k: float,
                     M: int, N: int) -> tuple[np.ndarray, np.ndarray]:
         """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心."""
-        S_max_ref = max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))) * self.K
+        # S_max 上限 _S_MAX_CAP 防止极端 σ/T (如 σ=2.0, T=10) 下 exp(3σ√T) 天文数字导致 OOM
+        S_max_ref = min(max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))), _S_MAX_CAP) * self.K
         S_max = max(S_max_ref, 1.5 * self.S0)
         dt = self.T / N
         S_grid = np.linspace(0, S_max, M + 1)
@@ -171,12 +206,19 @@ class UniversalCBPricer:
         for n in range(N, 0, -1):
             t_now = n * dt
             t_prev = (n - 1) * dt
-            step_date = self.current_date + timedelta(days=round(t_prev * 365.0))
-            interval_end = self.current_date + timedelta(days=round(t_now * 365.0))
+            # step_date 仅用于 bond_floor_value / accrued_interest 等按日历日计息的计算;
+            # int() 保证日期单调非递减, 不会像 round() 在 dt*365<0.5 时出现多步同日的情况.
+            step_date = self.current_date + timedelta(days=int(t_prev * _DAYS_PER_YEAR))
 
             current_spreads = base_spread + distress_k * np.maximum(0, 1 - S_grid/self.K)
             r_total = r + current_spreads
-            coupon_cash = self.discrete_coupon_amount(step_date, interval_end)
+
+            # 离散票息: 在连续时间轴上判断 (t_prev, t_now] 内是否有付息事件,
+            # 避免日期量化导致跨步漏判
+            coupon_cash = 0.0
+            for t_pay, amount in self._coupon_payment_events:
+                if t_prev < t_pay <= t_now:
+                    coupon_cash += amount
             if coupon_cash:
                 V += coupon_cash
 
@@ -210,8 +252,12 @@ class UniversalCBPricer:
             accrued = self.accrued_interest(step_date)
             call_price = self.face_value + accrued
             put_price = self.face_value + accrued
-            can_convert = step_date >= self.conversion_start_date
-            can_call = step_date >= self.call_start_date
+            can_convert = t_prev >= self._conv_start_t
+            call_redemption_allowed = (
+                self._call_no_redemption_until_t is None
+                or t_prev > self._call_no_redemption_until_t
+            )
+            can_call = t_prev >= self._call_start_t and call_redemption_allowed
 
             if can_convert:
                 V = np.maximum(V, S_grid * self.ratio)
@@ -224,7 +270,7 @@ class UniversalCBPricer:
                     # call_notice_days=0 时退化为旧版"立即行权"刚性 cap.
                     mask_call = S_grid >= self.K * self.call_trigger_ratio
                     if self.call_notice_days > 0:
-                        t_grace = self.call_notice_days / 365.0
+                        t_grace = self.call_notice_days / _DAYS_PER_YEAR
                         grace_premium = float(sigma) * np.sqrt(t_grace)
                         parity_capped = S_grid[mask_call] * self.ratio * (1.0 + grace_premium)
                     else:
@@ -241,8 +287,8 @@ class UniversalCBPricer:
                 # 同一 CB 网格上 moneyness=premium 处的 V, 下限为 face*premium.
                 # ITM 区域 (S>K) p_reset=0 不受影响; OTM 区域被适度拉升, 天然单调连续.
                 down_reset_allowed = (
-                    self.down_reset_block_until is None
-                    or step_date > self.down_reset_block_until
+                    self._down_reset_block_until_t is None
+                    or t_prev > self._down_reset_block_until_t
                 )
                 if p_down > 0 and down_reset_allowed:
                     # S-dependent 下修概率: S>=K → 0, S=0 → step_down_prob
@@ -253,7 +299,7 @@ class UniversalCBPricer:
                     reset_value = max(V_post_reset, conv_floor)
                     V = (1 - p_reset) * V + p_reset * np.maximum(V, reset_value)
 
-            if step_date >= self.put_start_date:
+            if t_prev >= self._put_start_t:
                 mask_put = S_grid <= self.K * self.put_trigger_ratio
                 V[mask_put] = np.maximum(V[mask_put], put_price)
                 V[0] = max(V[0], put_price)
@@ -291,8 +337,10 @@ class UniversalCBPricer:
           模型 cap 把 V 截到 parity·(1+σ√t_grace), 数值上略低于 parity 时该字段可能为
           小负数 (~ 0.x 元), 不是错误而是 cap 与离散网格的数值噪声边界。
         """
-        if sigma < 0 or r < 0 or q < 0 or base_spread < 0:
-            raise ValueError("sigma, r, q and base_spread must be non-negative")
+        if sigma <= 0:
+            raise ValueError("sigma must be positive (sigma=0 would cause PDE degeneracy)")
+        if r < 0 or q < 0 or base_spread < 0:
+            raise ValueError("r, q and base_spread must be non-negative")
         if M < 3 or N < 1:
             raise ValueError("M must be >= 3 and N must be >= 1")
 
@@ -336,6 +384,7 @@ class UniversalCBPricer:
                 call_start_date=self.call_start_date,
                 coupon_rates=self.coupon_rates,
                 call_trigger_ratio=self.call_trigger_ratio,
+                call_no_redemption_until=self.call_no_redemption_until,
                 put_trigger_ratio=self.put_trigger_ratio,
                 put_active_years=self.put_active_years,
                 down_reset_premium=self.down_reset_premium,

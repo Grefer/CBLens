@@ -88,6 +88,15 @@ def price_from_provider(provider: DataProvider, bond_code,
     if sigma is None:
         sigma = provider.hist_vol(stock_code, val_date, vol_window_days)
     S0 = provider.get_stock_close(stock_code, val_date)
+
+    # 校验 S0 / sigma: provider 可能返回 None/NaN/0, 提前拦截避免 pricer 报错不清晰
+    S0 = _finite_float(S0)
+    if S0 is None or S0 <= 0:
+        raise ValueError(f"{bond_code} 正股价无效 (S0={S0!r}), 无法定价")
+    sigma = _finite_float(sigma)
+    if sigma is None or sigma <= 0:
+        raise ValueError(f"{bond_code} 波动率无效 (sigma={sigma!r}), 无法定价")
+
     if q is None:
         try:
             q_pct = _finite_float(provider.get_stock_dividend_yield(stock_code, val_date))
@@ -135,6 +144,8 @@ def price_from_provider(provider: DataProvider, bond_code,
     )
     if terms.call_trigger_pct is not None:
         pricer_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
+    if terms.call_no_redemption_until is not None:
+        pricer_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
     if terms.put_trigger_pct is not None:
         pricer_kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
 
@@ -183,6 +194,7 @@ def price_from_provider(provider: DataProvider, bond_code,
         "underlying_status": terms.underlying_status,
         "underlying_trade_status": terms.underlying_trade_status,
         "underlying_pct_change": terms.underlying_pct_change,
+        "call_no_redemption_until": terms.call_no_redemption_until,
         "coupon_source": "cashflow" if cf and cf.coupon_rates else "terms",
         "theoretical_price": theo,
         "data_source": provider.name,
@@ -224,6 +236,8 @@ class _BatchStockCache(DataProvider):
 
     线程安全 (多线程并发定价时不会重复请求, 先到的线程写入, 后到的直接读缓存).
     """
+    _INFLIGHT_TIMEOUT = 30.0
+    _MAX_INFLIGHT_RETRIES = 2
 
     def __init__(self, inner: DataProvider):
         self._inner = inner
@@ -235,78 +249,147 @@ class _BatchStockCache(DataProvider):
         self._dividend_yield_cache: dict[tuple, float | None] = {}
         import threading
         self._lock = threading.Lock()
-        # 每个 hist_vol/history key 一把 Event, 避免并发重复打网络
         self._inflight: dict[tuple, "threading.Event"] = {}
+
+    # ── inflight-event 辅助 ────────────────────────────────
+    def _inflight_try_acquire(self, inflight_key: tuple, cache_dict: dict, cache_key: tuple):
+        """尝试获取 inflight 所有权. 返回 (is_owner, cache_hit, value_or_event).
+
+        已命中缓存 → (True, True, value); 非 owner → (False, False, event);
+        owner → (True, False, new_event).
+        """
+        import threading
+        with self._lock:
+            if cache_key in cache_dict:
+                return True, True, cache_dict[cache_key]
+            event = self._inflight.get(inflight_key)
+            if event is not None:
+                return False, False, event
+            event = self._inflight[inflight_key] = threading.Event()
+            return True, False, event
+
+    def _inflight_release(self, inflight_key: tuple):
+        with self._lock:
+            ev = self._inflight.pop(inflight_key, None)
+        if ev is not None:
+            ev.set()
+
+    def _inflight_wait_for(self, event, inflight_key: tuple) -> None:
+        """等待 inflight event, 超时直接暴露数据源卡顿而不是返回 None."""
+        if not event.wait(timeout=self._INFLIGHT_TIMEOUT):
+            raise TimeoutError(f"{self.name} 批量缓存等待超时: {inflight_key!r}")
 
     # ── 缓存的接口 ────────────────────────────────────────
     def get_stock_close(self, stock_code, on_date):
-        key = (stock_code, on_date)
-        with self._lock:
-            if key in self._close_cache:
-                return self._close_cache[key]
-            # 在线 provider 未明确线程安全, 缓存 miss 时也串行访问 inner.
-            value = self._inner.get_stock_close(stock_code, on_date)
-            self._close_cache[key] = value
-            return value
+        cache_key = (stock_code, on_date)
+        inflight_key = ("close", stock_code, on_date)
+        for _ in range(self._MAX_INFLIGHT_RETRIES + 1):
+            is_owner, hit, value_or_ev = self._inflight_try_acquire(
+                inflight_key, self._close_cache, cache_key)
+            if hit:
+                return value_or_ev
+            if not is_owner:
+                self._inflight_wait_for(value_or_ev, inflight_key)
+                with self._lock:
+                    if cache_key in self._close_cache:
+                        return self._close_cache[cache_key]
+                continue
+            try:
+                value = self._inner.get_stock_close(stock_code, on_date)
+                with self._lock:
+                    self._close_cache[cache_key] = value
+                return value
+            finally:
+                self._inflight_release(inflight_key)
+        raise RuntimeError(f"{stock_code} {on_date} 正股价缓存填充失败")
 
     def get_stock_history(self, stock_code, start, end):
-        key = (stock_code, start, end)
-        with self._lock:
-            if key in self._history_cache:
-                return self._history_cache[key]
-            value = self._inner.get_stock_history(stock_code, start, end)
-            self._history_cache[key] = value
-            return value
+        cache_key = (stock_code, start, end)
+        inflight_key = ("history", stock_code, start, end)
+        for _ in range(self._MAX_INFLIGHT_RETRIES + 1):
+            is_owner, hit, value_or_ev = self._inflight_try_acquire(
+                inflight_key, self._history_cache, cache_key)
+            if hit:
+                return value_or_ev
+            if not is_owner:
+                self._inflight_wait_for(value_or_ev, inflight_key)
+                with self._lock:
+                    if cache_key in self._history_cache:
+                        return self._history_cache[cache_key]
+                continue
+            try:
+                value = self._inner.get_stock_history(stock_code, start, end)
+                with self._lock:
+                    self._history_cache[cache_key] = value
+                return value
+            finally:
+                self._inflight_release(inflight_key)
+        raise RuntimeError(f"{stock_code} {start}~{end} 正股历史缓存填充失败")
 
     def get_stock_dividend_yield(self, stock_code, on_date):
-        key = (stock_code, on_date)
-        with self._lock:
-            if key in self._dividend_yield_cache:
-                return self._dividend_yield_cache[key]
-            getter = getattr(self._inner, "get_stock_dividend_yield", None)
-            value = getter(stock_code, on_date) if getter is not None else None
-            self._dividend_yield_cache[key] = value
-            return value
+        cache_key = (stock_code, on_date)
+        inflight_key = ("div_yield", stock_code, on_date)
+        for _ in range(self._MAX_INFLIGHT_RETRIES + 1):
+            is_owner, hit, value_or_ev = self._inflight_try_acquire(
+                inflight_key, self._dividend_yield_cache, cache_key)
+            if hit:
+                return value_or_ev
+            if not is_owner:
+                self._inflight_wait_for(value_or_ev, inflight_key)
+                with self._lock:
+                    if cache_key in self._dividend_yield_cache:
+                        return self._dividend_yield_cache[cache_key]
+                continue
+            try:
+                getter = getattr(self._inner, "get_stock_dividend_yield", None)
+                value = getter(stock_code, on_date) if getter is not None else None
+                with self._lock:
+                    self._dividend_yield_cache[cache_key] = value
+                return value
+            finally:
+                self._inflight_release(inflight_key)
+        raise RuntimeError(f"{stock_code} {on_date} 股息率缓存填充失败")
 
     def hist_vol(self, stock_code, end_date, window_days):
-        import threading
         cache_key = (stock_code, end_date, window_days)
         inflight_key = ("vol", *cache_key)
-        with self._lock:
-            if cache_key in self._vol_cache:
-                return self._vol_cache[cache_key]
-            event = self._inflight.get(inflight_key)
-            owner = event is None
-            if owner:
-                event = self._inflight[inflight_key] = threading.Event()
-        if not owner:
-            event.wait()
-            with self._lock:
-                if cache_key in self._vol_cache:
-                    return self._vol_cache[cache_key]
-            # owner 失败 → 当前线程重新进入 (此时 inflight 已被 owner 清掉)
-            return self.hist_vol(stock_code, end_date, window_days)
-        try:
-            lookback = max(window_days * 2, window_days + 15)
-            history = self.get_stock_history(
-                stock_code, end_date - timedelta(days=lookback), end_date)
-            closes = np.array([v for _, v in history if v is not None], dtype=float)
-            if len(closes) > window_days + 1:
-                closes = closes[-(window_days + 1):]
-            if len(closes) < 5:
-                raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
-            log_ret = np.diff(np.log(closes))
-            value = float(np.std(log_ret, ddof=1) * np.sqrt(252))
-            latest_close = _latest_price_on_or_before(history, end_date)
-            with self._lock:
-                self._vol_cache[cache_key] = value
-                if latest_close is not None:
-                    self._close_cache.setdefault((stock_code, end_date), latest_close)
-            return value
-        finally:
-            with self._lock:
-                self._inflight.pop(inflight_key, None)
-            event.set()
+        _MAX_RETRIES = 2
+        for attempt in range(_MAX_RETRIES + 1):
+            is_owner, hit, value_or_ev = self._inflight_try_acquire(
+                inflight_key, self._vol_cache, cache_key)
+            if hit:
+                return value_or_ev
+            if not is_owner:
+                self._inflight_wait_for(value_or_ev, inflight_key)
+                # owner 可能已完成 (cache hit) 或失败 (inflight 已清除, 需重试)
+                with self._lock:
+                    if cache_key in self._vol_cache:
+                        return self._vol_cache[cache_key]
+                continue  # owner 失败, 下次循环重新尝试获取 ownership
+            # 本线程是 owner, 执行计算
+            try:
+                lookback = max(window_days * 2, window_days + 15)
+                history = self.get_stock_history(
+                    stock_code, end_date - timedelta(days=lookback), end_date)
+                closes = np.array([v for _, v in history if v is not None], dtype=float)
+                if len(closes) > window_days + 1:
+                    closes = closes[-(window_days + 1):]
+                if len(closes) < 5:
+                    raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
+                log_ret = np.diff(np.log(closes))
+                value = float(np.std(log_ret, ddof=1) * np.sqrt(252))
+                latest_close = _latest_price_on_or_before(history, end_date)
+                with self._lock:
+                    self._vol_cache[cache_key] = value
+                    if latest_close is not None:
+                        self._close_cache.setdefault((stock_code, end_date), latest_close)
+                return value
+            except Exception:
+                if attempt == _MAX_RETRIES:
+                    raise
+            finally:
+                self._inflight_release(inflight_key)
+        raise RuntimeError("hist_vol: unreachable")
 
     # ── 直接透传的接口 ────────────────────────────────────
     def get_bond_terms(self, bond_code, valuation_date):

@@ -86,6 +86,8 @@ def backtest_theoretical_price(
     )
     if terms.call_trigger_pct is not None:
         common_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
+    if terms.call_no_redemption_until is not None:
+        common_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
     if terms.put_trigger_pct is not None:
         common_kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
     if terms.put_obs_months is not None and issue_dt and maturity_dt:

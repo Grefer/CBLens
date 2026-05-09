@@ -17,9 +17,9 @@
       }
 
 ``resolve_down_reset`` 把 cb_events + 手工覆盖 + 条款字段合并成 pricer 需要的
-``(block_until, p_scale, note)`` 三元组. 其中 cb_events 解析出的
-``effective_end`` 会直接作为冻结期; 显式手填的 ``BondTerms.down_reset_block_until``
-仍然优先 (硬 override).
+``(block_until, p_scale, note)`` 三元组. 手工 ``down_reset_overrides.json``
+优先; 其次使用 cb_events 中最新"不下修"公告, 避免旧的 cb_data 状态挡住后续公告;
+``BondTerms.down_reset_block_until`` 仅作为无事件时的 fallback。
 """
 from __future__ import annotations
 
@@ -136,10 +136,11 @@ def resolve_down_reset(
     """合并条款 + 事件层, 给 pricer 一组现成参数.
 
     优先级 (高 → 低):
-      1. ``terms.down_reset_block_until`` 显式硬 override
+      1. ``down_reset_overrides.json`` 显式公告日/强度覆盖
       2. cb_events 中最新不下修事件的 ``effective_end``
       3. 事件公告日 + cooldown_months 计算的 block_until
-      4. 无 (block_until = None, 即不屏蔽)
+      4. ``terms.down_reset_block_until`` 历史字段 fallback
+      5. 无 (block_until = None, 即不屏蔽)
 
     p_scale: 事件层 ``p_scale_after_cooldown`` 优先, 否则用 ``terms.down_reset_p_scale``.
     """
@@ -172,12 +173,12 @@ def resolve_down_reset(
             bond_code, announce_date, DEFAULT_COOLDOWN_MONTHS,
         )
 
-    if terms.down_reset_block_until is not None:
-        block_until = terms.down_reset_block_until
-    elif event_block_until is not None:
+    if event_block_until is not None:
         block_until = event_block_until
     elif announce_date is not None and cooldown is not None:
         block_until = _add_months(announce_date, int(round(float(cooldown))))
+    elif terms.down_reset_block_until is not None:
+        block_until = terms.down_reset_block_until
     else:
         block_until = None
 

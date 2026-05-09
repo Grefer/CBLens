@@ -22,7 +22,8 @@ import threading
 from dataclasses import asdict, fields, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable, get_args, get_origin, get_type_hints
+from collections.abc import Iterable
+from typing import get_args, get_origin, get_type_hints
 
 # 注: 类型标注统一使用 X | None / list[X] (PEP 604, Python 3.10+).
 
@@ -133,7 +134,7 @@ class TermsBundle:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 self._data = json.load(f)
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.warning("bundle 文件 %s 解析失败: %s; 视为空", self.path, e)
             self._data = {}
 
@@ -240,7 +241,7 @@ class TermsCache:
         try:
             with open(p, "r", encoding="utf-8") as f:
                 d = json.load(f)
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             logger.warning("缓存文件 %s 解析失败: %s", p, e)
             return None
         return _json_dict_to_terms(d)
@@ -266,7 +267,7 @@ class TermsCache:
         try:
             with open(p, "r", encoding="utf-8") as f:
                 d = json.load(f)
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             return None
         meta = d.get("_meta", {})
         ts = meta.get("fetched_at")

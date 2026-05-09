@@ -98,6 +98,7 @@ class CSVDataProvider(DataProvider):
             call_status=d.get("call_status"),
             call_announce_date=to_date(d.get("call_announce_date")),
             call_redemption_date=to_date(d.get("call_redemption_date")),
+            call_no_redemption_until=to_date(d.get("call_no_redemption_until")),
             last_trading_date=to_date(d.get("last_trading_date")),
             delisting_date=to_date(d.get("delisting_date")),
             underlying_name=d.get("underlying_name"),
