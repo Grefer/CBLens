@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/cblens-banner.png" alt="CBLens — A 股可转债定价与机会筛选工作台" width="720" />
+  <img src="assets/cblens-banner.svg" alt="CBLens — A 股可转债定价与机会筛选工作台" width="720" />
   <br /><br />
 
   <a href="#快速开始"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+" /></a>

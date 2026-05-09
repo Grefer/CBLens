@@ -13,6 +13,7 @@ dependencies = [
     "scipy>=1.14",
     "pillow>=10.0",
     "akshare>=1.13",
+    "pdfplumber>=0.9",
 ]
 
 [project.optional-dependencies]
