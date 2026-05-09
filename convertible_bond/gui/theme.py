@@ -30,8 +30,10 @@ _IS_WIN = sys.platform == "win32"
 # 下不模糊. mono 字体 Cascadia Mono 是 Windows 11 自带, 数字列对齐;
 # Windows 10 老版本可能没有, Tk 会自动回退到 Consolas (universal, 也清晰).
 if _IS_MAC:
-    FONT_FAMILY = "SF Pro Display"
-    FONT_MONO = "SF Mono"
+    # macOS 系统字体：使用 PingFang SC 保证中英文显示无缝且不回退模糊
+    # Menlo 是所有 macOS 内置的标准等宽字体
+    FONT_FAMILY = "PingFang SC"
+    FONT_MONO = "Menlo"
 elif _IS_WIN:
     FONT_FAMILY = "Microsoft YaHei UI"
     FONT_MONO = "Cascadia Mono"
@@ -64,3 +66,24 @@ def get_color(color_val):
     if isinstance(color_val, tuple):
         return color_val[1] if ctk.get_appearance_mode() == "Dark" else color_val[0]
     return color_val
+
+_WIN_EMOJI_FALLBACK = {
+    "📦 ": "", "⚡ ": "", "📈 ": "", "🔥 ": "", 
+    "🌐 ": "", "📥 ": "", "🆕 ": "", "⭐ ": "", "📝 ": "", 
+    "✅ ": "", "❌ ": "", "⚠ ": "", "🗑 ": "",
+    "📦": "", "⚡": "", "📈": "", "🔥": "", 
+    "🔄": "刷新", "💾": "保存", "📂": "载入",
+}
+
+def E(text: str) -> str:
+    """跨端 Emoji 处理器。
+    Tkinter 8.6 在 Windows 无法渲染彩色 Emoji（降级为丑陋的黑白线框）。
+    此函数在 Windows 下自动剥离常见 Emoji，或将独立 Emoji 按钮替换为纯文本；Mac 下则原样保留。
+    """
+    if not _IS_WIN:
+        return text
+    for emoji, fallback in _WIN_EMOJI_FALLBACK.items():
+        if text == emoji.strip():  # 独立按钮（如 "🔄"）直接替换
+            return fallback
+        text = text.replace(emoji, fallback)
+    return text.strip()

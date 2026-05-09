@@ -31,12 +31,33 @@ from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
     _attach_column_sort,
+    _configure_responsive_columns,
     _configure_tree_style,
     _format_tags,
     _is_finite,
     _median,
     _resolve_row_tag,
 )
+
+_WATCHLIST_COL_STRETCH_WEIGHTS = {
+    "代码": 0.5,
+    "名称": 1.0,
+    "正股": 0.6,
+    "上市日": 0.75,
+    "可交易日": 0.75,
+    "距交易": 0.25,
+    "机会分": 0.35,
+    "可信": 0.2,
+    "理论价": 0.35,
+    "市价": 0.35,
+    "偏差(%)": 0.35,
+    "加入时偏差(%)": 0.45,
+    "市价变化(%)": 0.45,
+    "敏感性": 0.8,
+    "标签": 2.0,
+    "状态": 0.25,
+    "加入时间": 1.4,
+}
 
 
 # ── 关注池新债自动发现 / 刷新 ─────────────────────────────────
@@ -307,21 +328,18 @@ def _render_watchlist_table(app):
         show="headings",
         selectmode="extended",
     )
-    y_scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-    x_scroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+    y_scroll = ctk.CTkScrollbar(frame, orientation="vertical", command=tree.yview)
+    x_scroll = ctk.CTkScrollbar(frame, orientation="horizontal", command=tree.xview)
     tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 
     tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
     y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
     x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
 
-    last_idx = len(columns) - 1
-    for idx, (column, header, width) in enumerate(zip(columns, headers, col_widths)):
-        tree.heading(column, text=header)
-        tree.column(
-            column, width=width, minwidth=max(40, width // 2),
-            stretch=(idx == last_idx), anchor="w",
-        )
+    _configure_responsive_columns(
+        tree, columns, headers, col_widths,
+        stretch_weights=_WATCHLIST_COL_STRETCH_WEIGHTS,
+    )
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
@@ -425,8 +443,8 @@ def _load_watchlist_selection_in_pricing_tab(app):
     if hasattr(app, "v_bond_code"):
         app.v_bond_code.set(code)
     if hasattr(app, "tab_seg") and hasattr(app, "_switch_tab"):
-        app.tab_seg.set("⚡ 定价")
-        app._switch_tab("⚡ 定价")
+        app.tab_seg.set(E("⚡ 定价"))
+        app._switch_tab(E("⚡ 定价"))
     app.v_batch_status.set(f"已载入单债定价页: {code}")
 
 

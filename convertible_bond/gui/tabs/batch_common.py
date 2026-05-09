@@ -157,6 +157,85 @@ def _configure_tree_style() -> None:
     )
 
 
+def _responsive_table_font_size(width: int) -> int:
+    """根据表格可视宽度选择字号; 只做小幅分档, 保持数据表密度."""
+    size = TABLE_FONT_SIZE
+    if width < 1080:
+        size -= 1
+    elif width >= 2600:
+        size += 3
+    elif width >= 2200:
+        size += 2
+    elif width >= 1800:
+        size += 1
+    return max(10, min(TABLE_FONT_SIZE + 3, size))
+
+
+def _apply_responsive_tree_font(tree: ttk.Treeview) -> None:
+    width = tree.winfo_width()
+    if width <= 1:
+        return
+    font_size = _responsive_table_font_size(width)
+    if getattr(tree, "_responsive_font_size", None) == font_size:
+        return
+    tree._responsive_font_size = font_size  # type: ignore[attr-defined]
+    row_height = max(22, TABLE_ROW_HEIGHT + (font_size - TABLE_FONT_SIZE) * 3)
+    style = ttk.Style()
+    style.configure(
+        "Treeview",
+        rowheight=row_height,
+        font=(FONT_MONO, font_size),
+    )
+    style.configure(
+        "Treeview.Heading",
+        font=(FONT_FAMILY, font_size, "bold"),
+    )
+
+
+def _configure_responsive_columns(
+    tree: ttk.Treeview,
+    columns,
+    headers,
+    widths,
+    stretch_weights: dict[str, float] | None = None,
+) -> None:
+    """按列权重分配窗口变宽后的剩余宽度, 避免只拉伸末列."""
+    base_widths = [int(w) for w in widths]
+    min_widths = [max(40, int(w) // 2) for w in base_widths]
+    weights = [
+        max(0.0, float((stretch_weights or {}).get(header, 1.0)))
+        for header in headers
+    ]
+
+    for column, header, width, min_width in zip(columns, headers, base_widths, min_widths):
+        tree.heading(column, text=header)
+        tree.column(column, width=width, minwidth=min_width, stretch=False, anchor="w")
+
+    def _apply_widths(_event=None) -> None:
+        available = tree.winfo_width()
+        if available <= 1:
+            return
+        extra = max(0, available - sum(base_widths) - 2)
+        weighted = [(idx, weight) for idx, weight in enumerate(weights) if weight > 0]
+        additions = [0] * len(base_widths)
+        if extra and weighted:
+            total_weight = sum(weight for _, weight in weighted)
+            remaining = extra
+            for pos, (idx, weight) in enumerate(weighted):
+                if pos == len(weighted) - 1:
+                    add = remaining
+                else:
+                    add = int(extra * weight / total_weight)
+                    remaining -= add
+                additions[idx] = add
+        for column, width, add in zip(columns, base_widths, additions):
+            tree.column(column, width=width + add)
+        _apply_responsive_tree_font(tree)
+
+    tree.bind("<Configure>", _apply_widths, add="+")
+    tree.after_idle(_apply_widths)
+
+
 def refresh_theme(app) -> None:
     """主题切换后刷新 Treeview 样式 + 给所有已注册树重新染色."""
     _configure_tree_style()
@@ -164,6 +243,8 @@ def refresh_theme(app) -> None:
         tree = getattr(app, attr, None)
         if tree is not None:
             _apply_tag_colors(tree)
+            tree._responsive_font_size = None  # type: ignore[attr-defined]
+            _apply_responsive_tree_font(tree)
 
 
 # ── 表头点击排序 ─────────────────────────────────────────────

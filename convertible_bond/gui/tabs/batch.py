@@ -33,6 +33,7 @@ from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
     _attach_column_sort,
+    _configure_responsive_columns,
     _configure_tree_style,
     _format_tags,
     _is_finite,
@@ -82,6 +83,25 @@ _BATCH_COL_GETTERS = {
     "标签":         lambda r: _format_tags(r.get("risk_tags")),
     "复核建议":     lambda r: _format_tags(r.get("review_notes")),
     "状态":         lambda r: "✓" if r.get("status") == "ok" else r.get("status", ""),
+}
+
+_BATCH_COL_STRETCH_WEIGHTS = {
+    "代码": 0.5,
+    "名称": 1.0,
+    "正股": 0.6,
+    "机会分": 0.35,
+    "可信": 0.2,
+    "转股价值": 0.35,
+    "转股溢价(%)": 0.4,
+    "σ(%)": 0.25,
+    "理论价": 0.35,
+    "市价": 0.35,
+    "偏差(%)": 0.35,
+    "评级": 0.25,
+    "敏感性": 0.8,
+    "标签": 2.0,
+    "复核建议": 3.0,
+    "状态": 0.25,
 }
 
 
@@ -450,22 +470,18 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         show="headings",
         selectmode="extended",
     )
-    y_scroll = ttk.Scrollbar(app.batch_table_frame, orient="vertical", command=tree.yview)
-    x_scroll = ttk.Scrollbar(app.batch_table_frame, orient="horizontal", command=tree.xview)
+    y_scroll = ctk.CTkScrollbar(app.batch_table_frame, orientation="vertical", command=tree.yview)
+    x_scroll = ctk.CTkScrollbar(app.batch_table_frame, orientation="horizontal", command=tree.xview)
     tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 
     tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
     y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
     x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
 
-    last_idx = len(columns) - 1
-    for idx, (column, header, width) in enumerate(zip(columns, headers, col_widths)):
-        tree.heading(column, text=header)
-        # 用户可拖宽; 末列 stretch=True 占用剩余宽度, 其他列保持初始宽度但允许拖
-        tree.column(
-            column, width=width, minwidth=max(40, width // 2),
-            stretch=(idx == last_idx), anchor="w",
-        )
+    _configure_responsive_columns(
+        tree, columns, headers, col_widths,
+        stretch_weights=_BATCH_COL_STRETCH_WEIGHTS,
+    )
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
@@ -619,7 +635,6 @@ def _load_selection_in_pricing_tab(app):
     if hasattr(app, "v_bond_code"):
         app.v_bond_code.set(code)
     if hasattr(app, "tab_seg") and hasattr(app, "_switch_tab"):
-        app.tab_seg.set("⚡ 定价")
-        app._switch_tab("⚡ 定价")
+        app.tab_seg.set(E("⚡ 定价"))
+        app._switch_tab(E("⚡ 定价"))
     app.v_batch_status.set(f"已载入单债定价页: {code}")
-

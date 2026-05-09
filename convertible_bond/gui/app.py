@@ -55,6 +55,7 @@ from .theme import (
     TEXT, TEXT_DIM,
     VOL_WINDOW_DEFAULT,
     get_color,
+    E,
 )
 from .widgets import AutocompleteEntry, Tooltip
 
@@ -144,30 +145,30 @@ class CBPricerApp(
             self._set_macos_dock_icon(icon_path)
 
     def _set_windows_app_icon(self) -> None:
-        """Windows: iconbitmap + AppUserModelID, 让任务栏显示项目图标而非 python.exe."""
+        """Windows: iconbitmap + iconphoto + AppUserModelID, 让任务栏显示高清图标."""
         ico_path = self._asset_path("cblens-icon.ico")
-        png_path = self._asset_path("cblens-icon.png")
+        png_path = self._asset_path("cblens-icon-win.png")
         try:
-            # 先设置 AppUserModelID, Windows 才会按它给任务栏分组取图标 (须在显示窗口前)
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CBLens.Pricer")
         except Exception as exc:
             logger.debug("AppUserModelID 设置失败: %s", exc)
+        # iconbitmap: 设置 .ico 给标题栏等小尺寸使用
         if ico_path.exists():
             try:
                 self.iconbitmap(default=str(ico_path))
-                return
             except Exception as exc:
-                logger.warning("iconbitmap 设置失败 (%s), 回退到 iconphoto", exc)
-        # 回退: 用 PNG + iconphoto (低质量但至少能显示)
-        if png_path.exists():
+                logger.warning("iconbitmap 设置失败: %s", exc)
+        # iconphoto: 设置大尺寸 PNG 给任务栏高 DPI 显示，解决图标模糊问题
+        icon_png = png_path if png_path.exists() else self._asset_path("cblens-icon.png")
+        if icon_png.exists():
             try:
                 from PIL import Image, ImageTk
-                image = Image.open(png_path).convert("RGBA")
+                image = Image.open(icon_png).convert("RGBA")
                 self._app_icon_image = ImageTk.PhotoImage(image)
                 self.iconphoto(True, self._app_icon_image)
             except Exception as exc:
-                logger.warning("iconphoto 也失败: %s", exc)
+                logger.warning("iconphoto 失败: %s", exc)
 
     @staticmethod
     def _set_macos_dock_icon(icon_path: Path) -> None:
@@ -314,7 +315,7 @@ class CBPricerApp(
 
     def _build_header(self):
         # 投资者工作流: 先筛候选 → 钻单债 → 验模型 → 做压力测试
-        self._tab_names = ["📦 批量", "⚡ 定价", "📈 回测", "🔥 敏感性"]
+        self._tab_names = [E("📦 批量"), E("⚡ 定价"), E("📈 回测"), E("🔥 敏感性")]
 
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
@@ -347,7 +348,7 @@ class CBPricerApp(
             text_color=TEXT, text_color_disabled=TEXT_DIM,
             corner_radius=8)
         # 启动默认进入批量复核页 — 投资入口先看候选池, 再钻到单债
-        self.tab_seg.set("📦 批量")
+        self.tab_seg.set(E("📦 批量"))
         self.tab_seg.grid(row=0, column=1, pady=15)
 
         right_frame = ctk.CTkFrame(header, fg_color="transparent")
@@ -368,7 +369,7 @@ class CBPricerApp(
 
         # 全市场 cb_data / 准入状态同步入口 — 替代命令行 cb-sync-* 调用
         self.btn_sync_pool = ctk.CTkButton(
-            right_frame, text="🌐 同步池",
+            right_frame, text=E("🌐 同步池"),
             command=self._open_pool_sync_menu,
             fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
             font=(FONT_FAMILY, 12), width=82, height=30, corner_radius=6)
@@ -384,24 +385,24 @@ class CBPricerApp(
             border_width=0, corner_radius=6, fg_color=BG_INPUT, height=30,
         ).pack(side="left")
         self.btn_wind = ctk.CTkButton(
-            right_frame, text="📥 同步", command=self._fetch_wind,
+            right_frame, text=E("📥 同步"), command=self._fetch_wind,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
             font=(FONT_FAMILY, 12, "bold"), width=76, height=30, corner_radius=6)
         self.btn_wind.pack(side="left", padx=(6, 0))
         Tooltip(self.btn_wind, "读取本地条款库, 拉取正股行情和历史波动率")
 
         self.btn_refresh_terms = ctk.CTkButton(
-            right_frame, text="🔄", command=self._refresh_terms,
+            right_frame, text=E("🔄"), command=self._refresh_terms,
             fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
             font=(FONT_FAMILY, 14), width=30, height=30, corner_radius=6)
         self.btn_refresh_terms.pack(side="left", padx=(4, 0))
         Tooltip(self.btn_refresh_terms,
                 "强制用 Wind 刷新当前债的本地条款\n适用于下修或评级变更后")
 
-        self.btn_save = ctk.CTkButton(right_frame, text="💾", command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
+        self.btn_save = ctk.CTkButton(right_frame, text=E("💾"), command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_save.pack(side="left", padx=(8, 0))
         Tooltip(self.btn_save, "保存当前参数预设  (Ctrl+S)")
-        self.btn_load = ctk.CTkButton(right_frame, text="📂", command=self._load_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
+        self.btn_load = ctk.CTkButton(right_frame, text=E("📂"), command=self._load_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_load.pack(side="left", padx=(6, 0))
         Tooltip(self.btn_load, "加载参数预设  (Ctrl+O)")
 
@@ -503,11 +504,11 @@ class CBPricerApp(
             self._tab_frames[name] = f
 
         # 默认显示批量页 (与 tab_seg 初始选中一致)
-        pricing_tab.build(self, self._tab_frames["⚡ 定价"])
-        backtest_tab.build(self, self._tab_frames["📈 回测"])
-        sensitivity_tab.build(self, self._tab_frames["🔥 敏感性"])
-        batch_tab.build(self, self._tab_frames["📦 批量"])
-        self._tab_frames["📦 批量"].grid(row=0, column=0, sticky="nsew")
+        pricing_tab.build(self, self._tab_frames[E("⚡ 定价")])
+        backtest_tab.build(self, self._tab_frames[E("📈 回测")])
+        sensitivity_tab.build(self, self._tab_frames[E("🔥 敏感性")])
+        batch_tab.build(self, self._tab_frames[E("📦 批量")])
+        self._tab_frames[E("📦 批量")].grid(row=0, column=0, sticky="nsew")
 
     def _switch_tab(self, selected):
         for name, f in self._tab_frames.items():
@@ -726,7 +727,7 @@ class CBPricerApp(
     # ── 错误处理 ───────────────────────────────────────────
     def _on_error(self, msg, show_dialog=True):
         self._stop_progress()
-        self.v_status.set(f"❌ {msg}")
+        self.v_status.set(E(f"❌ {msg}"))
         if show_dialog:
             self.v_ref_info.set("❌ 获取失败")
             self.v_result.set("—")
