@@ -73,6 +73,21 @@ class CBPricerApp(
 ):
     """主应用窗口 — 状态/壳层留这里, 业务方法分散到各 mixin."""
 
+    _RESPONSIVE_PROFILES = {
+        "compact": {
+            "pricing_left": 420,
+        },
+        "normal": {
+            "pricing_left": 470,
+        },
+        "wide": {
+            "pricing_left": 540,
+        },
+        "xl": {
+            "pricing_left": 600,
+        },
+    }
+
     def __init__(self):
         # Windows: 在 Tk 创建前开 per-monitor DPI awareness, 避免 4K 屏上字体糊
         # / 控件被系统自动放大 (默认 system DPI 模式会让 Tk 控件看起来失真)
@@ -97,7 +112,14 @@ class CBPricerApp(
 
         self._build_vars()
         self._animating = False
+        self._responsive_profile_name = None
+        self._responsive_after_id = None
+        self._responsive_last_size = None
+        self._pricing_sash_left = None
+        self._active_tab_name = None
         self._build_ui()
+        self.bind("<Configure>", self._on_root_configure, add="+")
+        self.after_idle(self._apply_responsive_layout)
 
     # ── 应用图标 / DPI ──────────────────────────────────────
     @staticmethod
@@ -508,14 +530,85 @@ class CBPricerApp(
         backtest_tab.build(self, self._tab_frames[E("📈 回测")])
         sensitivity_tab.build(self, self._tab_frames[E("🔥 敏感性")])
         batch_tab.build(self, self._tab_frames[E("📦 批量")])
-        self._tab_frames[E("📦 批量")].grid(row=0, column=0, sticky="nsew")
+        self._active_tab_name = E("📦 批量")
+        self._sync_active_tab_frame()
 
-    def _switch_tab(self, selected):
+    # ── 响应式布局 ────────────────────────────────────────
+    def _responsive_profile_for_size(self, width: int, height: int) -> str:
+        if width >= 2100 and height >= 900:
+            return "xl"
+        if width >= 1650 and height >= 820:
+            return "wide"
+        if width < 1220 or height < 760:
+            return "compact"
+        return "normal"
+
+    def _on_root_configure(self, event=None):
+        if event is not None and event.widget is not self:
+            return
+        if self._responsive_after_id is not None:
+            self.after_cancel(self._responsive_after_id)
+        # Tk 在拖动窗口时会密集触发 Configure; 等尺寸稳定后再做昂贵的 CTk 缩放。
+        self._responsive_after_id = self.after(250, self._apply_responsive_layout)
+
+    def _apply_responsive_layout(self):
+        self._responsive_after_id = None
+        width = max(1, self.winfo_width())
+        height = max(1, self.winfo_height())
+        profile_name = self._responsive_profile_for_size(width, height)
+        profile = self._RESPONSIVE_PROFILES[profile_name]
+        last_size = self._responsive_last_size
+        profile_changed = profile_name != self._responsive_profile_name
+        major_resize = (
+            last_size is None
+            or abs(width - last_size[0]) >= 120
+            or abs(height - last_size[1]) >= 80
+        )
+        if not profile_changed and not major_resize:
+            return
+        self._responsive_last_size = (width, height)
+
+        if profile_changed:
+            self._responsive_profile_name = profile_name
+            batch_tab.refresh_theme(self)
+            self.after_idle(self._sync_active_tab_frame)
+
+        if self._active_tab_name == E("⚡ 定价"):
+            self._place_pricing_sash(width=width)
+
+    def _place_pricing_sash(self, width: int | None = None):
+        paned = getattr(self, "pricing_paned", None)
+        if paned is None:
+            return
+        profile_name = self._responsive_profile_name or self._responsive_profile_for_size(
+            self.winfo_width(), self.winfo_height())
+        base_left = self._RESPONSIVE_PROFILES[profile_name]["pricing_left"]
+        width = max(1, width or self.winfo_width())
+        left = min(max(base_left, int(width * 0.28)), int(width * 0.42))
+        if self._pricing_sash_left is not None and abs(left - self._pricing_sash_left) < 24:
+            return
+        try:
+            paned.sash_place(0, left, 1)
+            self._pricing_sash_left = left
+        except Exception:
+            pass
+
+    def _sync_active_tab_frame(self):
+        selected = self._active_tab_name or E("📦 批量")
         for name, f in self._tab_frames.items():
             if name == selected:
                 f.grid(row=0, column=0, sticky="nsew")
+                f.tkraise()
             else:
                 f.grid_remove()
+
+    def _switch_tab(self, selected):
+        if selected not in self._tab_frames:
+            selected = E("📦 批量")
+        self._active_tab_name = selected
+        self._sync_active_tab_frame()
+        if selected == E("⚡ 定价"):
+            self.after_idle(self._place_pricing_sash)
 
     # ── 字段来源与自动加载 ─────────────────────────────────
     def _attach_manual_source_tracking(self):

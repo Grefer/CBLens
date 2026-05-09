@@ -48,7 +48,7 @@
   </defs>
 
   <!-- Background -->
-  <rect width="1200" height="400" fill="url(#bg)"/>
+  <rect width="1200" height="400" fill="url(#bg)" rx="32"/>
 
   <!-- Ambient glow behind icon -->
   <circle cx="250" cy="200" r="280" fill="url(#glow)"/>

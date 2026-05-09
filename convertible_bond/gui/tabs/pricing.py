@@ -43,7 +43,7 @@ def build(app, tab):
 
     paned.add(lp_host, minsize=380)
     paned.add(rp_host, minsize=540)
-    app.after(100, lambda: paned.sash_place(0, 470, 1))
+    app.after(100, app._place_pricing_sash)
 
     # ── 左列: 参数面板 (可滚动) ──
     lp = ctk.CTkScrollableFrame(lp_host, fg_color="transparent", width=460,

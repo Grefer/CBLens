@@ -590,7 +590,7 @@ def _filter_nonstandard_results(results, terms_cache=None):
 
 
 def _attach_main_context_menu(app, tree):
-    menu = tk.Menu(tree, tearoff=0)
+    menu = tk.Menu(tree, tearoff=0, font=(FONT_FAMILY, 12))
     menu.add_command(label="⭐ 加入关注池",
                      command=lambda: _add_selection_to_watchlist(app))
     menu.add_command(label="载入单债定价页 (双击)",

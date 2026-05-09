@@ -399,7 +399,7 @@ def _render_watchlist_table(app):
 
 
 def _attach_watchlist_context_menu(app, tree):
-    menu = tk.Menu(tree, tearoff=0)
+    menu = tk.Menu(tree, tearoff=0, font=(FONT_FAMILY, 12))
     menu.add_command(label="载入单债定价页 (双击)",
                      command=lambda: _load_watchlist_selection_in_pricing_tab(app))
     menu.add_command(label="🗑 从关注池移除",

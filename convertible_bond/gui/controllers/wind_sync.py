@@ -205,7 +205,7 @@ class WindSyncMixin:
     # ── 全市场池同步 (替代命令行 cb-sync-* 调用) ─────────────────
     def _open_pool_sync_menu(self):
         """弹出菜单选择: 同步基础 / 准入状态 / 公告事件."""
-        menu = tk.Menu(self, tearoff=0)
+        menu = tk.Menu(self, tearoff=0, font=(FONT_FAMILY, 12))
         for label, module, extra_args, _desc in _POOL_SYNC_TARGETS:
             menu.add_command(
                 label=label,
