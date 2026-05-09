@@ -73,6 +73,9 @@ class CBPricerApp(
     """主应用窗口 — 状态/壳层留这里, 业务方法分散到各 mixin."""
 
     def __init__(self):
+        # Windows: 在 Tk 创建前开 per-monitor DPI awareness, 避免 4K 屏上字体糊
+        # / 控件被系统自动放大 (默认 system DPI 模式会让 Tk 控件看起来失真)
+        self._enable_windows_dpi_awareness()
         super().__init__()
         ctk.set_appearance_mode("System")  # 跟随系统主题; 用户通过开关可手动覆盖
 
@@ -95,13 +98,33 @@ class CBPricerApp(
         self._animating = False
         self._build_ui()
 
-    # ── 应用图标 ────────────────────────────────────────────
+    # ── 应用图标 / DPI ──────────────────────────────────────
     @staticmethod
     def _asset_path(name: str) -> Path:
         return Path(__file__).resolve().parents[2] / "assets" / name
 
+    @staticmethod
+    def _enable_windows_dpi_awareness() -> None:
+        """Windows: per-monitor DPI v2, 让 Tk 控件在 4K / HiDPI 上不被 OS 拉伸放大."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            # PROCESS_PER_MONITOR_DPI_AWARE_V2 = -4 (Win 10 1703+); 失败时退回 v1 (=2)
+            try:
+                ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+            except (AttributeError, OSError):
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception as exc:
+            logger.debug("设置 Windows DPI awareness 失败 (可能是旧版系统): %s", exc)
+
     def _set_app_icon(self) -> None:
-        """设置 Tk 窗口图标; macOS Dock 图标尽量通过 AppKit 同步."""
+        """设置 Tk 窗口图标; Windows 走 .ico + AppUserModelID, macOS 走 AppKit."""
+        # Windows: 用 .ico (Tk 在 Win 下用 iconbitmap 比 iconphoto 稳, 任务栏分组也对)
+        if sys.platform == "win32":
+            self._set_windows_app_icon()
+            return
+
         icon_path = self._asset_path("cblens-icon.png")
         if not icon_path.exists():
             logger.warning("应用图标不存在: %s", icon_path)
@@ -119,6 +142,32 @@ class CBPricerApp(
 
         if sys.platform == "darwin":
             self._set_macos_dock_icon(icon_path)
+
+    def _set_windows_app_icon(self) -> None:
+        """Windows: iconbitmap + AppUserModelID, 让任务栏显示项目图标而非 python.exe."""
+        ico_path = self._asset_path("cblens-icon.ico")
+        png_path = self._asset_path("cblens-icon.png")
+        try:
+            # 先设置 AppUserModelID, Windows 才会按它给任务栏分组取图标 (须在显示窗口前)
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("CBLens.Pricer")
+        except Exception as exc:
+            logger.debug("AppUserModelID 设置失败: %s", exc)
+        if ico_path.exists():
+            try:
+                self.iconbitmap(default=str(ico_path))
+                return
+            except Exception as exc:
+                logger.warning("iconbitmap 设置失败 (%s), 回退到 iconphoto", exc)
+        # 回退: 用 PNG + iconphoto (低质量但至少能显示)
+        if png_path.exists():
+            try:
+                from PIL import Image, ImageTk
+                image = Image.open(png_path).convert("RGBA")
+                self._app_icon_image = ImageTk.PhotoImage(image)
+                self.iconphoto(True, self._app_icon_image)
+            except Exception as exc:
+                logger.warning("iconphoto 也失败: %s", exc)
 
     @staticmethod
     def _set_macos_dock_icon(icon_path: Path) -> None:

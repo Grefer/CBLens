@@ -1,19 +1,16 @@
-<div align="center">
-  <img src="assets/cblens-banner.svg" alt="CBLens — A 股可转债定价与机会筛选工作台" width="720" />
-  <br /><br />
+# CBLens
 
-  <a href="#快速开始"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="MIT License" /></a>
-  <a href="#测试"><img src="https://img.shields.io/badge/Tests-pytest-0A9EDC?style=flat-square&logo=pytest&logoColor=white" alt="pytest" /></a>
-  <a href="docs/USAGE.md"><img src="https://img.shields.io/badge/Docs-使用文档-F8C96A?style=flat-square" alt="Usage Docs" /></a>
+![CBLens](assets/cblens-banner.svg)
 
-  <br /><br />
-  <b>Crank-Nicolson PDE 定价 · 公告事件解析 · 主池准入筛选 · GUI / CLI 研究流</b>
-  <br />
-  <sub>把转债条款、公告事件、正股行情、信用利差和数值定价模型串成一条可重复的研究工作流。</sub>
-</div>
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-pytest-blue.svg)](#测试)
+[![Docs](https://img.shields.io/badge/docs-使用文档-orange.svg)](docs/USAGE.md)
+[![Last Commit](https://img.shields.io/github/last-commit/Grefer/ConvertibleBond)](https://github.com/Grefer/ConvertibleBond/commits/master)
+[![Issues](https://img.shields.io/github/issues/Grefer/ConvertibleBond)](https://github.com/Grefer/ConvertibleBond/issues)
 
-<br />
+> 基于 Crank-Nicolson PDE 引擎的 A 股可转债定价与机会筛选工作台，支持多数据源接入、公告事件解析、主池准入筛选以及完整的 GUI / CLI 研究工作流。把转债条款、公告事件、正股行情、信用利差和数值定价模型串成一条可重复的研究管线。
+
 
 ---
 

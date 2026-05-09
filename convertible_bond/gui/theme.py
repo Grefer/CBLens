@@ -24,8 +24,20 @@ BTN_HOVER = ("#bcc0cc", "#45475a")
 ACCENT_HOVER = ("#7287fd", "#74c7ec")
 
 _IS_MAC = sys.platform == "darwin"
-FONT_FAMILY = "SF Pro Display" if _IS_MAC else "Segoe UI"
-FONT_MONO = "SF Mono" if _IS_MAC else "Cascadia Mono"
+_IS_WIN = sys.platform == "win32"
+# Windows: 用 Microsoft YaHei UI 而不是 Segoe UI — 后者中英混排时会回退到
+# SimSun (bitmap, 发虚); YaHei UI 是 Windows 自带的中英两用 GUI 字体, 高 DPI
+# 下不模糊. mono 字体 Cascadia Mono 是 Windows 11 自带, 数字列对齐;
+# Windows 10 老版本可能没有, Tk 会自动回退到 Consolas (universal, 也清晰).
+if _IS_MAC:
+    FONT_FAMILY = "SF Pro Display"
+    FONT_MONO = "SF Mono"
+elif _IS_WIN:
+    FONT_FAMILY = "Microsoft YaHei UI"
+    FONT_MONO = "Cascadia Mono"
+else:
+    FONT_FAMILY = "Segoe UI"
+    FONT_MONO = "DejaVu Sans Mono"
 
 # 历史波动率窗口选项 (交易日数)
 VOL_WINDOW_MAP = {"1M": 21, "2M": 42, "3M": 63, "6M": 126, "1Y": 252}
