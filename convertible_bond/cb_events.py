@@ -16,6 +16,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from .data_providers import BondTerms, _add_months, to_date
+from .paths import data_path
 
 
 EVENT_TYPES = (
@@ -47,7 +48,7 @@ _TRANSIENT_CLEAR_GRACE_DAYS = 30
 
 
 def project_events_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "cb_events.json"
+    return data_path("cb_events.json", seed=True)
 
 
 @dataclass(frozen=True)

@@ -105,7 +105,7 @@ CustomTkinter GUI 覆盖完整研究流：
 ### 安装
 
 ```bash
-git clone https://github.com/your/ConvertibleBond.git
+git clone https://github.com/Grefer/ConvertibleBond.git
 cd ConvertibleBond
 
 python -m venv .venv
@@ -116,6 +116,23 @@ pip install -e ".[dev]"
 
 > [!NOTE]
 > **WindPy** 不通过 pip 发布。如需同步全市场条款或使用 Wind 行情，需在 Wind 终端的插件管理中把 Python 接口安装到当前虚拟环境。仅使用离线 PDE 模型、已有 `data/cb_data.json` 或 akshare 动态行情时，无需连接 Wind。
+
+### 直接使用桌面 APP
+
+在 [Releases](https://github.com/Grefer/ConvertibleBond/releases) 下载：
+
+- `CBLens-macOS.zip`：解压后双击 `CBLens.app`
+- `CBLens-Windows.zip`：解压后双击 `CBLens.exe`
+
+> [!NOTE]
+> 桌面包暂未使用 Apple Developer ID 或 Windows Authenticode 证书签名；首次打开可能出现系统安全提示。
+
+源码构建桌面包：
+
+```bash
+python -m pip install -e ".[desktop]"
+python scripts/build_desktop.py
+```
 
 ### 启动 GUI
 

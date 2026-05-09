@@ -28,6 +28,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
+from ..paths import asset_path
 from .constants import (
     BOND_CODE_RE,
     DEFAULT_DISTRESS_K_PCT,
@@ -124,7 +125,7 @@ class CBPricerApp(
     # ── 应用图标 / DPI ──────────────────────────────────────
     @staticmethod
     def _asset_path(name: str) -> Path:
-        return Path(__file__).resolve().parents[2] / "assets" / name
+        return asset_path(name)
 
     @staticmethod
     def _enable_windows_dpi_awareness() -> None:

@@ -17,12 +17,14 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
+from .paths import data_dir
+
 logger = logging.getLogger(__name__)
 
 
 def project_pdf_cache_dir() -> Path:
     """``data/announcement_pdfs/`` — 本地 PDF 缓存根目录."""
-    return Path(__file__).resolve().parent.parent / "data" / "announcement_pdfs"
+    return data_dir("announcement_pdfs")
 
 
 def _safe_filename_part(text: str) -> str:

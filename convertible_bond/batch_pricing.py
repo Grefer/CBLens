@@ -31,6 +31,7 @@ from .data_providers import (
     looks_private_cb_name,
     to_date,
 )
+from .paths import data_path
 
 
 BATCH_RESULT_COLUMNS = [
@@ -126,7 +127,7 @@ class AdmissionFilterResult:
 
 def project_batch_cache_path() -> Path:
     """项目级批量定价结果缓存路径."""
-    return Path(__file__).resolve().parent.parent / "data" / "batch_pricing_cache.json"
+    return data_path("batch_pricing_cache.json")
 
 
 def parse_bond_codes(raw: str | Iterable[str]) -> list[str]:

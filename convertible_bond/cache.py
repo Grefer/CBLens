@@ -30,6 +30,7 @@ from typing import get_args, get_origin, get_type_hints
 from .data_providers import (
     BondTerms, CashflowSchedule, DataProvider, WindDataProvider, to_date,
 )
+from .paths import data_path
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def project_bundle_path() -> Path:
     repo_root 推断方式: 沿 convertible_bond 包向上找两级.
     本文件路径: <repo>/convertible_bond/cache.py → repo = parent.parent.
     """
-    return Path(__file__).resolve().parent.parent / "data" / "cb_data.json"
+    return data_path("cb_data.json", seed=True)
 
 
 def _unwrap_type_args(tp) -> tuple:

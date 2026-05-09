@@ -31,7 +31,7 @@
 ### 基础环境
 
 ```bash
-git clone https://github.com/your/ConvertibleBond.git
+git clone https://github.com/Grefer/ConvertibleBond.git
 cd ConvertibleBond
 
 python -m venv .venv
@@ -62,6 +62,28 @@ WindPy 不通过 pip 发布。如需使用：
 
 > [!TIP]
 > 不连接 Wind 也能正常使用！离线 PDE 模型、已有 `data/cb_data.json`、akshare 动态行情都不依赖 Wind。
+
+### 桌面 APP
+
+正式 Release 会附带可直接运行的桌面包：
+
+- macOS: `CBLens-macOS.zip`，解压后双击 `CBLens.app`
+- Windows: `CBLens-Windows.zip`，解压后双击 `CBLens.exe`
+
+> 桌面包暂未使用 Apple Developer ID 或 Windows Authenticode 证书签名；首次打开可能出现系统安全提示。
+
+源码构建桌面包：
+
+```bash
+python -m pip install -e ".[desktop]"
+python scripts/build_desktop.py
+```
+
+构建产物位于 `dist/`。打包后的 APP 会把运行态数据写入用户目录，而不是写入应用安装目录：
+
+- macOS: `~/Library/Application Support/CBLens/data`
+- Windows: `%APPDATA%\CBLens\data`
+- 可用 `CBLENS_DATA_DIR` 环境变量覆盖数据目录
 
 ---
 

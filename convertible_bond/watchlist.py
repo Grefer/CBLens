@@ -7,9 +7,11 @@ from pathlib import Path
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from .paths import data_path
+
 
 def watchlist_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "watchlist.json"
+    return data_path("watchlist.json")
 
 
 def load_watchlist() -> list[dict]:
