@@ -13,6 +13,7 @@ from ..theme import (
     BG_CARD, BG_INPUT, BORDER,
     FONT_FAMILY, FONT_MONO,
     GREEN, MAUVE, ORANGE, RED, TEXT, TEXT_DIM,
+    TABLE_FONT_SIZE, TABLE_ROW_HEIGHT,
     get_color,
 )
 
@@ -138,16 +139,16 @@ def _configure_tree_style() -> None:
         background=get_color(BG_CARD),
         fieldbackground=get_color(BG_CARD),
         foreground=get_color(TEXT),
-        rowheight=26,
+        rowheight=TABLE_ROW_HEIGHT,
         borderwidth=0,
-        font=(FONT_MONO, 11),
+        font=(FONT_MONO, TABLE_FONT_SIZE),
     )
     style.configure(
         "Treeview.Heading",
         background=get_color(BORDER),
         foreground=get_color(TEXT),
         borderwidth=0,
-        font=(FONT_FAMILY, 11, "bold"),
+        font=(FONT_FAMILY, TABLE_FONT_SIZE, "bold"),
     )
     style.map(
         "Treeview",

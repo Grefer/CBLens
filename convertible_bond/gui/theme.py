@@ -39,6 +39,15 @@ else:
     FONT_FAMILY = "Segoe UI"
     FONT_MONO = "DejaVu Sans Mono"
 
+# 表格 (ttk.Treeview) 字号: Windows 上 Cascadia Mono 字重比 SF Mono 轻, 11pt
+# 在 4K 屏上偏细, +1 让数据列易读; 行高同步上调保持留白.
+if _IS_WIN:
+    TABLE_FONT_SIZE = 12
+    TABLE_ROW_HEIGHT = 30
+else:
+    TABLE_FONT_SIZE = 11
+    TABLE_ROW_HEIGHT = 26
+
 # 历史波动率窗口选项 (交易日数)
 VOL_WINDOW_MAP = {"1M": 21, "2M": 42, "3M": 63, "6M": 126, "1Y": 252}
 VOL_WINDOW_DEFAULT = "1M"

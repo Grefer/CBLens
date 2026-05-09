@@ -54,18 +54,44 @@ class WindDataProvider(DataProvider):
         self._bad_bond_fields: set[str] = set()
 
     def _ensure(self):
+        """启动 Wind 连接，若未安装或 DLL 加载失败则抛出详尽提示。
+
+        在 PyInstaller 冻结构建里 WindPy 的导入报错往往是 DLL 加载失败
+        (Windows) 或 dylib 找不到 (macOS), 而非 "模块缺失"。把原始异常接进
+        提示文本里，让用户 / 开发者能直接看到底层错误再对症处理。
+        """
         if self._w is not None:
             return self._w
+
+        import sys
+        frozen = bool(getattr(sys, "frozen", False))
+
         try:
             from WindPy import w  # type: ignore[import-not-found]
-        except ImportError as e:
+        except Exception as e:
+            frozen_hint = ""
+            if frozen:
+                frozen_hint = (
+                    "\n  [frozen build] 此发布包在构建时未成功打入 WindPy, 或者"
+                    "运行机上缺少 Wind 终端 / 原生动态库. 请在装有 Wind 终端 + "
+                    "`pip install WindPy` 的机器上重新打包."
+                )
             raise ImportError(
-                "未检测到 WindPy. 请在 Wind 终端 '插件管理' 中安装 Python 接口."
+                "未安装 WindPy，请安装 Wind 金融终端并配置 Python 插件。\n"
+                "  pip install WindPy  或在 Wind 终端中设置 Python 接口。"
+                f"{frozen_hint}\n  原始错误: {type(e).__name__}: {e}"
             ) from e
+
         if not w.isconnected():
             ret = w.start()
-            if ret.ErrorCode != 0:
-                raise RuntimeError(f"Wind 启动失败 (ErrorCode={ret.ErrorCode})")
+            if getattr(ret, "ErrorCode", -1) != 0:
+                raise ConnectionError(
+                    f"Wind 连接失败: ErrorCode={getattr(ret, 'ErrorCode', -1)}, Data={getattr(ret, 'Data', '')}"
+                    + (
+                        "\n  [frozen build] 请确认 Wind 终端已在本机启动并已登录."
+                        if frozen else ""
+                    )
+                )
         self._w = w
         return w
 
