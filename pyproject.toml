@@ -4,7 +4,8 @@ version = "1.0.0"
 description = "CBLens: A 股可转债定价与机会筛选工作台，支持 Crank-Nicolson PDE、公告事件、Wind/akshare 和 GUI"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["convertible-bond", "pricing", "pde", "wind", "akshare", "quant"]
 dependencies = [
     "customtkinter>=5.2.2",
@@ -15,6 +16,12 @@ dependencies = [
     "akshare>=1.13",
     "pdfplumber>=0.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Grefer/ConvertibleBond"
+Repository = "https://github.com/Grefer/ConvertibleBond"
+Documentation = "https://github.com/Grefer/ConvertibleBond/blob/main/docs/USAGE.md"
+Issues = "https://github.com/Grefer/ConvertibleBond/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
@@ -29,3 +36,10 @@ cb-sync-terms = "convertible_bond.cli.sync_terms:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["convertible_bond*"]

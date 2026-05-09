@@ -22,3 +22,7 @@ venv/
 
 # 公告 PDF 本地缓存 (按需下载, 不入版本库)
 data/announcement_pdfs/
+
+# GUI / CLI 运行态缓存和个人关注池, 公开发布不入版本库
+data/batch_pricing_cache.json
+data/watchlist.json

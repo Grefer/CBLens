@@ -75,7 +75,7 @@ CBLens 把 **静态条款** 和 **动态行情** 分开处理：
 | 公告事件 | cninfo | `data/cb_events.json` | 默认不需要 Wind |
 | 停牌、强赎、摘牌、ST、成交额 | Wind | `data/cb_data.json` | 每日增量刷新 |
 | 正股/转债行情、历史波动率、股息率、利率 | Wind / akshare / CSV | 不固定落盘 | 按行情源选择实时获取 |
-| 关注池 | 本地维护 | `data/watchlist.json` | GUI 批量页管理 |
+| 关注池 | 本地维护 | `data/watchlist.json` | GUI 批量页管理，运行态文件默认不提交 |
 
 > [!IMPORTANT]
 > 字段缺失时，主池准入筛选遵循**保守原则**：只有明确命中风险条件才剔除，`None` 不会直接剔除。
@@ -368,8 +368,8 @@ rows = [row for row in rows if row.get("status") == "ok"]
 | `data/cb_data.json` | 全市场条款与准入状态 | ❌ 一般不要 |
 | `data/cb_events.json` | 结构化公告事件 | ❌ 由同步维护 |
 | `data/down_reset_overrides.json` | 人工下修覆盖 | ✅ 可以手工维护 |
-| `data/watchlist.json` | 关注池 | ✅ 可由 GUI 管理 |
-| `data/batch_pricing_cache.json` | 批量定价缓存 | ❌ 自动生成 |
+| `data/watchlist.json` | 关注池 | ✅ 可由 GUI 管理，默认忽略 |
+| `data/batch_pricing_cache.json` | 批量定价缓存 | ❌ 自动生成，默认忽略 |
 
 > [!NOTE]
 > JSON 写入采用 `.tmp` 后 `rename` 的原子写模式，避免半截文件。

@@ -1,5 +1,7 @@
 """CBLens convertible bond pricing package."""
 
+__version__ = "1.0.0"
+
 from .pricer import (
     UniversalCBPricer,
     DEFAULT_COUPON_RATES,
@@ -80,6 +82,7 @@ from .cb_event_sync import (
 )
 
 __all__ = [
+    "__version__",
     "UniversalCBPricer",
     "DEFAULT_COUPON_RATES",
     "DEFAULT_FACE_VALUE",
