@@ -160,7 +160,7 @@ def build(app, tab):
     rp = ctk.CTkFrame(rp_host, fg_color="transparent")
     rp.grid(row=0, column=0, sticky="nsew", padx=(5, 0))
     rp.grid_columnconfigure(0, weight=1)
-    rp.grid_rowconfigure(2, weight=1)  # 仪表盘行才需要拉伸
+    rp.grid_rowconfigure(2, weight=1)  # 指标仪表盘铺满右侧剩余空间
 
     # 英雄结果卡
     rc = ctk.CTkFrame(rp, fg_color=BG_CARD, corner_radius=16)
@@ -236,13 +236,13 @@ def build(app, tab):
     # ── 🎯 What-if 快算 (波动率 ±2pp/±5pp · 正股 ±5%/±10%) ──
     _build_what_if_row(app, rp)
 
-    # 指标仪表盘 (8 tiles)
+    # 指标仪表盘: 8 个 tile 铺满剩余空间, 每项补一句解释避免空白只放数字。
     dc = ctk.CTkFrame(rp, fg_color="transparent")
     dc.grid(row=2, column=0, sticky="nsew", pady=(0, 6))
     dc.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="dec")
     dc.grid_rowconfigure((0, 1), weight=1, uniform="r")
 
-    def _tile(parent, row, col, label, var, hl=False):
+    def _metric(parent, row, col, label, var, desc, hl=False):
         t = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=16)
         t.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
         t.grid_columnconfigure(0, weight=1)
@@ -253,16 +253,19 @@ def build(app, tab):
         val_color = ACCENT if hl else TEXT
         ctk.CTkLabel(t, textvariable=var, text_color=val_color,
                      font=(FONT_MONO, 20, "bold")).grid(
-            row=1, column=0, sticky="w", padx=16, pady=(0, 16))
+            row=1, column=0, sticky="sw", padx=16, pady=(4, 4))
+        ctk.CTkLabel(t, text=desc, text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 10), anchor="w").grid(
+            row=2, column=0, sticky="w", padx=16, pady=(0, 14))
 
-    _tile(dc, 0, 0, "🏷️ 纯债价值", app.v_bond_floor)
-    _tile(dc, 0, 1, "🔄 转股价值", app.v_parity)
-    _tile(dc, 0, 2, "✨ 期权溢价", app.v_option_prem, hl=True)
-    _tile(dc, 0, 3, "Δ Delta", app.v_delta)
-    _tile(dc, 1, 0, "Γ Gamma", app.v_gamma)
-    _tile(dc, 1, 1, "ν Vega", app.v_vega)
-    _tile(dc, 1, 2, "Θ Theta", app.v_theta)
-    _tile(dc, 1, 3, "🎯 隐含波动率", app.v_iv)
+    _metric(dc, 0, 0, "纯债价值", app.v_bond_floor, "不含转股权的债底")
+    _metric(dc, 0, 1, "转股价值", app.v_parity, "S / K × 100 的即转价值")
+    _metric(dc, 0, 2, "期权溢价", app.v_option_prem, "理论价超出债底/转股锚", hl=True)
+    _metric(dc, 0, 3, "Delta", app.v_delta, "正股 +1 元的价格敏感度")
+    _metric(dc, 1, 0, "Gamma", app.v_gamma, "Delta 对正股价的曲率")
+    _metric(dc, 1, 1, "Vega", app.v_vega, "波动率 +1pp 的价格变化")
+    _metric(dc, 1, 2, "Theta", app.v_theta, "估值日推进 1 天的变化")
+    _metric(dc, 1, 3, "隐含波动率", app.v_iv, "用市价反解得到的 σ")
 
 
 # ── What-if 快算: σ ±pp 与 S ±% 微扰 ─────────────────────────
@@ -273,19 +276,19 @@ WHAT_IF_S_DELTAS_PCT    = (-10, -5, +5, +10)
 def _build_what_if_row(app, parent):
     """在右栏 hero 与 dashboard 之间插入一行 σ/S 快扫按钮."""
     card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
-    card.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+    card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
     card.grid_columnconfigure(2, weight=1)
 
-    ctk.CTkLabel(card, text="🎯 What-if", text_color=TEXT_DIM,
-                 font=(FONT_FAMILY, 13, "bold")).grid(
-        row=0, column=0, rowspan=2, padx=(16, 12), pady=12, sticky="w")
+    ctk.CTkLabel(card, text="🎯 What-if 快算", text_color=TEXT,
+                 font=(FONT_FAMILY, 14, "bold")).grid(
+        row=0, column=0, rowspan=2, padx=(18, 16), pady=18, sticky="w")
 
     # σ 行
     ctk.CTkLabel(card, text="σ", text_color=TEXT_DIM,
-                 font=(FONT_FAMILY, 12, "bold")).grid(
-        row=0, column=1, padx=(0, 8), pady=(10, 2), sticky="w")
+                 font=(FONT_FAMILY, 13, "bold")).grid(
+        row=0, column=1, padx=(0, 10), pady=(14, 4), sticky="w")
     sig_box = ctk.CTkFrame(card, fg_color="transparent")
-    sig_box.grid(row=0, column=2, sticky="w", padx=(0, 16), pady=(8, 2))
+    sig_box.grid(row=0, column=2, sticky="w", padx=(0, 18), pady=(12, 4))
 
     app._wf_sigma_buttons = {}
     for delta in WHAT_IF_SIGMA_DELTAS_PP:
@@ -294,18 +297,18 @@ def _build_what_if_row(app, parent):
             sig_box, textvariable=var,
             command=lambda d=delta: app._run_what_if("sigma", d),
             fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
-            font=(FONT_MONO, 11, "bold"), width=80, height=26, corner_radius=6,
+            font=(FONT_MONO, 12, "bold"), width=92, height=32, corner_radius=7,
             state="disabled",  # 等待主结果出来后才解锁, 避免 base=NaN 时点了无响应
         )
-        btn.pack(side="left", padx=(0, 4))
+        btn.pack(side="left", padx=(0, 6))
         app._wf_sigma_buttons[delta] = (btn, var)
 
     # S 行
     ctk.CTkLabel(card, text="S", text_color=TEXT_DIM,
-                 font=(FONT_FAMILY, 12, "bold")).grid(
-        row=1, column=1, padx=(0, 8), pady=(2, 10), sticky="w")
+                 font=(FONT_FAMILY, 13, "bold")).grid(
+        row=1, column=1, padx=(0, 10), pady=(4, 14), sticky="w")
     s_box = ctk.CTkFrame(card, fg_color="transparent")
-    s_box.grid(row=1, column=2, sticky="w", padx=(0, 16), pady=(2, 8))
+    s_box.grid(row=1, column=2, sticky="w", padx=(0, 18), pady=(4, 12))
 
     app._wf_s_buttons = {}
     for delta in WHAT_IF_S_DELTAS_PCT:
@@ -314,8 +317,8 @@ def _build_what_if_row(app, parent):
             s_box, textvariable=var,
             command=lambda d=delta: app._run_what_if("S", d),
             fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT_DIM,
-            font=(FONT_MONO, 11, "bold"), width=80, height=26, corner_radius=6,
+            font=(FONT_MONO, 12, "bold"), width=92, height=32, corner_radius=7,
             state="disabled",
         )
-        btn.pack(side="left", padx=(0, 4))
+        btn.pack(side="left", padx=(0, 6))
         app._wf_s_buttons[delta] = (btn, var)

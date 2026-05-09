@@ -206,8 +206,10 @@ def build(app, tab):
     app.lbl_batch_events_banner = ctk.CTkLabel(
         tab, textvariable=app.v_batch_events_banner,
         font=(FONT_FAMILY, 12, "bold"), text_color=ORANGE,
+        fg_color=BG_CARD, corner_radius=12,
+        padx=12, pady=8,
         anchor="w", justify="left", wraplength=1080, cursor="hand2")
-    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 4))
+    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
     app.lbl_batch_events_banner.grid_remove()
     app.lbl_batch_events_banner.bind(
         "<Button-1>", lambda _e: _show_events_banner_full(app))
