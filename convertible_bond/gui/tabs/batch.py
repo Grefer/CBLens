@@ -353,6 +353,21 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
                 **params,
             )
             watchlist_pricing = annotate_batch_results(watchlist_pricing)
+        success_count = sum(1 for row in results if row.get("status") == "ok")
+        if success_count == 0:
+            cached = _load_successful_result_cache(app)
+            if cached is not None:
+                app.after(0, lambda: _render_cached_after_failed_batch(
+                    app, provider.name, cached))
+                return
+            app._batch_results = results
+            app._batch_upcoming_results = watchlist_pricing
+            app.after(0, lambda: _render_batch_views(
+                app, results, excluded_count=excluded_count))
+            app.after(0, lambda: app.v_batch_status.set(
+                f"{provider.name} 本次批量定价全部失败，未更新缓存"))
+            return
+
         cache_path = save_batch_results_cache(
             results,
             source=provider.name,
@@ -372,6 +387,35 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
     finally:
         app.after(0, app._stop_progress)
         app.after(0, lambda: app.btn_batch_run.configure(state="normal"))
+
+
+def _load_successful_result_cache(app):
+    try:
+        loaded = load_batch_results_cache()
+    except Exception:
+        return None
+    results, excluded_count = _filter_nonstandard_results(
+        loaded["results"], getattr(app, "terms_cache", None))
+    if not any(row.get("status") == "ok" for row in results):
+        return None
+    return {
+        "results": sort_batch_results_for_review(results),
+        "upcoming_results": annotate_batch_results(loaded.get("upcoming_results") or []),
+        "meta": loaded.get("meta"),
+        "excluded_count": excluded_count,
+    }
+
+
+def _render_cached_after_failed_batch(app, provider_name, cached):
+    app._batch_all_results = cached["results"]
+    app._batch_upcoming_results = cached["upcoming_results"]
+    _render_batch_views(
+        app,
+        cache_meta=cached.get("meta"),
+        excluded_count=cached.get("excluded_count", 0),
+    )
+    app.v_batch_status.set(
+        f"{provider_name} 本次批量定价全部失败，已保留并显示上次可用缓存")
 
 
 def _excluded_status_suffix(excluded):

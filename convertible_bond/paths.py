@@ -111,10 +111,11 @@ def _needs_seed(target: Path, filename: str | None = None) -> bool:
                 and any(not str(k).startswith("_") for k in payload)
             )
         if filename == "batch_pricing_cache.json":
+            results = payload.get("results")
             return not (
                 isinstance(payload, dict)
-                and isinstance(payload.get("results"), list)
-                and len(payload["results"]) > 0
+                and isinstance(results, list)
+                and any(isinstance(row, dict) and row.get("status") == "ok" for row in results)
             )
     return False
 

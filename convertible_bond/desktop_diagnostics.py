@@ -36,6 +36,14 @@ def _json_summary(path: Path) -> str:
     if path.name == "cb_data.json" and isinstance(payload, dict):
         n_bonds = sum(1 for key in payload if not str(key).startswith("_"))
         return f"{path.stat().st_size} bytes, {n_bonds} bonds"
+    if path.name == "batch_pricing_cache.json" and isinstance(payload, dict):
+        results = payload.get("results")
+        if isinstance(results, list):
+            ok_count = sum(
+                1 for row in results
+                if isinstance(row, dict) and row.get("status") == "ok"
+            )
+            return f"{path.stat().st_size} bytes, {len(results)} rows, {ok_count} ok"
     if isinstance(payload, dict):
         return f"{path.stat().st_size} bytes, dict keys={len(payload)}"
     if isinstance(payload, list):
