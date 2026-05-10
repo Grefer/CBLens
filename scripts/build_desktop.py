@@ -26,6 +26,13 @@ from pathlib import Path
 
 
 APP_NAME = "CBLens"
+
+
+def _rp(path: Path) -> str:
+    """Return a raw-string literal for a path, safe for generated spec files."""
+    return f"r'{path}'"
+
+
 STATIC_DATA_FILES = (
     "cb_data.json",
     "cb_events.json",
@@ -87,14 +94,14 @@ def _detect_windpy() -> tuple[bool, str | None]:
 def _generate_spec(root: Path) -> str:
     """生成 PyInstaller spec 文件内容, 包含 WindPy 条件打包逻辑."""
     icon = _icon_path(root)
-    icon_str = f"'{icon}'" if icon else "None"
+    icon_str = _rp(icon) if icon else "None"
 
     # 收集 data 文件列表
-    data_entries = [f"('{root / 'assets'}', 'assets')"]
+    data_entries = [f"({_rp(root / 'assets')}, 'assets')"]
     for filename in STATIC_DATA_FILES:
         src = root / "data" / filename
         if src.exists():
-            data_entries.append(f"('{src}', 'data')")
+            data_entries.append(f"({_rp(src)}, 'data')")
 
     # 检测 WindPy
     has_windpy, windpy_file = _detect_windpy()
@@ -112,7 +119,7 @@ def _generate_spec(root: Path) -> str:
 
         rth_path = root / "pyi_rth_windpy.py"
         if rth_path.exists():
-            windpy_rth = f"'{rth_path}'"
+            windpy_rth = _rp(rth_path)
 
         # pip 包形态的 collect (安全失败)
         spec_collect = f"""
