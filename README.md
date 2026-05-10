@@ -124,8 +124,13 @@ pip install -e ".[dev]"
 - `CBLens-macOS.zip`：解压后双击 `CBLens.app`
 - `CBLens-Windows.zip`：解压后双击 `CBLens.exe`
 
-> [!NOTE]
-> 桌面包暂未使用 Apple Developer ID 或 Windows Authenticode 证书签名；首次打开可能出现系统安全提示。
+> [!IMPORTANT]
+> 桌面包暂未使用 Apple Developer ID 或 Windows Authenticode 证书签名，下载后系统会拦截：
+>
+> - **macOS**：双击会提示"无法验证开发者"或"已损坏"。先 `xattr -dr com.apple.quarantine /Applications/CBLens.app`（路径替换为你的实际位置），或在 Finder 里右键 → 打开 → 再次"打开"。
+> - **Windows**：SmartScreen 会弹出"已保护你的电脑"。点"更多信息" → "仍要运行"。
+>
+> 如不放心可参考下方"源码构建桌面包"自行编译。
 
 源码构建桌面包：
 

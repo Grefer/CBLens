@@ -70,7 +70,12 @@ WindPy 不通过 pip 发布。如需使用：
 - macOS: `CBLens-macOS.zip`，解压后双击 `CBLens.app`
 - Windows: `CBLens-Windows.zip`，解压后双击 `CBLens.exe`
 
-> 桌面包暂未使用 Apple Developer ID 或 Windows Authenticode 证书签名；首次打开可能出现系统安全提示。
+> 桌面包暂未使用 Apple Developer ID 或 Windows Authenticode 证书签名，首次运行需要手动放行：
+>
+> - **macOS**：Gatekeeper 可能提示"无法验证开发者"或"已损坏，无法打开"。在终端执行 `xattr -dr com.apple.quarantine /path/to/CBLens.app` 去掉隔离属性，或在 Finder 中右键 `CBLens.app` → 打开，再在弹窗中点"打开"。
+> - **Windows**：SmartScreen 会显示"Windows 已保护你的电脑"。点击"更多信息" → "仍要运行"。
+>
+> 如希望避免上述提示，可参考下方步骤在本机自行编译。
 
 源码构建桌面包：
 
