@@ -49,6 +49,16 @@ from .cninfo_provider import (
     CninfoAnnouncementProvider,
     extract_text_from_pdf_bytes,
 )
+from .paths import (
+    APP_NAME,
+    app_data_dir,
+    asset_path,
+    data_dir,
+    data_path,
+    is_frozen_app,
+    project_root,
+    seed_data_files,
+)
 from .cache import (
     TermsCache, TermsBundle, CachedBondDataProvider, CachingDataProvider,
     project_bundle_path,
@@ -142,6 +152,14 @@ __all__ = [
     "apply_events_to_bundle",
     "sync_cb_events",
     "project_bundle_path",
+    "seed_data_files",
+    "data_path",
+    "data_dir",
+    "app_data_dir",
+    "asset_path",
+    "project_root",
+    "is_frozen_app",
+    "APP_NAME",
     "to_date",
     "parse_coupon_string",
 ]

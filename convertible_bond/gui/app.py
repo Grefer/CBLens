@@ -28,7 +28,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
-from ..paths import asset_path
+from ..paths import asset_path, seed_data_files
 from .constants import (
     BOND_CODE_RE,
     DEFAULT_DISTRESS_K_PCT,
@@ -207,6 +207,9 @@ class CBPricerApp(
 
     # ── 变量 ──────────────────────────────────────────────
     def _build_vars(self):
+        # 确保打包进 PyInstaller 的 data/*.json 种子文件已被复制到可写数据目录
+        seed_data_files()
+
         # 转债特定字段保持空白, 避免虚构默认值被当成真实示例债; 输入代码后自动填充
         self.v_bond_code = ctk.StringVar()
         self.v_S0        = ctk.StringVar(value="")
