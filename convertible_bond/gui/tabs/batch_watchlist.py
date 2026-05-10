@@ -30,6 +30,7 @@ from ...watchlist import (
 from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
+    _attach_cell_tooltip,
     _attach_column_sort,
     _configure_responsive_columns,
     _configure_tree_style,
@@ -343,6 +344,7 @@ def _render_watchlist_table(app):
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
+    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签"})
 
     if not rows:
         placeholder = ctk.CTkLabel(

@@ -32,6 +32,7 @@ from ...watchlist import load_watchlist
 from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
+    _attach_cell_tooltip,
     _attach_column_sort,
     _configure_responsive_columns,
     _configure_tree_style,
@@ -531,6 +532,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
+    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签", "复核建议"})
     app._batch_main_tree = tree
     _TREE_ATTRS.add("_batch_main_tree")
     _attach_main_context_menu(app, tree)

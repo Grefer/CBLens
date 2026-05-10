@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import tkinter as tk
 from datetime import date, datetime
 from tkinter import ttk
 
@@ -336,3 +337,104 @@ def _attach_column_sort(tree: ttk.Treeview, columns, headers) -> None:
 
     for i, col in enumerate(columns):
         tree.heading(col, command=lambda i=i: on_click(i))
+
+
+def _attach_cell_tooltip(
+    tree: ttk.Treeview,
+    columns,
+    headers,
+    *,
+    tooltip_headers: set[str] | None = None,
+    delay_ms: int = 300,
+) -> None:
+    """给 Treeview 指定列加悬浮完整文本提示.
+
+    主要用于"标签"、"复核建议"这类长文本列。tooltip 内容直接取当前单元格
+    display value, 因此表头排序后也能自然跟随行移动。
+    """
+    targets = set(tooltip_headers or headers)
+    state = {"tip": None, "after": None, "cell": None}
+
+    def _cancel_after() -> None:
+        after_id = state.get("after")
+        if after_id is not None:
+            try:
+                tree.after_cancel(after_id)
+            except Exception:
+                pass
+            state["after"] = None
+
+    def _hide(_event=None) -> None:
+        _cancel_after()
+        tip = state.get("tip")
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
+            state["tip"] = None
+        state["cell"] = None
+
+    def _show(text: str, x_root: int, y_root: int) -> None:
+        tip = tk.Toplevel(tree)
+        tip.wm_overrideredirect(True)
+        try:
+            tip.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        label = tk.Label(
+            tip,
+            text=text,
+            justify="left",
+            wraplength=460,
+            background=get_color(BG_INPUT),
+            foreground=get_color(TEXT),
+            relief="solid",
+            borderwidth=1,
+            padx=8,
+            pady=6,
+            font=(FONT_FAMILY, 12),
+        )
+        label.pack()
+        tip.wm_geometry(f"+{x_root + 12}+{y_root + 16}")
+        state["tip"] = tip
+
+    def _motion(event) -> None:
+        row_id = tree.identify_row(event.y)
+        col_id = tree.identify_column(event.x)
+        if not row_id or not col_id:
+            _hide()
+            return
+        try:
+            col_idx = int(col_id.lstrip("#")) - 1
+        except ValueError:
+            _hide()
+            return
+        if col_idx < 0 or col_idx >= len(columns):
+            _hide()
+            return
+        header = headers[col_idx]
+        if header not in targets:
+            _hide()
+            return
+        value = str(tree.set(row_id, columns[col_idx]) or "").strip()
+        if not value or value in {"—", "-"}:
+            _hide()
+            return
+        cell = (row_id, col_idx, value)
+        if state.get("cell") == cell:
+            tip = state.get("tip")
+            if tip is not None:
+                tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+            return
+        _hide()
+        state["cell"] = cell
+        state["after"] = tree.after(
+            delay_ms,
+            lambda text=value, x=event.x_root, y=event.y_root: _show(text, x, y),
+        )
+
+    tree.bind("<Motion>", _motion, add="+")
+    tree.bind("<Leave>", _hide, add="+")
+    tree.bind("<ButtonPress>", _hide, add="+")
+    tree.bind("<MouseWheel>", _hide, add="+")
