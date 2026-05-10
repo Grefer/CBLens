@@ -103,10 +103,10 @@ def _generate_spec(root: Path) -> str:
     windpy_bins = ""
     windpy_data = ""
     windpy_module_mode = "{}"
-    windpy_rth = ""
+    windpy_rth = "None"
 
     if has_windpy:
-        print(f"[build] WindPy 已检测到 ({windpy_file}), 将打入发布包")
+        print(f"[build] WindPy detected ({windpy_file}), will be bundled")
         windpy_hidden = "'WindPy',"
         windpy_module_mode = "{'WindPy': 'pyz+py'}"
 
@@ -151,7 +151,7 @@ if os.path.isdir(_windpy_dir):
             datas.append((_path, '.'))
 """
     else:
-        print("[build] WindPy 不可用, 跳过打包 (Wind 数据源将不可用)")
+        print("[build] WindPy not available, skipping (Wind data source will be unavailable)")
         spec_collect = ""
 
     spec = f"""# -*- mode: python ; coding: utf-8 -*-
@@ -273,7 +273,7 @@ def build() -> None:
     spec_content = _generate_spec(root)
     spec_file = build_dir / f"{APP_NAME}.spec"
     spec_file.write_text(spec_content, encoding="utf-8")
-    print(f"[build] spec 文件已生成: {spec_file}")
+    print(f"[build] spec generated: {spec_file}")
 
     cmd = [
         sys.executable,
@@ -283,13 +283,13 @@ def build() -> None:
         "--clean",
         str(spec_file),
     ]
-    print(f"[build] 正在构建 {APP_NAME} ({platform.platform()})")
+    print(f"[build] Building {APP_NAME} ({platform.platform()})")
     env = os.environ.copy()
     env["PYINSTALLER_CONFIG_DIR"] = str(build_dir / "pyinstaller-config")
     env["MPLCONFIGDIR"] = str(build_dir / "mplconfig")
     subprocess.run(cmd, cwd=root, check=True, env=env)
     _postprocess_macos_app(dist)
-    print(f"[build] 构建完成: {dist}")
+    print(f"[build] Build complete: {dist}")
 
 
 if __name__ == "__main__":
