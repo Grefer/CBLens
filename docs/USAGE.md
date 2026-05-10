@@ -101,6 +101,11 @@ dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位；WindPy 会实际 import 一次但不会启动连接。
 GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时，APP 会像 DeltaLab 一样优先使用包内 WindPy。若发布包未内置 WindPy，运行时会自动探测本机 Wind 终端；非默认位置可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
 
+发布桌面包时，Windows 与 macOS 分开处理，避免 CI 中无 WindPy 的 macOS 包覆盖本机 WindPy 版：
+
+- Windows: 触发 GitHub Actions 的 `build-desktop.yml`，它只会覆盖 Release 里的 `CBLens-Windows.zip`
+- macOS: 在装有 Wind API 的本机运行 `python scripts/release_macos_desktop.py --tag v1.0.0`，脚本会先诊断 WindPy 与缓存数据，再覆盖上传 `CBLens-macOS.zip`
+
 ---
 
 ## 2. 数据源分工

@@ -139,6 +139,8 @@ python -m pip install -e ".[desktop]"
 python scripts/build_desktop.py
 ```
 
+桌面 Release 发布已拆分：Windows 包由 GitHub Actions 的 `build-desktop.yml` 上传；macOS 包需在装有 Wind API 的本机运行 `python scripts/release_macos_desktop.py --tag v1.0.0` 上传，避免 CI 构建覆盖包内 WindPy 支持。
+
 ### 启动 GUI
 
 ```bash

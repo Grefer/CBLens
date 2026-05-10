@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to upload desktop assets to"
+        description: "Release tag to upload the Windows desktop asset to"
         required: false
         default: "v1.0.0"
   push:
@@ -15,22 +15,43 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            name: macOS
-            artifact_name: CBLens-macOS
-            asset_path: dist/CBLens-macOS.zip
-          - os: windows-latest
-            name: Windows
-            artifact_name: CBLens-Windows
-            asset_path: dist/CBLens-Windows.zip
+  windows-release:
+    name: Windows release asset
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[desktop]"
+
+      - name: Build app
+        run: python scripts/build_desktop.py
+
+      - name: Package Windows app
+        shell: pwsh
+        run: Compress-Archive -Path dist/CBLens.exe -DestinationPath dist/CBLens-Windows.zip -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CBLens-Windows
+          path: dist/CBLens-Windows.zip
+
+      - name: Upload Windows release asset
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          files: dist/CBLens-Windows.zip
+
+  macos-artifact:
+    name: macOS artifact only
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -46,23 +67,14 @@ jobs:
         run: python scripts/build_desktop.py
 
       - name: Package macOS app
-        if: runner.os == 'macOS'
         run: ditto -c -k --norsrc --keepParent dist/CBLens.app dist/CBLens-macOS.zip
-
-      - name: Package Windows app
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist/CBLens.exe -DestinationPath dist/CBLens-Windows.zip -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.asset_path }}
+          name: CBLens-macOS
+          path: dist/CBLens-macOS.zip
 
-      - name: Upload release asset
+      - name: Keep release macOS asset local-only
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-          files: ${{ matrix.asset_path }}
+        run: echo "macOS release assets are uploaded from a local WindPy machine with scripts/release_macos_desktop.py."
