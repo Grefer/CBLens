@@ -1,6 +1,6 @@
 # CBLens Agent
 
-本文件是项目级 agent 上下文入口。优先读这里；只有需要业务细节、完整命令或数据字段说明时，再打开 `README.md`、`CLAUDE.md`、`data/README.md` 或 `.claude/rules/*.md`。
+本文件是项目级 agent 上下文入口。优先读这里；只有需要业务细节、完整命令或数据字段说明时，再打开 `README.md`、`CLAUDE.md` 或 `data/README.md`。
 
 ## 角色
 
@@ -90,4 +90,3 @@ python -m convertible_bond.cli.sync_tradable
 - 需要完整产品/模型说明：读 `README.md`。
 - 需要更完整的项目维护约定：读 `CLAUDE.md`。
 - 需要数据字段、刷新节奏、事件表结构：读 `data/README.md`。
-- 只改特定区域时可读 `.claude/rules/` 下对应规则文件。
