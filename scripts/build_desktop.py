@@ -114,6 +114,8 @@ def _generate_spec(root: Path) -> str:
 
     windpy_module_mode = "{}"
     windpy_rth = "None"
+    network_rth_path = root / "pyi_rth_network.py"
+    network_rth = _rp(network_rth_path) if network_rth_path.exists() else "None"
 
     if has_windpy:
         print(f"[build] WindPy detected ({windpy_file}), will be bundled")
@@ -185,10 +187,16 @@ datas = [{', '.join(data_entries)}]
 datas += collect_data_files('customtkinter')
 datas += collect_data_files('matplotlib')
 datas += collect_data_files('numpy')
+datas += collect_data_files('certifi')
 
 binaries = []
 for _pkg in ('numpy', 'scipy'):
     binaries += collect_dynamic_libs(_pkg)
+for _pkg in ('curl_cffi', 'py_mini_racer'):
+    try:
+        binaries += collect_dynamic_libs(_pkg)
+    except Exception:
+        pass
 
 _hidden = ['akshare', 'matplotlib.backends.backend_tkagg']
 if {has_windpy}:
@@ -196,10 +204,25 @@ if {has_windpy}:
 hiddenimports = _hidden
 hiddenimports += collect_submodules('numpy')
 hiddenimports += collect_submodules('scipy')
+for _pkg in (
+    'akshare', 'bs4', 'curl_cffi', 'html5lib', 'lxml',
+    'openpyxl', 'py_mini_racer', 'requests', 'xlrd',
+):
+    try:
+        hiddenimports += collect_submodules(_pkg)
+    except Exception:
+        pass
+    try:
+        datas += collect_data_files(_pkg)
+    except Exception:
+        pass
 
 {spec_collect}
 
 _runtime_hooks = []
+_net_rth = {network_rth}
+if _net_rth and os.path.isfile(_net_rth):
+    _runtime_hooks.append(_net_rth)
 _rth = {windpy_rth}
 if _rth and os.path.isfile(_rth):
     _runtime_hooks.append(_rth)

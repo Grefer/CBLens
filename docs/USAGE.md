@@ -90,6 +90,16 @@ python scripts/build_desktop.py
 - Windows: `%APPDATA%\CBLens\data`
 - 可用 `CBLENS_DATA_DIR` 环境变量覆盖数据目录
 
+若打包后怀疑内置数据或数据源依赖没有被带上，可在终端运行：
+
+```bash
+dist/CBLens/CBLens --diagnose
+# 或 macOS .app 形态:
+dist/CBLens.app/Contents/MacOS/CBLens --diagnose
+```
+
+诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位。
+
 ---
 
 ## 2. 数据源分工

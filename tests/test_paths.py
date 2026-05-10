@@ -1,4 +1,5 @@
 import sys
+import json
 
 from convertible_bond import paths
 
@@ -32,6 +33,47 @@ def test_frozen_seeded_data_file(monkeypatch, tmp_path):
     target = paths.data_path("cb_events.json", seed=True)
 
     assert target == user_data / "cb_events.json"
+    assert target.read_text(encoding="utf-8") == '{"events": []}'
+
+
+def test_frozen_seed_replaces_empty_cb_data(monkeypatch, tmp_path):
+    bundled = tmp_path / "bundle"
+    bundled_data = bundled / "data"
+    user_data = tmp_path / "user"
+    bundled_data.mkdir(parents=True)
+    user_data.mkdir(parents=True)
+    seed_payload = {
+        "128009.SZ": {"sec_name": "测试转债"},
+        "_bundle_meta": {"n_bonds": 1},
+    }
+    (bundled_data / "cb_data.json").write_text(
+        json.dumps(seed_payload, ensure_ascii=False), encoding="utf-8")
+    (user_data / "cb_data.json").write_text(
+        json.dumps({"_bundle_meta": {"n_bonds": 0}}), encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+    monkeypatch.setenv("CBLENS_DATA_DIR", str(user_data))
+
+    target = paths.data_path("cb_data.json", seed=True)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == seed_payload
+
+
+def test_frozen_seed_finds_onedir_internal_data(monkeypatch, tmp_path):
+    exe_dir = tmp_path / "dist" / "CBLens"
+    bundled_data = exe_dir / "_internal" / "data"
+    user_data = tmp_path / "user"
+    bundled_data.mkdir(parents=True)
+    (bundled_data / "cb_events.json").write_text('{"events": []}', encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "missing_meipass"), raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe_dir / "CBLens"), raising=False)
+    monkeypatch.setenv("CBLENS_DATA_DIR", str(user_data))
+
+    target = paths.data_path("cb_events.json", seed=True)
+
     assert target.read_text(encoding="utf-8") == '{"events": []}'
 
 

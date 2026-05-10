@@ -1,6 +1,7 @@
 """Runtime paths for source checkouts and frozen desktop apps."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -26,6 +27,47 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _frozen_resource_roots() -> list[Path]:
+    """Candidate roots that may contain bundled resources in PyInstaller builds."""
+    roots: list[Path] = []
+    if is_frozen_app():
+        mei = Path(getattr(sys, "_MEIPASS"))
+        roots.append(mei)
+        roots.append(mei.parent / "Resources")
+        roots.append(mei.parent / "_internal")
+
+        exe_parent = Path(sys.executable).resolve().parent
+        roots.append(exe_parent / "_internal")
+        for parent in exe_parent.parents:
+            if parent.name == "Contents":
+                roots.extend([
+                    parent / "Resources",
+                    parent / "Frameworks",
+                    parent / "MacOS" / "_internal",
+                ])
+                break
+    else:
+        roots.append(project_root())
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def bundled_data_path(filename: str) -> Path | None:
+    """Return the bundled seed data path when present."""
+    for root in _frozen_resource_roots():
+        candidate = root / "data" / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def app_data_dir() -> Path:
     """Writable data directory used by packaged desktop apps.
 
@@ -48,14 +90,27 @@ def app_data_dir() -> Path:
     return root / APP_NAME / "data"
 
 
-def _needs_seed(target: Path) -> bool:
+def _needs_seed(target: Path, filename: str | None = None) -> bool:
     """True when the target file is missing or looks corrupt/empty."""
     if not target.exists():
         return True
     try:
-        return target.stat().st_size < 10
+        if target.stat().st_size < 10:
+            return True
     except OSError:
         return True
+    if filename and filename.endswith(".json"):
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return True
+        if filename == "cb_data.json":
+            return not (
+                isinstance(payload, dict)
+                and any(not str(k).startswith("_") for k in payload)
+            )
+    return False
 
 
 def data_path(filename: str, *, seed: bool = False) -> Path:
@@ -63,18 +118,18 @@ def data_path(filename: str, *, seed: bool = False) -> Path:
     root = app_data_dir()
     root.mkdir(parents=True, exist_ok=True)
     target = root / filename
-    if seed and filename in _SEEDED_DATA_FILES and _needs_seed(target):
-        bundled = project_root() / "data" / filename
-        if bundled.exists() and bundled.resolve() != target.resolve():
+    if seed and filename in _SEEDED_DATA_FILES and _needs_seed(target, filename):
+        bundled = bundled_data_path(filename)
+        if bundled is not None and bundled.resolve() != target.resolve():
             try:
                 shutil.copy2(bundled, target)
                 logger.info("seeded %s from bundle → %s", filename, target)
             except OSError as exc:
                 logger.warning("seed %s 失败: %s", filename, exc)
-        elif not bundled.exists():
+        elif bundled is None:
             logger.warning(
-                "seed %s 跳过: bundled 源文件不存在 (%s), 请确认构建时 data/ 已包含此文件",
-                filename, bundled,
+                "seed %s 跳过: bundled 源文件不存在, 请确认构建时 data/ 已包含此文件; candidates=%s",
+                filename, [str(p / "data" / filename) for p in _frozen_resource_roots()],
             )
     return target
 

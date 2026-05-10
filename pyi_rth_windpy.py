@@ -25,7 +25,7 @@ WindPy 在不同平台的 bootstrap 逻辑不同:
 
   macOS:
     1. 找到 ``_MEIPASS/WindPy.py``
-    2. 把硬编码路径替换为 ``_MEIPASS`` 下的对应路径
+    2. 把硬编码路径替换为 bundle 内的对应 dylib 路径
     3. 写回修改后的文件, 后续 ``import WindPy`` 载入修改版
 
   Windows:
@@ -48,13 +48,32 @@ else:
 
     elif sys.platform == "darwin":
         # ── macOS: 替换 WindPy.py 中的 dylib 路径 (幂等, 每次启动都会更新) ──
-        #
-        # 优先使用用户机器上已安装的 Wind API.app 原始 dylib;
-        # 仅在原始路径不存在时才回退到 bundle 内置的副本
-        _original_sitepath = "/Applications/Wind API.app/Contents/Frameworks/libWind.QuantData.dylib"
-        if os.path.isfile(_original_sitepath):
-            pass  # Wind 终端已安装, 不干预
-        else:
+        def _bundled_lib(_name):
+            _candidates = [
+                os.path.join(_mei, _name),
+                os.path.join(os.path.dirname(_mei), "Frameworks", _name),
+                os.path.join(os.path.dirname(_mei), "Resources", _name),
+            ]
+            _exe = os.path.abspath(sys.executable)
+            _cur = os.path.dirname(_exe)
+            for _ in range(6):
+                _candidates.extend([
+                    os.path.join(_cur, "_internal", _name),
+                    os.path.join(_cur, "Frameworks", _name),
+                    os.path.join(_cur, "Resources", _name),
+                ])
+                _next = os.path.dirname(_cur)
+                if _next == _cur:
+                    break
+                _cur = _next
+            for _candidate in _candidates:
+                if os.path.isfile(_candidate):
+                    return _candidate
+            return None
+
+        _sitepath = _bundled_lib("libWind.QuantData.dylib")
+        _quantpath = _bundled_lib("libWind.Cosmos.QuantData.dylib")
+        if _sitepath and _quantpath:
             _windpy_path = os.path.join(_mei, "WindPy.py")
             if os.path.isfile(_windpy_path):
                 try:
@@ -64,13 +83,13 @@ else:
 
                     _patched = re.sub(
                         r'^(\s{8}sitepath\s*=\s*).*(libWind\.QuantData\.dylib).*$',
-                        f'\\1os.path.join({_mei!r}, "libWind.QuantData.dylib")  '
+                        f'\\1{_sitepath!r}  '
                         '# patched by pyi_rth_windpy',
                         _src, flags=re.MULTILINE,
                     )
                     _patched = re.sub(
                         r'^(\s{8}quantpath\s*=\s*).*(libWind\.Cosmos\.QuantData\.dylib).*$',
-                        f'\\1os.path.join({_mei!r}, "libWind.Cosmos.QuantData.dylib")  '
+                        f'\\1{_quantpath!r}  '
                         '# patched by pyi_rth_windpy',
                         _patched, flags=re.MULTILINE,
                     )
