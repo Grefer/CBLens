@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import platform
+import json
 import shutil
 import subprocess
 import sys
@@ -43,8 +44,27 @@ STATIC_DATA_FILES = (
     "cb_data.json",
     "cb_events.json",
     "down_reset_overrides.json",
-    "batch_pricing_cache.json",
+    # Tracked release seed. Runtime cache data/batch_pricing_cache.json is
+    # intentionally ignored, but local builds may still bundle it when usable.
+    "desktop_batch_pricing_cache.json",
 )
+BATCH_PRICING_CACHE_FILE = "batch_pricing_cache.json"
+
+
+def _is_usable_batch_cache(path: Path) -> bool:
+    """True when a batch cache contains at least one successful pricing row."""
+    if not path.exists():
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    results = payload.get("results")
+    return (
+        isinstance(results, list)
+        and any(isinstance(row, dict) and row.get("status") == "ok" for row in results)
+    )
 
 
 def _repo_root() -> Path:
@@ -107,7 +127,17 @@ def _generate_spec(root: Path) -> str:
     for filename in STATIC_DATA_FILES:
         src = root / "data" / filename
         if src.exists():
+            if filename == "desktop_batch_pricing_cache.json" and not _is_usable_batch_cache(src):
+                print(f"[build] Skip unusable desktop cache seed: {src}")
+                continue
             data_entries.append(f"({_rp(src)}, 'data')")
+
+    runtime_cache = root / "data" / BATCH_PRICING_CACHE_FILE
+    if _is_usable_batch_cache(runtime_cache):
+        data_entries.append(f"({_rp(runtime_cache)}, 'data')")
+        print(f"[build] Runtime batch cache detected, will be bundled: {runtime_cache}")
+    elif runtime_cache.exists():
+        print(f"[build] Skip unusable runtime batch cache: {runtime_cache}")
 
     # 检测 WindPy
     has_windpy, windpy_file = _detect_windpy()

@@ -135,5 +135,28 @@ def test_frozen_seed_replaces_failed_only_batch_cache(monkeypatch, tmp_path):
     assert json.loads(target.read_text(encoding="utf-8")) == seed_payload
 
 
+def test_frozen_seed_falls_back_to_desktop_batch_cache_seed(monkeypatch, tmp_path):
+    bundled = tmp_path / "bundle"
+    bundled_data = bundled / "data"
+    user_data = tmp_path / "user"
+    bundled_data.mkdir(parents=True)
+    seed_payload = {
+        "_meta": {"n_results": 1},
+        "results": [{"bond_code": "128009.SZ", "status": "ok"}],
+        "upcoming_results": [],
+    }
+    (bundled_data / "desktop_batch_pricing_cache.json").write_text(
+        json.dumps(seed_payload, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+    monkeypatch.setenv("CBLENS_DATA_DIR", str(user_data))
+
+    target = paths.data_path("batch_pricing_cache.json", seed=True)
+
+    assert target == user_data / "batch_pricing_cache.json"
+    assert json.loads(target.read_text(encoding="utf-8")) == seed_payload
+
+
 def test_asset_path_points_to_assets_dir():
     assert paths.asset_path("cblens-icon.png").parts[-2:] == ("assets", "cblens-icon.png")

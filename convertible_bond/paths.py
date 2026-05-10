@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 APP_NAME = "CBLens"
 _SEEDED_DATA_FILES = {"cb_data.json", "cb_events.json", "down_reset_overrides.json", "batch_pricing_cache.json"}
+_BUNDLED_DATA_ALIASES = {
+    # 运行态批量缓存仍写入/读取 batch_pricing_cache.json；Release 构建则可携带
+    # 一个只读种子文件，避免 CI 没有本机运行态缓存时桌面包首启空表。
+    "batch_pricing_cache.json": ("batch_pricing_cache.json", "desktop_batch_pricing_cache.json"),
+}
 
 
 def is_frozen_app() -> bool:
@@ -61,10 +66,12 @@ def _frozen_resource_roots() -> list[Path]:
 
 def bundled_data_path(filename: str) -> Path | None:
     """Return the bundled seed data path when present."""
+    candidate_names = _BUNDLED_DATA_ALIASES.get(filename, (filename,))
     for root in _frozen_resource_roots():
-        candidate = root / "data" / filename
-        if candidate.exists():
-            return candidate
+        for candidate_name in candidate_names:
+            candidate = root / "data" / candidate_name
+            if candidate.exists():
+                return candidate
     return None
 
 
