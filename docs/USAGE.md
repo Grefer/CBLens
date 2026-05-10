@@ -99,6 +99,7 @@ dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 ```
 
 诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位。
+下载版不在 CI 中内置 WindPy；运行时会自动探测本机 Wind 终端。若 WindPy 安装在非默认位置，可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
 
 ---
 

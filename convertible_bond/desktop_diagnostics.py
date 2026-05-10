@@ -13,6 +13,7 @@ from .paths import (
     project_root,
     seed_data_files,
 )
+from .data_providers.wind import prepare_windpy_import_path
 
 
 _DATA_FILES = (
@@ -52,6 +53,7 @@ def _module_status(module_name: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     """Print frozen app resource/data/import state for quick support checks."""
     _ = argv or sys.argv[1:]
+    windpy_paths = prepare_windpy_import_path()
     seeded = seed_data_files()
 
     print("CBLens desktop diagnostics")
@@ -60,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"_MEIPASS: {getattr(sys, '_MEIPASS', '')}")
     print(f"resource root: {project_root()}")
     print(f"data dir: {app_data_dir()}")
+    if windpy_paths:
+        print(f"WindPy path added: {', '.join(str(p) for p in windpy_paths)}")
     print()
     print("seeded targets:")
     for target in seeded:

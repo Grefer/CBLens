@@ -6,7 +6,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import site
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 from .base import (
     BondTerms,
@@ -27,6 +31,91 @@ from ._helpers import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _windpy_candidate_paths() -> list[Path]:
+    """Return possible WindPy locations on the running machine."""
+    candidates: list[Path] = []
+    for env_name in ("CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR"):
+        value = os.environ.get(env_name)
+        if value:
+            candidates.append(Path(value).expanduser())
+
+    if sys.platform == "darwin":
+        candidates.extend([
+            Path("/Applications/Wind API.app/Contents/python"),
+            Path("/Applications/Wind.app/Contents/python"),
+            Path("/Applications/Wind金融终端.app/Contents/python"),
+        ])
+    elif sys.platform == "win32":
+        roots = [
+            os.environ.get("WIND_HOME"),
+            os.environ.get("WINDDIR"),
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("LOCALAPPDATA"),
+            os.environ.get("APPDATA"),
+            "C:\\Wind",
+        ]
+        suffixes = [
+            "",
+            "Wind",
+            "Wind\\Wind.NET.Client",
+            "Wind\\WindNETClient",
+            "Wind\\WindPy",
+            "Wind.NET.Client",
+            "WindPy",
+        ]
+        for root in roots:
+            if not root:
+                continue
+            root_path = Path(root).expanduser()
+            candidates.append(root_path)
+            candidates.extend(root_path / suffix for suffix in suffixes if suffix)
+
+    try:
+        candidates.append(Path(site.getusersitepackages()))
+    except Exception:
+        pass
+    try:
+        candidates.extend(Path(p) for p in site.getsitepackages())
+    except Exception:
+        pass
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def prepare_windpy_import_path() -> list[Path]:
+    """Prepend local WindPy directories to ``sys.path`` when they exist.
+
+    Release builds are created in GitHub Actions where WindPy is unavailable,
+    so the packaged app must discover the user's local Wind terminal at run
+    time.  The function is intentionally import-only; it does not start Wind.
+    """
+    added: list[Path] = []
+    for candidate in _windpy_candidate_paths():
+        path = candidate
+        if path.is_file() and path.name.lower() == "windpy.py":
+            path = path.parent
+        has_windpy = (
+            (path / "WindPy.py").is_file()
+            or (path / "WindPy" / "__init__.py").is_file()
+            or (path / "WindPy.pth").is_file()
+        )
+        if not has_windpy:
+            continue
+        path_str = str(path)
+        if path_str not in sys.path:
+            sys.path.insert(0, path_str)
+            added.append(path)
+    return added
 
 
 class WindDataProvider(DataProvider):
@@ -63,8 +152,8 @@ class WindDataProvider(DataProvider):
         if self._w is not None:
             return self._w
 
-        import sys
         frozen = bool(getattr(sys, "frozen", False))
+        prepare_windpy_import_path()
 
         try:
             from WindPy import w  # type: ignore[import-not-found]
@@ -72,9 +161,10 @@ class WindDataProvider(DataProvider):
             frozen_hint = ""
             if frozen:
                 frozen_hint = (
-                    "\n  [frozen build] 此发布包在构建时未成功打入 WindPy, 或者"
-                    "运行机上缺少 Wind 终端 / 原生动态库. 请在装有 Wind 终端 + "
-                    "`pip install WindPy` 的机器上重新打包."
+                    "\n  [frozen build] 下载版不会自带 WindPy; 请确认本机已安装 "
+                    "Wind API/金融终端 Python 接口。macOS 常见路径为 "
+                    "`/Applications/Wind API.app/Contents/python/WindPy.py`。"
+                    "如安装在自定义位置, 请设置环境变量 CBLENS_WINDPY_PATH。"
                 )
             raise ImportError(
                 "未安装 WindPy，请安装 Wind 金融终端并配置 Python 插件。\n"

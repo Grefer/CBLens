@@ -12,7 +12,7 @@ Outputs:
 WindPy 处理策略 (借鉴 DeltaLab):
   - 构建机上能 import WindPy 时自动打入发布包
   - 两种形态兼容: (a) Wind 终端单文件 WindPy.py  (b) pip 安装的 WindPy 包
-  - CI 无 Wind 终端时自动跳过, Wind 模式仍报 "未安装 WindPy"
+  - CI 无 Wind 终端时自动跳过; 下载版运行时会再探测用户本机 Wind API 路径
 """
 from __future__ import annotations
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .base import DataProvider
 from .akshare import AkshareDataProvider
-from .wind import WindDataProvider
+from .wind import WindDataProvider, prepare_windpy_import_path
 
 
 def detect_available_providers() -> list[str]:
@@ -12,6 +12,7 @@ def detect_available_providers() -> list[str]:
     仅做 import 检测, 不实例化, 不发起任何网络调用.
     """
     available: list[str] = []
+    prepare_windpy_import_path()
     try:
         import WindPy  # type: ignore[import-not-found]  # noqa: F401
         available.append("Wind")
