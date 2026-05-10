@@ -140,15 +140,22 @@ try:
 except Exception:
     pass
 """
-        # Wind 终端单文件形态: 手工扫 WindPy.__file__ 同目录
+        # Wind 终端单文件形态: 手工扫 WindPy.__file__ 同目录 + Frameworks (macOS)
         if windpy_file:
             windpy_dir = os.path.dirname(os.path.abspath(windpy_file))
-            spec_collect += f"""
-# --- Wind 终端单文件形态: 扫描 {windpy_dir} ---
-import glob as _glob
-_windpy_dir = {repr(windpy_dir)}
-if os.path.isdir(_windpy_dir):
-    for _path in _glob.glob(os.path.join(_windpy_dir, '*')):
+            # macOS: WindPy.py 的 dylib 在 ../Frameworks/ 而非同目录
+            _wind_dirs = [windpy_dir]
+            if sys.platform == "darwin":
+                frameworks_dir = os.path.normpath(os.path.join(windpy_dir, "..", "Frameworks"))
+                if os.path.isdir(frameworks_dir):
+                    _wind_dirs.append(frameworks_dir)
+            _wind_scan_blocks = []
+            for _wd in _wind_dirs:
+                _wind_scan_blocks.append(f"""
+# --- Wind 终端扫描: {_wd} ---
+_wind_dir = {repr(_wd)}
+if os.path.isdir(_wind_dir):
+    for _path in _glob.glob(os.path.join(_wind_dir, '*')):
         if not os.path.isfile(_path):
             continue
         _lower = os.path.basename(_path).lower()
@@ -158,6 +165,11 @@ if os.path.isdir(_windpy_dir):
             binaries.append((_path, '.'))
         else:
             datas.append((_path, '.'))
+""")
+            spec_collect += f"""
+# --- Wind 终端单文件形态 ---
+import glob as _glob
+{''.join(_wind_scan_blocks)}
 """
     else:
         print("[build] WindPy not available, skipping (Wind data source will be unavailable)")
