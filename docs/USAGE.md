@@ -98,8 +98,8 @@ dist/CBLens/CBLens --diagnose
 dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 ```
 
-诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位。
-下载版不在 CI 中内置 WindPy；运行时会自动探测本机 Wind 终端。若 WindPy 安装在非默认位置，可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
+诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位；WindPy 会实际 import 一次但不会启动连接。
+GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时，APP 会像 DeltaLab 一样优先使用包内 WindPy。若发布包未内置 WindPy，运行时会自动探测本机 Wind 终端；非默认位置可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
 
 ---
 

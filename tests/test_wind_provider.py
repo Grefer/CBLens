@@ -1,5 +1,6 @@
 import sys
 
+import convertible_bond.data_providers.wind as wind_mod
 from convertible_bond.data_providers.wind import prepare_windpy_import_path
 
 
@@ -9,6 +10,8 @@ def test_prepare_windpy_import_path_uses_env_dir(monkeypatch, tmp_path):
     (wind_dir / "WindPy.py").write_text("# fake WindPy\n", encoding="utf-8")
     monkeypatch.setenv("CBLENS_WINDPY_PATH", str(wind_dir))
     monkeypatch.setattr(sys, "platform", "linux", raising=False)
+    monkeypatch.setattr(wind_mod.site, "getusersitepackages", lambda: str(tmp_path / "missing-user"))
+    monkeypatch.setattr(wind_mod.site, "getsitepackages", lambda: [str(tmp_path / "missing-site")])
     monkeypatch.setattr(sys, "path", [p for p in sys.path if p != str(wind_dir)])
 
     added = prepare_windpy_import_path()
@@ -22,9 +25,34 @@ def test_prepare_windpy_import_path_uses_env_file(monkeypatch, tmp_path):
     wind_file.write_text("# fake WindPy\n", encoding="utf-8")
     monkeypatch.setenv("CBLENS_WINDPY_PATH", str(wind_file))
     monkeypatch.setattr(sys, "platform", "linux", raising=False)
+    monkeypatch.setattr(wind_mod.site, "getusersitepackages", lambda: str(tmp_path / "missing-user"))
+    monkeypatch.setattr(wind_mod.site, "getsitepackages", lambda: [str(tmp_path / "missing-site")])
     monkeypatch.setattr(sys, "path", [p for p in sys.path if p != str(tmp_path)])
 
     added = prepare_windpy_import_path()
 
     assert added == [tmp_path]
     assert sys.path[0] == str(tmp_path)
+
+
+def test_prepare_windpy_import_path_prefers_frozen_bundle(monkeypatch, tmp_path):
+    bundle_dir = tmp_path / "bundle"
+    external_dir = tmp_path / "external"
+    bundle_dir.mkdir()
+    external_dir.mkdir()
+    (bundle_dir / "WindPy.py").write_text("# bundled WindPy\n", encoding="utf-8")
+    (external_dir / "WindPy.py").write_text("# external WindPy\n", encoding="utf-8")
+
+    monkeypatch.setenv("CBLENS_WINDPY_PATH", str(external_dir))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle_dir), raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "App" / "Contents" / "MacOS" / "CBLens"))
+    monkeypatch.setattr(sys, "platform", "linux", raising=False)
+    monkeypatch.setattr(wind_mod.site, "getusersitepackages", lambda: str(tmp_path / "missing-user"))
+    monkeypatch.setattr(wind_mod.site, "getsitepackages", lambda: [str(tmp_path / "missing-site")])
+    monkeypatch.setattr(sys, "path", [str(external_dir), str(bundle_dir), "original"])
+
+    added = prepare_windpy_import_path()
+
+    assert added[:2] == [bundle_dir, external_dir]
+    assert sys.path[:3] == [str(bundle_dir), str(external_dir), "original"]

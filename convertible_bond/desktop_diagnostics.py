@@ -1,6 +1,7 @@
 """Small diagnostics entry point for packaged desktop builds."""
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import sys
@@ -50,6 +51,15 @@ def _module_status(module_name: str) -> str:
     return f"found ({location})" if location else "found"
 
 
+def _import_status(module_name: str) -> str:
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:
+        return f"import failed ({type(exc).__name__}: {exc})"
+    location = getattr(module, "__file__", None) or ""
+    return f"imported ({location})" if location else "imported"
+
+
 def main(argv: list[str] | None = None) -> int:
     """Print frozen app resource/data/import state for quick support checks."""
     _ = argv or sys.argv[1:]
@@ -63,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"resource root: {project_root()}")
     print(f"data dir: {app_data_dir()}")
     if windpy_paths:
-        print(f"WindPy path added: {', '.join(str(p) for p in windpy_paths)}")
+        print(f"WindPy path prepared: {', '.join(str(p) for p in windpy_paths)}")
     print()
     print("seeded targets:")
     for target in seeded:
@@ -78,7 +88,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {source}: {_json_summary(source)}")
     print()
     print("modules:")
-    for module_name in ("WindPy", "akshare", "certifi", "requests"):
+    print(f"  WindPy: {_import_status('WindPy')}")
+    for module_name in ("akshare", "certifi", "requests"):
         print(f"  {module_name}: {_module_status(module_name)}")
     return 0
 

@@ -33,9 +33,39 @@ from ._helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _frozen_windpy_candidate_paths() -> list[Path]:
+    """Return WindPy locations inside a PyInstaller bundle, in priority order."""
+    if not getattr(sys, "frozen", False):
+        return []
+
+    candidates: list[Path] = []
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        mei_path = Path(mei)
+        candidates.extend([
+            mei_path,
+            mei_path / "site-packages",
+        ])
+
+    exe_dir = Path(sys.executable).resolve().parent
+    cur = exe_dir
+    for _ in range(6):
+        candidates.extend([
+            cur,
+            cur / "_internal",
+            cur / "Frameworks",
+            cur / "Resources",
+        ])
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return candidates
+
+
 def _windpy_candidate_paths() -> list[Path]:
     """Return possible WindPy locations on the running machine."""
-    candidates: list[Path] = []
+    candidates: list[Path] = _frozen_windpy_candidate_paths()
     for env_name in ("CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR"):
         value = os.environ.get(env_name)
         if value:
@@ -93,13 +123,14 @@ def _windpy_candidate_paths() -> list[Path]:
 
 
 def prepare_windpy_import_path() -> list[Path]:
-    """Prepend local WindPy directories to ``sys.path`` when they exist.
+    """Prepend WindPy directories to ``sys.path`` when they exist.
 
-    Release builds are created in GitHub Actions where WindPy is unavailable,
-    so the packaged app must discover the user's local Wind terminal at run
-    time.  The function is intentionally import-only; it does not start Wind.
+    Local builds can bundle WindPy like DeltaLab, while CI builds cannot.  In
+    frozen apps, bundled WindPy paths are preferred over user-machine fallback
+    paths.  The function is intentionally import-only; it does not start Wind.
     """
-    added: list[Path] = []
+    prepared: list[Path] = []
+    insert_at = 0
     for candidate in _windpy_candidate_paths():
         path = candidate
         if path.is_file() and path.name.lower() == "windpy.py":
@@ -112,10 +143,13 @@ def prepare_windpy_import_path() -> list[Path]:
         if not has_windpy:
             continue
         path_str = str(path)
-        if path_str not in sys.path:
-            sys.path.insert(0, path_str)
-            added.append(path)
-    return added
+        # Preserve candidate priority.  Plain insert(0, ...) in a loop reverses
+        # the order and can make user site-packages shadow bundled WindPy.
+        sys.path[:] = [entry for entry in sys.path if entry != path_str]
+        sys.path.insert(insert_at, path_str)
+        insert_at += 1
+        prepared.append(path)
+    return prepared
 
 
 class WindDataProvider(DataProvider):
