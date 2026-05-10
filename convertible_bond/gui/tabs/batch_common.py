@@ -20,15 +20,12 @@ from ..theme import (
 
 # ── Treeview 行标签颜色 (主表 + 关注池表共用) ──────────────────
 _TAG_COLORS: dict[str, tuple[str, str]] = {
-    "new":         MAUVE,    # 新债 (尚未交易 / 上市 ≤ 30 天)
+    "new":         MAUVE,    # 未上市 / 尚不可自由交易的新债
     "underpriced": GREEN,
     "overpriced":  RED,
     "anomaly":     ORANGE,
     "failed":      TEXT_DIM,
 }
-
-# 上市后多少天内仍标记为"新债"
-_NEW_BOND_DAYS = 30
 
 # 已注册到 app 的 Treeview 实例属性名, 主题切换时统一刷新.
 # 模块级集合: 假定单进程单 GUI 实例; 多实例场景下旧属性名会残留,
@@ -79,18 +76,33 @@ def _coerce_date(value) -> date | None:
         return None
 
 
+def _coerce_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+    return None
+
+
 def _is_new_bond(row) -> bool:
-    """新债判定: 显式标记不可交易, 或可交易日/上市日在未来或近 30 天内."""
-    if row.get("is_tradable") is False:
+    """新债判定: 未上市 / 尚不可自由交易才标记, 已上市标的不再按天数染色."""
+    is_tradable = _coerce_bool(row.get("is_tradable"))
+    status = str(row.get("trading_status") or "").strip().lower()
+    if is_tradable is True or status in {"tradable", "private_tradable"}:
+        return False
+    if is_tradable is False or status in {"pending", "private_pending"}:
         return True
+
     today = date.today()
     for key in ("tradable_date", "listing_date"):
         d = _coerce_date(row.get(key))
         if d is None:
             continue
-        if d > today:           # 尚未交易
-            return True
-        if (today - d).days <= _NEW_BOND_DAYS:  # 刚上市不久
+        if d > today:
             return True
     return False
 
