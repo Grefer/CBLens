@@ -1,5 +1,5 @@
 [project]
-name = "convertible-bond-pricer"
+name = "cblens"
 version = "1.0.0"
 description = "CBLens: A 股可转债定价与机会筛选工作台，支持 Crank-Nicolson PDE、公告事件、Wind/akshare 和 GUI"
 readme = "README.md"
@@ -14,17 +14,18 @@ dependencies = [
     "scipy>=1.14",
     "pillow>=10.0",
     "akshare>=1.13",
+    "requests>=2.28",
     "pdfplumber>=0.9",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Grefer/ConvertibleBond"
-Repository = "https://github.com/Grefer/ConvertibleBond"
-Documentation = "https://github.com/Grefer/ConvertibleBond/blob/main/docs/USAGE.md"
-Issues = "https://github.com/Grefer/ConvertibleBond/issues"
+Homepage = "https://github.com/Grefer/CBLens"
+Repository = "https://github.com/Grefer/CBLens"
+Documentation = "https://github.com/Grefer/CBLens/blob/main/docs/USAGE.md"
+Issues = "https://github.com/Grefer/CBLens/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
 desktop = ["pyinstaller>=6.10", "pillow>=10.0"]
 
 [project.scripts]

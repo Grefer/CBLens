@@ -396,13 +396,27 @@ class _BatchStockCache(DataProvider):
         return self._inner.get_bond_terms(bond_code, valuation_date)
 
     def get_bond_history(self, bond_code, start, end):
-        key = (bond_code, start, end)
-        with self._lock:
-            if key in self._bond_history_cache:
-                return self._bond_history_cache[key]
-            value = self._inner.get_bond_history(bond_code, start, end)
-            self._bond_history_cache[key] = value
-            return value
+        cache_key = (bond_code, start, end)
+        inflight_key = ("bond_history", *cache_key)
+        for _ in range(self._MAX_INFLIGHT_RETRIES + 1):
+            is_owner, hit, value_or_ev = self._inflight_try_acquire(
+                inflight_key, self._bond_history_cache, cache_key)
+            if hit:
+                return value_or_ev
+            if not is_owner:
+                self._inflight_wait_for(value_or_ev, inflight_key)
+                with self._lock:
+                    if cache_key in self._bond_history_cache:
+                        return self._bond_history_cache[cache_key]
+                continue
+            try:
+                value = self._inner.get_bond_history(bond_code, start, end)
+                with self._lock:
+                    self._bond_history_cache[cache_key] = value
+                return value
+            finally:
+                self._inflight_release(inflight_key)
+        raise RuntimeError(f"{bond_code} {start}~{end} 转债历史缓存填充失败")
 
     def get_cashflow(self, bond_code):
         return self._inner.get_cashflow(bond_code)

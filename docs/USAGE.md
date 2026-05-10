@@ -31,8 +31,8 @@
 ### 基础环境
 
 ```bash
-git clone https://github.com/Grefer/ConvertibleBond.git
-cd ConvertibleBond
+git clone https://github.com/Grefer/CBLens.git
+cd CBLens
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate

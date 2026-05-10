@@ -7,8 +7,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
   <a href="#测试"><img src="https://img.shields.io/badge/tests-pytest-blue.svg" alt="Tests"></a>
   <a href="docs/USAGE.md"><img src="https://img.shields.io/badge/docs-使用文档-orange.svg" alt="Docs"></a>
-  <a href="https://github.com/Grefer/ConvertibleBond/commits/master"><img src="https://img.shields.io/github/last-commit/Grefer/ConvertibleBond" alt="Last Commit"></a>
-  <a href="https://github.com/Grefer/ConvertibleBond/issues"><img src="https://img.shields.io/github/issues/Grefer/ConvertibleBond" alt="Issues"></a>
+  <a href="https://github.com/Grefer/CBLens/commits/master"><img src="https://img.shields.io/github/last-commit/Grefer/CBLens" alt="Last Commit"></a>
+  <a href="https://github.com/Grefer/CBLens/issues"><img src="https://img.shields.io/github/issues/Grefer/CBLens" alt="Issues"></a>
 </p>
 
 **基于 Crank-Nicolson PDE 引擎的 A 股可转债定价与机会筛选工作台**<br/>
@@ -105,8 +105,8 @@ CustomTkinter GUI 覆盖完整研究流：
 ### 安装
 
 ```bash
-git clone https://github.com/Grefer/ConvertibleBond.git
-cd ConvertibleBond
+git clone https://github.com/Grefer/CBLens.git
+cd CBLens
 
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
@@ -119,7 +119,7 @@ pip install -e ".[dev]"
 
 ### 直接使用桌面 APP
 
-在 [Releases](https://github.com/Grefer/ConvertibleBond/releases) 下载：
+在 [Releases](https://github.com/Grefer/CBLens/releases) 下载：
 
 - `CBLens-macOS.zip`：解压后双击 `CBLens.app`
 - `CBLens-Windows.zip`：解压后双击 `CBLens.exe`
@@ -259,7 +259,7 @@ print(row["bond_name"], row["theoretical_price"], row["market_price"], row["q"])
 ## 📁 项目结构
 
 ```text
-ConvertibleBond/
+CBLens/
 ├── assets/                     # CBLens 图标与品牌资产
 ├── docs/                       # 使用文档与品牌说明
 ├── convertible_bond/           # 主包

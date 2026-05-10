@@ -1,4 +1,4 @@
-# ConvertibleBond — 可转债理论定价引擎
+# CBLens — 可转债理论定价引擎
 
 ## 项目概述
 
@@ -13,7 +13,7 @@ A 股可转债理论定价系统，完整链路：数据同步 → 准入筛选 
 ### 目录结构 (9200+ 行)
 
 ```
-ConvertibleBond/
+CBLens/
 ├── convertible_bond/           # 主包
 │   ├── pricer.py               # PDE 定价引擎 (UniversalCBPricer)
 │   ├── pricing_api.py          # price_from_provider / batch_price 高级 API

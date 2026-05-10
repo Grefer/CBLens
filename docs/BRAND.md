@@ -19,12 +19,12 @@
 
 ### 命名保留
 
-为避免破坏已有脚本和 import，以下名称保持不变：
+为避免破坏已有脚本和 import，以下技术名称保持不变或按公开名称收敛：
 
 | 上下文 | 名称 |
 | :--- | :--- |
 | Python 包名 | `convertible_bond` |
-| pip 安装名 | `convertible-bond-pricer` |
+| pip 安装名 | `cblens` |
 | CLI 入口 | `cb-gui`、`cb-sync-events`、`cb-screen-pool` 等 |
 
 ---
@@ -92,7 +92,7 @@ GUI 使用 Catppuccin 风格双模配色（Latte / Mocha），定义在 `convert
 ### 推荐做法
 
 - ✅ README、文档首页、GUI 标题统一写作 **CBLens**
-- ✅ 技术上下文中可以写 `convertible_bond` 包或 `convertible-bond-pricer` 安装名
+- ✅ 技术上下文中可以写 `convertible_bond` 包；公开安装名统一写 `cblens`
 - ✅ 图标优先使用 SVG；需要 macOS `.icns` 或 Windows `.ico` 时，从 SVG 导出 1024px 源图再生成
 - ✅ 推荐措辞：「研究工作台」「复核视图」「模型偏差」「风险标签」
 

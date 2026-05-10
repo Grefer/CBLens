@@ -188,3 +188,39 @@ def test_batch_stock_cache_waiter_timeout_is_explicit():
             cached.get_stock_close("000001.SZ", end)
         inner.release.set()
         assert owner.result(timeout=1.0) == 10.0
+
+
+def test_batch_stock_cache_bond_history_fetch_does_not_hold_global_lock():
+    class SlowBondHistoryProvider:
+        name = "slow_bond_history"
+
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.dividend_calls = 0
+
+        def get_bond_history(self, bond_code, start, end):
+            self.started.set()
+            self.release.wait(timeout=1.0)
+            return [(end, 101.0)]
+
+        def get_stock_dividend_yield(self, stock_code, on_date):
+            self.dividend_calls += 1
+            return 2.5
+
+    inner = SlowBondHistoryProvider()
+    cached = pricing_api._BatchStockCache(inner)
+    start = date(2026, 4, 1)
+    end = date(2026, 4, 28)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        bond_future = pool.submit(cached.get_bond_history, "113001.SH", start, end)
+        assert inner.started.wait(timeout=1.0)
+        dividend_future = pool.submit(cached.get_stock_dividend_yield, "000001.SZ", end)
+        try:
+            assert dividend_future.result(timeout=0.2) == 2.5
+        finally:
+            inner.release.set()
+        assert bond_future.result(timeout=1.0) == [(end, 101.0)]
+
+    assert inner.dividend_calls == 1

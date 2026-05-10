@@ -1,4 +1,4 @@
-# ConvertibleBond Agent
+# CBLens Agent
 
 本文件是项目级 agent 上下文入口。优先读这里；只有需要业务细节、完整命令或数据字段说明时，再打开 `README.md`、`CLAUDE.md`、`data/README.md` 或 `.claude/rules/*.md`。
 
