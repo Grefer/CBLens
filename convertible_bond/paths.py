@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 APP_NAME = "CBLens"
-_SEEDED_DATA_FILES = {"cb_data.json", "cb_events.json", "down_reset_overrides.json"}
+_SEEDED_DATA_FILES = {"cb_data.json", "cb_events.json", "down_reset_overrides.json", "batch_pricing_cache.json"}
 
 
 def is_frozen_app() -> bool:
