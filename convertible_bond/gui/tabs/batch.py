@@ -14,7 +14,11 @@ from tkinter import messagebox, filedialog, ttk
 
 from ..theme import *
 from ...batch_pricing import (
+    AdmissionFilterConfig,
     BATCH_REVIEW_VIEWS,
+    DEFAULT_DELIST_WINDOW_DAYS,
+    DEFAULT_MIN_CREDIT_RATING,
+    DEFAULT_MIN_OUTSTANDING_BALANCE,
     annotate_batch_results,
     batch_pricing_exclusion_reason,
     build_batch_provider,
@@ -29,6 +33,7 @@ from ...batch_pricing import (
 )
 from ...pricing_api import batch_price_from_provider_threaded
 from ...watchlist import load_watchlist
+from ..widgets import Tooltip
 from .batch_common import (
     _TREE_ATTRS,
     _apply_tag_colors,
@@ -194,9 +199,21 @@ def build(app, tab):
         font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6, state="disabled")
     app.btn_batch_export.pack(side="left", padx=(8, 0))
 
-    codes, excluded = split_batch_codes_from_cache(getattr(app, "terms_cache", None))
+    # ── 公开交易硬过滤; ST/停牌/低评级/小余额等风险默认不进入主池 ──
+    ctrl.grid_columnconfigure(0, weight=1)
+    app.v_batch_min_rating = ctk.StringVar(value=DEFAULT_MIN_CREDIT_RATING or "")
+    app.v_batch_min_balance = ctk.StringVar(
+        value="" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
+    )
+    app.v_batch_min_turnover = ctk.StringVar(value="")
+    app.v_batch_delist_window = ctk.StringVar(value="0")
+
+    codes, excluded = split_batch_codes_from_cache(
+        getattr(app, "terms_cache", None),
+        admission_config=_batch_admission_config(app),
+    )
     suffix = _excluded_status_suffix(excluded)
-    app.v_batch_status = ctk.StringVar(value=f"将基于本地条款库的普通转债池定价 ({len(codes)} 只{suffix})")
+    app.v_batch_status = ctk.StringVar(value=f"将基于本地条款库的公开交易转债池定价 ({len(codes)} 只{suffix})")
     ctk.CTkLabel(tab, textvariable=app.v_batch_status,
                  font=(FONT_FAMILY, 13, "bold"), text_color=TEXT).grid(
                      row=1, column=0, sticky="w", padx=16, pady=(2, 8))
@@ -273,9 +290,12 @@ def _create_table_section(parent, *, row, title, with_summary=False):
 
 
 def _run_batch(app):
-    codes, excluded = split_batch_codes_from_cache(getattr(app, "terms_cache", None))
+    codes, excluded = split_batch_codes_from_cache(
+        getattr(app, "terms_cache", None),
+        admission_config=_batch_admission_config(app),
+    )
     if not codes:
-        messagebox.showwarning("提示", "本地条款库的普通转债池为空, 请先同步基础信息")
+        messagebox.showwarning("提示", "本地条款库的公开交易转债池为空, 请先同步基础信息")
         return
 
     source = app.v_batch_source.get()
@@ -396,7 +416,8 @@ def _load_successful_result_cache(app):
     except Exception:
         return None
     results, excluded_count = _filter_nonstandard_results(
-        loaded["results"], getattr(app, "terms_cache", None))
+        loaded["results"], getattr(app, "terms_cache", None),
+        admission_config=_batch_admission_config(app))
     if not any(row.get("status") == "ok" for row in results):
         return None
     return {
@@ -424,7 +445,57 @@ def _excluded_status_suffix(excluded):
         return ""
     by_reason = summarize_exclusions(excluded)
     top = "、".join(f"{reason}{count}" for reason, count in list(by_reason.items())[:2])
-    return f", 准入过滤 {len(excluded)} 只 ({top})"
+    return f", 公开交易过滤 {len(excluded)} 只 ({top})"
+
+
+def _batch_optional_pos_float(var):
+    """解析非负浮点; 留空或负数表示关闭该过滤项 (返回 None)."""
+    raw = var.get().strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
+def _batch_int(var, default):
+    raw = var.get().strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(float(raw)))
+    except ValueError:
+        return default
+
+
+def _batch_admission_config(app):
+    """构造公开交易硬过滤配置."""
+    return AdmissionFilterConfig(
+        delist_window_days=_batch_int(app.v_batch_delist_window, DEFAULT_DELIST_WINDOW_DAYS),
+        min_outstanding_balance=_batch_optional_pos_float(app.v_batch_min_balance),
+        min_credit_rating=(app.v_batch_min_rating.get().strip() or None),
+        min_turnover_amount=_batch_optional_pos_float(app.v_batch_min_turnover),
+    )
+
+
+def _refresh_batch_pool_count(app, *_):
+    """公开交易池变化后即时预览主池规模; 定价进行中不覆盖状态."""
+    try:
+        if str(app.btn_batch_run.cget("state")) == "disabled":
+            return
+    except Exception:
+        pass
+    try:
+        codes, excluded = split_batch_codes_from_cache(
+            getattr(app, "terms_cache", None),
+            admission_config=_batch_admission_config(app),
+        )
+    except Exception:
+        return
+    suffix = _excluded_status_suffix(excluded)
+    app.v_batch_status.set(f"公开交易转债池 {len(codes)} 只{suffix} · 点「刷新重算」定价")
 
 
 def _canonical_view_name(label: str) -> str:
@@ -551,7 +622,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         f"成功 {summary['success']}  失败 {summary['failed']}",
     ]
     if excluded_count:
-        parts.append(f"准入过滤 {excluded_count} 只")
+        parts.append(f"公开交易过滤 {excluded_count} 只")
     app.v_batch_status.set("  |  ".join(parts))
     app.btn_batch_export.configure(state="normal")
 
@@ -587,7 +658,8 @@ def _load_result_cache(app, *, silent: bool = False):
         return
 
     results, excluded_count = _filter_nonstandard_results(
-        loaded["results"], getattr(app, "terms_cache", None))
+        loaded["results"], getattr(app, "terms_cache", None),
+        admission_config=_batch_admission_config(app))
     results = sort_batch_results_for_review(results)
     app._batch_all_results = results
     app._batch_upcoming_results = annotate_batch_results(loaded.get("upcoming_results") or [])
@@ -617,15 +689,16 @@ def _export_csv(app):
         messagebox.showerror("导出失败", str(exc))
 
 
-def _filter_nonstandard_results(results, terms_cache=None):
+def _filter_nonstandard_results(results, terms_cache=None, admission_config=None):
     kept = []
     excluded_count = 0
     for row in results:
         code = row.get("bond_code", "")
-        reason = batch_pricing_exclusion_reason(code, row)
+        reason = batch_pricing_exclusion_reason(code, row, admission_config=admission_config)
         if reason is None and terms_cache is not None and hasattr(terms_cache, "get"):
             try:
-                reason = batch_pricing_exclusion_reason(code, terms_cache.get(code))
+                reason = batch_pricing_exclusion_reason(
+                    code, terms_cache.get(code), admission_config=admission_config)
             except Exception:
                 reason = None
         if reason is None:

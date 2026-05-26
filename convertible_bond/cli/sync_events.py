@@ -17,6 +17,7 @@ from pathlib import Path
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_event_sync import apply_events_to_bundle, sync_cb_events
 from ..cb_events import CBEventStore, project_events_path
+from ..historical_terms import TermsPatchStore, project_terms_patches_path
 from ..data_providers import DataProvider, WindDataProvider
 
 
@@ -55,6 +56,7 @@ def main() -> int:
 
     bundle = TermsBundle(Path(args.bundle) if args.bundle else project_bundle_path())
     store = CBEventStore(Path(args.events) if args.events else project_events_path())
+    patch_store = TermsPatchStore(project_terms_patches_path())
     codes = list(args.codes) if args.codes else bundle.list_bonds()
     if args.limit > 0:
         codes = codes[:args.limit]
@@ -86,6 +88,7 @@ def main() -> int:
         provider,
         codes,
         store,
+        term_patch_store=patch_store,
         end=date.today(),
         lookback_days=max(1, args.lookback_days),
         on_progress=progress,
@@ -95,6 +98,7 @@ def main() -> int:
     print(
         f"\n✅ 扫描公告 {result['scanned_announcements']} 条, "
         f"解析事件 {len(result['parsed_events'])} 条, 新增 {result['added']} 条, "
+        f"条款影响新增 {result.get('patches_added', 0)} 条, "
         f"失败 {len(result['failed'])} 只  ({elapsed:.1f}s)"
     )
     if download_pdf:
@@ -114,6 +118,19 @@ def main() -> int:
                   f"{event.raw_title[:40]}{extra}")
         if len(result["parsed_events"]) > 20:
             print(f"  ... 还有 {len(result['parsed_events']) - 20} 条")
+
+    if result.get("parsed_patches"):
+        print("\n条款影响 (前 20):")
+        for patch in result["parsed_patches"][:20]:
+            fields = ", ".join(
+                f"{key}={value}" for key, value in patch.fields.items()
+            )
+            print(
+                f"  {patch.effective_date} {patch.bond_code} {fields}: "
+                f"{(patch.raw_title or patch.note or '')[:40]}"
+            )
+        if len(result["parsed_patches"]) > 20:
+            print(f"  ... 还有 {len(result['parsed_patches']) - 20} 条")
 
     if args.apply:
         applied = apply_events_to_bundle(store, bundle)

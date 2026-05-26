@@ -1,0 +1,52 @@
+{
+  "source": "cninfo",
+  "window": [
+    "2021-05-25",
+    "2026-05-25"
+  ],
+  "announcements": {
+    "total_classified": 4936,
+    "event_counts": {
+      "down_reset_approved": 640,
+      "down_reset_proposed": 439,
+      "down_reset_rejected": 2269,
+      "down_reset_trigger_notice": 1588
+    }
+  },
+  "episodes": {
+    "total": 2952,
+    "outcome_counts": {
+      "approved": 640,
+      "proposed_pending": 43,
+      "rejected": 2269
+    },
+    "decided": 2909,
+    "approved": 640,
+    "rejected": 2269,
+    "approved_share_of_decided": 0.22000687521485046,
+    "rejected_share_of_decided": 0.7799931247851495,
+    "proposed_pending": 43
+  },
+  "proposal_to_approval_lag_days": {
+    "n": 373,
+    "median": 17,
+    "mean": 19.80965147453083
+  },
+  "explicit_trigger_followups_90d": {
+    "trigger_notices": 1588,
+    "counts": {
+      "approved": 245,
+      "no_decision_in_90d": 126,
+      "proposed_pending": 17,
+      "rejected": 1200
+    },
+    "decided": 1445,
+    "approved_share_of_decided": 0.1695501730103806
+  },
+  "outputs": {
+    "announcements_csv": "output/down_reset_cninfo_announcements_20210525_20260525.csv",
+    "episodes_csv": "output/down_reset_episodes_20210525_20260525.csv",
+    "trigger_followups_csv": "output/down_reset_trigger_followups_20210525_20260525.csv",
+    "report_md": "output/down_reset_probability_report_20210525_20260525.md"
+  }
+}

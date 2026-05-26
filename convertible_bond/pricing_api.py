@@ -16,14 +16,42 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
-from .pricer import UniversalCBPricer, DEFAULT_FACE_VALUE, DEFAULT_REDEMPTION_PRICE
+from .pricer import (
+    UniversalCBPricer,
+    DEFAULT_COUPON_RATES,
+    DEFAULT_FACE_VALUE,
+    DEFAULT_REDEMPTION_PRICE,
+)
 from .data_providers import DataProvider, WindDataProvider, auto_data_provider, finite_float
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
-from .down_reset_overrides import resolve_down_reset
+from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
+from .historical_terms import TermsPatchStore, project_terms
+from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
 
 
 _finite_float = finite_float
 
+_RATING_SPREAD_FLOORS = {
+    "AAA": 0.012,
+    "AA+": 0.018,
+    "AA": 0.025,
+    "AA-": 0.035,
+    "A+": 0.045,
+    "A": 0.060,
+    "A-": 0.080,
+    "BBB+": 0.100,
+    "BBB": 0.120,
+    "BBB-": 0.150,
+    "BB+": 0.180,
+    "BB": 0.220,
+    "BB-": 0.260,
+    "B+": 0.300,
+    "B": 0.360,
+    "B-": 0.420,
+    "CCC": 0.500,
+    "CC": 0.650,
+    "C": 0.800,
+}
 
 def _latest_price_on_or_before(history, on_date: date) -> float | None:
     latest: float | None = None
@@ -53,6 +81,141 @@ def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, f
     return _latest_price_on_or_before(history, val_date) or fallback_price
 
 
+def _rating_spread_floor(rating: Any) -> float | None:
+    if rating is None:
+        return None
+    raw = str(rating).upper().replace(" ", "").strip()
+    for label in sorted(_RATING_SPREAD_FLOORS, key=len, reverse=True):
+        if raw == label or raw.startswith(label):
+            return _RATING_SPREAD_FLOORS[label]
+    return None
+
+
+def _add_years(dt_value: date, years: int) -> date:
+    try:
+        return dt_value.replace(year=dt_value.year + years)
+    except ValueError:
+        return dt_value.replace(month=2, day=28, year=dt_value.year + years)
+
+
+def _accrued_interest(
+    *,
+    face_value: float,
+    coupon_rates: tuple[float, ...] | None,
+    issue_date: date | None,
+    on_date: date,
+) -> float:
+    if issue_date is None or on_date <= issue_date:
+        return 0.0
+    period_start = issue_date
+    for rate in tuple(coupon_rates or DEFAULT_COUPON_RATES):
+        period_end = _add_years(period_start, 1)
+        if period_start <= on_date <= period_end:
+            return face_value * float(rate) * (on_date - period_start).days / 365.0
+        period_start = period_end
+    return 0.0
+
+
+def _estimate_down_reset_floor(provider: DataProvider, stock_code: str, val_date: date) -> float | None:
+    """估算下修价监管/条款下限: max(近20交易日均价, 前一交易日均价)."""
+    try:
+        history = provider.get_stock_history(stock_code, val_date - timedelta(days=60), val_date)
+    except Exception:
+        return None
+    closes = [
+        float(v)
+        for d, v in history or []
+        if d is not None and d <= val_date and _finite_float(v) is not None
+    ]
+    if len(closes) < 20:
+        return None
+    last20_avg = sum(closes[-20:]) / 20.0
+    prev_close = closes[-1]
+    return max(last20_avg, prev_close)
+
+
+def _risk_warnings(terms, val_date: date) -> list[str]:
+    warnings: list[str] = []
+    if terms.suspension_status:
+        warnings.append(f"转债交易状态异常: {terms.suspension_status}")
+    conv_status = str(getattr(terms, "conversion_suspension_status", "") or "")
+    conv_start = getattr(terms, "conversion_suspension_start_date", None)
+    conv_end = getattr(terms, "conversion_suspension_end_date", None)
+    conversion_paused = "暂停" in conv_status or (
+        conv_start is not None
+        and conv_start <= val_date
+        and (conv_end is None or val_date <= conv_end)
+    )
+    if conversion_paused:
+        start_text = conv_start.isoformat() if conv_start else "待起始"
+        end_text = conv_end.isoformat() if conv_end else "待恢复"
+        warnings.append(f"转股暂停窗口: {start_text}~{end_text}")
+    if terms.underlying_trade_status:
+        warnings.append(f"正股交易状态异常: {terms.underlying_trade_status}")
+    if terms.underlying_status:
+        warnings.append(f"正股风险状态: {terms.underlying_status}")
+    outlook = str(getattr(terms, "credit_rating_outlook", "") or "").strip()
+    if outlook and outlook not in {"稳定", "正面"}:
+        warnings.append(f"评级展望: {outlook}")
+    watch_status = str(getattr(terms, "credit_watch_status", "") or "").strip()
+    if watch_status and not any(word in watch_status for word in ("撤出", "移出", "取消")):
+        warnings.append(f"评级观察: {watch_status}")
+    if terms.call_redemption_date is not None:
+        if terms.call_redemption_date <= val_date:
+            warnings.append("强赎赎回日已过, 普通理论价不适用")
+        else:
+            warnings.append("已公告强赎, 估值切换为短期限赎回视角")
+    if terms.last_trading_date is not None and terms.last_trading_date < val_date:
+        warnings.append("已过最后交易日, 市价/偏差参考意义有限")
+    if terms.delisting_date is not None:
+        if terms.delisting_date <= val_date:
+            warnings.append("已摘牌或临近摘牌状态已过期")
+        elif (terms.delisting_date - val_date).days <= 30:
+            warnings.append("30日内临近摘牌")
+    return warnings
+
+
+def _model_signal_status(terms, sigma: float | None, risk_warnings: list[str]) -> str:
+    hard_risk = False
+    if risk_warnings:
+        hard_risk = any(
+            any(token in text for token in ("ST", "退市", "停牌", "暂停", "摘牌", "最后交易"))
+            for text in risk_warnings
+        )
+    rating = str(getattr(terms, "credit_rating", "") or "").upper().replace(" ", "").strip()
+    if rating:
+        if not (rating.startswith("AAA") or rating.startswith("AA")):
+            hard_risk = True
+    balance = _finite_float(getattr(terms, "outstanding_balance", None))
+    if balance is not None and balance < 0.5:
+        hard_risk = True
+    vol = _finite_float(sigma)
+    if vol is not None and vol > 0.80:
+        hard_risk = True
+    return "不适合作为买入信号" if hard_risk else "可作为模型信号复核"
+
+
+def _assert_pricing_status_active(
+    bond_code: str,
+    terms,
+    val_date: date,
+    *,
+    maturity_date: date | None = None,
+) -> None:
+    if terms.call_redemption_date is not None and terms.call_redemption_date <= val_date:
+        raise ValueError(
+            f"{bond_code} 已到/已过强赎赎回日 ({terms.call_redemption_date}), 普通理论价不适用")
+    if terms.last_trading_date is not None and terms.last_trading_date < val_date:
+        raise ValueError(
+            f"{bond_code} 已过最后交易日 ({terms.last_trading_date}), 普通理论价不适用")
+    if terms.delisting_date is not None and terms.delisting_date <= val_date:
+        raise ValueError(
+            f"{bond_code} 已摘牌/退市 ({terms.delisting_date}), 普通理论价不适用")
+    if maturity_date is not None and maturity_date <= val_date:
+        raise ValueError(
+            f"{bond_code} 已到期 ({maturity_date}), 普通理论价不适用")
+
+
 def cb_data_provider_for_market(market_provider: DataProvider) -> DataProvider:
     """用 cb_data 提供转债静态信息, 用 market_provider 提供动态行情/利率."""
     static_source = market_provider if isinstance(market_provider, WindDataProvider) else None
@@ -70,6 +233,10 @@ def price_from_provider(provider: DataProvider, bond_code,
                         valuation_date=None, vol_window_days=21,
                         sigma=None, q=None,
                         M=500, N=2000,
+                        term_patch_store: TermsPatchStore | None = None,
+                        apply_term_events: bool = True,
+                        use_rating_spread: bool = True,
+                        estimate_down_reset_floor: bool = True,
                         **pricer_overrides):
     """
     输入转债代码 (例如 '128009.SZ') + 一个 DataProvider 实例, 自动拉参数并定价.
@@ -80,6 +247,21 @@ def price_from_provider(provider: DataProvider, bond_code,
     """
     val_date = valuation_date or date.today()
     terms = provider.get_bond_terms(bond_code, val_date)
+    projection = project_terms(
+        bond_code,
+        terms,
+        val_date,
+        patch_store=term_patch_store,
+        apply_events=apply_term_events,
+    )
+    terms = projection.terms
+
+    _assert_pricing_status_active(
+        bond_code,
+        terms,
+        val_date,
+        maturity_date=terms.maturity_date,
+    )
 
     stock_code = terms.underlying_code
     if not stock_code:
@@ -106,6 +288,7 @@ def price_from_provider(provider: DataProvider, bond_code,
     else:
         effective_q = float(q)
     market_price = _latest_bond_close(provider, bond_code, val_date, terms.close)
+    risk_warnings = _risk_warnings(terms, val_date)
 
     issue_dt = terms.issue_date
     conv_start_dt = issue_dt + timedelta(days=180) if issue_dt else None
@@ -120,6 +303,15 @@ def price_from_provider(provider: DataProvider, bond_code,
         maturity_dt = cf.maturity_date
     else:
         maturity_dt = terms.maturity_date
+    contractual_maturity_dt = maturity_dt
+    if maturity_dt is None:
+        raise ValueError(f"{bond_code} 数据源未返回到期日, 无法定价")
+    _assert_pricing_status_active(
+        bond_code,
+        terms,
+        val_date,
+        maturity_date=maturity_dt,
+    )
 
     if cf and cf.redemption_price is not None:
         redemption_price = float(cf.redemption_price)
@@ -130,6 +322,21 @@ def price_from_provider(provider: DataProvider, bond_code,
 
     if terms.conversion_price is None:
         raise ValueError(f"{bond_code} 数据源未返回转股价 K, 无法定价")
+
+    redemption_mode = False
+    if terms.call_redemption_date is not None:
+        redemption_mode = True
+        maturity_dt = terms.call_redemption_date
+        if terms.call_redemption_price is not None:
+            redemption_price = float(terms.call_redemption_price)
+        else:
+            face_value_for_call = float(terms.face_value or DEFAULT_FACE_VALUE)
+            redemption_price = face_value_for_call + _accrued_interest(
+                face_value=face_value_for_call,
+                coupon_rates=coupon_rates,
+                issue_date=issue_dt,
+                on_date=terms.call_redemption_date,
+            )
 
     pricer_kwargs = dict(
         S0=S0,
@@ -142,31 +349,94 @@ def price_from_provider(provider: DataProvider, bond_code,
         redemption_price=float(redemption_price),
         coupon_rates=coupon_rates,
     )
+    if redemption_mode:
+        # 已公告强赎时, 终点已经是赎回/转股二择一, 不再套用普通触发式强赎 cap。
+        pricer_kwargs["call_no_redemption_until"] = maturity_dt
+    down_reset_trigger_source = "terms"
+    if terms.down_reset_trigger_pct is None:
+        down_reset_trigger_pct = DEFAULT_DOWN_RESET_TRIGGER_PCT
+        down_reset_trigger_source = "default"
+    else:
+        down_reset_trigger_pct = float(terms.down_reset_trigger_pct)
+    pricer_kwargs["down_reset_trigger_ratio"] = down_reset_trigger_pct / 100.0
     if terms.call_trigger_pct is not None:
         pricer_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
-    if terms.call_no_redemption_until is not None:
+    if terms.call_no_redemption_until is not None and not redemption_mode:
         pricer_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
     if terms.put_trigger_pct is not None:
         pricer_kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
+    if terms.putback_start_date is not None:
+        pricer_kwargs["putback_start_date"] = terms.putback_start_date
+    if terms.putback_end_date is not None:
+        pricer_kwargs["putback_end_date"] = terms.putback_end_date
+    if terms.putback_price is not None:
+        pricer_kwargs["putback_price"] = float(terms.putback_price)
 
-    if terms.put_obs_months is not None and issue_dt and maturity_dt:
-        total_months = (maturity_dt - issue_dt).days / 30.4375
+    if terms.put_obs_months is not None and issue_dt and (contractual_maturity_dt or maturity_dt):
+        put_maturity = contractual_maturity_dt or maturity_dt
+        total_months = (put_maturity - issue_dt).days / 30.4375
         active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
         pricer_kwargs["put_active_years"] = int(round(active_years))
     resolved = resolve_down_reset(bond_code, terms, valuation_date=val_date)
     if resolved.block_until is not None:
         pricer_kwargs["down_reset_block_until"] = resolved.block_until
+    down_reset_floor = None
+    if estimate_down_reset_floor and "down_reset_floor" not in pricer_overrides:
+        down_reset_floor = _estimate_down_reset_floor(provider, stock_code, val_date)
+        if down_reset_floor is not None:
+            pricer_kwargs["down_reset_floor"] = down_reset_floor
+
+    down_intensity = resolve_down_reset_intensity(
+        p_down, resolved, redemption_mode=redemption_mode,
+    )
+    effective_p_down = down_intensity.effective_p_down
+    # 已公告下修: 把一次性下修节点传入 pricer (regime ②); 显式 override 优先。
+    if (
+        down_intensity.scheduled_reset_date is not None
+        and down_intensity.scheduled_reset_prob > 0
+    ):
+        pricer_kwargs.setdefault("scheduled_reset_date", down_intensity.scheduled_reset_date)
+        pricer_kwargs.setdefault("scheduled_reset_prob", down_intensity.scheduled_reset_prob)
+        if down_intensity.scheduled_reset_target_k is not None:
+            pricer_kwargs.setdefault(
+                "scheduled_reset_target_k", down_intensity.scheduled_reset_target_k)
 
     pricer_kwargs.update(pricer_overrides)
+    if "down_reset_trigger_ratio" in pricer_overrides:
+        down_reset_trigger_source = "override"
+    down_reset_trigger_ratio = float(
+        pricer_kwargs.get("down_reset_trigger_ratio", DEFAULT_DOWN_RESET_TRIGGER_RATIO)
+    )
+    down_reset_trigger_pct = down_reset_trigger_ratio * 100.0
     pricer = UniversalCBPricer(**pricer_kwargs)  # type: ignore[arg-type]
 
-    effective_p_down = float(p_down)
-    if resolved.p_scale is not None:
-        effective_p_down *= max(0.0, float(resolved.p_scale))
+    rating_base_spread = _rating_spread_floor(terms.credit_rating)
+    effective_base_spread = float(base_spread)
+    if use_rating_spread and rating_base_spread is not None:
+        effective_base_spread = max(effective_base_spread, float(rating_base_spread))
 
-    theo = pricer.price(sigma=sigma, r=r, base_spread=base_spread,
+    theo = pricer.price(sigma=sigma, r=r, base_spread=effective_base_spread,
                         distress_k=distress_k, p_down=effective_p_down,
                         M=M, N=N, q=effective_q)
+    has_down_value = (
+        effective_p_down > 0
+        or float(pricer_kwargs.get("scheduled_reset_prob", 0.0) or 0.0) > 0
+    )
+    if has_down_value:
+        no_down_kwargs = dict(pricer_kwargs)
+        no_down_kwargs.pop("scheduled_reset_date", None)
+        no_down_kwargs.pop("scheduled_reset_target_k", None)
+        no_down_kwargs["scheduled_reset_prob"] = 0.0
+        no_down_pricer = UniversalCBPricer(**no_down_kwargs)  # type: ignore[arg-type]
+        no_down_price = no_down_pricer.price(
+            sigma=sigma, r=r, base_spread=effective_base_spread,
+            distress_k=distress_k, p_down=0.0,
+            M=M, N=N, q=effective_q,
+        )
+    else:
+        no_down_price = theo
+    down_reset_uplift = float(theo) - float(no_down_price)
+    model_signal_status = _model_signal_status(terms, sigma, risk_warnings)
     return {
         "bond_code": bond_code,
         "bond_name": terms.sec_name,
@@ -177,24 +447,65 @@ def price_from_provider(provider: DataProvider, bond_code,
         "T": pricer.T,
         "sigma": sigma,
         "q": effective_q,
+        "base_spread": float(base_spread),
+        "effective_base_spread": effective_base_spread,
+        "rating_base_spread": rating_base_spread,
+        "base_p_down": down_intensity.base_p_down,
+        "effective_p_down": effective_p_down,
+        # Backward-compatible alias: historically this field held the model value.
         "p_down": effective_p_down,
         "down_reset_block_until": resolved.block_until,
         "down_reset_p_scale": resolved.p_scale,
         "down_reset_note": resolved.note,
         "down_reset_cooldown_months": resolved.cooldown_months,
         "down_reset_announce_date": resolved.announce_date,
+        "down_reset_proposed_date": getattr(resolved, "proposal_date", None),
+        "down_reset_approved_effective_date": getattr(resolved, "approved_effective_date", None),
+        "down_reset_scheduled_date": down_intensity.scheduled_reset_date,
+        "down_reset_scheduled_prob": down_intensity.scheduled_reset_prob,
+        "down_reset_scheduled_kind": down_intensity.scheduled_reset_kind,
+        "down_reset_scheduled_target_k": down_intensity.scheduled_reset_target_k,
+        "down_reset_trigger_pct": down_reset_trigger_pct,
+        "down_reset_trigger_ratio": down_reset_trigger_ratio,
+        "down_reset_trigger_source": down_reset_trigger_source,
+        "down_reset_floor": pricer_kwargs.get("down_reset_floor"),
+        "no_down_price": no_down_price,
+        "down_reset_uplift": down_reset_uplift,
+        "down_reset_uplift_pct": (down_reset_uplift / theo) if theo else float("nan"),
+        "redemption_mode": redemption_mode,
+        "call_status": terms.call_status,
+        "call_redemption_date": terms.call_redemption_date,
+        "last_trading_date": terms.last_trading_date,
+        "delisting_date": terms.delisting_date,
+        "maturity_date": maturity_dt,
+        "contractual_maturity_date": contractual_maturity_dt,
+        "redemption_price": pricer_kwargs.get("redemption_price", redemption_price),
+        "call_redemption_price": terms.call_redemption_price,
+        "putback_start_date": terms.putback_start_date,
+        "putback_end_date": terms.putback_end_date,
+        "putback_price": terms.putback_price,
         "market_price": market_price,
         "credit_rating": terms.credit_rating,
+        "credit_rating_outlook": terms.credit_rating_outlook,
+        "credit_watch_status": terms.credit_watch_status,
         "outstanding_balance": terms.outstanding_balance,
+        "conversion_suspension_start_date": terms.conversion_suspension_start_date,
+        "conversion_suspension_end_date": terms.conversion_suspension_end_date,
+        "conversion_suspension_status": terms.conversion_suspension_status,
         "listing_date": terms.listing_date,
         "tradable_date": terms.tradable_date,
         "is_tradable": terms.is_tradable,
         "trading_status": terms.trading_status,
+        "suspension_status": terms.suspension_status,
         "underlying_name": terms.underlying_name,
         "underlying_status": terms.underlying_status,
         "underlying_trade_status": terms.underlying_trade_status,
         "underlying_pct_change": terms.underlying_pct_change,
         "call_no_redemption_until": terms.call_no_redemption_until,
+        "term_patch_fields": sorted(projection.patch_fields),
+        "term_patch_count": len(projection.applied_patches),
+        "risk_warnings": risk_warnings,
+        "model_signal_status": model_signal_status,
         "coupon_source": "cashflow" if cf and cf.coupon_rates else "terms",
         "theoretical_price": theo,
         "data_source": provider.name,

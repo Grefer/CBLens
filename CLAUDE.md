@@ -123,5 +123,24 @@ cb-screen-pool --min-rating AA-             # 准入筛选报告
 cb-sync-admission-status --limit 50         # 刷新状态
 python -m convertible_bond.cli.sync_events  # 同步事件
 python -m convertible_bond.cli.sync_tradable # 同步可交易列表
+cb-calibrate-down-reset                     # 从 cb_events 校准下修博弈常量
 python CB.py 128009.SZ                      # 单只定价
 ```
+
+### 下修博弈建模 (三 regime, 按价格影响符号分)
+
+`resolve_down_reset_intensity` 把观测合成成 pricer 入参, 三态互斥:
+
+- **背景** (无确定性公告): "纯触发后"模型 — 触发线下方 (S < K·trigger_ratio) 一律按 `p_down` 年化概率下修 (每步 `1-exp(-p·dt)`, 网格无关), 触发线之上为 0。`p_down` = "触发后公司跟进下修"的年化概率; 不用"越跌越可能"的 S 渐变。
+- **已公告** (确定性正贡献): 输出 `scheduled_reset_date/prob/kind/target_k` 一次性下修节点, pricer 在预期生效日近确定施加, 不再放大背景强度。两个子态:
+  - `kind="proposed"` 待股东会: 生效日 = 提议日+`PROPOSED_EFFECTIVE_LAG_DAYS`, 概率 `PROPOSED_PASS_PROB`。
+  - `kind="approved"` 已通过待生效: 生效日 = 公告生效日 (缺失按 `APPROVED_EFFECTIVE_LAG_DAYS` 兜底), 概率 `APPROVED_PASS_PROB`≈1; **仅当生效日 > 估值日才建节点 (防与条款刷新双计)**。
+  - `target_k` = 公告解析到的下修后新 K (`parse_down_reset_new_price` 填 `CBEvent.event_price`); 缺失时 pricer 回落 premium/floor 估算。`target_k==现 K` 时节点自动成 no-op, 天然防双计。
+- **冻结** (强制为 0): `down_reset_block_until` 屏蔽下修价值至冷静期满。
+- 常量经 `cb-calibrate-down-reset` 从历史事件校准; 改这些值或下修结构前先重跑校准。
+
+> **关于 `event_price` 历史回填**: 不需要。`cb_data.json` 的 `conversion_price` 是 Wind
+> `clause_conversion2_swapshareprice` 即**当前 K**, 已内含所有"已生效"的历史下修; 这些历史
+> 事件也不会触发 regime-② 节点 (terminal/过期, 或 approved 生效日已过被守卫跳过)。`event_price`
+> 仅服务**在途公告** (已提议未通过 / 已通过未生效) — 此时 cb_data K 仍是旧值, 节点需公告新 K。
+> 存量事件 `event_price` 多为空 (解析代码后加), 但无害; 新公告同步时自动填充。

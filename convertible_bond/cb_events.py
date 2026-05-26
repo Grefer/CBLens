@@ -2,7 +2,7 @@
 
 事件层承接公告标题/原文解析后的结构化结果, 与 cb_data 的半静态条款解耦。
 它主要服务两件事:
-  1. 主池准入筛选: 强赎、摘牌、停牌、正股风险等
+  1. 主池公开交易筛选与复核提示: 强赎、摘牌、停牌、正股风险等
   2. 模型参数修正: 下修/不下修事件影响下修博弈
 """
 from __future__ import annotations
@@ -23,9 +23,14 @@ EVENT_TYPES = (
     "down_reset_proposed",
     "down_reset_approved",
     "down_reset_rejected",
+    "down_reset_trigger_notice",
+    "conversion_price_adjusted",
+    "balance_change",
     "call_redemption",
     "call_no_redemption",
     "putback",
+    "conversion_suspension",
+    "conversion_resume",
     "rating_change",
     "delisting",
     "suspension",
@@ -64,6 +69,7 @@ class CBEvent:
     url: str | None = None
     note: str | None = None
     commitment_months: int | None = None
+    event_price: float | None = None
 
     def key(self) -> tuple:
         return (
@@ -174,6 +180,7 @@ def parse_event_from_announcement(
     effective_start = dates[0] if dates else event_date
     effective_end = dates[-1] if len(dates) >= 2 else None
     commitment_months = None
+    event_price = None
 
     if body and event_type in {"down_reset_rejected", "call_no_redemption"}:
         commitment = parse_commitment_period(body, event_type=event_type)
@@ -181,6 +188,36 @@ def parse_event_from_announcement(
             effective_start = commitment["start"]
             effective_end = commitment["end"]
             commitment_months = commitment["months"]
+    elif body and event_type == "call_redemption":
+        redemption_dates = parse_call_redemption_dates(body)
+        if redemption_dates.get("last_trading_date"):
+            effective_start = redemption_dates["last_trading_date"]
+        if redemption_dates.get("redemption_date"):
+            effective_end = redemption_dates["redemption_date"]
+        elif redemption_dates.get("delisting_date"):
+            effective_end = redemption_dates["delisting_date"]
+        if redemption_dates.get("redemption_price") is not None:
+            event_price = float(redemption_dates["redemption_price"])
+    elif body and event_type == "putback":
+        putback = parse_putback_terms(body)
+        if putback.get("start"):
+            effective_start = putback["start"]
+        if putback.get("end"):
+            effective_end = putback["end"]
+        if putback.get("price") is not None:
+            event_price = float(putback["price"])
+    elif body and event_type in {"conversion_suspension", "conversion_resume"}:
+        suspension = parse_conversion_suspension_terms(body)
+        if suspension.get("start"):
+            effective_start = suspension["start"]
+        if suspension.get("end"):
+            effective_end = suspension["end"]
+    elif body and event_type in {"down_reset_proposed", "down_reset_approved"}:
+        # 下修提议/通过公告: 抽取下修后新转股价 (元/股) 填入 event_price,
+        # 供定价层把"已公告"节点的目标 K 用真实公告值而非估算下限。
+        new_price = parse_down_reset_new_price(body)
+        if new_price is not None:
+            event_price = float(new_price)
 
     # 临停类事件没有明确截止日期时, 给一个保守 TTL, 防止永久污染状态字段
     if effective_end is None and event_type in _TRANSIENT_EVENT_TYPES:
@@ -198,6 +235,7 @@ def parse_event_from_announcement(
         url=url,
         note=note,
         commitment_months=commitment_months,
+        event_price=event_price,
     )
 
 
@@ -295,6 +333,207 @@ def parse_commitment_period(
     return None
 
 
+def parse_call_redemption_dates(text: str) -> dict[str, date | float | None]:
+    """从强赎公告正文中解析关键日期.
+
+    返回 ``last_trading_date`` / ``redemption_date`` / ``delisting_date``。
+    命中不到时字段为 None。只使用有明确标签的日期, 避免把观察期误当执行日。
+    """
+    if not text:
+        return {
+            "last_trading_date": None,
+            "redemption_date": None,
+            "delisting_date": None,
+            "redemption_price": None,
+        }
+    t = re.sub(r"\s+", "", text.replace("（", "(").replace("）", ")"))
+    return {
+        "last_trading_date": _extract_labeled_date(
+            t,
+            (
+                r"(?:最后交易日|停止交易日|最后一个交易日)(?:为|是|:|：)?",
+            ),
+            negative_after=r"提示|安排|详见",
+        ),
+        "redemption_date": _extract_labeled_date(
+            t,
+            (
+                r"(?:赎回登记日|赎回日|提前赎回日)(?:为|是|:|：)?",
+            ),
+        ),
+        "delisting_date": _extract_labeled_date(
+            t,
+            (
+                r"(?:摘牌日|摘牌日期)(?:为|是|:|：)?",
+            ),
+        ),
+        "redemption_price": _extract_labeled_price(
+            t,
+            (
+                r"(?:赎回价格|提前赎回价格|本次赎回价格)(?:为|是|:|：)?",
+            ),
+        ),
+    }
+
+
+def parse_putback_terms(text: str) -> dict[str, date | float | None]:
+    """从回售公告正文中解析申报期和回售价格.
+
+    返回 ``start`` / ``end`` / ``price``。只接受明确锚定在回售申报期、
+    回售期、回售价格附近的文本, 避免把触发观察期误当成行权窗口。
+    """
+    if not text:
+        return {"start": None, "end": None, "price": None}
+    t = re.sub(r"\s+", "", text.replace("（", "(").replace("）", ")"))
+    range_re = (
+        r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+        r"(?:至|到|-)"
+        r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+    )
+    start = None
+    end = None
+    for m in re.finditer(range_re, t):
+        head = t[max(0, m.start() - 40): m.start()]
+        if not re.search(r"回售(?:申报)?期|申报期间|回售登记期", head):
+            continue
+        start = _safe_date(*m.groups()[:3])
+        end = _safe_date(*m.groups()[3:])
+        if start and end:
+            break
+    price = _extract_labeled_price(
+        t,
+        (
+            r"回售价格(?:为|是|:|：)?",
+            r"回售申报价格(?:为|是|:|：)?",
+        ),
+    )
+    return {"start": start, "end": end, "price": price}
+
+
+def parse_conversion_suspension_terms(text: str) -> dict[str, date | None]:
+    """从暂停/恢复转股公告正文中解析暂停转股窗口."""
+    if not text:
+        return {"start": None, "end": None}
+    t = re.sub(r"\s+", "", text.replace("（", "(").replace("）", ")"))
+    date_re = r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+    start = _extract_labeled_date(
+        t,
+        (
+            r"(?:暂停转股起始日|停止转股起始日|暂停转股开始日)(?:为|是|:|：)?",
+            r"(?:自|从)",
+        ),
+        negative_after=r"恢复|开始恢复",
+    )
+    end = _extract_labeled_date(
+        t,
+        (
+            r"(?:恢复转股日|恢复转股起始日|恢复转股开始日)(?:为|是|:|：)?",
+            r"(?:至|截至)",
+        ),
+    )
+    resume_after = re.search(date_re + r"(?:起|开始)?(?:恢复|开始恢复)转股", t)
+    if resume_after:
+        end = _safe_date(*resume_after.groups()[-3:]) or end
+    range_re = (
+        date_re +
+        r"(?:至|到|-)"
+        r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+    )
+    if start is None or end is None:
+        for m in re.finditer(range_re, t):
+            head = t[max(0, m.start() - 40): m.start()]
+            tail = t[m.end(): m.end() + 40]
+            if not re.search(r"暂停转股|停止转股|转股暂停", head + tail):
+                continue
+            start = start or _safe_date(*m.groups()[:3])
+            end = end or _safe_date(*m.groups()[3:])
+            break
+    return {"start": start, "end": end}
+
+
+# 下修公告里的新转股价 (元/股)。提议公告给"拟修正至"价, 通过公告给"修正后"价。
+# 与 cb_event_sync.parse_conversion_price_adjustment (用于生成 K patch) 区别:
+# 这里只取新价标量, 用于填 CBEvent.event_price, 覆盖提议/通过两类措辞。
+# 容忍金额前的货币词 ("为人民币6.20元/股")
+_CUR = r"(?:人民币|RMB|¥)?"
+_RE_DR_NEW_PRICE_PAIR = re.compile(
+    r"转股价格.{0,20}?由(?:原来的|原)?" + _CUR + r"[0-9]+(?:\.[0-9]+)?元/股.{0,20}?"
+    r"(?:向下修正|修正|调整)(?:为|至)" + _CUR + r"([0-9]+(?:\.[0-9]+)?)元/股"
+)
+_RE_DR_NEW_PRICE_SINGLE = (
+    re.compile(r"(?:向下修正后|本次向下修正后|修正后|下修后).{0,16}?转股价格(?:为|是|:|：)?" + _CUR + r"([0-9]+(?:\.[0-9]+)?)元/股"),
+    re.compile(r"(?:提议|拟).{0,30}?(?:向下修正|修正|调整).{0,16}?(?:为|至)" + _CUR + r"([0-9]+(?:\.[0-9]+)?)元/股"),
+    re.compile(r"(?:向下修正|下修)(?:转股价格)?(?:为|至)" + _CUR + r"([0-9]+(?:\.[0-9]+)?)元/股"),
+)
+
+
+def parse_down_reset_new_price(text: str | None) -> float | None:
+    """从下修提议/通过公告正文中解析下修后的新转股价 (元/股). 解析不到返回 None.
+
+    优先匹配"由 A 元/股 修正为 B 元/股"取 B; 否则匹配"修正后转股价格为 X 元/股"
+    或"提议/拟向下修正为 X 元/股"等单值措辞。
+    """
+    if not text:
+        return None
+    t = re.sub(r"\s+", "", str(text).replace("（", "(").replace("）", ")"))
+    m = _RE_DR_NEW_PRICE_PAIR.search(t)
+    if not m:
+        for pattern in _RE_DR_NEW_PRICE_SINGLE:
+            m = pattern.search(t)
+            if m:
+                break
+    if m:
+        try:
+            price = float(m.group(1))
+        except (TypeError, ValueError):
+            price = None
+        if price is not None and price > 0:
+            return price
+    # 提议措辞 ("向下修正至X") 之外, 已通过公告多用"调整前/调整后转股价格"或
+    # "由...调整为..."的表格式措辞 — 复用通用调整解析器覆盖 (避免正则重复漂移)。
+    # 懒导入打破 cb_events ←→ cb_event_sync 的模块级循环。
+    try:
+        from .cb_event_sync import parse_conversion_price_adjustment
+        adj = parse_conversion_price_adjustment(text)
+    except Exception:
+        adj = None
+    if adj and adj.get("new_price"):
+        try:
+            price = float(adj["new_price"])
+        except (TypeError, ValueError):
+            return None
+        return price if price > 0 else None
+    return None
+
+
+def _extract_labeled_date(
+    text: str,
+    prefixes: tuple[str, ...],
+    *,
+    negative_after: str | None = None,
+) -> date | None:
+    date_re = r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+    for prefix in prefixes:
+        for m in re.finditer(prefix + r".{0,20}?" + date_re, text):
+            if negative_after and re.search(negative_after, text[m.end(): m.end() + 12]):
+                continue
+            parsed = _safe_date(*m.groups()[-3:])
+            if parsed:
+                return parsed
+    return None
+
+
+def _extract_labeled_price(text: str, prefixes: tuple[str, ...]) -> float | None:
+    for prefix in prefixes:
+        match = re.search(prefix + r".{0,16}?([0-9]+(?:\.[0-9]+)?)元/张", text)
+        if match:
+            try:
+                return float(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
 def _safe_date(y, m, d) -> date | None:
     try:
         return date(int(y), int(m), int(d))
@@ -302,18 +541,49 @@ def _safe_date(y, m, d) -> date | None:
         return None
 
 
+def is_down_reset_trigger_notice_title(title: str) -> bool:
+    """是否为"可能/预计触发下修条件"提示公告.
+
+    这类公告只是进入观察/提示状态, 不是董事会提议, 更不是已经下修。
+    """
+    text = re.sub(r"\s+", "", str(title or "").upper())
+    if not text or "触发" not in text:
+        return False
+    if "向下修正" not in text and "下修" not in text:
+        return False
+    if re.search(r"不.{0,6}触发", text):
+        return False
+    if re.search(r"董事会.{0,16}(?:提议|建议)|提议.{0,20}(?:向下修正|下修)", text):
+        return False
+    if re.search(r"审议通过|修正.{0,12}实施|实施.{0,12}修正", text):
+        return False
+    if "提示" not in text and not re.search(r"可能|预计|即将|将要", text):
+        return False
+    return bool(re.search(r"(可能|预计|即将|将要)?.{0,12}触发.{0,20}(向下修正|下修)", text))
+
+
 def classify_announcement_title(title: str) -> str:
     text = str(title or "").upper()
-    if re.search(r"不(提前)?赎回|不强赎|暂不(提前)?赎回", text):
+    if re.search(r"不(提前)?赎回|不强赎|暂不(提前)?赎回|不行使.{0,30}(?:提前赎回|赎回权利?)", text):
         return "call_no_redemption"
     if re.search(r"赎回实施|实施赎回|强制赎回|提前赎回|赎回暨摘牌|赎回登记日", text):
         return "call_redemption"
     if re.search(r"不向下修正|不下修|暂不向下修正|不修正.*转股", text):
         return "down_reset_rejected"
+    if is_down_reset_trigger_notice_title(text):
+        return "down_reset_trigger_notice"
     if re.search(r"董事会.*向下修正|提议.*向下修正|提议下修", text):
         return "down_reset_proposed"
-    if re.search(r"向下修正.*转股价格|修正.*转股价格.*实施|转股价格调整", text):
+    if re.search(r"向下修正.*转股价格|修正.*转股价格.*实施", text):
         return "down_reset_approved"
+    if re.search(r"转股价格调整|调整.*转股价格", text):
+        return "conversion_price_adjusted"
+    if re.search(r"转股结果|回售结果|赎回结果|未转股余额|债券余额|剩余可转债余额", text):
+        return "balance_change"
+    if re.search(r"恢复.{0,8}转股|转股.{0,4}恢复", text):
+        return "conversion_resume"
+    if re.search(r"暂停.{0,8}转股|停止.{0,8}转股|转股.{0,4}暂停", text) and "停牌" not in text:
+        return "conversion_suspension"
     if "回售" in text:
         return "putback"
     if "评级" in text:
@@ -381,8 +651,14 @@ def apply_events_to_terms(
     if latest_call:
         updates["call_status"] = latest_call.parsed_status or "已公告强赎"
         updates["call_announce_date"] = latest_call.event_date
+        if latest_call.effective_start:
+            updates["last_trading_date"] = latest_call.effective_start
         if latest_call.effective_end:
             updates["call_redemption_date"] = latest_call.effective_end
+            if "摘牌" in latest_call.raw_title:
+                updates["delisting_date"] = latest_call.effective_end
+        if latest_call.event_price is not None:
+            updates["call_redemption_price"] = latest_call.event_price
     latest_no_call = _latest_event(active, "call_no_redemption")
     if latest_no_call and (latest_call is None or latest_no_call.event_date >= latest_call.event_date):
         updates["call_status"] = latest_no_call.parsed_status or "不强赎"
@@ -392,6 +668,35 @@ def apply_events_to_terms(
     latest_delist = _latest_event(active, "delisting")
     if latest_delist:
         updates["delisting_date"] = latest_delist.effective_end or latest_delist.effective_start
+
+    latest_putback = _latest_event(active, "putback")
+    if latest_putback:
+        if latest_putback.effective_start:
+            updates["putback_start_date"] = latest_putback.effective_start
+        if latest_putback.effective_end:
+            updates["putback_end_date"] = latest_putback.effective_end
+        if latest_putback.event_price is not None:
+            updates["putback_price"] = latest_putback.event_price
+
+    latest_conv_resume = _latest_event(active, "conversion_resume")
+    latest_conv_susp = _latest_event(active, "conversion_suspension")
+    if latest_conv_resume and (
+        latest_conv_susp is None or latest_conv_resume.event_date >= latest_conv_susp.event_date
+    ):
+        updates["conversion_suspension_status"] = latest_conv_resume.parsed_status or "恢复转股"
+        if latest_conv_resume.effective_start:
+            updates["conversion_suspension_end_date"] = latest_conv_resume.effective_start
+    elif latest_conv_susp:
+        if latest_conv_susp.effective_start:
+            updates["conversion_suspension_start_date"] = latest_conv_susp.effective_start
+        if latest_conv_susp.effective_end:
+            updates["conversion_suspension_end_date"] = latest_conv_susp.effective_end
+        if (
+            latest_conv_susp.effective_end is None
+            or latest_conv_susp.effective_end >= val_date
+        ):
+            updates["conversion_suspension_status"] = latest_conv_susp.parsed_status or "暂停转股"
+
     # 临停类事件: 仅在 effective_end 仍在窗口内时才标记停牌;
     # 过期超过 _TRANSIENT_CLEAR_GRACE_DAYS 才主动清空, 给 admission_status (Wind 直刷)
     # 留写入窗口, 避免刚过期的旧事件擦掉当天 admission 同步到的真实"停牌"。
@@ -442,7 +747,10 @@ def events_for_down_reset(
     event_store = store or default_event_store()
     return [
         e for e in event_store.list_events(bond_code=bond_code, through_date=through_date)
-        if e.event_type in {"down_reset_rejected", "down_reset_proposed", "down_reset_approved"}
+        if (
+            e.event_type in {"down_reset_rejected", "down_reset_proposed", "down_reset_approved"}
+            and not is_down_reset_trigger_notice_title(e.raw_title)
+        )
     ]
 
 
@@ -488,9 +796,14 @@ def _event_status(event_type: str) -> str:
         "down_reset_proposed": "提议下修",
         "down_reset_approved": "已下修",
         "down_reset_rejected": "不下修",
+        "down_reset_trigger_notice": "触发提示",
+        "conversion_price_adjusted": "转股价调整",
+        "balance_change": "余额变化",
         "call_redemption": "已公告强赎",
         "call_no_redemption": "不强赎",
         "putback": "回售",
+        "conversion_suspension": "暂停转股",
+        "conversion_resume": "恢复转股",
         "rating_change": "评级调整",
         "delisting": "临近摘牌",
         "suspension": "停牌",
@@ -539,6 +852,7 @@ def _event_to_json(event: CBEvent) -> dict:
 
 def _event_from_json(row: dict) -> CBEvent:
     months = row.get("commitment_months")
+    event_price = row.get("event_price")
     return CBEvent(
         bond_code=str(row["bond_code"]),
         event_date=to_date(row["event_date"]),
@@ -551,4 +865,5 @@ def _event_from_json(row: dict) -> CBEvent:
         url=row.get("url"),
         note=row.get("note"),
         commitment_months=int(months) if months is not None else None,
+        event_price=float(event_price) if event_price is not None else None,
     )

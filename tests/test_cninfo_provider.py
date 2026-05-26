@@ -4,10 +4,15 @@ from unittest.mock import MagicMock, patch
 
 from convertible_bond.cb_event_sync import (
     _needs_body,
+    parse_credit_rating_change,
+    parse_credit_rating_terms,
+    parse_conversion_price_adjustment,
+    parse_outstanding_balance_change,
     _try_download_body,
     sync_cb_events,
 )
 from convertible_bond.cb_events import CBEventStore, classify_announcement_title
+from convertible_bond.historical_terms import TermsPatchStore
 from convertible_bond.cninfo_provider import (
     CninfoAnnouncementProvider,
     _parse_announcement_item,
@@ -128,7 +133,15 @@ def test_needs_body_for_call_no_redemption():
 
 
 def test_needs_body_for_call_redemption():
-    assert _needs_body("关于提前赎回并摘牌的公告") is False
+    assert _needs_body("关于提前赎回并摘牌的公告") is True
+
+
+def test_needs_body_for_conversion_price_adjustment():
+    assert _needs_body("关于可转换公司债券转股价格调整的公告") is True
+
+
+def test_needs_body_for_rating_change():
+    assert _needs_body("关于可转换公司债券2026年跟踪评级结果的公告") is True
 
 
 def test_needs_body_for_unknown_title():
@@ -256,6 +269,182 @@ def test_sync_with_pdf_download_failure(tmp_path):
     events = store.list_events("113050.SH")
     assert len(events) == 1
     assert events[0].event_type == "call_no_redemption"
+
+
+def test_parse_conversion_price_adjustment_extracts_k_and_effective_date():
+    body = (
+        "本次调整前转股价格为10.20元/股，调整后转股价格为9.80元/股。"
+        "调整后的转股价格自2026年5月12日起生效。"
+    )
+    parsed = parse_conversion_price_adjustment(body)
+    assert parsed is not None
+    assert parsed["old_price"] == 10.20
+    assert parsed["new_price"] == 9.80
+    assert parsed["effective_date"] == date(2026, 5, 12)
+
+
+def test_parse_credit_rating_change_is_bond_rating_only():
+    body = "经评定，公司主体信用等级为AA，天润转债债项信用等级为AA+，评级展望为稳定。"
+    assert parse_credit_rating_change(body, title="关于跟踪评级结果的公告") == "AA+"
+    assert parse_credit_rating_change(
+        body,
+        title="关于变更惠云转债信用评级机构的公告",
+    ) is None
+
+
+def test_parse_credit_rating_change_handles_bond_downgrade_phrase():
+    body = (
+        "综合以上分析，联合资信决定将公司个体信用等级由bb-下调至b，"
+        "主体长期信用等级由BB-下调至B，将“龙大转债”信用等级由BB-下调至B，"
+        "评级展望为负面。"
+    )
+    assert parse_credit_rating_change(body, title="关于下调主体及相关债项信用评级的公告") == "B"
+
+
+def test_parse_credit_rating_terms_extracts_outlook_and_watch():
+    body = (
+        "经评定，天润转债债项信用等级为AA+，评级展望由稳定调整为负面，"
+        "并列入信用评级观察名单。"
+    )
+    parsed = parse_credit_rating_terms(body, title="关于跟踪评级结果的公告")
+    assert parsed["credit_rating"] == "AA+"
+    assert parsed["credit_rating_outlook"] == "负面"
+    assert parsed["credit_watch_status"] == "列入观察名单"
+
+
+def test_parse_outstanding_balance_change_handles_common_units():
+    assert parse_outstanding_balance_change(
+        "截至本公告披露日，“龙大转债”未转股余额为94591.26万元。"
+    ) == 9.459126
+    assert parse_outstanding_balance_change(
+        "本次赎回完成后，剩余可转债余额为0元。"
+    ) == 0.0
+    assert parse_outstanding_balance_change(
+        "截至2026年5月31日，可转债余额为9.46亿元。"
+    ) == 9.46
+
+
+def test_sync_writes_terms_patch_for_conversion_price_adjustment(tmp_path):
+    body = (
+        "本次调整前转股价格为10.20元/股，调整后转股价格为9.80元/股。"
+        "调整后的转股价格自2026年5月12日起生效。"
+    )
+
+    class FakeProvider:
+        name = "fake_cninfo"
+
+        def list_bond_announcements(self, bond_code, start, end):
+            return [
+                {
+                    "title": "关于可转换公司债券转股价格调整的公告",
+                    "date": date(2026, 5, 9),
+                    "url": "http://example.com/k.PDF",
+                    "pdf_url": "http://example.com/k.PDF",
+                },
+            ]
+
+        def download_announcement_text(self, pdf_url):
+            return body
+
+    store = CBEventStore(tmp_path / "events.json")
+    patch_store = TermsPatchStore(tmp_path / "patches.json")
+    result = sync_cb_events(
+        FakeProvider(),
+        ["123211.SZ"],
+        store,
+        term_patch_store=patch_store,
+        start=date(2026, 5, 1),
+        end=date(2026, 5, 20),
+    )
+
+    assert result["added"] == 1
+    assert result["patches_added"] == 1
+    events = store.list_events("123211.SZ")
+    assert events[0].event_type == "conversion_price_adjusted"
+    patches = patch_store.list_patches("123211.SZ")
+    assert patches[0].effective_date == date(2026, 5, 12)
+    assert patches[0].fields == {"conversion_price": 9.8}
+    assert patches[0].before_fields == {"conversion_price": 10.2}
+
+
+def test_sync_writes_terms_patch_for_balance_change(tmp_path):
+    body = "截至本公告披露日，“龙大转债”未转股余额为94591.26万元。"
+
+    class FakeProvider:
+        name = "fake_cninfo"
+
+        def list_bond_announcements(self, bond_code, start, end):
+            return [
+                {
+                    "title": "关于可转换公司债券转股结果暨股份变动公告",
+                    "date": date(2026, 5, 20),
+                    "url": "http://example.com/balance.PDF",
+                    "pdf_url": "http://example.com/balance.PDF",
+                },
+            ]
+
+        def download_announcement_text(self, pdf_url):
+            return body
+
+    store = CBEventStore(tmp_path / "events.json")
+    patch_store = TermsPatchStore(tmp_path / "patches.json")
+    result = sync_cb_events(
+        FakeProvider(),
+        ["128119.SZ"],
+        store,
+        term_patch_store=patch_store,
+        start=date(2026, 5, 1),
+        end=date(2026, 5, 25),
+    )
+
+    assert result["added"] == 1
+    assert result["patches_added"] == 1
+    events = store.list_events("128119.SZ")
+    assert events[0].event_type == "balance_change"
+    patches = patch_store.list_patches("128119.SZ")
+    assert patches[0].fields == {"outstanding_balance": 9.459126}
+
+
+def test_sync_writes_terms_patch_for_call_redemption_price(tmp_path):
+    body = (
+        "本次赎回的最后交易日为2026年4月27日。"
+        "赎回登记日为2026年5月6日。"
+        "本次赎回价格为100.62元/张。"
+    )
+
+    class FakeProvider:
+        name = "fake_cninfo"
+
+        def list_bond_announcements(self, bond_code, start, end):
+            return [
+                {
+                    "title": "关于实施赎回暨摘牌的公告",
+                    "date": date(2026, 4, 15),
+                    "url": "http://example.com/call.PDF",
+                    "pdf_url": "http://example.com/call.PDF",
+                },
+            ]
+
+        def download_announcement_text(self, pdf_url):
+            return body
+
+    store = CBEventStore(tmp_path / "events.json")
+    patch_store = TermsPatchStore(tmp_path / "patches.json")
+    result = sync_cb_events(
+        FakeProvider(),
+        ["118006.SH"],
+        store,
+        term_patch_store=patch_store,
+        start=date(2026, 4, 1),
+        end=date(2026, 4, 30),
+    )
+
+    assert result["added"] == 1
+    assert result["patches_added"] == 1
+    events = store.list_events("118006.SH")
+    assert events[0].event_price == 100.62
+    patches = patch_store.list_patches("118006.SH")
+    assert patches[0].fields == {"call_redemption_price": 100.62}
 
 
 # ── CninfoAnnouncementProvider 实例化测试 ──

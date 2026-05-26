@@ -29,9 +29,16 @@ class BondTerms:
     face_value: float | None = None              # 例: 100.0
     conversion_price: float | None = None        # 转股价 K
     redemption_price: float | None = None        # 到期赎回价 (例 107.0)
+    down_reset_trigger_pct: float | None = None  # 下修触发 (例 85.0 = 85%K)
     call_trigger_pct: float | None = None        # 强赎触发 (例 130.0 = 130%K)
     put_trigger_pct: float | None = None         # 回售触发 (例 70.0)
     put_obs_months: float | None = None          # 回售观察期月数 (从发行起算)
+    putback_start_date: date | None = None       # 已公告回售申报起始日
+    putback_end_date: date | None = None         # 已公告回售申报截止日
+    putback_price: float | None = None           # 已公告回售价格 (元/张, 含息口径)
+    conversion_suspension_start_date: date | None = None  # 已公告暂停转股起始日
+    conversion_suspension_end_date: date | None = None    # 已公告暂停转股截止/恢复日
+    conversion_suspension_status: str | None = None       # 暂停转股/恢复转股等状态
     down_reset_block_until: date | None = None   # 公告不下修/不提议期间, 该日前不计下修
     down_reset_p_scale: float | None = None      # 单债下修强度缩放; 0 表示不计下修博弈
     down_reset_note: str | None = None           # 人工记录公告/判断来源
@@ -39,11 +46,14 @@ class BondTerms:
     coupon_rates: tuple[float, ...] | None = None  # 已解析的小数 (例 (0.003, 0.005, ...))
     close: float | None = None                   # 转债现价
     credit_rating: str | None = None
+    credit_rating_outlook: str | None = None     # 评级展望: 稳定/负面/正面等
+    credit_watch_status: str | None = None       # 评级观察/关注状态
     outstanding_balance: float | None = None     # 剩余规模 (亿)
     suspension_status: str | None = None          # 停复牌/交易状态补充
     call_status: str | None = None                # 强赎公告/执行状态
     call_announce_date: date | None = None        # 强赎公告日
     call_redemption_date: date | None = None      # 强赎登记/赎回日
+    call_redemption_price: float | None = None    # 已公告强赎价格 (元/张, 含息口径)
     call_no_redemption_until: date | None = None  # "不提前赎回"承诺到期日, 该日前不计强赎博弈
     last_trading_date: date | None = None         # 最后交易日/摘牌前最后可交易日
     delisting_date: date | None = None            # 摘牌日
@@ -234,10 +244,10 @@ class DataProvider(ABC):
         valuation_date: date,
         base_terms: BondTerms | None = None,
     ) -> BondTerms:
-        """拉取主池准入筛选所需的增量状态字段.
+        """拉取主池筛选和复核所需的增量状态字段.
 
         默认退回 ``get_bond_terms``。Wind 等数据源可覆盖该方法, 只刷新停牌、
-        强赎、摘牌、正股风险、成交额等字段, 供每日筛选前快速更新。
+        强赎、摘牌、正股风险、成交额等字段, 供每日批量前快速更新。
         """
         return self.get_bond_terms(bond_code, valuation_date)
 

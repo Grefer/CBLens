@@ -10,7 +10,8 @@ from datetime import date, timedelta
 
 from .pricer import UniversalCBPricer, DEFAULT_REDEMPTION_PRICE, DEFAULT_FACE_VALUE
 from .data_providers import DataProvider, WindDataProvider, BondTerms
-from .down_reset_overrides import resolve_down_reset
+from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
+from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_RATIO
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +85,23 @@ def backtest_theoretical_price(
         redemption_price=redemption_price,
         coupon_rates=coupon_rates,
     )
+    common_kwargs["down_reset_trigger_ratio"] = (
+        float(terms.down_reset_trigger_pct) / 100.0
+        if terms.down_reset_trigger_pct is not None
+        else DEFAULT_DOWN_RESET_TRIGGER_RATIO
+    )
     if terms.call_trigger_pct is not None:
         common_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
     if terms.call_no_redemption_until is not None:
         common_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
     if terms.put_trigger_pct is not None:
         common_kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
+    if terms.putback_start_date is not None:
+        common_kwargs["putback_start_date"] = terms.putback_start_date
+    if terms.putback_end_date is not None:
+        common_kwargs["putback_end_date"] = terms.putback_end_date
+    if terms.putback_price is not None:
+        common_kwargs["putback_price"] = float(terms.putback_price)
     if terms.put_obs_months is not None and issue_dt and maturity_dt:
         total_months = (maturity_dt - issue_dt).days / 30.4375
         active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
@@ -168,9 +180,21 @@ def backtest_theoretical_price(
             if resolved_down_reset.block_until is not None:
                 point_kwargs["down_reset_block_until"] = resolved_down_reset.block_until
             point_kwargs.update(pricer_overrides)
-            effective_p_down = float(p_down)
-            if resolved_down_reset.p_scale is not None:
-                effective_p_down *= max(0.0, float(resolved_down_reset.p_scale))
+            down_intensity = resolve_down_reset_intensity(
+                p_down, resolved_down_reset,
+            )
+            effective_p_down = down_intensity.effective_p_down
+            if (
+                down_intensity.scheduled_reset_date is not None
+                and down_intensity.scheduled_reset_prob > 0
+            ):
+                point_kwargs.setdefault(
+                    "scheduled_reset_date", down_intensity.scheduled_reset_date)
+                point_kwargs.setdefault(
+                    "scheduled_reset_prob", down_intensity.scheduled_reset_prob)
+                if down_intensity.scheduled_reset_target_k is not None:
+                    point_kwargs.setdefault(
+                        "scheduled_reset_target_k", down_intensity.scheduled_reset_target_k)
 
             pricer = UniversalCBPricer(
                 S0=S0, current_date=val_date, **point_kwargs)  # type: ignore[arg-type]

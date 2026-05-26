@@ -6,10 +6,390 @@ from datetime import date, timedelta
 import pytest
 
 from convertible_bond import pricing_api
+from convertible_bond.data_providers import BondTerms
+from convertible_bond.historical_terms import TermsPatch, TermsPatchStore
 
 
 class DummyProvider:
     name = "dummy"
+
+
+class SimplePricingProvider:
+    name = "simple"
+
+    def __init__(self, terms: BondTerms):
+        self.terms = terms
+
+    def get_bond_terms(self, bond_code, valuation_date):
+        return self.terms
+
+    def hist_vol(self, stock_code, end_date, window_days):
+        return 0.2
+
+    def get_stock_close(self, stock_code, on_date):
+        return 12.0
+
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        return None
+
+    def get_bond_history(self, bond_code, start, end):
+        return [(end, 101.0)]
+
+    def get_stock_history(self, stock_code, start, end):
+        return []
+
+    def get_cashflow(self, bond_code):
+        return None
+
+
+def _base_terms(**updates):
+    values = dict(
+        sec_name="测试转债",
+        underlying_code="600001.SH",
+        issue_date=date(2024, 1, 1),
+        maturity_date=date(2030, 1, 1),
+        conversion_price=10.0,
+        face_value=100.0,
+        redemption_price=107.0,
+        coupon_rates=(0.003,),
+    )
+    values.update(updates)
+    return BondTerms(**values)
+
+
+def test_price_from_provider_applies_terms_patch_before_pricing(monkeypatch, tmp_path):
+    class Provider:
+        name = "patched"
+
+        def get_bond_terms(self, bond_code, valuation_date):
+            return BondTerms(
+                sec_name="测试转债",
+                underlying_code="600001.SH",
+                issue_date=date(2024, 1, 1),
+                maturity_date=date(2030, 1, 1),
+                conversion_price=10.0,
+                face_value=100.0,
+                redemption_price=107.0,
+                coupon_rates=(0.003,),
+            )
+
+        def hist_vol(self, stock_code, end_date, window_days):
+            return 0.2
+
+        def get_stock_close(self, stock_code, on_date):
+            return 12.0
+
+        def get_stock_dividend_yield(self, stock_code, on_date):
+            return None
+
+        def get_bond_history(self, bond_code, start, end):
+            return [(end, 101.0)]
+
+        def get_cashflow(self, bond_code):
+            return None
+
+    seen = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = 100.0 / self.K
+
+        def price(self, **kwargs):
+            return 123.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+
+    patch_store = TermsPatchStore(tmp_path / "patches.json")
+    patch_store.add_many([
+        TermsPatch(
+            bond_code="113001.SH",
+            effective_date=date(2026, 5, 12),
+            fields={"conversion_price": 8.0},
+        )
+    ])
+
+    result = pricing_api.price_from_provider(
+        Provider(),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+        term_patch_store=patch_store,
+    )
+
+    assert seen["K"] == 8.0
+    assert result["K"] == 8.0
+    assert result["term_patch_fields"] == ["conversion_price"]
+    assert result["term_patch_count"] == 1
+
+
+def test_price_from_provider_announced_call_uses_redemption_horizon(monkeypatch):
+    seen_init = {}
+    seen_price = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            seen_init.update(kwargs)
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 0.05
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            seen_price.update(kwargs)
+            return 109.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    terms = _base_terms(
+        call_status="已公告强赎",
+        call_announce_date=date(2026, 5, 1),
+        last_trading_date=date(2026, 5, 20),
+        call_redemption_date=date(2026, 5, 25),
+        call_redemption_price=100.62,
+    )
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(terms),
+        "113001.SH",
+        valuation_date=date(2026, 5, 10),
+        p_down=0.15,
+    )
+
+    assert seen_init["maturity_date"] == date(2026, 5, 25)
+    assert seen_init["call_no_redemption_until"] == date(2026, 5, 25)
+    assert seen_init["redemption_price"] == 100.62
+    assert seen_price["p_down"] == 0.0
+    assert result["base_p_down"] == pytest.approx(0.15)
+    assert result["effective_p_down"] == 0.0
+    assert result["redemption_mode"] is True
+    assert result["call_redemption_date"] == date(2026, 5, 25)
+    assert result["call_redemption_price"] == 100.62
+    assert any("已公告强赎" in text for text in result["risk_warnings"])
+
+
+def test_price_from_provider_rejects_terminal_terms_before_market_fetch():
+    class TerminalProvider(SimplePricingProvider):
+        def hist_vol(self, stock_code, end_date, window_days):
+            raise AssertionError("terminal bond should not fetch volatility")
+
+        def get_stock_close(self, stock_code, on_date):
+            raise AssertionError("terminal bond should not fetch stock close")
+
+        def get_bond_history(self, bond_code, start, end):
+            raise AssertionError("terminal bond should not fetch bond close")
+
+    terms = _base_terms(maturity_date=date(2026, 5, 1))
+
+    with pytest.raises(ValueError, match="已到期"):
+        pricing_api.price_from_provider(
+            TerminalProvider(terms),
+            "113001.SH",
+            valuation_date=date(2026, 5, 20),
+        )
+
+
+def test_price_from_provider_returns_status_dates(monkeypatch):
+    class FakePricer:
+        def __init__(self, **kwargs):
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 102.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    terms = _base_terms(
+        call_status="不强赎",
+        suspension_status="正常交易",
+        last_trading_date=date(2026, 6, 20),
+        delisting_date=date(2026, 6, 30),
+    )
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(terms),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+    )
+
+    assert result["call_status"] == "不强赎"
+    assert result["suspension_status"] == "正常交易"
+    assert result["last_trading_date"] == date(2026, 6, 20)
+    assert result["delisting_date"] == date(2026, 6, 30)
+    assert result["maturity_date"] == date(2030, 1, 1)
+    assert result["contractual_maturity_date"] == date(2030, 1, 1)
+
+
+def test_price_from_provider_reports_down_reset_uplift(monkeypatch):
+    class FakePricer:
+        def __init__(self, **kwargs):
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 108.0 if kwargs["p_down"] > 0 else 100.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(_base_terms()),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+        p_down=0.15,
+    )
+
+    assert result["theoretical_price"] == 108.0
+    assert result["no_down_price"] == 100.0
+    assert result["down_reset_uplift"] == pytest.approx(8.0)
+    assert result["down_reset_uplift_pct"] == pytest.approx(8.0 / 108.0)
+
+
+def test_price_from_provider_marks_risky_single_bond_signal(monkeypatch):
+    class FakePricer:
+        def __init__(self, **kwargs):
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 100.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    terms = _base_terms(underlying_status="ST/退市风险")
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(terms),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+    )
+
+    assert result["model_signal_status"] == "不适合作为买入信号"
+    assert any("正股风险状态" in text for text in result["risk_warnings"])
+
+
+def test_price_from_provider_passes_putback_window(monkeypatch):
+    seen = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 101.5
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    terms = _base_terms(
+        putback_start_date=date(2026, 6, 1),
+        putback_end_date=date(2026, 6, 5),
+        putback_price=100.8,
+    )
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(terms),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+    )
+
+    assert seen["putback_start_date"] == date(2026, 6, 1)
+    assert seen["putback_end_date"] == date(2026, 6, 5)
+    assert seen["putback_price"] == 100.8
+    assert result["putback_price"] == 100.8
+
+
+def test_price_from_provider_passes_down_reset_trigger_ratio(monkeypatch):
+    seen = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 102.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    terms = _base_terms(down_reset_trigger_pct=85.0)
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(terms),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+    )
+
+    assert seen["down_reset_trigger_ratio"] == pytest.approx(0.85)
+    assert result["down_reset_trigger_pct"] == 85.0
+    assert result["down_reset_trigger_ratio"] == pytest.approx(0.85)
+    assert result["down_reset_trigger_source"] == "terms"
+
+
+def test_price_from_provider_defaults_down_reset_trigger_ratio(monkeypatch):
+    seen = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 102.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(_base_terms()),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+    )
+
+    assert seen["down_reset_trigger_ratio"] == pytest.approx(0.85)
+    assert result["down_reset_trigger_pct"] == 85.0
+    assert result["down_reset_trigger_ratio"] == pytest.approx(0.85)
+    assert result["down_reset_trigger_source"] == "default"
+
+
+def test_price_from_provider_uses_rating_spread_floor(monkeypatch):
+    seen_price = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            seen_price.update(kwargs)
+            return 99.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    terms = _base_terms(credit_rating="A")
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(terms),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+        base_spread=0.03,
+    )
+
+    assert seen_price["base_spread"] == pytest.approx(0.06)
+    assert result["rating_base_spread"] == pytest.approx(0.06)
+    assert result["effective_base_spread"] == pytest.approx(0.06)
 
 
 def test_batch_price_from_provider_threaded_runs_concurrently(monkeypatch):

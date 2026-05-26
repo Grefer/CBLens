@@ -1,7 +1,8 @@
 import sys
+from datetime import date
 
 import convertible_bond.data_providers.wind as wind_mod
-from convertible_bond.data_providers.wind import prepare_windpy_import_path
+from convertible_bond.data_providers.wind import WindDataProvider, prepare_windpy_import_path
 
 
 def test_prepare_windpy_import_path_uses_env_dir(monkeypatch, tmp_path):
@@ -56,3 +57,36 @@ def test_prepare_windpy_import_path_prefers_frozen_bundle(monkeypatch, tmp_path)
 
     assert added[:2] == [bundle_dir, external_dir]
     assert sys.path[:3] == [str(bundle_dir), str(external_dir), "original"]
+
+
+def test_get_bond_terms_reads_wind_reset_trigger_ratio(monkeypatch):
+    class Result:
+        ErrorCode = 0
+
+        def __init__(self, fields, values):
+            self.Fields = fields
+            self.Data = [[values.get(field)] for field in fields]
+
+    class FakeWind:
+        def __init__(self):
+            self.requested_fields = None
+
+        def wss(self, code, fields, options):
+            requested = fields.split(",")
+            self.requested_fields = requested
+            return Result(
+                requested,
+                {
+                    "sec_name": "测试转债",
+                    "clause_reset_resettriggerratio": 85.0,
+                },
+            )
+
+    fake_wind = FakeWind()
+    provider = WindDataProvider()
+    monkeypatch.setattr(provider, "_ensure", lambda: fake_wind)
+
+    terms = provider.get_bond_terms("113001.SH", date(2026, 5, 25))
+
+    assert "clause_reset_resettriggerratio" in fake_wind.requested_fields
+    assert terms.down_reset_trigger_pct == 85.0

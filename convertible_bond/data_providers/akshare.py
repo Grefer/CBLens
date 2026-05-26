@@ -162,6 +162,7 @@ class AkshareDataProvider(DataProvider):
             face_value=100.0,
             conversion_price=K_val,
             redemption_price=None,         # 不在 akshare 字段, 由默认 107 兜底
+            down_reset_trigger_pct=None,   # 同上, 由 Wind/本地基础条款补充; 定价层默认 85%K
             call_trigger_pct=None,         # 同上, 由默认 130 兜底
             put_trigger_pct=None,          # 同上, 由默认 70 兜底
             put_obs_months=None,

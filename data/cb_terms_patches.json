@@ -1,0 +1,134 @@
+{
+  "_meta": {
+    "updated_at": "2026-05-26T21:40:42"
+  },
+  "patches": [
+    {
+      "bond_code": "111010.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-05-28",
+      "event_date": "2025-05-28",
+      "fields": {
+        "credit_rating": "A"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-05-28/1223695918.PDF",
+      "raw_title": "立昂微关于“立昂转债”2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "111010.SH|2025-05-28|rating_change|立昂微关于“立昂转债”2025年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-06-30",
+      "event_date": "2025-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定",
+        "credit_watch_status": "撤出观察名单"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-30/1224016383.PDF",
+      "raw_title": "关于可转换公司债券2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2025-06-30|rating_change|关于可转换公司债券2025年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-06-30",
+      "event_date": "2025-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定",
+        "credit_watch_status": "撤出观察名单"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-30/1224016382.PDF",
+      "raw_title": "山西美锦能源股份有限公司相关债券2025年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2025-06-30|rating_change|山西美锦能源股份有限公司相关债券2025年跟踪评级报告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 9.55
+      },
+      "bond_code": "110073.SH",
+      "confidence": "parsed_no_effective_date",
+      "effective_date": "2025-07-11",
+      "event_date": "2025-07-11",
+      "fields": {
+        "conversion_price": 9.42
+      },
+      "note": "转股价 9.55->9.42 | https://static.cninfo.com.cn/finalpage/2025-07-11/1224131233.PDF",
+      "raw_title": "国投资本股份有限公司关于利润分配调整可转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "110073.SH|2025-07-11|conversion_price_adjusted|国投资本股份有限公司关于利润分配调整可转债转股价格的公告"
+    },
+    {
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-08-16",
+      "event_date": "2025-08-16",
+      "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-08-16/1224498672.PDF",
+      "raw_title": "关于评级机构维持公司主体及美锦转债信用等级的公告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2025-08-16|rating_change|关于评级机构维持公司主体及美锦转债信用等级的公告"
+    },
+    {
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-12-24",
+      "event_date": "2025-12-24",
+      "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-12-24/1224893448.PDF",
+      "raw_title": "关于评级机构维持公司主体及美锦转债信用等级的公告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2025-12-24|rating_change|关于评级机构维持公司主体及美锦转债信用等级的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 9.57
+      },
+      "bond_code": "128119.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-02-12",
+      "event_date": "2026-02-12",
+      "fields": {
+        "conversion_price": 9.38
+      },
+      "note": "转股价 9.57->9.38 | https://static.cninfo.com.cn/finalpage/2026-02-12/1224977471.PDF",
+      "raw_title": "关于向下修正“龙大转债”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "128119.SZ|2026-02-12|down_reset_approved|关于向下修正“龙大转债”转股价格的公告"
+    },
+    {
+      "bond_code": "128119.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-04-30",
+      "event_date": "2026-04-30",
+      "fields": {
+        "credit_rating": "BB-"
+      },
+      "note": "http://static.cninfo.com.cn/finalpage/2026-04-30/1225265086.PDF",
+      "raw_title": "联合资信评估股份有限公司关于下调山东龙大美食股份有限公司主体及相关债项信用评级的公告",
+      "source": "cninfo",
+      "source_event_key": "128119.SZ|2026-04-30|rating_change|联合资信评估股份有限公司关于下调山东龙大美食股份有限公司主体及相关债项信用评级的公告"
+    },
+    {
+      "bond_code": "128119.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-20",
+      "event_date": "2026-05-20",
+      "fields": {
+        "credit_rating": "B"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-20/1225317474.PDF",
+      "raw_title": "联合资信评估股份有限公司关于下调山东龙大美食股份有限公司主体及相关债项信用评级的公告",
+      "source": "cninfo",
+      "source_event_key": "128119.SZ|2026-05-20|rating_change|联合资信评估股份有限公司关于下调山东龙大美食股份有限公司主体及相关债项信用评级的公告"
+    }
+  ]
+}

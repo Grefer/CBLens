@@ -31,6 +31,8 @@ from .data_providers import (
     looks_private_cb_name,
     to_date,
 )
+from .cb_events import CBEventStore, project_events_path
+from .historical_terms import TermsPatchStore, project_terms
 from .paths import data_path
 
 
@@ -53,6 +55,9 @@ BATCH_RESULT_COLUMNS = [
     "opportunity_score",
     "confidence",
     "risk_tags",
+    "model_signal_status",
+    "no_down_price",
+    "down_reset_uplift",
     "sensitivity_status",
     "review_bucket",
     "review_notes",
@@ -66,18 +71,15 @@ BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核
 HARD_REVIEW_TAGS = {
     "高HV", "极小余额", "小余额", "余额异常", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
-    "正股跌停", "偏差异常",
+    "正股风险", "正股停牌", "转债停牌", "正股跌停", "偏差异常",
 }
 # |偏差| 超过该阈值时打 "偏差异常" 标签 — 多数情况是市价/正股价不同日、
 # 强赎/停牌未应用、转股价未刷新等数据问题, 而非真正的低估机会
 DEVIATION_ANOMALY_THRESHOLD = 0.20
-DEFAULT_DELIST_WINDOW_DAYS = 30
-DEFAULT_MIN_OUTSTANDING_BALANCE = 0.5
-DEFAULT_MIN_CREDIT_RATING = "A+"
-_SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "暂停上市")
-_CALL_ANNOUNCED_KEYWORDS = ("已公告强赎", "公告强赎", "强制赎回", "提前赎回", "赎回登记")
-_NO_CALL_KEYWORDS = ("不强赎", "不提前赎回", "暂不强赎", "暂不提前赎回")
-_UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "暂停上市", "终止上市", "退市")
+DEFAULT_DELIST_WINDOW_DAYS = 0
+DEFAULT_MIN_OUTSTANDING_BALANCE: float | None = 0.5
+DEFAULT_MIN_CREDIT_RATING: str | None = "A+"
+_UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "风险警示", "暂停上市", "终止上市", "退市")
 _UNDERLYING_SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "停止交易")
 _RATING_SCORES = {
     "C": 0,
@@ -104,10 +106,11 @@ _RATING_SCORES = {
 
 @dataclass(frozen=True)
 class AdmissionFilterConfig:
-    """批量定价主池准入参数.
+    """批量定价主池公开交易过滤参数.
 
-    字段缺失时不剔除; 只有数据明确触发风险条件时才排除出主池。
-    ``min_turnover_amount`` 的单位跟随数据源原始口径，未设置时不做成交额过滤。
+    当前硬剔除优先保证转债本身能公开交易, 并默认剔除正股 ST/停牌、
+    低评级、小余额等普通 PDE 模型不适合作为买入信号的标的。高 HV
+    只有定价后才能识别, 由结果风险标签和复核视图承接。
     """
 
     delist_window_days: int = DEFAULT_DELIST_WINDOW_DAYS
@@ -118,7 +121,7 @@ class AdmissionFilterConfig:
 
 @dataclass(frozen=True)
 class AdmissionFilterResult:
-    """单只转债主池准入结果."""
+    """单只转债主池公开交易过滤结果."""
 
     bond_code: str
     accepted: bool
@@ -164,6 +167,7 @@ def list_batch_codes_from_cache(
     *,
     include_nonstandard: bool = False,
     admission_config: AdmissionFilterConfig | None = None,
+    on_date: date | None = None,
 ) -> list[str]:
     """返回 cb_data 静态信息缓存中的批量定价代码池.
 
@@ -179,11 +183,20 @@ def list_batch_codes_from_cache(
     codes = list(terms_cache.list_bonds())
     if include_nonstandard:
         return codes
+    check_date = on_date or date.today()
+    patch_store, event_store = _admission_projection_stores()
     return [
         code for code in codes
         if batch_pricing_exclusion_reason(
             code,
-            _cached_terms(terms_cache, code),
+            _project_terms_for_admission(
+                code,
+                _cached_terms(terms_cache, code),
+                check_date,
+                patch_store=patch_store,
+                event_store=event_store,
+            ),
+            on_date=check_date,
             admission_config=admission_config,
         ) is None
     ]
@@ -193,16 +206,27 @@ def split_batch_codes_from_cache(
     terms_cache,
     *,
     admission_config: AdmissionFilterConfig | None = None,
+    on_date: date | None = None,
 ) -> tuple[list[str], list[tuple[str, str]]]:
     """把缓存代码池拆成 (可批量定价代码, 被过滤代码及原因)."""
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return [], []
+    check_date = on_date or date.today()
+    patch_store, event_store = _admission_projection_stores()
     kept: list[str] = []
     excluded: list[tuple[str, str]] = []
     for code in terms_cache.list_bonds():
-        reason = batch_pricing_exclusion_reason(
+        terms = _project_terms_for_admission(
             code,
             _cached_terms(terms_cache, code),
+            check_date,
+            patch_store=patch_store,
+            event_store=event_store,
+        )
+        reason = batch_pricing_exclusion_reason(
+            code,
+            terms,
+            on_date=check_date,
             admission_config=admission_config,
         )
         if reason is None:
@@ -216,8 +240,9 @@ def screen_batch_pool_from_cache(
     terms_cache,
     *,
     admission_config: AdmissionFilterConfig | None = None,
+    on_date: date | None = None,
 ) -> dict:
-    """返回主池准入筛选报告.
+    """返回主池公开交易筛选报告.
 
     报告用于 GUI/CLI 在定价前展示数据池质量，结构为:
     ``{accepted, excluded, total, n_accepted, n_excluded, excluded_by_reason}``。
@@ -225,6 +250,7 @@ def screen_batch_pool_from_cache(
     accepted, excluded = split_batch_codes_from_cache(
         terms_cache,
         admission_config=admission_config,
+        on_date=on_date,
     )
     return {
         "accepted": accepted,
@@ -257,13 +283,11 @@ def batch_pricing_exclusion_reason(
 ) -> str | None:
     """返回批量主池过滤原因; None 表示可以进入主批量定价.
 
-    这里采用保守的白名单策略。定向转债在可交易前可能值得关注，但进入
-    deviation 排序会制造虚假的"低估"信号，因此默认不进主池。
-    对停牌、强赎、临近摘牌、正股 ST、低成交额、小余额、低评级等二级
-    准入条件采用"字段明确才剔除"的保守规则，避免因数据源缺字段误杀。
+    这里只做进入主批量候选前的硬条件判断: 代码段/交易所、定向标识、
+    是否已进入可交易窗口、转债自身停牌、最后交易/摘牌/到期日, 以及
+    默认不适合直接作为买入信号的正股 ST/停牌、小余额和低评级标的。
     """
     if admission_config is not None:
-        delist_window_days = admission_config.delist_window_days
         min_outstanding_balance = admission_config.min_outstanding_balance
         min_credit_rating = admission_config.min_credit_rating
         min_turnover_amount = admission_config.min_turnover_amount
@@ -275,7 +299,7 @@ def batch_pricing_exclusion_reason(
     raw_code = str(code or "").upper().strip()
     if "." not in raw_code:
         return "代码缺少交易所后缀"
-    plain, exch = raw_code.split(".", 1)
+    _plain, exch = raw_code.split(".", 1)
     if exch not in {"SH", "SZ"}:
         return "非沪深主板/深市可转债"
     delisting_date = _terms_date(terms, "delisting_date")
@@ -287,15 +311,11 @@ def batch_pricing_exclusion_reason(
     maturity_date = _terms_date(terms, "maturity_date")
     if maturity_date and maturity_date <= check_date:
         return "已到期"
+    status_reason = _public_trading_status_reason(terms)
+    if status_reason:
+        return status_reason
     if is_tradable is False:
         return "不可交易"
-    if _terms_status_contains(terms, _SUSPENSION_KEYWORDS, "trading_status", "suspension_status"):
-        return "停牌/暂停交易"
-    if _call_announced(terms, check_date):
-        return "已公告强赎"
-    delist_reason = _near_delisting_reason(terms, check_date, delist_window_days)
-    if delist_reason:
-        return delist_reason
     if _underlying_has_st_risk(terms):
         return "正股 ST/退市风险"
     if _underlying_suspended(terms):
@@ -327,14 +347,14 @@ def batch_pricing_exclusion_reason(
         if not is_standard_public_cb_code(raw_code):
             return "非普通公募转债代码段"
         if looks_private_cb_name(name):
-            return "定向转债/非主池标的"
-        return "非主池标的"
+            return "定向转债/非公开交易标的"
+        return "非公开交易标的"
     if is_tradable is True:
         if not is_standard_public_cb_code(raw_code):
             return "非普通公募转债代码段"
         if looks_private_cb_name(name):
-            return "定向转债/非主池标的"
-        return "非主池标的"
+            return "定向转债/非公开交易标的"
+        return "非公开交易标的"
     if not is_standard_public_cb_code(raw_code):
         return "非普通公募转债代码段"
     if looks_private_cb_name(name):
@@ -342,64 +362,45 @@ def batch_pricing_exclusion_reason(
     return None
 
 
-def _terms_status_contains(terms: Any, keywords: Sequence[str], *keys: str) -> bool:
-    text = " ".join(str(_terms_value(terms, key) or "") for key in keys).upper()
-    return any(keyword.upper() in text for keyword in keywords)
-
-
-def _call_announced(terms: Any, on_date: date) -> bool:
-    if _terms_status_contains(terms, _NO_CALL_KEYWORDS, "call_status", "trading_status"):
-        return False
-    if _terms_status_contains(terms, _CALL_ANNOUNCED_KEYWORDS, "call_status", "trading_status"):
-        return True
-    announce_date = _terms_date(terms, "call_announce_date")
-    if announce_date is not None and announce_date <= on_date:
-        return True
-    # Wind 对部分已强赎标的只返回强赎赎回日/登记日, 不返回文字状态。
-    # 该字段一旦出现, 即表示已进入强赎安排, 应从主池剔除。
-    if _terms_date(terms, "call_redemption_date") is not None:
-        return True
-    return False
-
-
-def _near_delisting_reason(terms: Any, on_date: date, window_days: int) -> str | None:
-    window = max(0, int(window_days))
-    for key in ("last_trading_date", "delisting_date"):
-        d = _terms_date(terms, key)
-        if d is not None and on_date <= d <= on_date + timedelta(days=window):
-            return "临近摘牌"
-    maturity = _terms_date(terms, "maturity_date")
-    if maturity is not None and on_date <= maturity <= on_date + timedelta(days=window):
-        return "临近到期/摘牌"
+def _public_trading_status_reason(terms: Any) -> str | None:
+    status = " ".join(
+        str(_terms_value(terms, key) or "")
+        for key in ("trading_status", "suspension_status")
+    ).upper()
+    if not status:
+        return None
+    if any(keyword in status for keyword in ("退市", "摘牌", "终止上市")):
+        return "已退市"
+    if "暂停上市" in status:
+        return "暂停上市"
+    if any(keyword in status for keyword in ("停牌", "暂停交易", "停止交易")):
+        return "停牌/暂停交易"
+    if "违约" in status:
+        return "违约/异常状态"
     return None
 
 
+def _text_contains_any(text: str, keywords: Sequence[str]) -> bool:
+    upper = str(text or "").upper()
+    return any(keyword.upper() in upper for keyword in keywords)
+
+
 def _underlying_has_st_risk(terms: Any) -> bool:
-    name = str(_terms_value(terms, "underlying_name") or "").upper()
-    status = str(_terms_value(terms, "underlying_status") or "").upper()
-    text = f"{name} {status}"
-    return any(keyword.upper() in text for keyword in _UNDERLYING_ST_KEYWORDS)
+    name = str(_terms_value(terms, "underlying_name") or "")
+    status = str(_terms_value(terms, "underlying_status") or "")
+    return _text_contains_any(f"{name} {status}", _UNDERLYING_ST_KEYWORDS)
 
 
 def _underlying_suspended(terms: Any) -> bool:
-    """正股是否处于停牌/暂停交易状态.
-
-    优先看专用的 ``underlying_trade_status`` 字段; 数据源未拆分时退回到
-    ``underlying_status``。命中即代表正股端无法交易, PDE 的 S0 已失效,
-    应直接从主池剔除。
-    """
-    parts = [
-        str(_terms_value(terms, "underlying_trade_status") or "").upper(),
-        str(_terms_value(terms, "underlying_status") or "").upper(),
-    ]
-    text = " ".join(parts)
-    return any(keyword.upper() in text for keyword in _UNDERLYING_SUSPENSION_KEYWORDS)
+    trade_status = str(_terms_value(terms, "underlying_trade_status") or "")
+    status = str(_terms_value(terms, "underlying_status") or "")
+    return _text_contains_any(f"{trade_status} {status}", _UNDERLYING_SUSPENSION_KEYWORDS)
 
 
 def _underlying_limit_down_threshold(stock_code: Any) -> float:
     """正股跌停阈值 (%, 负数). 创业板/科创板 20%, 其余主板 10%.
 
-    ST 正股的 5% 限制不在此处理: ST 已在主池准入阶段直接剔除。
+    ST 正股的 5% 限制不在此处理: ST 风险进入复核标签, 不作为主池硬剔除。
     阈值留 0.5% 余量, 避免数据源 pct_chg 取整偏差导致漏识别。
     """
     raw = str(stock_code or "").upper().strip()
@@ -581,6 +582,35 @@ def _cached_terms(terms_cache, code: str):
         return None
 
 
+def _admission_projection_stores():
+    try:
+        return TermsPatchStore(), CBEventStore(project_events_path())
+    except Exception:
+        return None, None
+
+
+def _project_terms_for_admission(
+    code: str,
+    terms: Any,
+    on_date: date,
+    *,
+    patch_store: TermsPatchStore | None = None,
+    event_store: CBEventStore | None = None,
+):
+    if terms is None or isinstance(terms, dict):
+        return terms
+    try:
+        return project_terms(
+            code,
+            terms,
+            on_date,
+            patch_store=patch_store,
+            event_store=event_store,
+        ).terms
+    except Exception:
+        return terms
+
+
 def _with_inferred_trading_metadata(code: str, terms: Any, on_date: date):
     if terms is None or isinstance(terms, dict):
         return terms
@@ -630,6 +660,7 @@ def annotate_batch_result(row: dict) -> dict:
         out.setdefault("risk_tags", [])
         out.setdefault("confidence", "低")
         out.setdefault("opportunity_score", float("nan"))
+        out.setdefault("model_signal_status", "不可用")
         return out
 
     s0 = _finite_float(out.get("S0"))
@@ -743,10 +774,33 @@ def annotate_batch_result(row: dict) -> dict:
         risk_tags.append("无评级")
         confidence_points -= 8.0
 
+    if _underlying_has_st_risk(out):
+        risk_tags.append("正股风险")
+        score -= 25.0
+        confidence_points -= 30.0
+    if _underlying_suspended(out):
+        risk_tags.append("正股停牌")
+        score -= 20.0
+        confidence_points -= 25.0
+    if _public_trading_status_reason(out) == "停牌/暂停交易":
+        risk_tags.append("转债停牌")
+        score -= 20.0
+        confidence_points -= 25.0
+
     if _underlying_at_limit_down(out, out.get("stock_code")):
         risk_tags.append("正股跌停")
         score -= 15.0
         confidence_points -= 18.0
+
+    down_uplift = _finite_float(out.get("down_reset_uplift"))
+    if down_uplift is None:
+        no_down = _finite_float(out.get("no_down_price"))
+        if theo is not None and no_down is not None:
+            down_uplift = theo - no_down
+            out["down_reset_uplift"] = down_uplift
+    if down_uplift is not None and theo and theo > 0 and down_uplift / theo >= 0.08:
+        risk_tags.append("下修贡献高")
+        confidence_points -= 8.0
 
     if market is None or market <= 0:
         risk_tags.append("无市价")
@@ -768,6 +822,12 @@ def annotate_batch_result(row: dict) -> dict:
     out["risk_tags"] = _dedupe_tags(risk_tags)
     out["confidence"] = confidence
     out["opportunity_score"] = score
+    if set(out["risk_tags"]) & HARD_REVIEW_TAGS or confidence == "低":
+        out["model_signal_status"] = "不适合作为买入信号"
+    elif out["risk_tags"]:
+        out["model_signal_status"] = "需复核"
+    else:
+        out["model_signal_status"] = "可作为模型信号复核"
     out["sensitivity_status"] = _sensitivity_status(out["risk_tags"], confidence)
     out["review_bucket"] = _review_bucket(out)
     out["review_notes"] = _review_notes(out)
@@ -939,7 +999,7 @@ def _restore_result_row(row: dict) -> dict:
     for key in (
         "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
         "conversion_premium", "model_premium_to_parity", "opportunity_score",
-        "undervaluation_rate",
+        "undervaluation_rate", "no_down_price", "down_reset_uplift",
     ):
         if key in restored and restored[key] is None:
             restored[key] = float("nan")
@@ -963,7 +1023,7 @@ def _sensitivity_status(tags: Sequence[str], confidence: str) -> str:
     tag_set = set(tags or [])
     if {"高HV", "模型溢价高"} & tag_set:
         return "波动率敏感"
-    if {"极小余额", "小余额", "余额异常", "短久期", "低评级"} & tag_set:
+    if {"极小余额", "小余额", "余额异常", "短久期", "低评级", "正股风险", "正股停牌", "转债停牌"} & tag_set:
         return "条款/流动性敏感"
     if confidence == "高":
         return "较稳健"
@@ -994,7 +1054,7 @@ def _review_notes(row: dict) -> list[str]:
     if "高HV" in tags or "较高HV" in tags:
         notes.append("用 60/120 日 HV 或手工 sigma 重算, 防止短期波动抬高理论价")
     if "模型溢价高" in tags:
-        notes.append("理论价主要来自期权/下修价值, 需要降低 p_down 或 sigma 做压力测试")
+        notes.append("理论价主要来自期权/下修价值, 需要降低基础下修强度或 sigma 做压力测试")
     if {"极小余额", "小余额", "余额异常"} & tags:
         notes.append("核实剩余规模、流动性、强赎/退市安排")
     if "短久期" in tags or "近到期" in tags:
@@ -1003,6 +1063,12 @@ def _review_notes(row: dict) -> list[str]:
         notes.append("核实信用风险和信用利差假设")
     if "正股跌停" in tags:
         notes.append("正股当日跌停, S0 不稳定; 需等待正股恢复正常交易后再判断")
+    if "正股风险" in tags:
+        notes.append("正股存在 ST/退市风险, 普通模型理论价不适合作为买入信号")
+    if "正股停牌" in tags or "转债停牌" in tags:
+        notes.append("交易暂停状态下行情锚点失真, 等复牌后重新定价")
+    if "下修贡献高" in tags:
+        notes.append("理论价对下修假设敏感, 对比无下修价和下修贡献后再判断")
     if "偏差异常" in tags:
         notes.append("|偏差|>20%, 多为正股/转债不同日或停牌/强赎未应用; 重新拉取行情和事件后再判断")
     if "模型低估" in tags and not notes:

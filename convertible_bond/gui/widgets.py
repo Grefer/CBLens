@@ -60,7 +60,7 @@ def _form_row(parent, label_text, var, row, wind=False, extra_widget=None,
         ←── col 0 ──→     ←──────── ent_container (col 1, sticky=w) ────────→
 
     - ``primary`` 默认是 ``CTkEntry``; 传 ``custom_widget`` (factory) 时换成它
-      自己创建的控件 — 例如波动率下拉、事件状态只读标签等。
+      自己创建的控件, 例如波动率下拉。
     - label 槽宽固定, 输入区从同一 x 坐标开始, 避免中文标签长短造成输入框参差。
     - ``extra-slot`` / ``source-slot`` 即使没内容也保留固定宽度的空 spacer,
       所以同一 section 内不同行的操作按钮、来源标签也垂直对齐。

@@ -12,7 +12,7 @@
 </p>
 
 **基于 Crank-Nicolson PDE 引擎的 A 股可转债定价与机会筛选工作台**<br/>
-支持多数据源接入、公告事件解析、主池准入筛选以及完整的 GUI / CLI 研究工作流。<br/>
+支持多数据源接入、公告事件解析、公开交易主池筛选以及完整的 GUI / CLI 研究工作流。<br/>
 把转债条款、公告事件、正股行情、信用利差和数值定价模型串成一条可重复的研究管线。
 
 </div>
@@ -45,7 +45,7 @@ CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，
 
 ### 📦 批量筛选与打分
 从全市场条款库出发，自动完成：
-- 主池准入筛选（停牌、强赎、ST、低流动性等）
+- 主池公开交易筛选（剔除不可公开交易标的，风险进入复核标签）
 - 批量 PDE 定价与多线程加速
 - 机会分 / 置信度 / 风险标签
 - 转股溢价率 / 低估率排序
@@ -90,7 +90,7 @@ CustomTkinter GUI 覆盖完整研究流：
 ### ✅ 可测试模型
 核心模块均有 pytest 覆盖：
 - PDE 引擎精度与收敛性
-- 数据缓存 / 事件解析 / 准入筛选
+- 数据缓存 / 事件解析 / 公开交易筛选
 - 批量定价 / API 调用链
 - Wind mock 测试（无需真实连接）
 
@@ -175,14 +175,14 @@ cb-sync-tradable --info
 # ② 月初或新债/退市/下修集中变化后，全量同步基础条款
 cb-sync-tradable
 
-# ③ 每日刷新停牌、强赎、摘牌、正股 ST、成交额、余额、评级等准入字段
+# ③ 每日刷新停牌、强赎、摘牌、正股 ST、成交额、余额、评级等状态字段
 cb-sync-admission-status
 
 # ④ 同步公告事件，并把事件状态应用回 cb_data
 cb-sync-events --apply
 
-# ⑤ 批量定价前查看主池准入报告
-cb-screen-pool --min-rating A+ --min-balance 0.5
+# ⑤ 批量定价前查看公开交易主池报告
+cb-screen-pool
 
 # ⑥ 打开 GUI 做批量复核、单债钻取和敏感性分析
 cb-gui
@@ -195,7 +195,7 @@ cb-gui
 ```mermaid
 flowchart LR
     A["🌐 Wind / cninfo / akshare / CSV"] --> B["💾 data/*.json<br/>条款与事件缓存"]
-    B --> C["🔍 准入筛选<br/>admission_status + batch_pricing"]
+    B --> C["🔍 公开交易筛选<br/>admission_status + batch_pricing"]
     C --> D["⚙️ PDE 定价<br/>UniversalCBPricer"]
     D --> E["📊 机会分 / 风险标签<br/>复核视图"]
     E --> F["🖥️ GUI / CLI / Python API"]
@@ -206,7 +206,7 @@ flowchart LR
 | 层级 | 职责 | 核心模块 |
 | :---: | --- | --- |
 | **① 基础信息** | 发行条款、转股价、票息、强赎/回售规则、评级、余额 | `data_providers`, `cache` |
-| **② 事件状态** | 公告事件、停牌、强赎、ST、成交额等准入字段 | `cb_events`, `admission_status` |
+| **② 事件状态** | 公告事件、停牌、强赎、ST、成交额等状态字段 | `cb_events`, `admission_status` |
 | **③ 动态行情** | 正股/转债价格、历史波动率、股息率、无风险利率 | `data_providers` |
 | **④ 模型定价** | 理论价、希腊值、纯债底、转股价值、期权溢价 | `pricer` |
 | **⑤ 筛选打分** | 低估率、转股溢价、机会分、风险标签、置信度 | `batch_pricing` |
@@ -267,7 +267,7 @@ CBLens/
 │   ├── pricing_api.py          # provider 驱动的单只/批量定价 helper
 │   ├── data_providers.py       # Wind / akshare / CSV 数据源
 │   ├── cache.py                # TermsBundle / TermsCache / CachedBondDataProvider
-│   ├── batch_pricing.py        # 准入筛选、机会分、风险标签、批量结果缓存
+│   ├── batch_pricing.py        # 公开交易筛选、机会分、风险标签、批量结果缓存
 │   ├── admission_status.py     # 停牌、强赎、摘牌、ST、成交额等状态刷新
 │   ├── cb_events.py            # 公告事件模型与解析
 │   ├── cb_event_sync.py        # 公告同步和事件应用
@@ -317,7 +317,9 @@ pytest tests/test_batch_pricing.py -x -q
 > [!WARNING]
 > CBLens 是研究工具，不是交易系统。以下模型局限需要在使用时注意：
 
-- **强赎路径依赖**：强赎触发是单点判断，尚未完整建模"30 个交易日中 15 日"的路径依赖。
+- **强赎路径依赖**：强赎触发是单点判断，尚未完整建模"30 个交易日中 15 日"的路径依赖；下修触发同理用单点 S 依赖强度近似。
+- **下修博弈分两态**：无公告时用"纯触发后"模型（`p_down` = 触发线下方公司跟进下修的年化概率，触发线之上为 0）建模"会不会修"；董事会**已提议**时改用一次性近确定下修节点（生效日≈提议日+表决滞后、概率=历史通过率，经 `cb-calibrate-down-reset` 从 `cb_events` 校准），不再把背景强度放大数倍摊到全周期。
+- **下修幅度**：已公告（提议/通过）时优先用公告解析到的真实新转股价（`parse_down_reset_new_price`）；解析不到或纯背景博弈时才回落 `down_reset_premium` + 监管下限（20 日均价/前收）近似，每股净资产下限暂未纳入。
 - **利率结构**：当前为标量利率，未建完整期限结构。
 - **股息率口径**：`q` 按连续股息率处理，数据源缺失时默认 0；不同数据源的股息率口径可能不同，建议对高股息正股做人工复核。
 - **历史回测**：默认使用当前条款，历史下修发生过的债可能出现转股价跳点偏差。

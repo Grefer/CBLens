@@ -39,9 +39,17 @@ class UniversalCBPricer:
                  call_no_redemption_until: date | None = None,
                  put_trigger_ratio: float = 0.7,
                  put_active_years: int = 2,
+                 putback_start_date: date | None = None,
+                 putback_end_date: date | None = None,
+                 putback_price: float | None = None,
                  down_reset_premium: float = 1.02,
+                 down_reset_trigger_ratio: float = 1.0,
                  down_reset_block_until: date | None = None,
-                 call_notice_days: int = 30):
+                 down_reset_floor: float | None = None,
+                 call_notice_days: int = 30,
+                 scheduled_reset_date: date | None = None,
+                 scheduled_reset_prob: float = 0.0,
+                 scheduled_reset_target_k: float | None = None):
         self._validate_inputs(S0, K, current_date, maturity_date, face_value)
         self.S0 = S0
         self.K = K
@@ -55,9 +63,28 @@ class UniversalCBPricer:
         self.call_no_redemption_until = call_no_redemption_until
         self.put_trigger_ratio = put_trigger_ratio
         self.put_active_years = put_active_years
+        self.putback_start_date = putback_start_date
+        self.putback_end_date = putback_end_date
+        self.putback_price = putback_price
         self.down_reset_premium = down_reset_premium
+        self.down_reset_trigger_ratio = float(down_reset_trigger_ratio)
+        if self.down_reset_trigger_ratio <= 0:
+            raise ValueError("down_reset_trigger_ratio must be positive")
         self.down_reset_block_until = down_reset_block_until
+        self.down_reset_floor = down_reset_floor
+        if self.down_reset_floor is not None and self.down_reset_floor <= 0:
+            raise ValueError("down_reset_floor must be positive when provided")
         self.call_notice_days = max(0, int(call_notice_days))
+        # 董事会已提议下修时的"一次性近确定下修"节点 (regime ②):
+        # scheduled_reset_date ≈ 提议日 + 表决滞后, scheduled_reset_prob ≈ 通过率。
+        # scheduled_reset_target_k: 公告解析到的新转股价; None 时回落 premium/floor 估算。
+        self.scheduled_reset_date = scheduled_reset_date
+        self.scheduled_reset_prob = max(0.0, float(scheduled_reset_prob))
+        self.scheduled_reset_target_k = (
+            float(scheduled_reset_target_k)
+            if scheduled_reset_target_k is not None and scheduled_reset_target_k > 0
+            else None
+        )
         self.coupon_rates = tuple(coupon_rates or DEFAULT_COUPON_RATES)
 
         self.T = (maturity_date - current_date).days / _DAYS_PER_YEAR
@@ -83,9 +110,22 @@ class UniversalCBPricer:
                 self.call_no_redemption_until - current_date
             ).days / _DAYS_PER_YEAR
         self._put_start_t = (self.put_start_date - current_date).days / _DAYS_PER_YEAR
+        self._putback_start_t: float | None = None
+        self._putback_end_t: float | None = None
+        if self.putback_start_date is not None:
+            self._putback_start_t = (self.putback_start_date - current_date).days / _DAYS_PER_YEAR
+        if self.putback_end_date is not None:
+            self._putback_end_t = (self.putback_end_date - current_date).days / _DAYS_PER_YEAR
         self._down_reset_block_until_t: float | None = None
         if self.down_reset_block_until is not None:
             self._down_reset_block_until_t = (self.down_reset_block_until - current_date).days / _DAYS_PER_YEAR
+        # 一次性下修节点的连续时间坐标; t_eff > T (生效日晚于到期) 视为无关, 置 None。
+        # t_eff <= 0 (提议已逾期但无通过事件) 在 PDE 末步兜底应用。
+        self._scheduled_reset_t: float | None = None
+        if self.scheduled_reset_date is not None and self.scheduled_reset_prob > 0:
+            t_eff = (self.scheduled_reset_date - current_date).days / _DAYS_PER_YEAR
+            if t_eff <= self.T:
+                self._scheduled_reset_t = t_eff
 
     @staticmethod
     def _validate_inputs(S0, K, current_date, maturity_date, face_value):
@@ -190,6 +230,43 @@ class UniversalCBPricer:
         self.ratio = self.face_value / self.K
         return self.K
 
+    def _down_reset_value(self, S_grid: np.ndarray, V: np.ndarray,
+                          target_k: float | None = None):
+        """下修后的延续价值, 用齐次性近似在同一网格上取 (背景 hazard 与已公告节点共用).
+
+        下修后 K_new = S / down_reset_premium (受 down_reset_floor 约束)。由
+        (S, K) 一阶齐次性, 当前股价 S 处的 post-reset 价值 ≈ 原网格上 moneyness
+        相同点的 V; 再以转股价值 face·(K/K_new) 作下限。
+
+        - ``target_k`` 给定 (公告解析到的确定新 K): K_new = target_k 固定常数,
+          逐点映射。注意若 target_k == 现 K (下修已落地), 映射为恒等 → 节点变 no-op,
+          天然防止与条款刷新双计。
+        - 无 floor: K_new = S/premium → moneyness=premium 处取值, 对所有 S 同一标量。
+        - 有 floor: K_new = max(S/premium, floor), 逐点映射到同 moneyness 的旧网格。
+
+        返回标量 (无 floor 估算) 或数组; 调用方用 np.maximum 广播即可。
+        """
+        if target_k is not None:
+            tk = float(target_k)
+            equiv_s = self.K * S_grid / tk
+            V_post_reset = np.interp(equiv_s, S_grid, V)
+            conv_floor = self.face_value * S_grid / tk
+            return np.maximum(V_post_reset, conv_floor)
+        if self.down_reset_floor is not None:
+            # 现实下修价有均价/净资产下限。floor 绑定时下修后 moneyness 不再固定,
+            # 因此逐点映射到同 moneyness 的旧网格。
+            target_k = np.maximum(
+                S_grid / self.down_reset_premium,
+                float(self.down_reset_floor),
+            )
+            equiv_s = self.K * S_grid / target_k
+            V_post_reset = np.interp(equiv_s, S_grid, V)
+            conv_floor = self.face_value * S_grid / target_k
+            return np.maximum(V_post_reset, conv_floor)
+        V_post_reset = float(np.interp(self.K * self.down_reset_premium, S_grid, V))
+        conv_floor = self.face_value * self.down_reset_premium
+        return max(V_post_reset, conv_floor)
+
     def _price_grid(self, sigma: float, r: float, q: float, base_spread: float,
                     p_down: float, distress_k: float,
                     M: int, N: int) -> tuple[np.ndarray, np.ndarray]:
@@ -280,7 +357,9 @@ class UniversalCBPricer:
                         np.maximum(call_price, parity_capped),
                     )
 
-                # 下修博弈: S < K 时才可能触发下修, 概率随 OTM 程度线性递增.
+                # 下修博弈: S 低于下修触发线时才可能触发下修, 概率随
+                # 低于触发线的程度线性递增。默认 trigger_ratio=1.0 保持旧行为
+                # (S<K 即可计入); 条款库有 85%K 等明确阈值时会更保守。
                 # p_down 按年化事件强度解释, 每个 PDE 时间步转换成 step probability;
                 # 否则会在 N 个时间步里反复应用完整概率, 造成 OTM 转债被严重高估.
                 # 下修后 K_new = S / down_reset_premium, 用齐次性近似 post-reset 延续价值:
@@ -291,15 +370,44 @@ class UniversalCBPricer:
                     or t_prev > self._down_reset_block_until_t
                 )
                 if p_down > 0 and down_reset_allowed:
-                    # S-dependent 下修概率: S>=K → 0, S=0 → step_down_prob
+                    # "纯触发后" 模型: 触发线下方 (S < K·trigger_ratio) 一律按 step 概率下修,
+                    # 触发线之上为 0。p_down 解释为"触发后公司跟进下修"的年化概率,
+                    # 每步换算 1-exp(-p·dt) 保证网格无关。不再用"越跌越可能"的 S 渐变。
                     step_down_prob = 1.0 - float(np.exp(-p_down * dt))
-                    p_reset = step_down_prob * np.clip(1.0 - S_grid / self.K, 0.0, 1.0)
-                    V_post_reset = float(np.interp(self.K * self.down_reset_premium, S_grid, V))
-                    conv_floor = self.face_value * self.down_reset_premium
-                    reset_value = max(V_post_reset, conv_floor)
+                    trigger_price = self.K * self.down_reset_trigger_ratio
+                    p_reset = step_down_prob * (S_grid < trigger_price)
+                    reset_value = self._down_reset_value(S_grid, V)
                     V = (1 - p_reset) * V + p_reset * np.maximum(V, reset_value)
 
-            if t_prev >= self._put_start_t:
+                # 已公告下修 (regime ②: 已提议/已通过待生效): 一次性近确定下修节点。
+                # 历史上提议后≈100% 通过 (cb_events 校准), 价值跳变集中在生效日附近,
+                # 用单点 max(V, reset_value) 混合替代把背景 hazard 放大数倍摊到全周期。
+                # target_k 给定时用公告真实新 K, 否则回落 premium/floor 估算。
+                # 不受 block_until 约束 — 新公告覆盖此前的"不修正"承诺。
+                # t_prev<t_eff<=t_now 跨步时触发; t_eff<=0 (逾期) 在末步 (n==1) 兜底。
+                if self._scheduled_reset_t is not None and self.scheduled_reset_prob > 0 and (
+                    t_prev < self._scheduled_reset_t <= t_now
+                    or (self._scheduled_reset_t <= 0 and n == 1)
+                ):
+                    reset_value = self._down_reset_value(
+                        S_grid, V, target_k=self.scheduled_reset_target_k)
+                    p_sched = self.scheduled_reset_prob
+                    V = (1 - p_sched) * V + p_sched * np.maximum(V, reset_value)
+
+            putback_window_active = (
+                self._putback_start_t is not None
+                and self._putback_end_t is not None
+                and self._putback_start_t <= t_prev <= self._putback_end_t
+            )
+            if putback_window_active:
+                explicit_put_price = (
+                    float(self.putback_price)
+                    if self.putback_price is not None
+                    else put_price
+                )
+                V = np.maximum(V, explicit_put_price)
+                V[0] = max(V[0], explicit_put_price)
+            elif t_prev >= self._put_start_t:
                 mask_put = S_grid <= self.K * self.put_trigger_ratio
                 V[mask_put] = np.maximum(V[mask_put], put_price)
                 V[0] = max(V[0], put_price)
@@ -387,9 +495,17 @@ class UniversalCBPricer:
                 call_no_redemption_until=self.call_no_redemption_until,
                 put_trigger_ratio=self.put_trigger_ratio,
                 put_active_years=self.put_active_years,
+                putback_start_date=self.putback_start_date,
+                putback_end_date=self.putback_end_date,
+                putback_price=self.putback_price,
                 down_reset_premium=self.down_reset_premium,
+                down_reset_trigger_ratio=self.down_reset_trigger_ratio,
                 down_reset_block_until=self.down_reset_block_until,
+                down_reset_floor=self.down_reset_floor,
                 call_notice_days=self.call_notice_days,
+                scheduled_reset_date=self.scheduled_reset_date,
+                scheduled_reset_prob=self.scheduled_reset_prob,
+                scheduled_reset_target_k=self.scheduled_reset_target_k,
             )
             S_grid_t, V_t = tomorrow_pricer._price_grid(
                 sigma, r, q, base_spread, p_down, distress_k, M, N)

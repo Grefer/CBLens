@@ -1,6 +1,6 @@
-"""主池准入状态字段的增量刷新.
+"""主池交易状态与风险字段的增量刷新.
 
-这一层只更新批量定价筛选会用到的事件/状态字段, 不重建完整条款:
+这一层只更新批量定价会用到的事件/状态字段, 不重建完整条款:
 停牌、强赎公告、摘牌/最后交易日、正股 ST 风险、成交额、评级和余额等。
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ ADMISSION_STATUS_FIELDS = (
     "call_status",
     "call_announce_date",
     "call_redemption_date",
+    "call_redemption_price",
     "last_trading_date",
     "delisting_date",
     "underlying_name",
@@ -31,6 +32,8 @@ ADMISSION_STATUS_FIELDS = (
     "underlying_pct_change",
     "bond_turnover_amount",
     "credit_rating",
+    "credit_rating_outlook",
+    "credit_watch_status",
     "outstanding_balance",
 )
 
@@ -55,7 +58,7 @@ def merge_admission_status(base: BondTerms | None, patch: BondTerms | None) -> B
 
 
 def changed_admission_fields(before: BondTerms | None, after: BondTerms) -> list[str]:
-    """返回准入状态字段中发生变化的字段名."""
+    """返回交易状态/风险字段中发生变化的字段名."""
     before_terms = before or BondTerms()
     return [
         name for name in ADMISSION_STATUS_FIELDS
@@ -70,7 +73,7 @@ def refresh_admission_status(
     valuation_date: date | None = None,
     on_progress=None,
 ) -> dict:
-    """批量刷新主池准入状态字段并写回 store.
+    """批量刷新主池交易状态/风险字段并写回 store.
 
     返回 ``{success, failed, changed, excluded, excluded_by_reason, store_path}``。
     ``store`` 建议传 ``TermsBundle``; 若 store 中没有某只债, 会先用 provider
@@ -134,7 +137,7 @@ def refresh_admission_status_from_store(
     limit: int = 0,
     on_progress=None,
 ) -> dict:
-    """对 store 中已有转债刷新准入状态字段."""
+    """对 store 中已有转债刷新交易状态/风险字段."""
     if store is None or not hasattr(store, "list_bonds"):
         raise ValueError("store 必须支持 list_bonds()")
     codes: Sequence[str] = store.list_bonds()

@@ -1,0 +1,1906 @@
+"""基于批量机会分的选债策略回测.
+
+第一版策略保持可解释:
+  - 每个调仓日对候选池做批量定价并复用 ``opportunity_score`` 排序
+  - 选出前 N 只转债, 按等权持有到下一调仓边界
+  - 收益用调仓日/期末附近最近有效转债收盘价计算
+
+注意: 若使用当前 ``cb_data`` 作为历史条款快照, 下修、强赎和退市状态可能带有
+当前信息偏差。该模块负责把口径固定下来; 更严格的历史点位数据可通过 provider
+或历史 bundle 接入。
+"""
+from __future__ import annotations
+
+import csv
+import math
+from collections import Counter
+from dataclasses import dataclass
+from datetime import date, timedelta
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .batch_pricing import (
+    AdmissionFilterConfig,
+    BATCH_REVIEW_VIEWS,
+    DEFAULT_UNDERVALUED_SCORE_THRESHOLD,
+    HARD_REVIEW_TAGS,
+    batch_pricing_exclusion_reason,
+    filter_batch_results_by_view,
+)
+from .data_providers import DataProvider, finite_float
+from .pricing_api import batch_price_from_provider_threaded
+
+
+@dataclass(frozen=True)
+class ScoreStrategyConfig:
+    """机会分选债策略参数."""
+
+    top_n: int = 10
+    rebalance_freq: str = "M"
+    selection_view: str = "综合机会"
+    min_score: float | None = None
+    min_confidence: tuple[str, ...] | None = ("高", "中")
+    exclude_risk_tags: tuple[str, ...] = tuple(sorted(HARD_REVIEW_TAGS))
+    min_market_price: float | None = None
+    max_market_price: float | None = None
+    min_conversion_premium: float | None = None
+    max_conversion_premium: float | None = None
+    min_deviation: float | None = None
+    max_deviation: float | None = None
+    min_sigma: float | None = None
+    max_sigma: float | None = None
+    price_lookback_days: int = 31
+    max_price_staleness_days: int = 10
+    execution_timing: str = "signal_close"
+    execution_lookahead_days: int = 10
+    mark_to_market: bool = True
+    pre_filter_prices: bool = True
+    transaction_cost: float = 0.0
+    compute_benchmark: bool = True
+
+
+@dataclass(frozen=True)
+class PricePoint:
+    """某只转债在一个交易日上的可用成交价格."""
+
+    date: date
+    price: float
+
+
+class _BacktestCacheProvider(DataProvider):
+    """单次策略回测内的数据源缓存层.
+
+    批量定价、成交价查询和日频估值都会反复访问同一批历史行情/条款。把缓存放在
+    provider 装饰器里, 可以让下游 helper 无感复用, 同时保持现有 DataProvider
+    契约不变。
+    """
+
+    def __init__(
+        self,
+        inner: DataProvider,
+        *,
+        start_date: date,
+        end_date: date,
+        price_lookback_days: int,
+        execution_lookahead_days: int,
+        vol_window_days: int,
+    ):
+        self.inner = inner
+        self.name = f"{inner.name}+btcache"
+        lookback = max(price_lookback_days, vol_window_days * 3 + 30)
+        self._history_start = start_date - timedelta(days=lookback + 15)
+        self._history_end = end_date + timedelta(days=max(1, execution_lookahead_days) + 15)
+        self._bond_history: dict[str, list[tuple[date, float | None]]] = {}
+        self._stock_history: dict[str, list[tuple[date, float | None]]] = {}
+        self._bond_history_exact: dict[tuple, list[tuple[date, float | None]]] = {}
+        self._stock_history_exact: dict[tuple, list[tuple[date, float | None]]] = {}
+        self._terms: dict[tuple[str, date], Any] = {}
+        self._diagnostics: dict[tuple[str, date], dict[str, Any]] = {}
+        self._stock_close: dict[tuple[str, date], float] = {}
+        self.stats: Counter = Counter()
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def cache_identity(self) -> str:
+        return _provider_cache_identity(self.inner)
+
+    def get_bond_terms(self, bond_code: str, valuation_date: date):
+        key = (bond_code, valuation_date)
+        if key in self._terms:
+            self.stats["terms_hits"] += 1
+            return self._terms[key]
+        self.stats["terms_misses"] += 1
+        terms = self.inner.get_bond_terms(bond_code, valuation_date)
+        self._terms[key] = terms
+        return terms
+
+    def get_stock_close(self, stock_code: str, on_date: date) -> float:
+        key = (stock_code, on_date)
+        if key in self._stock_close:
+            self.stats["stock_close_hits"] += 1
+            return self._stock_close[key]
+        self.stats["stock_close_misses"] += 1
+        value = self.inner.get_stock_close(stock_code, on_date)
+        self._stock_close[key] = value
+        return value
+
+    def get_stock_history(self, stock_code: str, start: date, end: date):
+        if start >= self._history_start and end <= self._history_end:
+            if stock_code not in self._stock_history:
+                self.stats["stock_history_misses"] += 1
+                self._stock_history[stock_code] = self.inner.get_stock_history(
+                    stock_code, self._history_start, self._history_end)
+            else:
+                self.stats["stock_history_hits"] += 1
+            return _slice_history(self._stock_history[stock_code], start, end)
+        key = (stock_code, start, end)
+        if key in self._stock_history_exact:
+            self.stats["stock_history_hits"] += 1
+            return self._stock_history_exact[key]
+        self.stats["stock_history_misses"] += 1
+        history = self.inner.get_stock_history(stock_code, start, end)
+        self._stock_history_exact[key] = history
+        return history
+
+    def get_stock_dividend_yield(self, stock_code, on_date):
+        return self.inner.get_stock_dividend_yield(stock_code, on_date)
+
+    def get_bond_history(self, bond_code: str, start: date, end: date):
+        if start >= self._history_start and end <= self._history_end:
+            if bond_code not in self._bond_history:
+                self.stats["bond_history_misses"] += 1
+                self._bond_history[bond_code] = self.inner.get_bond_history(
+                    bond_code, self._history_start, self._history_end)
+            else:
+                self.stats["bond_history_hits"] += 1
+            return _slice_history(self._bond_history[bond_code], start, end)
+        key = (bond_code, start, end)
+        if key in self._bond_history_exact:
+            self.stats["bond_history_hits"] += 1
+            return self._bond_history_exact[key]
+        self.stats["bond_history_misses"] += 1
+        history = self.inner.get_bond_history(bond_code, start, end)
+        self._bond_history_exact[key] = history
+        return history
+
+    def get_cashflow(self, bond_code):
+        return self.inner.get_cashflow(bond_code)
+
+    def get_risk_free_rate(self, on_date):
+        return self.inner.get_risk_free_rate(on_date)
+
+    def get_admission_status(self, bond_code, valuation_date, base_terms=None):
+        return self.inner.get_admission_status(bond_code, valuation_date, base_terms)
+
+    def list_bond_announcements(self, bond_code, start, end):
+        return self.inner.list_bond_announcements(bond_code, start, end)
+
+    def list_tradable_cbs(self, on_date: date | None = None):
+        return self.inner.list_tradable_cbs(on_date)
+
+    def get_terms_source_diagnostics(self, bond_code: str, valuation_date: date) -> dict[str, Any]:
+        key = (bond_code, valuation_date)
+        if key in self._diagnostics:
+            self.stats["diagnostics_hits"] += 1
+            return self._diagnostics[key]
+        self.stats["diagnostics_misses"] += 1
+        describe = getattr(self.inner, "get_terms_source_diagnostics", None)
+        if callable(describe):
+            diag = describe(bond_code, valuation_date)
+        else:
+            diag = {
+                "bond_code": bond_code,
+                "valuation_date": valuation_date,
+                "terms_source": "provider",
+                "snapshot_date": None,
+                "patch_count": 0,
+                "event_count": 0,
+                "uses_current_fallback": False,
+            }
+        self._diagnostics[key] = diag
+        return diag
+
+    def cache_stats(self) -> dict[str, int]:
+        return dict(self.stats)
+
+
+def build_rebalance_schedule(start_date: date, end_date: date, freq: str = "M") -> list[date]:
+    """生成回测边界日期, 首尾始终包含 ``start_date`` / ``end_date``.
+
+    ``D`` 近似按工作日, ``W`` 取周五, ``M`` 取自然月最后一个工作日,
+    ``Q`` 取季末月份最后一个工作日。遇到 A 股节假日时, 定价和收益计算会
+    自动回退到该日之前最近的有效收盘价。
+    """
+    if end_date <= start_date:
+        raise ValueError("end_date 必须晚于 start_date")
+
+    freq_key = (freq or "M").upper()
+    if freq_key not in {"D", "W", "M", "Q"}:
+        raise ValueError(f"未知调仓频率: {freq}")
+
+    points: set[date] = {start_date, end_date}
+    d = start_date + timedelta(days=1)
+    while d < end_date:
+        if freq_key == "D" and d.weekday() < 5:
+            points.add(d)
+        elif freq_key == "W" and d.weekday() == 4:
+            points.add(d)
+        elif freq_key in {"M", "Q"}:
+            month_end = _last_weekday_of_month(d.year, d.month)
+            is_freq_month = freq_key == "M" or d.month in {3, 6, 9, 12}
+            if is_freq_month and d == month_end:
+                points.add(d)
+        d += timedelta(days=1)
+    return sorted(points)
+
+
+def backtest_score_strategy(
+    provider: DataProvider,
+    bond_codes: list[str],
+    *,
+    start_date: date,
+    end_date: date,
+    config: ScoreStrategyConfig | None = None,
+    terms_cache=None,
+    admission_config: AdmissionFilterConfig | None = None,
+    r: float = 0.022,
+    base_spread: float = 0.03,
+    distress_k: float = 0.05,
+    p_down: float = 0.15,
+    vol_window_days: int = 21,
+    sigma: float | None = None,
+    q: float | None = None,
+    M: int = 300,
+    N: int = 1000,
+    max_workers: int | None = None,
+    use_runtime_cache: bool = True,
+    pricing_snapshot_cache: dict[Any, list[dict[str, Any]]] | None = None,
+    progress_cb=None,
+    **pricer_overrides,
+) -> dict[str, Any]:
+    """回测机会分选债策略.
+
+    返回结构包含:
+      - ``equity_curve``: 组合净值点位
+      - ``benchmark_curve``: 等权全可投池基准净值 (``compute_benchmark`` 开启时)
+      - ``periods``: 每个持有区间的收益、持仓和候选池统计
+      - ``rebalance_snapshots``: 每次调仓的候选/选中摘要
+      - ``summary``: 总收益、年化、回撤、波动率、胜率、Sharpe、超额等指标
+
+    净值口径:
+      - 等权持有 ``top_n`` 选中标的; 缺期初/期末收盘价无法建仓的标的按现金(0 收益)
+        计入分母, 避免少数可成交标的把组合静默放大成高集中度。
+      - 区间净收益 = 毛收益 - ``turnover * transaction_cost`` (单边换手 × 成本率)。
+      - 基准为每个调仓日"全部通过准入且已定价"标的的等权收益, 表示买下整个筛选池
+        的参照线; 用于衡量机会分排序带来的超额。
+    """
+    cfg = config or ScoreStrategyConfig()
+    if cfg.top_n <= 0:
+        raise ValueError("top_n 必须为正整数")
+    if not bond_codes:
+        raise ValueError("bond_codes 不能为空")
+    runtime_cache_provider = None
+    if use_runtime_cache:
+        runtime_cache_provider = _BacktestCacheProvider(
+            provider,
+            start_date=start_date,
+            end_date=end_date,
+            price_lookback_days=cfg.price_lookback_days,
+            execution_lookahead_days=cfg.execution_lookahead_days,
+            vol_window_days=vol_window_days,
+        )
+        provider = runtime_cache_provider
+
+    schedule = build_rebalance_schedule(start_date, end_date, cfg.rebalance_freq)
+    periods: list[dict[str, Any]] = []
+    snapshots: list[dict[str, Any]] = []
+    equity_curve = [{"date": schedule[0], "equity": 1.0}]
+    benchmark_curve = [{"date": schedule[0], "equity": 1.0}] if cfg.compute_benchmark else []
+    equity = 1.0
+    benchmark_equity = 1.0
+    previous_codes: list[str] = []
+    total_periods = len(schedule) - 1
+    performance_stats: Counter = Counter()
+
+    for idx, period_start in enumerate(schedule[:-1]):
+        period_end = schedule[idx + 1]
+        eligible, excluded, source_diagnostics = _eligible_codes_for_date(
+            provider,
+            bond_codes,
+            period_start,
+            terms_cache=terms_cache,
+            admission_config=admission_config,
+        )
+        pricing_codes, prefilter_excluded = _pre_filter_codes_by_price(
+            provider,
+            eligible,
+            period_start,
+            cfg,
+        )
+        if prefilter_excluded:
+            excluded.extend(prefilter_excluded)
+            performance_stats["price_prefilter_excluded"] += len(prefilter_excluded)
+        priced_rows = _batch_price_with_snapshot_cache(
+            provider,
+            pricing_codes,
+            snapshot_cache=pricing_snapshot_cache,
+            stats=performance_stats,
+            r=r,
+            base_spread=base_spread,
+            distress_k=distress_k,
+            p_down=p_down,
+            valuation_date=period_start,
+            vol_window_days=vol_window_days,
+            sigma=sigma,
+            q=q,
+            M=M,
+            N=N,
+            max_workers=max_workers,
+            **pricer_overrides,
+        )
+
+        # 转债成交价缓存: 策略持仓与基准共享, 避免同一调仓期重复拉历史。
+        price_cache: dict[tuple, PricePoint | None] = {}
+        candidates = _select_candidate_rows(priced_rows, cfg)
+        selected = candidates[:cfg.top_n]
+        selected_codes = [str(row.get("bond_code")) for row in selected]
+        candidate_rows = _candidate_explanation_rows(candidates, selected_codes, cfg)
+        rejection_rows = _rejection_explanation_rows(
+            priced_rows,
+            excluded,
+            cfg,
+            candidate_codes={str(row.get("bond_code")) for row in candidates},
+        )
+        positions, skipped_positions = _position_returns(
+            provider,
+            selected,
+            period_start,
+            period_end,
+            lookback_days=cfg.price_lookback_days,
+            max_staleness_days=cfg.max_price_staleness_days,
+            execution_timing=cfg.execution_timing,
+            execution_lookahead_days=cfg.execution_lookahead_days,
+            price_cache=price_cache,
+        )
+
+        turnover = _equal_weight_turnover(previous_codes, selected_codes)
+        previous_codes = selected_codes
+
+        # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母。
+        intended = len(selected)
+        if intended > 0:
+            for pos in positions:
+                pos["weight"] = 1.0 / intended
+                pos["return_contribution"] = float(pos["period_return"]) / intended
+            gross_return = float(sum(p["period_return"] for p in positions) / intended)
+            cash_weight = float(intended - len(positions)) / intended
+        else:
+            gross_return = 0.0
+            cash_weight = 1.0
+        period_start_equity = equity
+        cost = turnover * cfg.transaction_cost
+        period_return = gross_return - cost
+        equity = period_start_equity * (1.0 + period_return)
+        if cfg.mark_to_market:
+            curve_points = _portfolio_mark_to_market_curve(
+                provider,
+                positions,
+                start_equity=period_start_equity,
+                period_end=period_end,
+                cost=cost,
+                intended_count=intended,
+            )
+            _upsert_equity_points(equity_curve, curve_points)
+            if curve_points:
+                equity = float(curve_points[-1]["equity"])
+        else:
+            _upsert_equity_points(equity_curve, [{"date": period_end, "equity": equity}])
+
+        benchmark_return = None
+        if cfg.compute_benchmark:
+            benchmark_return = _benchmark_period_return(
+                provider,
+                priced_rows,
+                period_start,
+                period_end,
+                lookback_days=cfg.price_lookback_days,
+                max_staleness_days=cfg.max_price_staleness_days,
+                execution_timing=cfg.execution_timing,
+                execution_lookahead_days=cfg.execution_lookahead_days,
+                price_cache=price_cache,
+            )
+            benchmark_equity *= 1.0 + (benchmark_return or 0.0)
+            benchmark_curve.append({"date": period_end, "equity": benchmark_equity})
+
+        scored = [finite_float(row.get("opportunity_score")) for row in selected]
+        finite_scores = [s for s in scored if s is not None]
+        snapshot = {
+            "date": period_start,
+            "eligible_count": len(eligible),
+            "excluded_count": len(excluded),
+            "pricing_count": len(pricing_codes),
+            "pre_filtered_count": len(prefilter_excluded),
+            "priced_count": sum(1 for row in priced_rows if row.get("status") == "ok"),
+            "failed_count": sum(1 for row in priced_rows if row.get("status") != "ok"),
+            "candidate_count": len(candidates),
+            "selected_count": len(selected),
+            "selected_codes": selected_codes,
+            "candidate_rows": candidate_rows,
+            "rejection_rows": rejection_rows,
+            "avg_score": (sum(finite_scores) / len(finite_scores)) if finite_scores else None,
+            "data_quality": _period_data_quality(source_diagnostics),
+        }
+        snapshots.append(snapshot)
+        periods.append({
+            "start_date": period_start,
+            "end_date": period_end,
+            "period_return": period_return,
+            "gross_return": gross_return,
+            "cost": cost,
+            "cash_weight": cash_weight,
+            "benchmark_return": benchmark_return,
+            "equity": equity,
+            "benchmark_equity": benchmark_equity if cfg.compute_benchmark else None,
+            "turnover": turnover,
+            "execution_timing": _normalize_execution_timing(cfg.execution_timing),
+            "entry_date": _min_position_date(positions, "entry_date"),
+            "exit_date": _max_position_date(positions, "exit_date"),
+            "positions": positions,
+            "skipped_positions": skipped_positions,
+            "excluded_reasons": excluded,
+            **snapshot,
+        })
+
+        if progress_cb:
+            progress_cb(idx + 1, total_periods)
+
+    summary = _summarize_strategy(
+        equity_curve,
+        periods,
+        start_date=schedule[0],
+        end_date=schedule[-1],
+        freq=cfg.rebalance_freq,
+        top_n=cfg.top_n,
+        risk_free_rate=r,
+        benchmark_curve=benchmark_curve if cfg.compute_benchmark else None,
+    )
+    diagnostics = _build_strategy_diagnostics(
+        equity_curve,
+        periods,
+        summary,
+    )
+    if runtime_cache_provider is not None:
+        performance_stats.update({
+            f"runtime_cache.{key}": value
+            for key, value in runtime_cache_provider.cache_stats().items()
+        })
+    diagnostics["performance"] = dict(performance_stats)
+    return {
+        "start_date": schedule[0],
+        "end_date": schedule[-1],
+        "config": {
+            "top_n": cfg.top_n,
+            "rebalance_freq": cfg.rebalance_freq,
+            "selection_view": cfg.selection_view,
+            "min_score": cfg.min_score,
+            "min_confidence": list(cfg.min_confidence) if cfg.min_confidence else None,
+            "exclude_risk_tags": list(cfg.exclude_risk_tags),
+            "min_market_price": cfg.min_market_price,
+            "max_market_price": cfg.max_market_price,
+            "min_conversion_premium": cfg.min_conversion_premium,
+            "max_conversion_premium": cfg.max_conversion_premium,
+            "min_deviation": cfg.min_deviation,
+            "max_deviation": cfg.max_deviation,
+            "min_sigma": cfg.min_sigma,
+            "max_sigma": cfg.max_sigma,
+            "price_lookback_days": cfg.price_lookback_days,
+            "max_price_staleness_days": cfg.max_price_staleness_days,
+            "execution_timing": _normalize_execution_timing(cfg.execution_timing),
+            "execution_lookahead_days": cfg.execution_lookahead_days,
+            "mark_to_market": cfg.mark_to_market,
+            "pre_filter_prices": cfg.pre_filter_prices,
+            "transaction_cost": cfg.transaction_cost,
+            "compute_benchmark": cfg.compute_benchmark,
+        },
+        "equity_curve": equity_curve,
+        "benchmark_curve": benchmark_curve,
+        "periods": periods,
+        "rebalance_snapshots": snapshots,
+        "summary": summary,
+        "diagnostics": diagnostics,
+    }
+
+
+_SUMMARY_CSV_KEYS = (
+    "periods", "final_equity", "total_return", "annualized_return",
+    "annualized_volatility", "volatility_basis", "sharpe", "sortino",
+    "calmar", "max_drawdown", "max_drawdown_days", "hit_rate",
+    "avg_selected_count", "avg_turnover", "avg_cash_weight", "total_cost",
+    "benchmark_final_equity", "benchmark_total_return", "excess_return",
+)
+
+
+def write_strategy_backtest_csv(path: str | Path, result: dict[str, Any]) -> None:
+    """导出策略回测的逐期摘要、日频净值、持仓明细和汇总指标 CSV."""
+    columns = [
+        "start_date", "end_date", "entry_date", "exit_date",
+        "period_return", "gross_return", "cost",
+        "benchmark_return", "equity", "benchmark_equity", "turnover", "cash_weight",
+        "eligible_count", "priced_count", "candidate_count", "selected_count",
+        "avg_score", "execution_timing", "selected_codes",
+    ]
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        config = result.get("config") or {}
+        if config:
+            writer.writerow(["# config"])
+            for key, value in config.items():
+                writer.writerow([key, _csv_value(value)])
+            writer.writerow([])
+        writer.writerow(columns)
+        for row in result.get("periods", []):
+            writer.writerow([
+                _csv_value(row.get("start_date")),
+                _csv_value(row.get("end_date")),
+                _csv_value(row.get("entry_date")),
+                _csv_value(row.get("exit_date")),
+                _csv_value(row.get("period_return")),
+                _csv_value(row.get("gross_return")),
+                _csv_value(row.get("cost")),
+                _csv_value(row.get("benchmark_return")),
+                _csv_value(row.get("equity")),
+                _csv_value(row.get("benchmark_equity")),
+                _csv_value(row.get("turnover")),
+                _csv_value(row.get("cash_weight")),
+                row.get("eligible_count", ""),
+                row.get("priced_count", ""),
+                row.get("candidate_count", ""),
+                row.get("selected_count", ""),
+                _csv_value(row.get("avg_score")),
+                row.get("execution_timing", ""),
+                "|".join(str(code) for code in row.get("selected_codes") or []),
+            ])
+        curve = result.get("equity_curve") or []
+        if curve:
+            writer.writerow([])
+            writer.writerow(["# equity_curve"])
+            writer.writerow(["date", "equity"])
+            for row in curve:
+                writer.writerow([_csv_value(row.get("date")), _csv_value(row.get("equity"))])
+        positions = [
+            (period, pos)
+            for period in result.get("periods", [])
+            for pos in period.get("positions", [])
+        ]
+        if positions:
+            writer.writerow([])
+            writer.writerow(["# positions"])
+            writer.writerow([
+                "period_start", "period_end", "rank", "bond_code", "bond_name",
+                "entry_date", "exit_date", "start_price", "end_price",
+                "period_return", "score", "confidence", "risk_tags",
+            ])
+            for period, pos in positions:
+                writer.writerow([
+                    _csv_value(period.get("start_date")),
+                    _csv_value(period.get("end_date")),
+                    pos.get("rank", ""),
+                    pos.get("bond_code", ""),
+                    pos.get("bond_name", ""),
+                    _csv_value(pos.get("entry_date")),
+                    _csv_value(pos.get("exit_date")),
+                    _csv_value(pos.get("start_price")),
+                    _csv_value(pos.get("end_price")),
+                    _csv_value(pos.get("period_return")),
+                    _csv_value(pos.get("score")),
+                    pos.get("confidence", ""),
+                    "|".join(str(tag) for tag in pos.get("risk_tags") or []),
+                ])
+        skipped = [
+            (period, pos)
+            for period in result.get("periods", [])
+            for pos in period.get("skipped_positions", [])
+        ]
+        if skipped:
+            writer.writerow([])
+            writer.writerow(["# skipped_positions"])
+            writer.writerow([
+                "period_start", "period_end", "bond_code", "bond_name",
+                "reason", "entry_date", "exit_date", "start_price", "end_price",
+            ])
+            for period, pos in skipped:
+                writer.writerow([
+                    _csv_value(period.get("start_date")),
+                    _csv_value(period.get("end_date")),
+                    pos.get("bond_code", ""),
+                    pos.get("bond_name", ""),
+                    pos.get("reason", ""),
+                    _csv_value(pos.get("entry_date")),
+                    _csv_value(pos.get("exit_date")),
+                    _csv_value(pos.get("start_price")),
+                    _csv_value(pos.get("end_price")),
+                ])
+        candidate_rows = [
+            (period, row)
+            for period in result.get("periods", [])
+            for row in period.get("candidate_rows", [])
+        ]
+        if candidate_rows:
+            writer.writerow([])
+            writer.writerow(["# candidate_rows"])
+            writer.writerow([
+                "period_start", "period_end", "rank", "selected", "bond_code", "bond_name",
+                "selection_reason", "score", "market_price", "deviation",
+                "conversion_premium", "sigma", "confidence", "risk_tags",
+            ])
+            for period, row in candidate_rows:
+                writer.writerow([
+                    _csv_value(period.get("start_date")),
+                    _csv_value(period.get("end_date")),
+                    row.get("rank", ""),
+                    row.get("selected", ""),
+                    row.get("bond_code", ""),
+                    row.get("bond_name", ""),
+                    row.get("selection_reason", ""),
+                    _csv_value(row.get("score")),
+                    _csv_value(row.get("market_price")),
+                    _csv_value(row.get("deviation")),
+                    _csv_value(row.get("conversion_premium")),
+                    _csv_value(row.get("sigma")),
+                    row.get("confidence", ""),
+                    "|".join(str(tag) for tag in row.get("risk_tags") or []),
+                ])
+        rejection_rows = [
+            (period, row)
+            for period in result.get("periods", [])
+            for row in period.get("rejection_rows", [])
+        ]
+        if rejection_rows:
+            writer.writerow([])
+            writer.writerow(["# rejection_rows"])
+            writer.writerow([
+                "period_start", "period_end", "source", "bond_code", "bond_name",
+                "reason", "score", "market_price", "deviation",
+                "conversion_premium", "confidence", "risk_tags",
+            ])
+            for period, row in rejection_rows:
+                writer.writerow([
+                    _csv_value(period.get("start_date")),
+                    _csv_value(period.get("end_date")),
+                    row.get("source", ""),
+                    row.get("bond_code", ""),
+                    row.get("bond_name", ""),
+                    row.get("reason", ""),
+                    _csv_value(row.get("score")),
+                    _csv_value(row.get("market_price")),
+                    _csv_value(row.get("deviation")),
+                    _csv_value(row.get("conversion_premium")),
+                    row.get("confidence", ""),
+                    "|".join(str(tag) for tag in row.get("risk_tags") or []),
+                ])
+        summary = result.get("summary") or {}
+        if summary:
+            writer.writerow([])
+            writer.writerow(["# summary"])
+            for key in _SUMMARY_CSV_KEYS:
+                writer.writerow([key, _csv_value(summary.get(key))])
+        diagnostics = result.get("diagnostics") or {}
+        if diagnostics:
+            writer.writerow([])
+            writer.writerow(["# diagnostics"])
+            data_quality = diagnostics.get("data_quality") or {}
+            for key, value in data_quality.items():
+                writer.writerow([f"data_quality.{key}", _csv_value(value)])
+            attribution = diagnostics.get("attribution") or {}
+            for key in ("total_cost", "avg_cash_weight", "skipped_positions", "cost_drag"):
+                writer.writerow([f"attribution.{key}", _csv_value(attribution.get(key))])
+            warnings = diagnostics.get("warnings") or []
+            for idx, warning in enumerate(warnings, start=1):
+                writer.writerow([f"warning.{idx}", warning])
+            performance = diagnostics.get("performance") or {}
+            for key, value in performance.items():
+                writer.writerow([f"performance.{key}", _csv_value(value)])
+            for section, rows in (
+                ("top_contributors", attribution.get("top_contributors") or []),
+                ("top_detractors", attribution.get("top_detractors") or []),
+                ("yearly_returns", diagnostics.get("yearly_returns") or []),
+                ("monthly_returns", diagnostics.get("monthly_returns") or []),
+            ):
+                if not rows:
+                    continue
+                writer.writerow([])
+                writer.writerow([f"# {section}"])
+                keys = list(rows[0].keys())
+                writer.writerow(keys)
+                for row in rows:
+                    writer.writerow([_csv_value(row.get(key)) for key in keys])
+
+
+def _slice_history(history, start: date, end: date):
+    return [
+        (d, value)
+        for d, value in history or []
+        if d is not None and start <= d <= end
+    ]
+
+
+def _provider_cache_identity(provider: DataProvider) -> str:
+    parts = [getattr(provider, "name", provider.__class__.__name__)]
+    inner = getattr(provider, "inner", None)
+    if inner is not None:
+        parts.append(_provider_cache_identity(inner))
+    for attr in ("history_store", "patch_store", "event_store"):
+        obj = getattr(provider, attr, None)
+        path = getattr(obj, "root", None) or getattr(obj, "path", None)
+        if path is not None:
+            p = Path(path)
+            try:
+                stat = p.stat()
+                parts.append(f"{attr}:{p}:{stat.st_mtime_ns}")
+            except OSError:
+                parts.append(f"{attr}:{p}:missing")
+    return "|".join(str(part) for part in parts)
+
+
+def _batch_price_with_snapshot_cache(
+    provider: DataProvider,
+    codes: list[str],
+    *,
+    snapshot_cache: dict[Any, list[dict[str, Any]]] | None,
+    stats: Counter,
+    **kwargs,
+) -> list[dict[str, Any]]:
+    if not codes:
+        return []
+    key = None
+    if snapshot_cache is not None:
+        key = _pricing_snapshot_key(provider, codes, kwargs)
+        if key in snapshot_cache:
+            stats["pricing_snapshot_hits"] += 1
+            return [_copy_pricing_row(row) for row in snapshot_cache[key]]
+    stats["pricing_snapshot_misses"] += 1
+    rows = batch_price_from_provider_threaded(provider, codes, **kwargs)
+    if snapshot_cache is not None and key is not None:
+        if len(snapshot_cache) > 256:
+            snapshot_cache.pop(next(iter(snapshot_cache)))
+        snapshot_cache[key] = [_copy_pricing_row(row) for row in rows]
+    return rows
+
+
+def _pricing_snapshot_key(
+    provider: DataProvider,
+    codes: list[str],
+    kwargs: dict[str, Any],
+) -> tuple:
+    relevant = {
+        key: value
+        for key, value in kwargs.items()
+        if key not in {"progress_cb"}
+    }
+    return (
+        _provider_cache_identity(provider),
+        tuple(codes),
+        tuple(sorted((key, _hashable_value(value)) for key, value in relevant.items())),
+    )
+
+
+def _hashable_value(value: Any):
+    if isinstance(value, (str, int, float, bool, type(None), date)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return tuple(_hashable_value(v) for v in value)
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _hashable_value(v)) for k, v in value.items()))
+    return repr(value)
+
+
+def _copy_pricing_row(row: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(row)
+    if isinstance(copied.get("risk_tags"), list):
+        copied["risk_tags"] = list(copied["risk_tags"])
+    return copied
+
+
+def _pre_filter_codes_by_price(
+    provider: DataProvider,
+    codes: list[str],
+    valuation_date: date,
+    cfg: ScoreStrategyConfig,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    if not cfg.pre_filter_prices or (cfg.min_market_price is None and cfg.max_market_price is None):
+        return codes, []
+    kept: list[str] = []
+    excluded: list[tuple[str, str]] = []
+    for code in codes:
+        point = _latest_bond_price_point(
+            provider,
+            code,
+            valuation_date,
+            lookback_days=cfg.price_lookback_days,
+            max_staleness_days=cfg.max_price_staleness_days,
+        )
+        if point is None:
+            excluded.append((code, "价格预筛: 缺少有效转债收盘价"))
+            continue
+        if not _passes_range(point.price, cfg.min_market_price, cfg.max_market_price):
+            excluded.append((code, f"价格预筛: {point.price:.2f} 不在区间内"))
+            continue
+        kept.append(code)
+    return kept, excluded
+
+
+def _eligible_codes_for_date(
+    provider: DataProvider,
+    bond_codes: list[str],
+    on_date: date,
+    *,
+    terms_cache=None,
+    admission_config: AdmissionFilterConfig | None = None,
+) -> tuple[list[str], list[tuple[str, str]], list[dict[str, Any]]]:
+    eligible: list[str] = []
+    excluded: list[tuple[str, str]] = []
+    source_diagnostics: list[dict[str, Any]] = []
+    for code in bond_codes:
+        terms = _terms_from_cache(terms_cache, code)
+        if terms is None:
+            try:
+                terms = provider.get_bond_terms(code, on_date)
+            except Exception as exc:
+                excluded.append((code, f"条款获取失败: {exc}"))
+                continue
+        source_diagnostics.append(_terms_source_diagnostic(provider, code, on_date))
+        reason = batch_pricing_exclusion_reason(
+            code,
+            terms,
+            on_date=on_date,
+            admission_config=admission_config,
+        )
+        if reason is None:
+            eligible.append(code)
+        else:
+            excluded.append((code, reason))
+    return eligible, excluded, source_diagnostics
+
+
+def _terms_source_diagnostic(
+    provider: DataProvider,
+    bond_code: str,
+    valuation_date: date,
+) -> dict[str, Any]:
+    describe = getattr(provider, "get_terms_source_diagnostics", None)
+    if callable(describe):
+        try:
+            diag = describe(bond_code, valuation_date)
+            if isinstance(diag, dict):
+                return diag
+        except Exception:
+            pass
+    return {
+        "bond_code": bond_code,
+        "valuation_date": valuation_date,
+        "terms_source": "provider",
+        "snapshot_date": None,
+        "patch_count": 0,
+        "event_count": 0,
+        "uses_current_fallback": False,
+    }
+
+
+def _period_data_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    source_counts = Counter(str(row.get("terms_source") or "unknown") for row in rows)
+    fallback_count = sum(1 for row in rows if row.get("uses_current_fallback"))
+    patch_count = sum(1 for row in rows if int(row.get("patch_count") or 0) > 0)
+    event_count = sum(1 for row in rows if int(row.get("event_count") or 0) > 0)
+    total = len(rows)
+    return {
+        "sample_count": total,
+        "source_counts": dict(source_counts),
+        "current_fallback_count": fallback_count,
+        "current_fallback_ratio": fallback_count / total if total else 0.0,
+        "patch_applied_count": patch_count,
+        "event_applied_count": event_count,
+    }
+
+
+def _terms_from_cache(terms_cache, code: str):
+    if terms_cache is None or not hasattr(terms_cache, "get"):
+        return None
+    try:
+        return terms_cache.get(code)
+    except Exception:
+        return None
+
+
+def _select_candidate_rows(rows: list[dict[str, Any]], cfg: ScoreStrategyConfig) -> list[dict[str, Any]]:
+    view = cfg.selection_view if cfg.selection_view in BATCH_REVIEW_VIEWS else "综合机会"
+    ranked = filter_batch_results_by_view(rows, view)
+    excluded_tags = set(cfg.exclude_risk_tags or ())
+    selected: list[dict[str, Any]] = []
+    for row in ranked:
+        if row.get("status") != "ok":
+            continue
+        score = finite_float(row.get("opportunity_score"))
+        if score is None:
+            continue
+        if cfg.min_score is not None and score < cfg.min_score:
+            continue
+        if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
+            continue
+        if excluded_tags and excluded_tags & set(row.get("risk_tags") or []):
+            continue
+        market_price = finite_float(row.get("market_price"))
+        if market_price is None or market_price <= 0:
+            continue
+        if not _passes_range(market_price, cfg.min_market_price, cfg.max_market_price):
+            continue
+        premium = finite_float(row.get("conversion_premium"))
+        if not _passes_range(premium, cfg.min_conversion_premium, cfg.max_conversion_premium):
+            continue
+        deviation = finite_float(row.get("deviation"))
+        if not _passes_range(deviation, cfg.min_deviation, cfg.max_deviation):
+            continue
+        sigma = finite_float(row.get("sigma"))
+        if not _passes_range(sigma, cfg.min_sigma, cfg.max_sigma):
+            continue
+        selected.append(row)
+    return selected
+
+
+def _candidate_explanation_rows(
+    candidates: list[dict[str, Any]],
+    selected_codes: list[str],
+    cfg: ScoreStrategyConfig,
+    *,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    selected_set = set(selected_codes)
+    rows: list[dict[str, Any]] = []
+    for rank, row in enumerate(candidates[:limit], start=1):
+        code = str(row.get("bond_code") or "")
+        selected = code in selected_set
+        rows.append({
+            "rank": rank,
+            "bond_code": code,
+            "bond_name": row.get("bond_name"),
+            "selected": selected,
+            "selection_reason": _candidate_selection_reason(row, rank, cfg, selected),
+            "score": finite_float(row.get("opportunity_score")),
+            "market_price": finite_float(row.get("market_price")),
+            "theoretical_price": finite_float(row.get("theoretical_price")),
+            "deviation": finite_float(row.get("deviation")),
+            "conversion_premium": finite_float(row.get("conversion_premium")),
+            "sigma": finite_float(row.get("sigma")),
+            "confidence": row.get("confidence"),
+            "risk_tags": list(row.get("risk_tags") or []),
+            "model_signal_status": row.get("model_signal_status"),
+        })
+    return rows
+
+
+def _candidate_selection_reason(
+    row: dict[str, Any],
+    rank: int,
+    cfg: ScoreStrategyConfig,
+    selected: bool,
+) -> str:
+    score = finite_float(row.get("opportunity_score"))
+    deviation = finite_float(row.get("deviation"))
+    premium = finite_float(row.get("conversion_premium"))
+    tags = [str(tag) for tag in row.get("risk_tags") or []]
+    parts = []
+    if score is not None:
+        parts.append(f"机会分 {score:.1f}")
+    if deviation is not None:
+        parts.append(f"偏差 {deviation * 100:+.1f}%")
+    if premium is not None:
+        parts.append(f"溢价 {premium * 100:+.1f}%")
+    if tags:
+        parts.append("标签 " + "/".join(tags[:3]))
+    prefix = "选中" if selected else f"落选: 排名 {rank} 超过 Top{cfg.top_n}"
+    return f"{prefix}; " + " · ".join(parts) if parts else prefix
+
+
+def _rejection_explanation_rows(
+    priced_rows: list[dict[str, Any]],
+    excluded: list[tuple[str, str]],
+    cfg: ScoreStrategyConfig,
+    *,
+    candidate_codes: set[str],
+    limit: int = 120,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for code, reason in excluded:
+        code = str(code)
+        rows.append({
+            "bond_code": code,
+            "bond_name": "",
+            "source": "准入/预筛",
+            "reason": str(reason),
+            "score": None,
+            "market_price": None,
+            "deviation": None,
+            "conversion_premium": None,
+            "confidence": "",
+            "risk_tags": [],
+        })
+        seen.add(code)
+        if len(rows) >= limit:
+            return rows
+
+    for row in filter_batch_results_by_view(priced_rows, "综合机会"):
+        code = str(row.get("bond_code") or "")
+        if not code or code in seen or code in candidate_codes:
+            continue
+        reason = _candidate_filter_reason(row, cfg)
+        if reason is None:
+            continue
+        rows.append({
+            "bond_code": code,
+            "bond_name": row.get("bond_name"),
+            "source": "筛选",
+            "reason": reason,
+            "score": finite_float(row.get("opportunity_score")),
+            "market_price": finite_float(row.get("market_price")),
+            "deviation": finite_float(row.get("deviation")),
+            "conversion_premium": finite_float(row.get("conversion_premium")),
+            "confidence": row.get("confidence"),
+            "risk_tags": list(row.get("risk_tags") or []),
+        })
+        seen.add(code)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> str | None:
+    if row.get("status") != "ok":
+        return str(row.get("error") or row.get("message") or "定价失败")
+
+    tags = set(str(tag) for tag in row.get("risk_tags") or [])
+    score = finite_float(row.get("opportunity_score"))
+    view = cfg.selection_view if cfg.selection_view in BATCH_REVIEW_VIEWS else "综合机会"
+    if view == "低估候选":
+        if score is None:
+            return "低估候选视图: 缺少机会分"
+        if score < DEFAULT_UNDERVALUED_SCORE_THRESHOLD:
+            return f"低估候选视图: 机会分 {score:.1f} < {DEFAULT_UNDERVALUED_SCORE_THRESHOLD:.1f}"
+        if row.get("confidence") not in {"高", "中"}:
+            return "低估候选视图: 置信度不足"
+        if "转股折价" in tags:
+            return "低估候选视图: 转股折价单独归类"
+        hard = tags & HARD_REVIEW_TAGS
+        if hard:
+            return "低估候选视图: 硬复核标签 " + "/".join(sorted(hard))
+    elif view == "转股折价" and "转股折价" not in tags:
+        return "转股折价视图: 未出现转股折价标签"
+    elif view == "需复核" and not (
+        tags & HARD_REVIEW_TAGS or row.get("confidence") == "低"
+    ):
+        return "需复核视图: 不属于复核池"
+
+    if score is None:
+        return "缺少机会分"
+    if cfg.min_score is not None and score < cfg.min_score:
+        return f"机会分 {score:.1f} < 最低分 {cfg.min_score:.1f}"
+    if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
+        return f"置信度 {row.get('confidence') or '—'} 不在允许范围"
+    excluded_tags = set(cfg.exclude_risk_tags or ())
+    hard = excluded_tags & tags
+    if hard:
+        return "命中排除标签 " + "/".join(sorted(hard))
+
+    market_price = finite_float(row.get("market_price"))
+    if market_price is None or market_price <= 0:
+        return "缺少有效市价"
+    reason = _range_filter_reason("价格", market_price, cfg.min_market_price, cfg.max_market_price)
+    if reason:
+        return reason
+    premium = finite_float(row.get("conversion_premium"))
+    reason = _range_filter_reason("溢价", premium, cfg.min_conversion_premium,
+                                  cfg.max_conversion_premium, pct=True)
+    if reason:
+        return reason
+    deviation = finite_float(row.get("deviation"))
+    reason = _range_filter_reason("偏差", deviation, cfg.min_deviation, cfg.max_deviation, pct=True)
+    if reason:
+        return reason
+    sigma = finite_float(row.get("sigma"))
+    reason = _range_filter_reason("HV", sigma, cfg.min_sigma, cfg.max_sigma, pct=True)
+    if reason:
+        return reason
+    return None
+
+
+def _range_filter_reason(
+    label: str,
+    value: float | None,
+    min_value: float | None,
+    max_value: float | None,
+    *,
+    pct: bool = False,
+) -> str | None:
+    if min_value is None and max_value is None:
+        return None
+    if value is None:
+        return f"缺少{label}"
+    display = value * 100.0 if pct else value
+    suffix = "%" if pct else ""
+    if min_value is not None and value < min_value:
+        threshold = min_value * 100.0 if pct else min_value
+        return f"{label} {display:.2f}{suffix} < 下限 {threshold:.2f}{suffix}"
+    if max_value is not None and value > max_value:
+        threshold = max_value * 100.0 if pct else max_value
+        return f"{label} {display:.2f}{suffix} > 上限 {threshold:.2f}{suffix}"
+    return None
+
+
+def _passes_range(value: float | None, min_value: float | None, max_value: float | None) -> bool:
+    if min_value is None and max_value is None:
+        return True
+    if value is None:
+        return False
+    if min_value is not None and value < min_value:
+        return False
+    if max_value is not None and value > max_value:
+        return False
+    return True
+
+
+def _position_returns(
+    provider: DataProvider,
+    selected: list[dict[str, Any]],
+    start_date: date,
+    end_date: date,
+    *,
+    lookback_days: int,
+    max_staleness_days: int | None = None,
+    execution_timing: str = "signal_close",
+    execution_lookahead_days: int = 10,
+    price_cache: dict[tuple, PricePoint | None] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    positions: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for rank, row in enumerate(selected, start=1):
+        code = str(row.get("bond_code"))
+        entry_point = _execution_price_point(
+            provider, code, start_date,
+            timing=execution_timing,
+            side="entry",
+            lookback_days=lookback_days,
+            max_staleness_days=max_staleness_days,
+            lookahead_days=execution_lookahead_days,
+            cache=price_cache,
+        )
+        exit_point = _execution_price_point(
+            provider, code, end_date,
+            timing=execution_timing,
+            side="exit",
+            lookback_days=lookback_days,
+            max_staleness_days=max_staleness_days,
+            lookahead_days=execution_lookahead_days,
+            cache=price_cache,
+        )
+        if entry_point is None or exit_point is None:
+            skipped.append({
+                "bond_code": code,
+                "bond_name": row.get("bond_name"),
+                "reason": _missing_execution_reason(
+                    entry_point, exit_point, execution_timing),
+                "entry_date": entry_point.date if entry_point else None,
+                "exit_date": exit_point.date if exit_point else None,
+                "start_price": entry_point.price if entry_point else None,
+                "end_price": exit_point.price if exit_point else None,
+            })
+            continue
+        ret = exit_point.price / entry_point.price - 1.0
+        positions.append({
+            "rank": rank,
+            "bond_code": code,
+            "bond_name": row.get("bond_name"),
+            "score": finite_float(row.get("opportunity_score")),
+            "confidence": row.get("confidence"),
+            "risk_tags": list(row.get("risk_tags") or []),
+            "entry_date": entry_point.date,
+            "exit_date": exit_point.date,
+            "start_price": entry_point.price,
+            "end_price": exit_point.price,
+            "period_return": ret,
+        })
+    return positions, skipped
+
+
+def _benchmark_period_return(
+    provider: DataProvider,
+    priced_rows: list[dict[str, Any]],
+    start_date: date,
+    end_date: date,
+    *,
+    lookback_days: int,
+    max_staleness_days: int | None = None,
+    execution_timing: str = "signal_close",
+    execution_lookahead_days: int = 10,
+    price_cache: dict[tuple, PricePoint | None] | None = None,
+) -> float | None:
+    """等权买下全部"通过准入且已定价"标的的区间收益, 作为筛选池基准.
+
+    成交价采用与策略相同的执行时点设置, 避免基准和策略出现不同的未来函数口径。
+    """
+    returns: list[float] = []
+    for row in priced_rows:
+        if row.get("status") != "ok":
+            continue
+        code = str(row.get("bond_code"))
+        entry_point = _execution_price_point(
+            provider, code, start_date,
+            timing=execution_timing,
+            side="entry",
+            lookback_days=lookback_days,
+            max_staleness_days=max_staleness_days,
+            lookahead_days=execution_lookahead_days,
+            cache=price_cache,
+        )
+        exit_point = _execution_price_point(
+            provider, code, end_date,
+            timing=execution_timing,
+            side="exit",
+            lookback_days=lookback_days,
+            max_staleness_days=max_staleness_days,
+            lookahead_days=execution_lookahead_days,
+            cache=price_cache,
+        )
+        if entry_point is None or exit_point is None:
+            continue
+        returns.append(exit_point.price / entry_point.price - 1.0)
+    if not returns:
+        return None
+    return float(sum(returns) / len(returns))
+
+
+def _normalize_execution_timing(value: str | None) -> str:
+    raw = (value or "signal_close").strip().lower()
+    aliases = {
+        "signal": "signal_close",
+        "same_close": "signal_close",
+        "signal_close": "signal_close",
+        "close": "signal_close",
+        "当日收盘": "signal_close",
+        "next": "next_close",
+        "next_close": "next_close",
+        "next_day_close": "next_close",
+        "下一收盘": "next_close",
+        "次日收盘": "next_close",
+    }
+    if raw not in aliases:
+        raise ValueError(f"未知成交时点: {value}")
+    return aliases[raw]
+
+
+def _execution_price_point(
+    provider: DataProvider,
+    bond_code: str,
+    signal_date: date,
+    *,
+    timing: str,
+    side: str,
+    lookback_days: int,
+    max_staleness_days: int | None,
+    lookahead_days: int,
+    cache: dict[tuple, PricePoint | None] | None = None,
+) -> PricePoint | None:
+    timing_key = _normalize_execution_timing(timing)
+    max_stale = None if max_staleness_days is None else max(0, int(max_staleness_days))
+    if timing_key == "signal_close":
+        cache_key = ("latest", bond_code, signal_date, lookback_days, max_stale)
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
+        point = _latest_bond_price_point(
+            provider, bond_code, signal_date,
+            lookback_days=lookback_days,
+            max_staleness_days=max_stale,
+        )
+    else:
+        cache_key = ("next", bond_code, signal_date, max(1, int(lookahead_days)))
+        if cache is not None and cache_key in cache:
+            return cache[cache_key]
+        point = _next_bond_price_point(
+            provider, bond_code, signal_date,
+            lookahead_days=max(1, int(lookahead_days)),
+        )
+    if cache is not None:
+        cache[cache_key] = point
+    return point
+
+
+def _missing_execution_reason(
+    entry_point: PricePoint | None,
+    exit_point: PricePoint | None,
+    execution_timing: str,
+) -> str:
+    timing = _normalize_execution_timing(execution_timing)
+    label = "下一可得收盘" if timing == "next_close" else "信号日收盘"
+    if entry_point is None and exit_point is None:
+        return f"缺少期初/期末{label}成交价或价格过旧"
+    if entry_point is None:
+        return f"缺少期初{label}成交价或价格过旧"
+    return f"缺少期末{label}成交价或价格过旧"
+
+
+def _portfolio_mark_to_market_curve(
+    provider: DataProvider,
+    positions: list[dict[str, Any]],
+    *,
+    start_equity: float,
+    period_end: date,
+    cost: float,
+    intended_count: int,
+) -> list[dict[str, Any]]:
+    """根据持仓期内可得收盘价生成组合净值点位.
+
+    等权口径与区间收益保持一致: 未能建仓的标的占用现金权重, 已建仓标的在两个
+    可得成交价之间逐日按最新收盘价估值。
+    """
+    if intended_count <= 0:
+        return [{"date": period_end, "equity": start_equity}]
+    if not positions:
+        return [{"date": period_end, "equity": start_equity * (1.0 - cost)}]
+
+    price_maps: dict[str, dict[date, float]] = {}
+    all_dates: set[date] = set()
+    for pos in positions:
+        code = str(pos.get("bond_code"))
+        entry_date = pos.get("entry_date")
+        exit_date = pos.get("exit_date")
+        entry_price = finite_float(pos.get("start_price"))
+        exit_price = finite_float(pos.get("end_price"))
+        if not isinstance(entry_date, date) or not isinstance(exit_date, date):
+            continue
+        if entry_price is None or exit_price is None:
+            continue
+        start, end = min(entry_date, exit_date), max(entry_date, exit_date)
+        series = _bond_price_map(provider, code, start, end)
+        series[entry_date] = entry_price
+        series[exit_date] = exit_price
+        price_maps[code] = series
+        all_dates.update(series)
+
+    if not price_maps:
+        return [{"date": period_end, "equity": start_equity * (1.0 - cost)}]
+
+    all_dates.add(period_end)
+    curve: list[dict[str, Any]] = []
+    for current_date in sorted(all_dates):
+        gross_return = 0.0
+        for pos in positions:
+            code = str(pos.get("bond_code"))
+            series = price_maps.get(code)
+            if not series:
+                continue
+            entry_date = pos["entry_date"]
+            exit_date = pos["exit_date"]
+            entry_price = float(pos["start_price"])
+            exit_price = float(pos["end_price"])
+            if current_date < entry_date:
+                pos_return = 0.0
+            elif current_date >= exit_date:
+                pos_return = exit_price / entry_price - 1.0
+            else:
+                mark = _latest_price_from_map(series, current_date)
+                pos_return = (mark / entry_price - 1.0) if mark is not None else 0.0
+            gross_return += pos_return / intended_count
+        curve.append({
+            "date": current_date,
+            "equity": start_equity * (1.0 + gross_return - cost),
+        })
+    return curve
+
+
+def _bond_price_map(
+    provider: DataProvider,
+    bond_code: str,
+    start: date,
+    end: date,
+) -> dict[date, float]:
+    try:
+        history = provider.get_bond_history(bond_code, start, end)
+    except Exception:
+        return {}
+    prices: dict[date, float] = {}
+    for d, value in history or []:
+        if d is None or d < start or d > end:
+            continue
+        px = finite_float(value)
+        if px is not None and px > 0:
+            prices[d] = px
+    return prices
+
+
+def _latest_price_from_map(series: dict[date, float], on_date: date) -> float | None:
+    latest_date = None
+    latest_price = None
+    for d, px in series.items():
+        if d <= on_date and (latest_date is None or d > latest_date):
+            latest_date = d
+            latest_price = px
+    return latest_price
+
+
+def _upsert_equity_points(
+    curve: list[dict[str, Any]],
+    points: list[dict[str, Any]],
+) -> None:
+    for point in points:
+        point_date = point.get("date")
+        if not isinstance(point_date, date):
+            continue
+        if not curve or point_date > curve[-1]["date"]:
+            curve.append(point)
+        elif point_date == curve[-1]["date"]:
+            curve[-1] = point
+        else:
+            for i, existing in enumerate(curve):
+                if existing["date"] == point_date:
+                    curve[i] = point
+                    break
+                if existing["date"] > point_date:
+                    curve.insert(i, point)
+                    break
+
+
+def _min_position_date(positions: list[dict[str, Any]], key: str) -> date | None:
+    vals = [p.get(key) for p in positions if isinstance(p.get(key), date)]
+    return min(vals) if vals else None
+
+
+def _max_position_date(positions: list[dict[str, Any]], key: str) -> date | None:
+    vals = [p.get(key) for p in positions if isinstance(p.get(key), date)]
+    return max(vals) if vals else None
+
+
+def _period_end_price(
+    provider: DataProvider,
+    bond_code: str,
+    on_date: date,
+    lookback_days: int,
+    cache: dict[str, float | None] | None = None,
+) -> float | None:
+    if cache is not None and bond_code in cache:
+        return cache[bond_code]
+    price = _latest_bond_price(provider, bond_code, on_date, lookback_days)
+    if cache is not None:
+        cache[bond_code] = price
+    return price
+
+
+def _latest_bond_price(
+    provider: DataProvider,
+    bond_code: str,
+    on_date: date,
+    lookback_days: int,
+) -> float | None:
+    point = _latest_bond_price_point(
+        provider, bond_code, on_date, lookback_days=lookback_days,
+        max_staleness_days=None,
+    )
+    return point.price if point else None
+
+
+def _latest_bond_price_point(
+    provider: DataProvider,
+    bond_code: str,
+    on_date: date,
+    *,
+    lookback_days: int,
+    max_staleness_days: int | None,
+) -> PricePoint | None:
+    start = on_date - timedelta(days=max(1, int(lookback_days)))
+    try:
+        history = provider.get_bond_history(bond_code, start, on_date)
+    except Exception:
+        return None
+    latest_price: float | None = None
+    latest_date: date | None = None
+    for d, value in history or []:
+        if d is None or d > on_date:
+            continue
+        px = finite_float(value)
+        if px is None:
+            continue
+        if latest_date is None or d >= latest_date:
+            latest_date = d
+            latest_price = px
+    if latest_price is None or latest_date is None:
+        return None
+    if max_staleness_days is not None and (on_date - latest_date).days > max_staleness_days:
+        return None
+    return PricePoint(date=latest_date, price=latest_price)
+
+
+def _next_bond_price_point(
+    provider: DataProvider,
+    bond_code: str,
+    signal_date: date,
+    *,
+    lookahead_days: int,
+) -> PricePoint | None:
+    end = signal_date + timedelta(days=max(1, int(lookahead_days)))
+    try:
+        history = provider.get_bond_history(bond_code, signal_date, end)
+    except Exception:
+        return None
+    best_date: date | None = None
+    best_price: float | None = None
+    for d, value in history or []:
+        if d is None or d <= signal_date:
+            continue
+        px = finite_float(value)
+        if px is None or px <= 0:
+            continue
+        if best_date is None or d < best_date:
+            best_date = d
+            best_price = px
+    if best_date is None or best_price is None:
+        return None
+    return PricePoint(date=best_date, price=best_price)
+
+
+def _summarize_strategy(
+    equity_curve: list[dict[str, Any]],
+    periods: list[dict[str, Any]],
+    *,
+    start_date: date,
+    end_date: date,
+    freq: str,
+    top_n: int,
+    risk_free_rate: float = 0.0,
+    benchmark_curve: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    final_equity = float(equity_curve[-1]["equity"]) if equity_curve else 1.0
+    total_return = final_equity - 1.0
+    years = max((end_date - start_date).days / 365.25, 0.0)
+    annualized_return = (
+        final_equity ** (1.0 / years) - 1.0
+        if years > 0 and final_equity > 0
+        else None
+    )
+    returns = [finite_float(row.get("period_return")) for row in periods]
+    period_returns = [r for r in returns if r is not None]
+    curve_returns = _equity_curve_returns(equity_curve)
+    use_curve_returns = len(curve_returns) > max(len(period_returns), 1)
+    metric_returns = curve_returns if use_curve_returns else period_returns
+    periods_per_year = 252 if use_curve_returns else _periods_per_year(freq)
+    rf_per_period = (risk_free_rate or 0.0) / periods_per_year
+    if len(metric_returns) >= 2:
+        std = float(np.std(metric_returns, ddof=1))
+        annualized_vol = std * math.sqrt(periods_per_year)
+        excess_returns = [r - rf_per_period for r in metric_returns]
+        sharpe = (
+            float(np.mean(excess_returns)) / std * math.sqrt(periods_per_year)
+            if std > 0
+            else None
+        )
+        downside = [min(0.0, r - rf_per_period) for r in metric_returns]
+        downside_dev = math.sqrt(sum(x * x for x in downside) / len(downside))
+        sortino = (
+            float(np.mean(excess_returns)) / downside_dev * math.sqrt(periods_per_year)
+            if downside_dev > 0
+            else None
+        )
+    else:
+        annualized_vol = None
+        sharpe = None
+        sortino = None
+    benchmark_final_equity = None
+    benchmark_total_return = None
+    excess_return = None
+    if benchmark_curve:
+        benchmark_final_equity = float(benchmark_curve[-1]["equity"])
+        benchmark_total_return = benchmark_final_equity - 1.0
+        excess_return = total_return - benchmark_total_return
+    selected_counts = [int(row.get("selected_count") or 0) for row in periods]
+    turnovers = [finite_float(row.get("turnover")) for row in periods]
+    finite_turnovers = [t for t in turnovers if t is not None]
+    cash_weights = [finite_float(row.get("cash_weight")) for row in periods]
+    finite_cash_weights = [w for w in cash_weights if w is not None]
+    costs = [finite_float(row.get("cost")) for row in periods]
+    finite_costs = [c for c in costs if c is not None]
+    dd_stats = _drawdown_stats(equity_curve)
+    max_drawdown = dd_stats["max_drawdown"]
+    calmar = (
+        annualized_return / max_drawdown
+        if annualized_return is not None and max_drawdown and max_drawdown > 0
+        else None
+    )
+    return {
+        "top_n": top_n,
+        "rebalance_freq": (freq or "M").upper(),
+        "periods": len(periods),
+        "final_equity": final_equity,
+        "total_return": total_return,
+        "annualized_return": annualized_return,
+        "annualized_volatility": annualized_vol,
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "calmar": calmar,
+        "volatility_basis": "daily_mtm" if use_curve_returns else "rebalance_period",
+        **dd_stats,
+        "hit_rate": (
+            sum(1 for r in period_returns if r > 0) / len(period_returns)
+            if period_returns
+            else None
+        ),
+        "avg_period_return": (
+            float(np.mean(period_returns)) if period_returns else None
+        ),
+        "avg_selected_count": (
+            sum(selected_counts) / len(selected_counts) if selected_counts else 0.0
+        ),
+        "avg_turnover": (
+            sum(finite_turnovers) / len(finite_turnovers) if finite_turnovers else None
+        ),
+        "avg_cash_weight": (
+            sum(finite_cash_weights) / len(finite_cash_weights) if finite_cash_weights else None
+        ),
+        "total_cost": sum(finite_costs) if finite_costs else 0.0,
+        "benchmark_final_equity": benchmark_final_equity,
+        "benchmark_total_return": benchmark_total_return,
+        "excess_return": excess_return,
+    }
+
+
+def _equity_curve_returns(equity_curve: list[dict[str, Any]]) -> list[float]:
+    returns: list[float] = []
+    prev_date = None
+    prev_equity = None
+    for row in sorted(equity_curve, key=lambda x: x.get("date") or date.min):
+        current_date = row.get("date")
+        equity = finite_float(row.get("equity"))
+        if not isinstance(current_date, date) or equity is None or equity <= 0:
+            continue
+        if prev_date is not None and current_date > prev_date and prev_equity and prev_equity > 0:
+            returns.append(equity / prev_equity - 1.0)
+        prev_date = current_date
+        prev_equity = equity
+    return returns
+
+
+def _build_strategy_diagnostics(
+    equity_curve: list[dict[str, Any]],
+    periods: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    data_quality = _summarize_data_quality(periods)
+    attribution = _strategy_attribution(periods)
+    diagnostics = {
+        "data_quality": data_quality,
+        "attribution": attribution,
+        "yearly_returns": _calendar_return_table(equity_curve, "Y"),
+        "monthly_returns": _calendar_return_table(equity_curve, "M"),
+    }
+    diagnostics["warnings"] = _strategy_warnings(summary, data_quality, attribution)
+    return diagnostics
+
+
+def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
+    source_counts: Counter = Counter()
+    total = 0
+    fallback = 0
+    patch_applied = 0
+    event_applied = 0
+    for period in periods:
+        dq = period.get("data_quality") or {}
+        count = int(dq.get("sample_count") or 0)
+        total += count
+        fallback += int(dq.get("current_fallback_count") or 0)
+        patch_applied += int(dq.get("patch_applied_count") or 0)
+        event_applied += int(dq.get("event_applied_count") or 0)
+        for key, value in (dq.get("source_counts") or {}).items():
+            source_counts[str(key)] += int(value or 0)
+    return {
+        "sample_count": total,
+        "source_counts": dict(source_counts),
+        "current_fallback_count": fallback,
+        "current_fallback_ratio": fallback / total if total else 0.0,
+        "patch_applied_count": patch_applied,
+        "event_applied_count": event_applied,
+    }
+
+
+def _strategy_attribution(periods: list[dict[str, Any]]) -> dict[str, Any]:
+    by_code: dict[str, dict[str, Any]] = {}
+    skipped = 0
+    costs = []
+    cash_weights = []
+    for period in periods:
+        selected_count = int(period.get("selected_count") or 0)
+        costs.append(finite_float(period.get("cost")) or 0.0)
+        cash_weights.append(finite_float(period.get("cash_weight")) or 0.0)
+        skipped += len(period.get("skipped_positions") or [])
+        for pos in period.get("positions") or []:
+            code = str(pos.get("bond_code") or "")
+            if not code:
+                continue
+            contribution = finite_float(pos.get("return_contribution"))
+            if contribution is None:
+                weight = 1.0 / selected_count if selected_count > 0 else 0.0
+                contribution = (finite_float(pos.get("period_return")) or 0.0) * weight
+            bucket = by_code.setdefault(code, {
+                "bond_code": code,
+                "bond_name": pos.get("bond_name") or "",
+                "contribution": 0.0,
+                "holding_periods": 0,
+                "wins": 0,
+                "losses": 0,
+            })
+            bucket["contribution"] += contribution
+            bucket["holding_periods"] += 1
+            ret = finite_float(pos.get("period_return")) or 0.0
+            if ret > 0:
+                bucket["wins"] += 1
+            elif ret < 0:
+                bucket["losses"] += 1
+    ranked = sorted(by_code.values(), key=lambda x: float(x["contribution"]), reverse=True)
+    return {
+        "total_cost": sum(costs),
+        "cost_drag": -sum(costs),
+        "avg_cash_weight": sum(cash_weights) / len(cash_weights) if cash_weights else None,
+        "skipped_positions": skipped,
+        "top_contributors": ranked[:10],
+        "top_detractors": list(reversed(ranked[-10:])) if ranked else [],
+    }
+
+
+def _calendar_return_table(equity_curve: list[dict[str, Any]], granularity: str) -> list[dict[str, Any]]:
+    rows = sorted(
+        (
+            (row.get("date"), finite_float(row.get("equity")))
+            for row in equity_curve
+        ),
+        key=lambda x: x[0] or date.min,
+    )
+    grouped: dict[str, float] = {}
+    prev_date = None
+    prev_equity = None
+    for current_date, equity in rows:
+        if not isinstance(current_date, date) or equity is None or equity <= 0:
+            continue
+        if prev_date is not None and current_date > prev_date and prev_equity and prev_equity > 0:
+            key = (
+                f"{current_date.year}"
+                if granularity.upper() == "Y"
+                else f"{current_date.year}-{current_date.month:02d}"
+            )
+            grouped[key] = (1.0 + grouped.get(key, 0.0)) * (equity / prev_equity) - 1.0
+        prev_date = current_date
+        prev_equity = equity
+    return [
+        {"period": key, "return": value}
+        for key, value in sorted(grouped.items())
+    ]
+
+
+def _strategy_warnings(
+    summary: dict[str, Any],
+    data_quality: dict[str, Any],
+    attribution: dict[str, Any],
+) -> list[str]:
+    warnings: list[str] = []
+    fallback_ratio = finite_float(data_quality.get("current_fallback_ratio")) or 0.0
+    if fallback_ratio > 0.2:
+        warnings.append(f"{fallback_ratio*100:.0f}% 条款样本使用当前数据回退, 需警惕未来函数")
+    max_drawdown = finite_float(summary.get("max_drawdown")) or 0.0
+    if max_drawdown > 0.2:
+        warnings.append(f"最大回撤 {max_drawdown*100:.1f}%, 需要检查回撤区间持仓")
+    avg_turnover = finite_float(summary.get("avg_turnover")) or 0.0
+    if avg_turnover > 0.8:
+        warnings.append(f"平均换手 {avg_turnover*100:.0f}%, 对成本和流动性敏感")
+    avg_cash = finite_float(summary.get("avg_cash_weight")) or 0.0
+    if avg_cash > 0.2:
+        warnings.append(f"平均现金权重 {avg_cash*100:.0f}%, 策略条件可能过严或成交数据不足")
+    skipped = int(attribution.get("skipped_positions") or 0)
+    if skipped > 0:
+        warnings.append(f"{skipped} 个入选仓位因缺成交价被现金替代")
+    total_cost = finite_float(summary.get("total_cost")) or 0.0
+    if total_cost > 0.03:
+        warnings.append(f"累计交易成本约 {total_cost*100:.1f}%, 需评估滑点和费率假设")
+    return warnings
+
+
+def _drawdown_stats(equity_curve: list[dict[str, Any]]) -> dict[str, Any]:
+    peak = -math.inf
+    peak_date = None
+    max_dd = 0.0
+    max_start = None
+    max_end = None
+    longest_days = 0
+    active_start = None
+    last_valid_date = None
+    for row in sorted(equity_curve, key=lambda x: x.get("date") or date.min):
+        current_date = row.get("date")
+        equity = finite_float(row.get("equity"))
+        if not isinstance(current_date, date) or equity is None or equity <= 0:
+            continue
+        last_valid_date = current_date
+        if equity >= peak:
+            if active_start is not None:
+                longest_days = max(longest_days, (current_date - active_start).days)
+                active_start = None
+            peak = equity
+            peak_date = current_date
+            continue
+        if peak <= 0:
+            continue
+        if active_start is None:
+            active_start = peak_date
+        dd = 1.0 - equity / peak
+        if dd > max_dd:
+            max_dd = dd
+            max_start = peak_date
+            max_end = current_date
+    if active_start is not None and last_valid_date is not None:
+        longest_days = max(longest_days, (last_valid_date - active_start).days)
+    return {
+        "max_drawdown": max_dd,
+        "max_drawdown_start": max_start,
+        "max_drawdown_end": max_end,
+        "max_drawdown_days": (
+            (max_end - max_start).days
+            if isinstance(max_start, date) and isinstance(max_end, date)
+            else 0
+        ),
+        "longest_drawdown_days": longest_days,
+    }
+
+
+def _equal_weight_turnover(previous_codes: list[str], current_codes: list[str]) -> float:
+    if not previous_codes and not current_codes:
+        return 0.0
+    if not previous_codes or not current_codes:
+        return 1.0
+    prev_weight = {code: 1.0 / len(previous_codes) for code in previous_codes}
+    curr_weight = {code: 1.0 / len(current_codes) for code in current_codes}
+    codes = set(prev_weight) | set(curr_weight)
+    return 0.5 * sum(abs(curr_weight.get(code, 0.0) - prev_weight.get(code, 0.0)) for code in codes)
+
+
+def _max_drawdown(equities: list[float]) -> float:
+    peak = -math.inf
+    max_dd = 0.0
+    for equity in equities:
+        if equity > peak:
+            peak = equity
+        if peak > 0:
+            max_dd = max(max_dd, 1.0 - equity / peak)
+    return max_dd
+
+
+def _periods_per_year(freq: str) -> int:
+    return {
+        "D": 252,
+        "W": 52,
+        "M": 12,
+        "Q": 4,
+    }.get((freq or "M").upper(), 12)
+
+
+def _last_weekday_of_month(year: int, month: int) -> date:
+    if month == 12:
+        d = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        d = date(year, month + 1, 1) - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _csv_value(value: Any):
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, float):
+        return "" if math.isnan(value) else f"{value:.8f}"
+    if value is None:
+        return ""
+    return value

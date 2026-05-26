@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .data_providers import BondTerms, _add_months, to_date
@@ -35,6 +35,15 @@ from .paths import data_path
 logger = logging.getLogger(__name__)
 
 DEFAULT_COOLDOWN_MONTHS = 6  # 多数 A 股转债募集说明书写 6 个月, 缺失时的兜底
+# 已提议下修改用"一次性近确定下修节点"建模 (见 resolve_down_reset_intensity)。
+# 经 cb_events 历史校准 (cli/calibrate_down_reset): 提议→通过通过率≈100% (含未决保守口径 83%),
+# 提议→通过滞后中位 17 天。旧的"已提议 × 倍数"语义已被 scheduled reset 取代。
+PROPOSED_PASS_PROB = 0.9  # 董事会提议后被股东会通过的概率 (校准: 有终态 100% / 含未决 83%)
+PROPOSED_EFFECTIVE_LAG_DAYS = 17  # 提议公告 → 通过公告的滞后 (校准: 中位 17 / 均值 19 天)
+# 已通过待生效 (approved-pending): 股东会已通过、新转股价尚未到生效日的窗口。
+# 下修已是定局, 通过率视为 1.0; 公告未给生效日时按这个滞后兜底估算。
+APPROVED_PASS_PROB = 1.0  # 已通过 → 下修必然落地
+APPROVED_EFFECTIVE_LAG_DAYS = 7  # 通过公告 → 新转股价生效的滞后 (登记日次日, 缺失时兜底)
 
 
 def project_overrides_path() -> Path:
@@ -49,6 +58,93 @@ class ResolvedDownReset:
     note: str | None
     cooldown_months: float | None
     announce_date: date | None
+    proposal_date: date | None = None
+    # 已通过待生效: 股东会通过、新转股价尚未到生效日 (生效日 > 估值日才置位, 防双计)。
+    approved_date: date | None = None
+    approved_effective_date: date | None = None
+    # 公告里解析到的下修后新转股价 (元/股); 缺失时定价回落到下限/premium 估算。
+    announced_new_k: float | None = None
+
+
+@dataclass(frozen=True)
+class DownResetIntensity:
+    """下修强度的基础值与事件调整后模型值.
+
+    block_until 不在这里归零: 冻结窗口由 pricer 的
+    ``down_reset_block_until`` 在时间维度上处理; effective_p_down 表示窗口外
+    模型会采用的年化下修强度 (背景 hazard)。
+
+    已公告下修 (已提议 / 已通过待生效) 不叠加到 effective_p_down, 而是输出一个
+    ``scheduled_reset_*`` 一次性下修节点, 由 pricer 在预期生效日附近近确定地施加。
+    ``scheduled_reset_kind`` 区分 "proposed"(待股东会) 与 "approved"(已通过待生效)。
+    """
+    base_p_down: float
+    effective_p_down: float
+    p_scale: float | None
+    redemption_mode: bool = False
+    scheduled_reset_date: date | None = None
+    scheduled_reset_prob: float = 0.0
+    scheduled_reset_kind: str | None = None  # "proposed" | "approved" | None
+    scheduled_reset_target_k: float | None = None  # 公告新 K; None 时 pricer 用下限/premium 估算
+
+
+def resolve_down_reset_intensity(
+    base_p_down: float,
+    resolved: ResolvedDownReset | None,
+    *,
+    p_scale_override: float | None = None,
+    redemption_mode: bool = False,
+) -> DownResetIntensity:
+    """把基础 p_down 与公告事件合成为模型实际强度.
+
+    背景态: effective_p_down = base · p_scale (年化 hazard)。
+    已公告态: 不再抬升背景强度, 而是输出一次性下修节点
+    (scheduled_reset_*), 由 pricer 在预期生效日附近近确定地施加。两种子态:
+      - proposed (待股东会): 生效日 ≈ 提议日 + PROPOSED_EFFECTIVE_LAG_DAYS,
+        概率 = PROPOSED_PASS_PROB。
+      - approved (已通过待生效): 生效日 = resolved.approved_effective_date,
+        概率 = APPROVED_PASS_PROB (≈1); 已通过优先于已提议。
+    强赎模式: 背景强度与已公告节点都归零 (终点已是赎回/转股二择一)。
+    """
+    base = max(0.0, float(base_p_down))
+    p = base
+    p_scale = p_scale_override
+    if p_scale is None:
+        p_scale = getattr(resolved, "p_scale", None)
+    if p_scale is not None:
+        p *= max(0.0, float(p_scale))
+    scheduled_reset_date: date | None = None
+    scheduled_reset_prob = 0.0
+    scheduled_reset_kind: str | None = None
+    proposal_date = getattr(resolved, "proposal_date", None)
+    approved_effective = getattr(resolved, "approved_effective_date", None)
+    announced_new_k = getattr(resolved, "announced_new_k", None)
+    scheduled_reset_target_k = None
+    if not redemption_mode:
+        # 已通过待生效优先 (更确定); 否则用已提议节点。
+        if approved_effective is not None:
+            scheduled_reset_date = approved_effective
+            scheduled_reset_prob = APPROVED_PASS_PROB
+            scheduled_reset_kind = "approved"
+        elif proposal_date is not None:
+            scheduled_reset_date = proposal_date + timedelta(days=PROPOSED_EFFECTIVE_LAG_DAYS)
+            scheduled_reset_prob = PROPOSED_PASS_PROB
+            scheduled_reset_kind = "proposed"
+        if scheduled_reset_kind is not None and announced_new_k is not None:
+            scheduled_reset_target_k = float(announced_new_k)
+
+    if redemption_mode:
+        p = 0.0
+    return DownResetIntensity(
+        base_p_down=base,
+        effective_p_down=p,
+        p_scale=p_scale,
+        redemption_mode=redemption_mode,
+        scheduled_reset_date=scheduled_reset_date,
+        scheduled_reset_prob=scheduled_reset_prob,
+        scheduled_reset_kind=scheduled_reset_kind,
+        scheduled_reset_target_k=scheduled_reset_target_k,
+    )
 
 
 class DownResetOverrides:
@@ -145,16 +241,32 @@ def resolve_down_reset(
 
     p_scale: 事件层 ``p_scale_after_cooldown`` 优先, 否则用 ``terms.down_reset_p_scale``.
     """
-    ov = (overrides or default_overrides()).get(bond_code) or {}
-    announce_date = to_date(ov.get("announce_date")) if ov else None
+    raw_ov = (overrides or default_overrides()).get(bond_code) or {}
+    announce_date = to_date(raw_ov.get("announce_date")) if raw_ov else None
+    # 历史回测不能看到估值日之后才公告的手工覆盖。没有 announce_date 的旧式
+    # 覆盖无法判定生效日, 仍按显式人工参数处理。
+    if announce_date is not None and valuation_date is not None and announce_date > valuation_date:
+        ov = {}
+        announce_date = None
+    else:
+        ov = raw_ov
     event_block_until = None
     event_cooldown = None
     event_note = None
+    proposal_date = None
+    approved_date = None
+    approved_effective_date = None
+    announced_new_k = None
+    down_events = []
+    try:
+        from .cb_events import events_for_down_reset
+        down_events = events_for_down_reset(bond_code, through_date=valuation_date)
+    except Exception:
+        down_events = []
     if announce_date is None:
         try:
-            from .cb_events import events_for_down_reset
             rejected = [
-                e for e in events_for_down_reset(bond_code, through_date=valuation_date)
+                e for e in down_events
                 if e.event_type == "down_reset_rejected"
             ]
             if rejected:
@@ -165,6 +277,38 @@ def resolve_down_reset(
                 event_note = latest.raw_title
         except Exception:
             event_note = None
+    proposed = [e for e in down_events if e.event_type == "down_reset_proposed"]
+    terminal = [
+        e for e in down_events
+        if e.event_type in {"down_reset_rejected", "down_reset_approved"}
+    ]
+    if proposed:
+        latest_proposed = max(proposed, key=lambda e: e.event_date)
+        latest_terminal = max(terminal, key=lambda e: e.event_date) if terminal else None
+        if latest_terminal is None or latest_proposed.event_date > latest_terminal.event_date:
+            proposal_date = latest_proposed.event_date
+            announced_new_k = getattr(latest_proposed, "event_price", None)
+
+    # 已通过待生效: 通过事件是最新下修事件, 且新转股价生效日仍在估值日之后。
+    # 生效日已过的下修走条款刷新, 不在此叠加 (防双计)。公告未给生效日时按滞后兜底估算。
+    approved = [e for e in down_events if e.event_type == "down_reset_approved"]
+    if approved:
+        latest_approved = max(approved, key=lambda e: e.event_date)
+        is_latest = all(
+            latest_approved.event_date >= e.event_date
+            for e in down_events if e is not latest_approved
+        )
+        if is_latest:
+            eff = latest_approved.effective_end or latest_approved.effective_start
+            if eff is None:
+                eff = latest_approved.event_date + timedelta(days=APPROVED_EFFECTIVE_LAG_DAYS)
+            cmp_date = valuation_date or date.today()
+            if eff > cmp_date:
+                approved_date = latest_approved.event_date
+                approved_effective_date = eff
+                # 已通过覆盖同券更早的"已提议"节点
+                proposal_date = None
+                announced_new_k = getattr(latest_approved, "event_price", None)
 
     cooldown = event_cooldown if event_cooldown is not None else terms.down_reset_cooldown_months
     if announce_date is not None and event_block_until is None and cooldown is None:
@@ -198,6 +342,12 @@ def resolve_down_reset(
         note_parts.append(str(ov["note"]))
     if event_note:
         note_parts.append(str(event_note))
+    if proposal_date is not None:
+        note_parts.append(f"proposal={proposal_date.isoformat()}")
+    if approved_effective_date is not None:
+        note_parts.append(f"approved_effective={approved_effective_date.isoformat()}")
+    if announced_new_k is not None:
+        note_parts.append(f"new_k={announced_new_k:g}")
     if terms.down_reset_note:
         note_parts.append(terms.down_reset_note)
     note = " | ".join(note_parts) if note_parts else None
@@ -208,4 +358,8 @@ def resolve_down_reset(
         note=note,
         cooldown_months=cooldown,
         announce_date=announce_date,
+        proposal_date=proposal_date,
+        approved_date=approved_date,
+        approved_effective_date=approved_effective_date,
+        announced_new_k=announced_new_k,
     )

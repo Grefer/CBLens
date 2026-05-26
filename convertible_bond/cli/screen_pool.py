@@ -1,9 +1,8 @@
-"""查看 cb_data 批量定价主池准入筛选报告.
+"""查看 cb_data 批量定价公开交易主池报告.
 
 用法:
     python -m convertible_bond.cli.screen_pool
-    python -m convertible_bond.cli.screen_pool --min-rating AA- --min-balance 1
-    python -m convertible_bond.cli.screen_pool --min-turnover 10000000 --show-excluded 50
+    python -m convertible_bond.cli.screen_pool --show-excluded 50
 """
 from __future__ import annotations
 
@@ -11,26 +10,36 @@ import argparse
 import sys
 from pathlib import Path
 
-from ..batch_pricing import AdmissionFilterConfig, screen_batch_pool_from_cache
+from ..batch_pricing import (
+    AdmissionFilterConfig,
+    DEFAULT_MIN_CREDIT_RATING,
+    DEFAULT_MIN_OUTSTANDING_BALANCE,
+    screen_batch_pool_from_cache,
+)
 from ..cache import TermsBundle, project_bundle_path
 
 
 def main() -> int:
+    default_min_balance = (
+        DEFAULT_MIN_OUTSTANDING_BALANCE
+        if DEFAULT_MIN_OUTSTANDING_BALANCE is not None
+        else -1.0
+    )
     parser = argparse.ArgumentParser(
-        description="查看批量定价前的主池准入筛选报告",
+        description="查看批量定价前的公开交易主池报告",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("--bundle", "-b", default="",
                         help="cb_data bundle 路径 (默认 <repo>/data/cb_data.json)")
-    parser.add_argument("--delist-window", type=int, default=30,
-                        help="临近摘牌/到期剔除窗口天数 (默认 30)")
-    parser.add_argument("--min-balance", type=float, default=0.5,
-                        help="最低剩余余额, 单位亿; 负数表示关闭该过滤 (默认 0.5)")
-    parser.add_argument("--min-rating", default="A+",
-                        help="最低信用评级; 留空表示关闭该过滤 (默认 A+)")
+    parser.add_argument("--delist-window", type=int, default=0,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--min-balance", type=float, default=default_min_balance,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--min-rating", default=DEFAULT_MIN_CREDIT_RATING or "",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--min-turnover", type=float, default=-1.0,
-                        help="最低成交额, 单位跟随数据源; 负数表示关闭该过滤")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--show-excluded", type=int, default=20,
                         help="展示被剔除明细数量 (默认 20)")
     args = parser.parse_args()

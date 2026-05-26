@@ -1,9 +1,11 @@
 import csv
 import math
+from dataclasses import replace
 from datetime import date
 
 import pytest
 
+from convertible_bond import batch_pricing
 from convertible_bond.batch_pricing import (
     AdmissionFilterConfig,
     BATCH_RESULT_COLUMNS,
@@ -94,7 +96,36 @@ def test_list_batch_codes_from_cache_filters_nonstandard_private_bonds():
     ) == "已到期"
 
 
-def test_batch_pricing_exclusion_reason_applies_admission_filters():
+def test_split_batch_codes_from_cache_applies_projected_terms(monkeypatch):
+    class FakeTermsCache:
+        data = {
+            "113001.SH": BondTerms(sec_name="事件终止债"),
+            "113002.SH": BondTerms(sec_name="正常债"),
+        }
+
+        def list_bonds(self):
+            return list(self.data)
+
+        def get(self, code):
+            return self.data[code]
+
+    def fake_project(code, terms, on_date, **_kwargs):
+        if code == "113001.SH":
+            return replace(terms, last_trading_date=date(2026, 5, 1))
+        return terms
+
+    monkeypatch.setattr(batch_pricing, "_project_terms_for_admission", fake_project)
+
+    kept, excluded = split_batch_codes_from_cache(
+        FakeTermsCache(),
+        on_date=date(2026, 5, 20),
+    )
+
+    assert kept == ["113002.SH"]
+    assert excluded == [("113001.SH", "已过最后交易日")]
+
+
+def test_batch_pricing_exclusion_reason_blocks_hard_risks():
     check_date = date(2026, 4, 28)
 
     assert batch_pricing_exclusion_reason(
@@ -109,19 +140,29 @@ def test_batch_pricing_exclusion_reason_applies_admission_filters():
     ) == "停牌/暂停交易"
     assert batch_pricing_exclusion_reason(
         "113050.SH",
+        BondTerms(sec_name="南银转债", last_trading_date=date(2026, 4, 27)),
+        on_date=check_date,
+    ) == "已过最后交易日"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", trading_status="退市"),
+        on_date=check_date,
+    ) == "已退市"
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
         {"sec_name": "南银转债", "call_status": "已公告强赎"},
         on_date=check_date,
-    ) == "已公告强赎"
+    ) is None
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", call_redemption_date=date(2026, 5, 6)),
         on_date=check_date,
-    ) == "已公告强赎"
+    ) is None
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", last_trading_date=date(2026, 5, 10)),
         on_date=check_date,
-    ) == "临近摘牌"
+    ) is None
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", underlying_name="*ST 测试"),
@@ -312,10 +353,34 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
     assert "转股折价" in row["risk_tags"]
     assert "高HV" in row["risk_tags"]
     assert row["confidence"] in {"中", "低"}
+    assert row["model_signal_status"] == "不适合作为买入信号"
     assert row["sensitivity_status"] == "波动率敏感"
     assert row["review_bucket"] == "需复核"
     assert row["review_notes"]
     assert math.isfinite(row["opportunity_score"])
+
+
+def test_annotate_batch_result_flags_underlying_risk_and_down_uplift():
+    row = annotate_batch_result({
+        "bond_code": "110081.SH",
+        "status": "ok",
+        "S0": 18.0,
+        "K": 30.0,
+        "sigma": 0.35,
+        "theoretical_price": 110.0,
+        "no_down_price": 98.0,
+        "market_price": 90.0,
+        "deviation": -0.1818,
+        "credit_rating": "AA",
+        "outstanding_balance": 20.0,
+        "T": 1.5,
+        "underlying_status": "ST/退市风险",
+    })
+
+    assert row["down_reset_uplift"] == pytest.approx(12.0)
+    assert "正股风险" in row["risk_tags"]
+    assert "下修贡献高" in row["risk_tags"]
+    assert row["model_signal_status"] == "不适合作为买入信号"
 
 
 def test_sort_batch_results_for_review_penalizes_noisy_deviation():

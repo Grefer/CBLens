@@ -103,6 +103,49 @@ class TestRegression:
                                distress_k=0.05, p_down=0.15, M=200, N=500)
         assert p1 >= p0, f"p_down=0.15 价格 {p1:.3f} 应 >= p_down=0 价格 {p0:.3f}"
 
+    def test_down_reset_trigger_ratio_gates_p_down_value(self):
+        """下修触发线低于 K 时, 同样 p_down 的下修价值应更保守."""
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        p0 = UniversalCBPricer(**kwargs).price(
+            sigma=0.28, r=0.022, base_spread=0.03,
+            distress_k=0.05, p_down=0.0, M=200, N=500)
+        old_gate = UniversalCBPricer(**kwargs, down_reset_trigger_ratio=1.0).price(
+            sigma=0.28, r=0.022, base_spread=0.03,
+            distress_k=0.05, p_down=0.30, M=200, N=500)
+        strict_gate = UniversalCBPricer(**kwargs, down_reset_trigger_ratio=0.85).price(
+            sigma=0.28, r=0.022, base_spread=0.03,
+            distress_k=0.05, p_down=0.30, M=200, N=500)
+
+        assert old_gate >= strict_gate >= p0
+
+    def test_flat_below_trigger_resets_near_trigger(self):
+        """纯触发后(flat): 股价刚跌破触发线就应获得明确下修价值,
+
+        不像旧的 S 渐变那样在触发线附近趋近于 0。
+        """
+        kwargs = dict(
+            S0=51.0, K=52.77,  # S/K≈0.97, 刚跌破触发线 (trigger_ratio=1.0)
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+            down_reset_trigger_ratio=1.0,
+        )
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, M=300, N=800)
+        p0 = UniversalCBPricer(**kwargs).price(p_down=0.0, **price_kw)
+        p1 = UniversalCBPricer(**kwargs).price(p_down=0.30, **price_kw)
+        # flat 下方 uplift≈1.2; 旧渐变在 S/K=0.97 处只有 ~0.04
+        assert p1 - p0 > 0.5, f"近触发线下修价值 {p1 - p0:.3f} 过小, 疑似仍在用 S 渐变"
+
     def test_p_down_is_time_step_scaled(self):
         """p_down 应按时间步缩放, 不应随 PDE 网格 N 加密而被重复放大."""
         kwargs = dict(
@@ -144,6 +187,142 @@ class TestRegression:
                                          distress_k=0.05, p_down=0.15, M=300, N=1000)
 
         assert p_blocked <= p_open
+
+    def test_scheduled_reset_raises_otm_price(self):
+        """已提议下修 (一次性近确定下修节点) 应抬升 OTM 转债价值."""
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, M=200, N=500)
+        no_sched = UniversalCBPricer(**kwargs).price(**price_kw)
+        with_sched = UniversalCBPricer(
+            **kwargs,
+            scheduled_reset_date=date(2025, 3, 1),
+            scheduled_reset_prob=0.9,
+        ).price(**price_kw)
+        assert with_sched > no_sched, (
+            f"已提议下修价 {with_sched:.3f} 应高于无提议 {no_sched:.3f}")
+
+    def test_scheduled_reset_prob_monotonic(self):
+        """一次性下修节点的价值应随通过率单调上升."""
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, M=200, N=500)
+        prices = [
+            UniversalCBPricer(
+                **kwargs, scheduled_reset_date=date(2025, 3, 1),
+                scheduled_reset_prob=p).price(**price_kw)
+            for p in (0.0, 0.5, 1.0)
+        ]
+        assert prices[0] <= prices[1] <= prices[2]
+
+    def test_scheduled_reset_beyond_maturity_ignored(self):
+        """生效日晚于到期日的一次性下修节点应被忽略, 不影响定价."""
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, M=200, N=500)
+        base = UniversalCBPricer(**kwargs).price(**price_kw)
+        beyond = UniversalCBPricer(
+            **kwargs, scheduled_reset_date=date(2027, 1, 1),
+            scheduled_reset_prob=0.9).price(**price_kw)
+        assert beyond == pytest.approx(base)
+
+    def test_scheduled_reset_target_k_noop_when_equals_current_k(self):
+        """目标 K == 现 K (下修已落地) 时, 一次性节点应近似 no-op (防与条款刷新双计)."""
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, M=300, N=800)
+        no_node = UniversalCBPricer(**kwargs).price(**price_kw)
+        same_k = UniversalCBPricer(
+            **kwargs, scheduled_reset_date=date(2025, 6, 1),
+            scheduled_reset_prob=1.0, scheduled_reset_target_k=52.77,
+        ).price(**price_kw)
+        assert same_k == pytest.approx(no_node, abs=0.05)
+
+    def test_scheduled_reset_target_k_lower_raises_value(self):
+        """公告新 K 更低时, 已公告节点应抬升 OTM 价值 (优于无节点)."""
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, M=300, N=800)
+        no_node = UniversalCBPricer(**kwargs).price(**price_kw)
+        low_k = UniversalCBPricer(
+            **kwargs, scheduled_reset_date=date(2025, 6, 1),
+            scheduled_reset_prob=1.0, scheduled_reset_target_k=42.0,
+        ).price(**price_kw)
+        assert low_k > no_node
+
+    def test_down_reset_floor_caps_reset_value(self):
+        """下修价下限绑定时, 下修博弈价值不应高于无下限近似."""
+        kwargs = dict(
+            S0=18.0, K=30.0,
+            current_date=date(2026, 4, 28),
+            maturity_date=date(2028, 11, 28),
+            issue_date=date(2022, 12, 22),
+            conversion_start_date=date(2023, 6, 20),
+            redemption_price=115.0,
+        )
+        no_floor = UniversalCBPricer(**kwargs).price(
+            sigma=0.55, r=0.022, base_spread=0.03,
+            distress_k=0.05, p_down=0.50, M=160, N=400)
+        with_floor = UniversalCBPricer(**kwargs, down_reset_floor=25.0).price(
+            sigma=0.55, r=0.022, base_spread=0.03,
+            distress_k=0.05, p_down=0.50, M=160, N=400)
+
+        assert with_floor <= no_floor
+
+    def test_explicit_putback_window_sets_price_floor(self):
+        """已公告回售申报期内, 回售价应成为全状态价格底."""
+        pricer = UniversalCBPricer(
+            S0=80.0, K=120.0,
+            current_date=date(2026, 6, 2),
+            maturity_date=date(2027, 6, 2),
+            issue_date=date(2022, 6, 2),
+            conversion_start_date=date(2022, 12, 2),
+            putback_start_date=date(2026, 6, 1),
+            putback_end_date=date(2026, 6, 5),
+            putback_price=101.2,
+            redemption_price=107.0,
+        )
+
+        price = pricer.price(
+            sigma=0.20, r=0.022, base_spread=0.08,
+            distress_k=0.0, p_down=0.0, M=120, N=300)
+
+        assert price >= 101.2
 
 
 # ── 2. 边界条件 ──────────────────────────────────────────
@@ -899,6 +1078,146 @@ class TestPriceFromProvider:
 
         assert result["down_reset_block_until"] == date(2025, 10, 1)
         assert "新公告" in result["down_reset_note"]
+
+    def test_price_from_provider_schedules_reset_for_active_proposal(self, fake_provider, tmp_path, monkeypatch):
+        """董事会已提议下修但未落地/否决时, 单只定价应输出一次性下修节点 (regime ②),
+
+        而不再把背景 hazard 抬升数倍: effective_p_down 保持背景值, 另给出
+        scheduled_reset_date (提议日 + 表决滞后) 与 scheduled_prob (通过率)。
+        """
+        from convertible_bond import cb_events as cbe
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        store = cbe.CBEventStore(tmp_path / "cb_events.json")
+        store.add_many([
+            cbe.CBEvent(
+                bond_code="123001.SZ",
+                event_date=date(2025, 8, 1),
+                event_type="down_reset_proposed",
+                raw_title="关于董事会提议向下修正测试转债转股价格的公告",
+            ),
+        ])
+        monkeypatch.setattr(cbe, "_default_event_store", store)
+        monkeypatch.setattr(
+            dro,
+            "_default_overrides",
+            dro.DownResetOverrides(tmp_path / "down_reset_overrides.json"),
+        )
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_proposed_date"] == date(2025, 8, 1)
+        # 背景强度不再被 ×3 抬升
+        assert result["base_p_down"] == pytest.approx(0.15)
+        assert result["effective_p_down"] == pytest.approx(0.15)
+        assert result["p_down"] == pytest.approx(0.15)
+        # 一次性下修节点: 提议日 + PROPOSED_EFFECTIVE_LAG_DAYS, 概率 = PROPOSED_PASS_PROB
+        assert result["down_reset_scheduled_date"] == (
+            date(2025, 8, 1) + timedelta(days=dro.PROPOSED_EFFECTIVE_LAG_DAYS))
+        assert result["down_reset_scheduled_prob"] == pytest.approx(dro.PROPOSED_PASS_PROB)
+        assert result["down_reset_scheduled_kind"] == "proposed"
+
+    def test_price_from_provider_schedules_reset_for_approved_pending(self, fake_provider, tmp_path, monkeypatch):
+        """已通过但新转股价尚未生效时, 应输出 kind=approved 的近确定下修节点 (生效日 > 估值日)。"""
+        from convertible_bond import cb_events as cbe
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider  # end = 2025-08-31
+        store = cbe.CBEventStore(tmp_path / "cb_events.json")
+        store.add_many([
+            cbe.CBEvent(
+                bond_code="123001.SZ",
+                event_date=date(2025, 8, 25),
+                event_type="down_reset_approved",
+                raw_title="关于向下修正测试转债转股价格的公告",
+                effective_end=date(2025, 9, 10),  # 生效日仍在未来
+            ),
+        ])
+        monkeypatch.setattr(cbe, "_default_event_store", store)
+        monkeypatch.setattr(
+            dro, "_default_overrides",
+            dro.DownResetOverrides(tmp_path / "down_reset_overrides.json"),
+        )
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_approved_effective_date"] == date(2025, 9, 10)
+        assert result["down_reset_scheduled_kind"] == "approved"
+        assert result["down_reset_scheduled_date"] == date(2025, 9, 10)
+        assert result["down_reset_scheduled_prob"] == pytest.approx(dro.APPROVED_PASS_PROB)
+
+    def test_price_from_provider_ignores_already_effective_approval(self, fake_provider, tmp_path, monkeypatch):
+        """生效日已过的下修不再叠加节点 (防双计), 回落背景强度。"""
+        from convertible_bond import cb_events as cbe
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider  # end = 2025-08-31
+        store = cbe.CBEventStore(tmp_path / "cb_events.json")
+        store.add_many([
+            cbe.CBEvent(
+                bond_code="123001.SZ",
+                event_date=date(2025, 6, 1),
+                event_type="down_reset_approved",
+                raw_title="关于向下修正测试转债转股价格的公告",
+                effective_end=date(2025, 6, 10),  # 生效日已过
+            ),
+        ])
+        monkeypatch.setattr(cbe, "_default_event_store", store)
+        monkeypatch.setattr(
+            dro, "_default_overrides",
+            dro.DownResetOverrides(tmp_path / "down_reset_overrides.json"),
+        )
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_approved_effective_date"] is None
+        assert result["down_reset_scheduled_kind"] is None
+        assert result["down_reset_scheduled_prob"] == 0.0
+        assert result["effective_p_down"] == pytest.approx(0.15)
+
+    def test_price_from_provider_uses_announced_new_k_as_target(self, fake_provider, tmp_path, monkeypatch):
+        """提议公告带 event_price 时, 节点目标 K 应透传成公告新 K (而非估算)。"""
+        from convertible_bond import cb_events as cbe
+        from convertible_bond import down_reset_overrides as dro
+        from convertible_bond.pricing_api import price_from_provider
+
+        provider, _, end = fake_provider
+        store = cbe.CBEventStore(tmp_path / "cb_events.json")
+        store.add_many([
+            cbe.CBEvent(
+                bond_code="123001.SZ",
+                event_date=date(2025, 8, 1),
+                event_type="down_reset_proposed",
+                raw_title="关于董事会提议向下修正测试转债转股价格的公告",
+                event_price=6.20,  # 公告解析出的下修后新转股价
+            ),
+        ])
+        monkeypatch.setattr(cbe, "_default_event_store", store)
+        monkeypatch.setattr(
+            dro, "_default_overrides",
+            dro.DownResetOverrides(tmp_path / "down_reset_overrides.json"),
+        )
+
+        result = price_from_provider(
+            provider, "123001.SZ",
+            valuation_date=end, p_down=0.15, M=80, N=200,
+        )
+
+        assert result["down_reset_scheduled_kind"] == "proposed"
+        assert result["down_reset_scheduled_target_k"] == pytest.approx(6.20)
 
 
 # ── 14. 条款本地缓存 + CachingDataProvider ──────────────────

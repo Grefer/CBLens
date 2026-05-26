@@ -12,6 +12,10 @@ from convertible_bond.cb_events import (
     apply_events_to_terms,
     classify_announcement_title,
     parse_commitment_period,
+    parse_call_redemption_dates,
+    parse_conversion_suspension_terms,
+    parse_down_reset_new_price,
+    parse_putback_terms,
     parse_event_from_announcement,
 )
 from convertible_bond.data_providers import BondTerms
@@ -22,7 +26,14 @@ def test_classify_announcement_title_handles_core_event_types():
     assert classify_announcement_title("关于实施赎回暨摘牌的公告") == "call_redemption"
     assert classify_announcement_title("关于不向下修正转股价格的公告") == "down_reset_rejected"
     assert classify_announcement_title("董事会提议向下修正转股价格的公告") == "down_reset_proposed"
+    assert classify_announcement_title("关于可转债转股价格调整的公告") == "conversion_price_adjusted"
     assert classify_announcement_title("关于可转债回售的提示性公告") == "putback"
+    assert classify_announcement_title("关于可转换公司债券转股结果暨股份变动公告") == "balance_change"
+    assert classify_announcement_title("关于暂停可转债转股的公告") == "conversion_suspension"
+    assert classify_announcement_title("关于恢复可转债转股的公告") == "conversion_resume"
+    assert classify_announcement_title(
+        "关于不行使“洪城转债”提前赎回权利的核查意见"
+    ) == "call_no_redemption"
 
 
 def test_parse_event_from_announcement_extracts_dates_and_status():
@@ -38,6 +49,155 @@ def test_parse_event_from_announcement_extracts_dates_and_status():
     assert event.effective_start == date(2026, 4, 27)
     assert event.effective_end == date(2026, 5, 6)
     assert event.parsed_status == "已公告强赎"
+
+
+def test_parse_call_redemption_dates_from_body():
+    body = (
+        "本次赎回的最后交易日为2026年4月27日。"
+        "赎回登记日为2026年5月6日，摘牌日为2026年5月7日。"
+        "本次赎回价格为100.62元/张。"
+    )
+    parsed = parse_call_redemption_dates(body)
+    assert parsed["last_trading_date"] == date(2026, 4, 27)
+    assert parsed["redemption_date"] == date(2026, 5, 6)
+    assert parsed["delisting_date"] == date(2026, 5, 7)
+    assert parsed["redemption_price"] == 100.62
+
+
+def test_parse_event_from_call_redemption_body_uses_execution_dates():
+    body = (
+        "本次赎回的最后交易日为2026年4月27日。"
+        "赎回登记日为2026年5月6日。"
+    )
+    event = parse_event_from_announcement(
+        "118006.SH",
+        "关于实施赎回暨摘牌的公告",
+        date(2026, 4, 15),
+        body=body,
+    )
+    assert event is not None
+    assert event.effective_start == date(2026, 4, 27)
+    assert event.effective_end == date(2026, 5, 6)
+
+
+def test_parse_event_from_call_redemption_body_uses_price():
+    body = (
+        "本次赎回的最后交易日为2026年4月27日。"
+        "赎回登记日为2026年5月6日。"
+        "本次赎回价格为100.62元/张。"
+    )
+    event = parse_event_from_announcement(
+        "118006.SH",
+        "关于实施赎回暨摘牌的公告",
+        date(2026, 4, 15),
+        body=body,
+    )
+    assert event is not None
+    assert event.event_price == 100.62
+    patched = apply_events_to_terms(
+        "118006.SH",
+        BondTerms(sec_name="测试转债"),
+        [event],
+        valuation_date=date(2026, 4, 20),
+    )
+    assert patched.call_redemption_price == 100.62
+
+
+def test_parse_conversion_suspension_terms_from_body_and_apply_to_terms():
+    body = (
+        "因实施权益分派，龙大转债自2026年6月3日至2026年6月10日期间暂停转股，"
+        "自2026年6月11日起恢复转股。"
+    )
+    parsed = parse_conversion_suspension_terms(body)
+    assert parsed["start"] == date(2026, 6, 3)
+    assert parsed["end"] == date(2026, 6, 11)
+
+    event = parse_event_from_announcement(
+        "128119.SZ",
+        "关于暂停可转换公司债券转股的公告",
+        date(2026, 6, 1),
+        body=body,
+    )
+    assert event is not None
+    assert event.event_type == "conversion_suspension"
+    patched = apply_events_to_terms(
+        "128119.SZ",
+        BondTerms(sec_name="测试转债"),
+        [event],
+        valuation_date=date(2026, 6, 5),
+    )
+    assert patched.conversion_suspension_start_date == date(2026, 6, 3)
+    assert patched.conversion_suspension_end_date == date(2026, 6, 11)
+    assert patched.conversion_suspension_status == "暂停转股"
+
+
+def test_parse_putback_terms_from_body_and_apply_to_terms():
+    body = (
+        "本次回售申报期为2026年6月1日至2026年6月5日。"
+        "本次回售价格为100.80元/张（含息）。"
+    )
+    parsed = parse_putback_terms(body)
+    assert parsed["start"] == date(2026, 6, 1)
+    assert parsed["end"] == date(2026, 6, 5)
+    assert parsed["price"] == 100.80
+
+    event = parse_event_from_announcement(
+        "113001.SH",
+        "关于可转债回售的公告",
+        date(2026, 5, 20),
+        body=body,
+    )
+    assert event is not None
+    patched = apply_events_to_terms(
+        "113001.SH",
+        BondTerms(sec_name="测试转债"),
+        [event],
+        valuation_date=date(2026, 5, 21),
+    )
+    assert patched.putback_start_date == date(2026, 6, 1)
+    assert patched.putback_end_date == date(2026, 6, 5)
+    assert patched.putback_price == 100.80
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("本次董事会提议将转股价格向下修正，修正后的转股价格为6.20元/股。", 6.20),
+    ("公司转股价格由8.15元/股向下修正为6.20元/股", 6.20),
+    ("拟将转股价格向下修正至5.50元/股", 5.50),
+    ("同意将公司转股价格向下修正为人民币7.88元/股", 7.88),
+    ("修正后转股价格为RMB12.30元/股", 12.30),
+    # 已通过/调整公告常用"调整后转股价格"或"由原来的...调整为"的表格式措辞
+    ("调整后“国泰转债”转股价格：7.65元/股，调整前7.82元/股", 7.65),
+    ("转股价格将于2025年11月18日起由原来的7.82元/股调整为7.65元/股", 7.65),
+    # 提议公告只给当前/初始价、未定新价时应返回 None (定价回落估算)
+    ("当前转股价格：89.82元/股，初始转股价格为89.82元/股", None),
+    ("本公告与转股价格无关", None),
+    ("", None),
+])
+def test_parse_down_reset_new_price(body, expected):
+    assert parse_down_reset_new_price(body) == expected
+
+
+def test_parse_event_fills_event_price_for_proposed_and_approved():
+    """下修提议/通过公告应把新转股价填入 CBEvent.event_price."""
+    proposed = parse_event_from_announcement(
+        "123001.SZ",
+        "关于董事会提议向下修正转股价格的公告",
+        date(2026, 4, 1),
+        body="董事会提议将转股价格向下修正，修正后的转股价格为6.20元/股。",
+    )
+    assert proposed is not None
+    assert proposed.event_type == "down_reset_proposed"
+    assert proposed.event_price == 6.20
+
+    approved = parse_event_from_announcement(
+        "123001.SZ",
+        "关于向下修正转股价格的公告",
+        date(2026, 4, 20),
+        body="转股价格由8.15元/股向下修正为6.20元/股，自2026年4月28日起生效。",
+    )
+    assert approved is not None
+    assert approved.event_type == "down_reset_approved"
+    assert approved.event_price == 6.20
 
 
 def test_event_store_dedupes_by_event_key(tmp_path):

@@ -80,12 +80,6 @@ def build(app, tab):
             corner_radius=6)
         return app.btn_spread
 
-    def make_event_status(p):
-        # 事件状态只读显示 — 占用 entry 槽位, 与其他行左边沿对齐。
-        return ctk.CTkLabel(
-            p, textvariable=app.v_dr_status, text_color=TEXT,
-            font=(FONT_FAMILY, 12), width=130, height=ENTRY_HEIGHT, anchor="w")
-
     _form_row(sec1, "正股价 S", app.v_S0, 0, wind=True,
               source_var=app.v_src_S0, show_source=True,
               tooltip="估值日附近正股收盘/最新价, 是转股价值和下修触发判断的核心输入。")
@@ -106,11 +100,25 @@ def build(app, tab):
     _form_row(sec1, "信用利差 (%)", app.v_spread, 6, width=130,
               extra_widget=make_spr,
               source_var=app.v_src_spread, show_source=True,
-              tooltip="用于纯债折现和信用风险调整。可按评级经验表自动填入。")
-    _form_row(sec1, "事件状态", None, 7, custom_widget=make_event_status)
+              tooltip="用户输入的基础信用利差。定价时会与评级底线取较高值作为实际折现利差。")
+    _form_row(sec1, "低股价利差扩张 (%)", app.v_dk, 7, width=130,
+              source_var=app.v_src_dk, show_source=True,
+              tooltip=(
+                  "正股低于转股价时额外增加的信用利差。"
+                  "模型使用: 实际折现利差(S)=定价利差+本参数×max(0,1-S/K)。"))
+
+    # 下修条款事件: p_down + 转股价/下修估值 row + 覆盖面板
+    dr_sec = CollapsibleSection(lp, "下修条款事件", expanded=False)
+    dr_sec.grid(row=1, column=0, sticky="ew", padx=6, pady=5)
+    _build_down_clause_events_card(app, dr_sec.content)
+
+    # 其他条款事件: 强赎 / 回售 / 风险
+    other_terms = CollapsibleSection(lp, "其他条款事件", expanded=False)
+    other_terms.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
+    _build_other_clause_events_card(app, other_terms.content)
 
     adv_terms = CollapsibleSection(lp, "条款明细", expanded=False)
-    adv_terms.grid(row=1, column=0, sticky="ew", padx=6, pady=5)
+    adv_terms.grid(row=3, column=0, sticky="ew", padx=6, pady=5)
     sec_terms = create_card(adv_terms.content, "条款与日期", 0, 0, icon="📄")
     _form_row(sec_terms, "面值", app.v_face, 0, wind=True, source_var=app.v_src_face,
               tooltip="通常为 100。除特殊测试外无需修改。")
@@ -124,39 +132,31 @@ def build(app, tab):
     _form_row(sec_terms, "各年票息 (%)", app.v_coupons, 6, wind=True, width=240,
               compact=True, source_var=app.v_src_coupons,
               tooltip="逐年票息百分比, 逗号分隔。")
-    _form_row(sec_terms, "强赎触发 (%K)", app.v_call_ratio, 7, wind=True,
+    _form_row(sec_terms, "下修触发 (%K)", app.v_down_reset_trigger_ratio, 7, wind=True,
+              source_var=app.v_src_down_reset_trigger_ratio,
+              tooltip="正股价格低于转股价的该比例并满足观察期时, 通常进入可提议下修条件。")
+    _form_row(sec_terms, "强赎触发 (%K)", app.v_call_ratio, 8, wind=True,
               source_var=app.v_src_call_ratio,
               tooltip="正股价格达到转股价的该比例附近时触发强赎条款。")
-    _form_row(sec_terms, "回售触发 (%K)", app.v_put_ratio, 8, wind=True,
+    _form_row(sec_terms, "回售触发 (%K)", app.v_put_ratio, 9, wind=True,
               source_var=app.v_src_put_ratio,
               tooltip="正股价格低于转股价的该比例附近时触发回售条款。")
-    _form_row(sec_terms, "回售生效年数", app.v_put_years, 9, wind=True,
+    _form_row(sec_terms, "回售生效年数", app.v_put_years, 10, wind=True,
               source_var=app.v_src_put_years)
-    _form_row(sec_terms, "强赎宽限天数", app.v_call_notice, 10,
+    _form_row(sec_terms, "强赎宽限天数", app.v_call_notice, 11,
               source_var=app.v_src_call_notice,
               tooltip="公告强赎后的缓冲窗口。用于近似宽限期内的股票选择权。")
 
     adv_model = CollapsibleSection(lp, "高级模型参数", expanded=False)
-    adv_model.grid(row=2, column=0, sticky="ew", padx=6, pady=5)
+    adv_model.grid(row=4, column=0, sticky="ew", padx=6, pady=5)
     sec4 = create_card(adv_model.content, "数值网格", 0, 0, icon="🧮")
     _form_row(sec4, "空间节点 M", app.v_M, 0,
               tooltip="价格区间网格。越大越精细, 也越慢。")
     _form_row(sec4, "时间步数 N", app.v_N, 1,
               tooltip="定价时间步网格。越大越精细, 也越慢。")
 
-    dr_sec = CollapsibleSection(lp, "下修事件", expanded=False)
-    dr_sec.grid(row=3, column=0, sticky="ew", padx=6, pady=5)
-    # p_down 直接对应"下修事件强度", distress_k 与下修触发的信用恶化耦合,
-    # 一并放进下修事件区作为模型参数, 与下面的"事件覆盖"配合使用.
-    sec_dr_model = create_card(dr_sec.content, "事件模型参数", 0, 0, icon="🎲")
-    _form_row(sec_dr_model, "下修强度 p (%/年)", app.v_p_down, 0, source_var=app.v_src_p_down,
-              tooltip="年化下修事件强度。公告不下修冻结期内会被事件表自动屏蔽。")
-    _form_row(sec_dr_model, "信用扩张系数 (%)", app.v_dk, 1, source_var=app.v_src_dk,
-              tooltip="正股越低时信用利差扩张的幅度参数。")
-    app._build_down_reset_panel(dr_sec.content)
-
-    ev_sec = CollapsibleSection(lp, "公告事件", expanded=False)
-    ev_sec.grid(row=4, column=0, sticky="ew", padx=6, pady=5)
+    ev_sec = CollapsibleSection(lp, "公告同步", expanded=False)
+    ev_sec.grid(row=5, column=0, sticky="ew", padx=6, pady=5)
     app._build_events_panel(ev_sec.content)
 
     # ── 右列: 结果面板 ──
@@ -237,7 +237,7 @@ def build(app, tab):
     app.btn_cashflow.pack(side="right")
 
     # ── 🎯 What-if 快算 (波动率 ±2pp/±5pp · 正股 ±5%/±10%) ──
-    _build_what_if_row(app, rp)
+    _build_what_if_row(app, rp, row=1)
 
     # 指标仪表盘: 8 个 tile 铺满剩余空间, 每项补一句解释避免空白只放数字。
     dc = ctk.CTkFrame(rp, fg_color="transparent")
@@ -271,15 +271,144 @@ def build(app, tab):
     _metric(dc, 1, 3, "隐含波动率", app.v_iv, "用市价反解得到的 σ")
 
 
+def _build_down_clause_events_card(app, parent):
+    """下修条款事件: p_down + 当前转股价 / 下修估值 row + 覆盖面板.
+
+    顶部 alert banner 在投影出现"公告 K 覆盖条款库 K"等异常时显示,
+    让用户首屏察觉条款层与公告层的分歧。
+    """
+    card = create_card(parent, "下修与转股价", 0, 0, icon="🛡")
+
+    # alert banner: v_term_event_alert 非空时展示, 空字符串时 grid_remove 不占空间
+    alert_lbl = ctk.CTkLabel(
+        card, textvariable=app.v_term_event_alert,
+        text_color=ORANGE, font=(FONT_FAMILY, 11, "bold"),
+        anchor="w", justify="left", wraplength=380,
+    )
+    alert_lbl.grid(row=0, column=0, sticky="ew", padx=16, pady=(0, 6))
+    alert_lbl.grid_remove()
+
+    def _toggle_alert(*_args):
+        if str(app.v_term_event_alert.get() or "").strip():
+            alert_lbl.grid()
+        else:
+            alert_lbl.grid_remove()
+    app.v_term_event_alert.trace_add("write", _toggle_alert)
+
+    def make_p_hint(p):
+        # extra-slot 里挂一个 read-only 标签, 用户输入 λ 时实时显示 ≈P(1年内至少 1 次)
+        return ctk.CTkLabel(
+            p, textvariable=app.v_p_down_hint,
+            text_color=TEXT_DIM, font=(FONT_MONO, 11), anchor="w",
+        )
+
+    _form_row(card, "年化下修强度 (%/年)", app.v_p_down, 1,
+              extra_widget=make_p_hint,
+              source_var=app.v_src_p_down, show_source=True,
+              tooltip=(
+                  "年化下修强度 λ (hazard rate), 不是严格的 1 年内概率。\n"
+                  "PDE 每步用 step_p = 1 - exp(-λ·dt) 折算, 与时间步无关。\n"
+                  "右侧 ≈X% /年 是换算后 P(1 年内至少 1 次) = 1 - exp(-λ) 供参考。\n"
+                  "状态默认: 15%(未触发/保守) · 25%(已进入触发区) · 65%(近期触发提示公告)。\n"
+                  "正股在触发线之上 → 低默认; 之下 → 按背景强度计入 (与跌幅深浅无关)。\n"
+                  "已提议/已通过待生效使用公告下修节点, 不塞进背景强度。\n"
+                  "不下修承诺期会由公告事件或下方覆盖面板自动屏蔽。"))
+    _build_clause_event_row(
+        app, card, 2,
+        key="conv", title="当前转股价", accent=ACCENT,
+        status_var=app.v_term_event_conv_status,
+        detail_var=app.v_term_event_conv_detail,
+        progress_var=app.v_term_event_conv_progress,
+        tooltip="转股价是转股价值和下修判断的共同锚点。这里显示公告里的新转股价是否已生效。")
+    _build_clause_event_row(
+        app, card, 3,
+        key="down", title="下修估值", accent=ORANGE,
+        status_var=app.v_term_event_down_status,
+        detail_var=app.v_term_event_down_detail,
+        progress_var=app.v_term_event_down_progress,
+        tooltip=("下修估值视角 (三态): 已公告(提议/通过)显示预计生效日与新 K; "
+                 "冻结期下修价值=0; 背景态按触发线二元判断。冻结/人工覆盖见下方覆盖面板。"))
+    app._build_down_reset_panel(card, embedded=True, start_row=4)
+
+
+def _build_other_clause_events_card(app, parent):
+    """其他条款事件: 强赎 / 回售 / 风险."""
+    card = create_card(parent, "事件触发", 0, 0, icon="📌")
+
+    rows = (
+        ("call", "强赎", app.v_term_event_call_status,
+         app.v_term_event_call_detail, app.v_term_event_call_progress,
+         "强赎触发进度按 S / 强赎触发价估算; 已公告强赎时显示执行进度。"),
+        ("put", "回售", app.v_term_event_put_status,
+         app.v_term_event_put_detail, app.v_term_event_put_progress,
+         "回售触发进度按正股从 K 跌向回售触发价的距离估算。"),
+        ("risk", "风险/摘牌", app.v_term_event_risk_status,
+         app.v_term_event_risk_detail, app.v_term_event_risk_progress,
+         "摘牌/最后交易日按 30 天窗口显示临近程度。"),
+    )
+    for idx, (key, title, status_var, detail_var, progress_var, tooltip) in enumerate(rows):
+        _build_clause_event_row(
+            app, card, idx, key=key, title=title, accent=ACCENT,
+            status_var=status_var, detail_var=detail_var,
+            progress_var=progress_var, tooltip=tooltip)
+
+    app.after_idle(app._refresh_terms_snapshot_card)
+
+
+def _build_clause_event_row(app, parent, row, *, key, title, accent,
+                            status_var, detail_var, progress_var, tooltip=None):
+    row_frame = ctk.CTkFrame(parent, fg_color=BG_INPUT, corner_radius=8)
+    row_frame.grid(row=row, column=0, sticky="ew", padx=16, pady=3)
+    row_frame.grid_columnconfigure(1, weight=1)
+
+    ctk.CTkLabel(
+        row_frame, text=title, text_color=TEXT,
+        font=(FONT_FAMILY, 12, "bold"),
+    ).grid(row=0, column=0, sticky="w", padx=(10, 8), pady=(8, 1))
+    status_lbl = ctk.CTkLabel(
+        row_frame, textvariable=status_var, text_color=TEXT_DIM,
+        font=(FONT_FAMILY, 11, "bold"), anchor="e",
+    )
+    status_lbl.grid(row=0, column=1, sticky="e", padx=(4, 10), pady=(8, 1))
+
+    detail_lbl = ctk.CTkLabel(
+        row_frame, textvariable=detail_var, text_color=TEXT_DIM,
+        font=(FONT_FAMILY, 11), anchor="w", justify="left", wraplength=330,
+    )
+    detail_lbl.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
+
+    bar = ctk.CTkProgressBar(
+        row_frame, orientation="horizontal", width=210, height=6,
+        corner_radius=3, progress_color=accent, fg_color=BORDER,
+    )
+    bar.grid(row=2, column=0, sticky="ew", padx=(10, 8), pady=(0, 9))
+    bar.set(0)
+    progress_lbl = ctk.CTkLabel(
+        row_frame, textvariable=progress_var, text_color=TEXT_DIM,
+        font=(FONT_MONO, 10), anchor="e", width=82,
+    )
+    progress_lbl.grid(row=2, column=1, sticky="e", padx=(0, 10), pady=(0, 9))
+
+    if tooltip:
+        Tooltip(row_frame, tooltip)
+        Tooltip(detail_lbl, tooltip)
+    app._term_event_widgets[key] = {
+        "bar": bar,
+        "status": status_lbl,
+        "progress": progress_lbl,
+    }
+    return row_frame
+
+
 # ── What-if 快算: σ ±pp 与 S ±% 微扰 ─────────────────────────
 WHAT_IF_SIGMA_DELTAS_PP = (-5, -2, +2, +5)
 WHAT_IF_S_DELTAS_PCT    = (-10, -5, +5, +10)
 
 
-def _build_what_if_row(app, parent):
+def _build_what_if_row(app, parent, *, row=1):
     """在右栏 hero 与 dashboard 之间插入一行 σ/S 快扫按钮."""
     card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
-    card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+    card.grid(row=row, column=0, sticky="ew", pady=(0, 10))
     card.grid_columnconfigure(2, weight=1)
 
     ctk.CTkLabel(card, text="🎯 What-if 快算", text_color=TEXT,

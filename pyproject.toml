@@ -30,7 +30,9 @@ desktop = ["pyinstaller>=6.10", "pillow>=10.0"]
 
 [project.scripts]
 cb-gui = "convertible_bond.gui.app:main"
+cb-calibrate-down-reset = "convertible_bond.cli.calibrate_down_reset:main"
 cb-screen-pool = "convertible_bond.cli.screen_pool:main"
+cb-strategy-backtest = "convertible_bond.cli.strategy_backtest:main"
 cb-sync-admission-status = "convertible_bond.cli.sync_admission_status:main"
 cb-sync-events = "convertible_bond.cli.sync_events:main"
 cb-sync-tradable = "convertible_bond.cli.sync_tradable:main"

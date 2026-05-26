@@ -38,15 +38,15 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 | 场景 | 命令 |
 | --- | --- |
 | 月初定期 (新债/退市/下修) | `python -m convertible_bond.cli.sync_tradable` |
-| 每日准入状态 (停牌/强赎/ST/成交额等) | `python -m convertible_bond.cli.sync_admission_status` |
+| 每日状态字段 (停牌/强赎/ST/成交额等) | `python -m convertible_bond.cli.sync_admission_status` |
 | 公告事件 (下修/强赎/回售等) | `python -m convertible_bond.cli.sync_events --apply` |
-| 查看主池筛选报告 | `python -m convertible_bond.cli.screen_pool` |
+| 查看公开交易主池报告 | `python -m convertible_bond.cli.screen_pool` |
 | 单只债的事件后 | GUI 顶部 🔄 按钮 |
 | 仅查看当前状态 | `python -m convertible_bond.cli.sync_tradable --info` |
 
 ### 数据来源对比
 
-- **转债基础信息**: 固定由 WindPy 获取并写入 `cb_data.json`，覆盖强赎/回售触发比例、回售观察期、完整付息计划等 akshare 缺失字段。
+- **转债基础信息**: 固定由 WindPy 获取并写入 `cb_data.json`，覆盖下修/强赎/回售触发比例、回售观察期、完整付息计划等 akshare 缺失字段。
 - **动态行情/股息率/利率**: GUI 和批量定价中可选择 Wind 或 akshare。正股股息率会按行情源实时获取，取不到时模型参数 `q` 回退为 0；akshare 无法返回无风险利率时，程序放弃接口获取并保留界面/参数中的手工值。
 
 ### 交易状态字段
@@ -57,34 +57,32 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`
 - `suspension_status`: 停牌/暂停交易等补充状态
 - `call_status`, `call_announce_date`, `call_redemption_date`: 强赎公告和执行状态
-- `last_trading_date`, `delisting_date`: 最后交易日 / 摘牌日，用于剔除临近摘牌标的
+- `down_reset_trigger_pct`, `call_trigger_pct`, `put_trigger_pct`: 下修 / 强赎 / 回售触发比例，单位为 `%K`。下修触发缺失时, 定价层显式使用 `85%K` 作为模型默认。
+- `last_trading_date`, `delisting_date`: 最后交易日 / 摘牌日；已过最后交易日或已摘牌时从主池剔除
 - `underlying_name`, `underlying_status`: 正股名称与风险状态，用于识别 ST / 退市风险
-- `bond_turnover_amount`: 转债成交额，口径由数据源决定；设置阈值后可用于低流动性过滤
+- `bond_turnover_amount`: 转债成交额，口径由数据源决定；用于风险标签和复核，不作为默认硬剔除
 
 这些字段由 `convertible_bond.admission_status` 做增量刷新。刷新时只会写入数据源明确返回的非空值；
 如果 Wind 某个候选字段不可用，不会清空本地已有值或人工维护值。
 
-### 主池准入筛选
+### 主池公开交易筛选
 
-批量定价主池会先剔除不适合进入模型排序的标的：
+批量定价主池只硬剔除转债本身不能公开交易的标的：
 
 - 不可交易或尚未进入可交易窗口
 - 停牌 / 暂停交易
-- 已公告强赎
-- 临近最后交易日、摘牌日或到期日
-- 正股 ST / 退市风险
-- 成交额低于指定阈值
-- 剩余余额低于默认阈值
-- 信用评级低于默认阈值
+- 已过最后交易日、已摘牌或已到期
+- 非沪深普通公募代码段，或名称明确为定向 / 非公开交易转债
 
-字段缺失时不会直接剔除，避免因数据源覆盖不足误杀；明确命中风险条件时才排除出主池。
+强赎、临近摘牌、正股 ST / 停牌、低成交额、小余额、低评级等不再硬剔除；
+这些信息进入风险标签、复核视图或单债提示，避免把仍可公开交易的债误杀。
 
 ### 人工事件覆盖字段
 
 这些字段不会由 Wind 自动同步，适合记录“不下修”等公告事件：
 
 - `down_reset_block_until`: 该日期前不计下修博弈；无 `cb_events` / `down_reset_overrides.json` 时作为 fallback
-- `down_reset_p_scale`: 单债下修强度缩放，`0` 表示完全不计下修博弈，`0.25` 表示按模型默认强度的 25%
+- `down_reset_p_scale`: 单债下修强度事件乘数，作用于基础 `p_down`；`0` 表示完全不计下修博弈，`0.25` 表示按基础强度的 25%
 - `down_reset_note`: 覆盖原因或公告摘要
 
 ### 注意
@@ -100,6 +98,7 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `down_reset_proposed`: 提议下修
 - `down_reset_approved`: 下修通过 / 转股价格调整
 - `down_reset_rejected`: 不下修
+- `conversion_price_adjusted`: 权益分派等导致的转股价格调整
 - `call_redemption`: 公告强赎
 - `call_no_redemption`: 公告不强赎
 - `putback`: 回售
@@ -139,3 +138,46 @@ python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
 `call_no_redemption_until`，不下修公告会写入 `down_reset_block_until / down_reset_note`。
 定价时以 `down_reset_overrides.json` 和 `cb_events.json` 中的最新公告为准，避免旧
 `cb_data` 字段挡住后续事件。
+
+会改变模型输入的公告还会生成 `cb_terms_patches.json`。例如“转股价格调整”
+公告会解析调整前/调整后转股价和生效日，写成 `conversion_price` patch；
+明确披露债项信用等级的评级公告会写成 `credit_rating` patch。
+单只和批量定价会先读取 `cb_data.json`，再按估值日应用这些 patch 和事件状态。
+
+## 历史策略回测的条款视角
+
+策略回测会通过 `HistoricalBondDataProvider` 尽量按估值日重建当时可见信息：
+
+1. 先从 `cb_data_history/YYYY-MM-DD.json` 选择不晚于估值日的最近一份完整条款快照。
+2. 再应用 `cb_terms_patches.json` 中 `effective_date <= 估值日` 的条款变更。
+3. 最后应用 `cb_events.json` 中 `event_date <= 估值日` 的公告事件。
+
+`cb_terms_patches.json` 用于记录会直接改变模型参数的字段，尤其是下修后的
+`conversion_price`、评级、余额等。示例：
+
+```json
+{
+  "patches": [
+    {
+      "bond_code": "113001.SH",
+      "effective_date": "2025-02-10",
+      "field": "conversion_price",
+      "value": 8.0,
+      "source": "announcement",
+      "note": "转股价格调整"
+    },
+    {
+      "bond_code": "113002.SH",
+      "effective_date": "2025-03-01",
+      "fields": {
+        "credit_rating": "AA",
+        "outstanding_balance": 6.5
+      }
+    }
+  ]
+}
+```
+
+如果没有历史快照，回测会退回当前 `cb_data` 的静态字段，并清掉强赎、摘牌、
+停牌、ST、不下修、成交额等日级/事件状态，再用事件表按日期重建；但当前转股价
+等半静态字段仍可能带有未来信息。因此严肃回测应尽量补齐历史快照或条款 patch。

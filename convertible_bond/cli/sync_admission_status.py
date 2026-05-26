@@ -1,4 +1,4 @@
-"""刷新 cb_data 中的主池准入状态字段.
+"""刷新 cb_data 中的交易状态与风险字段.
 
 用法:
     python -m convertible_bond.cli.sync_admission_status
@@ -30,7 +30,7 @@ def _make_provider(name: str) -> DataProvider:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="刷新 cb_data 中的主池准入状态字段",
+        description="刷新 cb_data 中的交易状态与风险字段",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -59,7 +59,7 @@ def main() -> int:
         print(f"❌ 数据源初始化失败: {exc}", file=sys.stderr)
         return 2
 
-    print(f"开始刷新准入状态: {len(codes)} 只")
+    print(f"开始刷新状态字段: {len(codes)} 只")
     print(f"Bundle: {bundle.path}")
     start = time.time()
 
@@ -83,7 +83,7 @@ def main() -> int:
     print(
         f"\n✅ 成功 {len(result['success'])} 只, "
         f"变更 {len(result['changed'])} 只, "
-        f"当前准入剔除 {len(result['excluded'])} 只, "
+            f"当前公开交易过滤 {len(result['excluded'])} 只, "
         f"失败 {len(result['failed'])} 只, 耗时 {elapsed:.1f}s"
     )
     if result["excluded_by_reason"]:

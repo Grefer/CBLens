@@ -20,6 +20,13 @@ from ...cb_events import (
     project_events_path,
     reload_default_event_store,
 )
+from ...historical_terms import (
+    TermsPatch,
+    TermsPatchStore,
+    project_terms,
+    project_terms_patches_path,
+    reload_default_terms_patch_store,
+)
 from ..constants import BOND_CODE_RE, EVENT_SYNC_STALE_HOURS
 from ..theme import (
     ACCENT, BG_INPUT, BORDER,
@@ -80,7 +87,9 @@ class EventsMixin:
             return
 
         events = self.event_store.list_events(bond_code=bond_code)
-        if not events:
+        patches = TermsPatchStore(project_terms_patches_path()).list_patches(bond_code=bond_code)
+        patches_by_date = self._patches_by_event_date(patches)
+        if not events and not patches:
             self.v_event_summary.set("无事件记录")
             lbl = ctk.CTkLabel(
                 self._events_list_frame, text="暂无事件 — 点击「同步公告」从巨潮抓取",
@@ -89,7 +98,8 @@ class EventsMixin:
             self._event_widgets.append(lbl)
             return
 
-        self.v_event_summary.set(f"{len(events)} 条事件")
+        suffix = f", {len(patches)} 条款影响" if patches else ""
+        self.v_event_summary.set(f"{len(events)} 条事件{suffix}")
         # 按日期倒序显示 (最新在上)
         for i, ev in enumerate(reversed(events)):
             row_frame = ctk.CTkFrame(
@@ -113,6 +123,9 @@ class EventsMixin:
             info_text = f"{date_str}  {title_short}"
             if ev.commitment_months:
                 info_text += f"  [承诺{ev.commitment_months}个月]"
+            impact_text = self._event_impact_text(ev, patches_by_date.get(ev.event_date, []))
+            if impact_text:
+                info_text += f"  ·  {impact_text}"
 
             info_lbl = ctk.CTkLabel(
                 row_frame, text=info_text, text_color=TEXT,
@@ -142,11 +155,88 @@ class EventsMixin:
                 except Exception:
                     pass
 
+        event_dates = {ev.event_date for ev in events}
+        orphan_patches = [p for p in patches if p.event_date not in event_dates]
+        start_row = len(events)
+        for j, patch in enumerate(reversed(orphan_patches)):
+            row_frame = ctk.CTkFrame(
+                self._events_list_frame, fg_color=BG_INPUT, corner_radius=8)
+            row_frame.grid(row=start_row + j, column=0, sticky="ew", padx=2, pady=2)
+            row_frame.grid_columnconfigure(1, weight=1)
+            self._event_widgets.append(row_frame)
+            badge = ctk.CTkLabel(
+                row_frame, text="条款", text_color="#ffffff",
+                fg_color="#179299", corner_radius=4,
+                font=(FONT_FAMILY, 10, "bold"), width=52, height=18)
+            badge.grid(row=0, column=0, padx=(6, 4), pady=4, sticky="w")
+            text = (
+                f"{patch.effective_date.isoformat()}  "
+                f"{self._patch_impact_text(patch)}"
+            )
+            lbl = ctk.CTkLabel(
+                row_frame, text=text, text_color=TEXT,
+                font=(FONT_FAMILY, 11), anchor="w")
+            lbl.grid(row=0, column=1, padx=(2, 6), pady=4, sticky="w")
+
+    @staticmethod
+    def _patches_by_event_date(patches: list[TermsPatch]) -> dict[date, list[TermsPatch]]:
+        out: dict[date, list[TermsPatch]] = {}
+        for patch in patches:
+            key = patch.event_date or patch.effective_date
+            out.setdefault(key, []).append(patch)
+        return out
+
+    def _event_impact_text(self, event: CBEvent, patches: list[TermsPatch]) -> str:
+        matched = [
+            patch for patch in patches
+            if not patch.raw_title or patch.raw_title == event.raw_title
+        ] or patches
+        parts = [self._patch_impact_text(patch) for patch in matched]
+        return "; ".join(part for part in parts if part)
+
+    @staticmethod
+    def _patch_impact_text(patch: TermsPatch) -> str:
+        labels = {
+            "conversion_price": "K",
+            "credit_rating": "评级",
+            "credit_rating_outlook": "评级展望",
+            "credit_watch_status": "评级观察",
+            "outstanding_balance": "余额",
+            "call_status": "强赎状态",
+            "call_announce_date": "强赎公告日",
+            "call_no_redemption_until": "不强赎至",
+            "call_redemption_date": "赎回日",
+            "call_redemption_price": "赎回价",
+            "down_reset_block_until": "不下修至",
+            "last_trading_date": "最后交易日",
+            "delisting_date": "摘牌日",
+            "putback_start_date": "回售起始",
+            "putback_end_date": "回售截止",
+            "putback_price": "回售价",
+            "conversion_suspension_start_date": "暂停转股起始",
+            "conversion_suspension_end_date": "暂停转股结束",
+            "conversion_suspension_status": "转股状态",
+        }
+        parts = []
+        before = patch.before_fields or {}
+        for key, value in patch.fields.items():
+            label = labels.get(key, key)
+            old = before.get(key)
+            if old is not None:
+                parts.append(f"{label} {old}->{value}")
+            else:
+                parts.append(f"{label}={value}")
+        if patch.effective_date:
+            parts.append(f"生效 {patch.effective_date.isoformat()}")
+        return " ".join(parts)
+
     @staticmethod
     def _event_type_color(event_type: str) -> str:
         return {
             "down_reset_proposed": "#e6a700",   # 黄
             "down_reset_approved": "#40a02b",   # 绿
+            "down_reset_trigger_notice": "#df8e1d",
+            "conversion_price_adjusted": "#179299",
             "down_reset_rejected": "#d20f39",   # 红
             "call_redemption":     "#d20f39",
             "call_no_redemption":  "#40a02b",
@@ -164,6 +254,8 @@ class EventsMixin:
         return {
             "down_reset_proposed": "提议下修",
             "down_reset_approved": "已下修",
+            "down_reset_trigger_notice": "触发提示",
+            "conversion_price_adjusted": "调转股价",
             "down_reset_rejected": "不下修",
             "call_redemption":     "强赎",
             "call_no_redemption":  "不强赎",
@@ -345,8 +437,10 @@ class EventsMixin:
             from ...cninfo_provider import CninfoAnnouncementProvider
             provider = CninfoAnnouncementProvider()
             store = CBEventStore(project_events_path())
+            patch_store = TermsPatchStore(project_terms_patches_path())
             result = sync_cb_events(
                 provider, [code], store,
+                term_patch_store=patch_store,
                 end=date.today(), lookback_days=365,
                 download_pdf=True,
             )
@@ -357,12 +451,13 @@ class EventsMixin:
     def _reload_events_for_current_code(self, code: str) -> None:
         self.event_store = CBEventStore(project_events_path())
         reload_default_event_store()
+        reload_default_terms_patch_store()
         if self._normalize_bond_code(self.v_bond_code.get()) != code:
             return
         self._refresh_events_panel(code)
         terms = self.terms_cache.get(code)
         if terms is not None:
-            self._populate_down_reset_from_resolver(code, terms)
+            self._apply_projected_terms_to_current_fields(code, terms)
 
     def _on_auto_sync_events_done(self, code: str, result: dict | None, exc: Exception | None):
         self._event_sync_in_flight.discard(code)
@@ -375,9 +470,12 @@ class EventsMixin:
 
         scanned = result.get("scanned_announcements", 0) if result else 0
         added = result.get("added", 0) if result else 0
+        patches_added = result.get("patches_added", 0) if result else 0
         pdf_ok = result.get("pdf_downloaded", 0) if result else 0
         pdf_fail = result.get("pdf_failed", 0) if result else 0
         msg = f"公告已自动刷新: 扫描 {scanned} 条, 新增 {added} 条"
+        if patches_added:
+            msg += f", 条款影响 {patches_added} 条"
         if pdf_ok or pdf_fail:
             msg += f" (PDF ✓{pdf_ok} ✗{pdf_fail})"
         self.v_event_summary.set(msg)
@@ -413,16 +511,21 @@ class EventsMixin:
         try:
             from ...cninfo_provider import CninfoAnnouncementProvider
             provider = CninfoAnnouncementProvider()
+            patch_store = TermsPatchStore(project_terms_patches_path())
             result = sync_cb_events(
                 provider, [code], self.event_store,
+                term_patch_store=patch_store,
                 end=date.today(), lookback_days=365,
                 download_pdf=True,
             )
             scanned = result["scanned_announcements"]
             added = result["added"]
+            patches_added = result.get("patches_added", 0)
             pdf_ok = result.get("pdf_downloaded", 0)
             pdf_fail = result.get("pdf_failed", 0)
             msg = f"扫描 {scanned} 条, 新增 {added} 条"
+            if patches_added:
+                msg += f", 条款影响 {patches_added} 条"
             if pdf_ok or pdf_fail:
                 msg += f" (PDF ✓{pdf_ok} ✗{pdf_fail})"
             self.after(0, lambda: self._on_sync_events_done(code, msg))
@@ -440,3 +543,25 @@ class EventsMixin:
     # 注: ``_apply_events_to_current`` (写回事件到本地条款库) 已下线 —
     # 该按钮在 GUI 上几乎没人点 (日常定价直接读事件表), 维护动作请走
     # ``convertible_bond.cb_event_sync`` 公共函数 / CLI。
+
+    def _apply_projected_terms_to_current_fields(self, code: str, terms) -> None:
+        projection = project_terms(
+            code,
+            terms,
+            date.today(),
+            event_store=self.event_store,
+        )
+        projected = projection.terms
+        self._current_projected_terms = projected
+        self._current_terms_projection = projection
+        if projected.conversion_price is not None:
+            source = "公告" if "conversion_price" in projection.patch_fields else self.v_src_K.get()
+            self._set_field(
+                self.v_K,
+                f"{float(projected.conversion_price):.2f}",
+                self.v_src_K,
+                source,
+            )
+        self._populate_down_reset_from_resolver(code, projected)
+        if hasattr(self, "_refresh_terms_snapshot_card"):
+            self._refresh_terms_snapshot_card()

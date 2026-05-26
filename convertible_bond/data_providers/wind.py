@@ -163,6 +163,7 @@ class WindDataProvider(DataProvider):
         "latestpar",
         "clause_conversion2_swapshareprice",
         "clause_calloption_redemptionprice",
+        "clause_reset_resettriggerratio",
         "clause_calloption_triggerproportion",
         "clause_putoption_redeem_triggerproportion",
         "clause_putoption_putbackperiodobs",
@@ -267,6 +268,7 @@ class WindDataProvider(DataProvider):
             face_value=_f("latestpar"),
             conversion_price=_f("clause_conversion2_swapshareprice"),
             redemption_price=_f("clause_calloption_redemptionprice"),
+            down_reset_trigger_pct=_f("clause_reset_resettriggerratio"),
             call_trigger_pct=_f("clause_calloption_triggerproportion"),
             put_trigger_pct=_f("clause_putoption_redeem_triggerproportion"),
             put_obs_months=_f("clause_putoption_putbackperiodobs"),
@@ -297,7 +299,7 @@ class WindDataProvider(DataProvider):
         return bad
 
     def get_admission_status(self, bond_code, valuation_date, base_terms=None):
-        """增量刷新主池准入状态字段.
+        """增量刷新主池交易状态与风险字段.
 
         Wind 字段在不同终端/权限下可能存在差异, 因此这里逐个候选字段尝试;
         拿不到的字段保持 None, 不影响已有 cb_data 内容。
@@ -322,9 +324,15 @@ class WindDataProvider(DataProvider):
                     "calloption_redemptiondate",
                     "redemptiondate",
                 ),
+                "call_redemption_price": (
+                    "clause_calloption_redemptionprice",
+                    "calloption_redemptionprice",
+                    "redemptionprice",
+                ),
                 "last_trading_date": ("lasttrade_date", "lasttradingdate", "last_trade_date"),
                 "delisting_date": ("delist_date", "delistingdate"),
                 "credit_rating": ("creditrating",),
+                "credit_rating_outlook": ("ratingoutlook", "creditratingoutlook"),
                 "outstanding_balance": ("outstandingbalance",),
             },
             valuation_date,
@@ -360,6 +368,7 @@ class WindDataProvider(DataProvider):
             call_status=_string_or_none(bond_data.get("call_status")),
             call_announce_date=_date_or_none(bond_data.get("call_announce_date")),
             call_redemption_date=_date_or_none(bond_data.get("call_redemption_date")),
+            call_redemption_price=_float_or_none(bond_data.get("call_redemption_price")),
             last_trading_date=_date_or_none(bond_data.get("last_trading_date")),
             delisting_date=_date_or_none(bond_data.get("delisting_date")),
             underlying_name=_string_or_none(stock_data.get("underlying_name")),
@@ -368,6 +377,7 @@ class WindDataProvider(DataProvider):
             underlying_pct_change=underlying_pct_change,
             bond_turnover_amount=bond_turnover_amount,
             credit_rating=_string_or_none(bond_data.get("credit_rating")),
+            credit_rating_outlook=_string_or_none(bond_data.get("credit_rating_outlook")),
             outstanding_balance=_float_or_none(bond_data.get("outstanding_balance")),
         )
         return terms

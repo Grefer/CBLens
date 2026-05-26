@@ -28,9 +28,11 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
+from ..batch_pricing import DEFAULT_MIN_CREDIT_RATING, DEFAULT_MIN_OUTSTANDING_BALANCE
 from ..paths import asset_path, seed_data_files
 from .constants import (
     BOND_CODE_RE,
+    DEFAULT_DOWN_RESET_TRIGGER_PCT,
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
     EVENT_SYNC_STALE_HOURS,    # noqa: F401  (re-export for legacy callers)
@@ -47,6 +49,7 @@ from .tabs import backtest as backtest_tab
 from .tabs import batch as batch_tab
 from .tabs import pricing as pricing_tab
 from .tabs import sensitivity as sensitivity_tab
+from .tabs import strategy as strategy_tab
 from .theme import (
     ACCENT, ACCENT_HOVER,
     BG_APP, BG_CARD, BG_INPUT, BORDER,
@@ -210,7 +213,7 @@ class CBPricerApp(
         # 确保打包进 PyInstaller 的 data/*.json 种子文件已被复制到可写数据目录
         seed_data_files()
 
-        # 转债特定字段保持空白, 避免虚构默认值被当成真实示例债; 输入代码后自动填充
+        # 单债字段保持空白, 避免虚构示例债; 通用条款比例保留模型默认值。
         self.v_bond_code = ctk.StringVar()
         self.v_S0        = ctk.StringVar(value="")
         self.v_K         = ctk.StringVar(value="")
@@ -226,15 +229,17 @@ class CBPricerApp(
         self.v_q         = ctk.StringVar(value="0")
         self.v_spread    = ctk.StringVar(value="3.0")
         self.v_p_down    = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
+        # 实时换算: 用户输入的是年化强度 λ, 这里展示对应的 P(1年内至少 1 次) = 1 - exp(-λ)
+        self.v_p_down_hint = ctk.StringVar(value="")
         self.v_dk        = ctk.StringVar(value=f"{DEFAULT_DISTRESS_K_PCT:g}")
         # 下修事件覆盖 (per-bond) — 默认由 cb_events 自动解析; 面板仅作维护/确认
         self.v_dr_announce_date = ctk.StringVar(value="")
         self.v_dr_cooldown      = ctk.StringVar(value="")
-        self.v_dr_p_scale       = ctk.StringVar(value="")
         self.v_dr_block_until   = ctk.StringVar(value="—")
         self.v_dr_note          = ctk.StringVar(value="")
         self.v_dr_status        = ctk.StringVar(value="无事件")
         self.v_call_ratio  = ctk.StringVar(value="130")
+        self.v_down_reset_trigger_ratio = ctk.StringVar(value=f"{DEFAULT_DOWN_RESET_TRIGGER_PCT:g}")
         self.v_put_ratio   = ctk.StringVar(value="70")
         self.v_put_years   = ctk.StringVar(value="2")
         self.v_call_notice = ctk.StringVar(value="30")
@@ -255,6 +260,36 @@ class CBPricerApp(
         self.v_bt_solve_iv = ctk.BooleanVar(value=True)
         self.v_bt_show_decomp = ctk.BooleanVar(value=True)
 
+        self.v_bt_mode = ctk.StringVar(value="单债回测")
+        self.v_st_start = ctk.StringVar(value=(today - timedelta(days=365)).isoformat())
+        self.v_st_end = ctk.StringVar(value=today.isoformat())
+        self.v_st_freq = ctk.StringVar(value="月")
+        self.v_st_top_n = ctk.StringVar(value="10")
+        self.v_st_template = ctk.StringVar(value="自定义")
+        self.v_st_view = ctk.StringVar(value="低估候选")
+        self.v_st_min_price = ctk.StringVar(value="")
+        self.v_st_max_price = ctk.StringVar(value="")
+        self.v_st_min_premium = ctk.StringVar(value="")
+        self.v_st_max_premium = ctk.StringVar(value="")
+        self.v_st_min_deviation = ctk.StringVar(value="")
+        self.v_st_max_deviation = ctk.StringVar(value="")
+        self.v_st_min_sigma = ctk.StringVar(value="")
+        self.v_st_max_sigma = ctk.StringVar(value="")
+        self.v_st_min_balance = ctk.StringVar(
+            value="" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
+        )
+        self.v_st_min_rating = ctk.StringVar(value=DEFAULT_MIN_CREDIT_RATING or "")
+        self.v_st_min_turnover = ctk.StringVar(value="")
+        self.v_st_delist_window = ctk.StringVar(value="0")
+        self.v_st_cost = ctk.StringVar(value="20")
+        self.v_st_benchmark = ctk.BooleanVar(value=True)
+        self.v_st_codes = ctk.StringVar(value="")
+        self.v_st_terms_history_dir = ctk.StringVar(value="")
+        self.v_st_terms_patches = ctk.StringVar(value="")
+        self.v_st_events_path = ctk.StringVar(value="")
+        self.v_st_status = ctk.StringVar(value="Pro 预览: 设置条件后运行策略回测")
+        self.v_st_precheck = ctk.StringVar(value="预检: 尚未运行")
+
         # 价值分解 & 希腊值
         self.v_bond_floor   = ctk.StringVar(value="—")
         self.v_parity       = ctk.StringVar(value="—")
@@ -271,12 +306,42 @@ class CBPricerApp(
         self.v_sens_status  = ctk.StringVar(value="设置参数范围后点击运行")
         self.v_deviation    = ctk.StringVar(value="—")
 
+        # 单债条款事件 (定价页只读展示)
+        self.v_term_event_alert = ctk.StringVar(value="")
+        self.v_term_event_down_status = ctk.StringVar(value="下修估值 —")
+        self.v_term_event_down_detail = ctk.StringVar(value="—")
+        self.v_term_event_down_progress = ctk.StringVar(value="—")
+        self.v_term_event_call_status = ctk.StringVar(value="强赎 —")
+        self.v_term_event_call_detail = ctk.StringVar(value="—")
+        self.v_term_event_call_progress = ctk.StringVar(value="—")
+        self.v_term_event_put_status = ctk.StringVar(value="回售 —")
+        self.v_term_event_put_detail = ctk.StringVar(value="—")
+        self.v_term_event_put_progress = ctk.StringVar(value="—")
+        self.v_term_event_conv_status = ctk.StringVar(value="转股价 —")
+        self.v_term_event_conv_detail = ctk.StringVar(value="—")
+        self.v_term_event_conv_progress = ctk.StringVar(value="—")
+        self.v_term_event_risk_status = ctk.StringVar(value="风险 —")
+        self.v_term_event_risk_detail = ctk.StringVar(value="—")
+        self.v_term_event_risk_progress = ctk.StringVar(value="—")
+        self._term_event_widgets: dict = {}
+
+        self._current_projected_terms = None
+        self._current_terms_projection = None
+        self._last_pricing_impact = None
+
         self._sens_figure     = None
         self._sens_canvas     = None
         self._last_sens_args  = None
         self._bt_figure       = None
         self._bt_canvas       = None
         self._last_bt_result  = None
+        self._strategy_bt_figure = None
+        self._strategy_bt_canvas = None
+        self._last_strategy_bt_result = None
+        self._strategy_bt_cancel = None
+        self._strategy_bt_running = False
+        self._strategy_pricing_cache = {}
+        self._strategy_compare_results = []
 
         self._last_stock_code = None
         self._last_credit = None
@@ -298,6 +363,7 @@ class CBPricerApp(
         self.v_src_p_down      = ctk.StringVar(value="模型")
         self.v_src_dk          = ctk.StringVar(value="模型")
         self.v_src_call_ratio  = ctk.StringVar(value="手工")
+        self.v_src_down_reset_trigger_ratio = ctk.StringVar(value="默认")
         self.v_src_put_ratio   = ctk.StringVar(value="手工")
         self.v_src_put_years   = ctk.StringVar(value="手工")
         self.v_src_call_notice = ctk.StringVar(value="手工")
@@ -328,7 +394,29 @@ class CBPricerApp(
         self._announcement_preview_in_flight: set[str] = set()
 
         self._attach_manual_source_tracking()
+        self.v_p_down.trace_add("write", lambda *_: self._refresh_p_down_hint())
+        self._refresh_p_down_hint()
         self._bond_code_trace = self.v_bond_code.trace_add("write", self._on_bond_code_write)
+
+    def _refresh_p_down_hint(self) -> None:
+        """把用户输入的 hazard λ 换算成 P(1 年内至少 1 次)。
+
+        UI 输入是 % 形式 (e.g. 15 → λ=0.15); 用户惯于按"年内概率"思考,
+        所以旁边挂一个 read-only 提示, 让强度与概率的口径都看得见。
+        """
+        try:
+            lam = float(str(self.v_p_down.get()).strip()) / 100.0
+        except (TypeError, ValueError):
+            self.v_p_down_hint.set("")
+            return
+        if lam <= 0:
+            self.v_p_down_hint.set("≈ 0% /年")
+        elif lam >= 6.0:
+            self.v_p_down_hint.set("≈ 100% /年")
+        else:
+            import math
+            p1y = 1.0 - math.exp(-lam)
+            self.v_p_down_hint.set(f"≈ {p1y * 100:.1f}% /年")
 
     # ── UI 构建 ────────────────────────────────────────────
     def _build_ui(self):
@@ -343,7 +431,7 @@ class CBPricerApp(
 
     def _build_header(self):
         # 投资者工作流: 先筛候选 → 钻单债 → 验模型 → 做压力测试
-        self._tab_names = [E("📦 批量"), E("⚡ 定价"), E("📈 回测"), E("🔥 敏感性")]
+        self._tab_names = [E("📦 批量"), E("⚡ 定价"), E("📈 回测"), E("🎯 策略"), E("🔥 敏感性")]
 
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
@@ -395,7 +483,7 @@ class CBPricerApp(
         Tooltip(self.data_source_menu,
                 "选择行情和利率来源；转债基础信息固定读取本地条款库, 并可由 Wind 刷新")
 
-        # 全市场 cb_data / 准入状态同步入口 — 替代命令行 cb-sync-* 调用
+        # 全市场 cb_data / 状态字段同步入口 — 替代命令行 cb-sync-* 调用
         self.btn_sync_pool = ctk.CTkButton(
             right_frame, text=E("🌐 同步池"),
             command=self._open_pool_sync_menu,
@@ -403,7 +491,7 @@ class CBPricerApp(
             font=(FONT_FAMILY, 12), width=82, height=30, corner_radius=6)
         self.btn_sync_pool.pack(side="left", padx=(0, 10))
         Tooltip(self.btn_sync_pool,
-                "弹出菜单: 同步全市场基础信息、刷新停牌强赎等准入状态、同步公告事件")
+                "弹出菜单: 同步全市场基础信息、刷新停牌强赎等状态字段、同步公告事件")
 
         AutocompleteEntry(
             right_frame, textvariable=self.v_bond_code,
@@ -534,6 +622,7 @@ class CBPricerApp(
         # 默认显示批量页 (与 tab_seg 初始选中一致)
         pricing_tab.build(self, self._tab_frames[E("⚡ 定价")])
         backtest_tab.build(self, self._tab_frames[E("📈 回测")])
+        strategy_tab.build(self, self._tab_frames[E("🎯 策略")])
         sensitivity_tab.build(self, self._tab_frames[E("🔥 敏感性")])
         batch_tab.build(self, self._tab_frames[E("📦 批量")])
         self._active_tab_name = E("📦 批量")
@@ -634,6 +723,7 @@ class CBPricerApp(
             (self.v_spread, self.v_src_spread),
             (self.v_p_down, self.v_src_p_down),
             (self.v_dk, self.v_src_dk),
+            (self.v_down_reset_trigger_ratio, self.v_src_down_reset_trigger_ratio),
             (self.v_call_ratio, self.v_src_call_ratio),
             (self.v_put_ratio, self.v_src_put_ratio),
             (self.v_put_years, self.v_src_put_years),
@@ -642,14 +732,30 @@ class CBPricerApp(
         for value_var, source_var in pairs:
             handle = value_var.trace_add(
                 "write",
-                lambda *_args, src=source_var: self._mark_manual_source(src),
+                lambda *_args, var=value_var, src=source_var: self._mark_manual_source(
+                    src, value_var=var),
             )
             self._source_trace_handles.append((value_var, handle))
 
-    def _mark_manual_source(self, source_var):
+    def _mark_manual_source(self, source_var, *, value_var=None):
         if self._programmatic_update:
             return
         source_var.set("手工")
+        if (
+            any(
+                value_var is var
+                for var in (
+                    self.v_S0,
+                    self.v_K,
+                    self.v_down_reset_trigger_ratio,
+                    self.v_cur_date,
+                )
+            )
+            and hasattr(self, "_auto_fill_p_down_from_current_x")
+        ):
+            self.after_idle(lambda: self._auto_fill_p_down_from_current_x())
+        if hasattr(self, "_refresh_terms_snapshot_card"):
+            self.after_idle(self._refresh_terms_snapshot_card)
 
     def _set_field(self, value_var, value, source_var=None, source=None):
         self._programmatic_update = True
@@ -659,6 +765,8 @@ class CBPricerApp(
             self._programmatic_update = False
         if source_var is not None and source is not None:
             source_var.set(source)
+        if hasattr(self, "_refresh_terms_snapshot_card"):
+            self.after_idle(self._refresh_terms_snapshot_card)
 
     @staticmethod
     def _fmt_pct(value):
@@ -798,6 +906,8 @@ class CBPricerApp(
         # 刷新 matplotlib 图表色彩
         if self._last_bt_result is not None:
             self._render_backtest_chart(self._last_bt_result)
+        if self._last_strategy_bt_result is not None:
+            self._render_strategy_backtest_result(self._last_strategy_bt_result)
         if getattr(self, "_last_sens_args", None) is not None:
             self._render_sensitivity_chart(*self._last_sens_args)
 
@@ -839,10 +949,17 @@ class CBPricerApp(
         "v_bond_code", "v_S0", "v_K", "v_face", "v_redemp",
         "v_cur_date", "v_mat_date", "v_iss_date", "v_conv_date",
         "v_coupons", "v_sigma", "v_r", "v_q", "v_spread", "v_p_down", "v_dk",
-        "v_call_ratio", "v_put_ratio", "v_put_years", "v_call_notice", "v_M", "v_N",
+        "v_down_reset_trigger_ratio", "v_call_ratio", "v_put_ratio",
+        "v_put_years", "v_call_notice", "v_M", "v_N",
         "v_vol_window", "v_market_price",
         "v_bt_start", "v_bt_end", "v_bt_freq",
         "v_data_source",
+        # 策略页配置 (模板/选债逻辑/范围过滤/成本); 文件路径与日期不纳入, 保持预设可移植
+        "v_st_freq", "v_st_top_n", "v_st_template", "v_st_view",
+        "v_st_min_price", "v_st_max_price",
+        "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",
+        "v_st_min_sigma", "v_st_max_sigma", "v_st_min_rating", "v_st_min_balance",
+        "v_st_min_turnover", "v_st_delist_window", "v_st_cost", "v_st_benchmark",
     )
 
     def _save_preset(self):
@@ -886,7 +1003,8 @@ class CBPricerApp(
                 self.v_src_cur_date, self.v_src_mat_date, self.v_src_iss_date,
                 self.v_src_conv_date, self.v_src_coupons, self.v_src_sigma,
                 self.v_src_r, self.v_src_q, self.v_src_spread, self.v_src_p_down, self.v_src_dk,
-                self.v_src_call_ratio, self.v_src_put_ratio, self.v_src_put_years,
+                self.v_src_down_reset_trigger_ratio, self.v_src_call_ratio,
+                self.v_src_put_ratio, self.v_src_put_years,
                 self.v_src_call_notice,
             ):
                 src.set("预设")

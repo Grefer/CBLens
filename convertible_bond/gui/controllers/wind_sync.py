@@ -18,9 +18,11 @@ from ...data_providers import (
     DataProvider,
     WindDataProvider,
 )
+from ...historical_terms import project_terms
 from ..constants import (
     BOND_CODE_RE,
     DEFAULT_CREDIT_SPREAD_PCT,
+    DEFAULT_DOWN_RESET_TRIGGER_PCT,
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
 )
@@ -42,8 +44,8 @@ _POOL_SYNC_TARGETS = (
      "只拉本地条款库中超过 7 天未刷新或新发行的债, 显著比全量快\n通常 1-3 分钟."),
     ("🌐 全量同步基础信息", "convertible_bond.cli.sync_tradable", [],
      "拉取全部可交易转债的发行条款 / 票息 / 转股价 / 评级 / 余额到本地条款库\n慢, 通常 5-15 分钟; 期间会占用 Wind 接口."),
-    ("🚦 刷新准入状态", "convertible_bond.cli.sync_admission_status", [],
-     "刷新停牌 / 强赎公告 / ST / 临近摘牌 / 成交额等准入字段\n通常 1-5 分钟."),
+    ("🚦 刷新状态字段", "convertible_bond.cli.sync_admission_status", [],
+     "刷新停牌 / 强赎公告 / ST / 临近摘牌 / 成交额等状态字段\n通常 1-5 分钟."),
     ("📰 同步公告事件", "convertible_bond.cli.sync_events", [],
      "下载并解析公告标题, 写入本地事件表\n通常 1-3 分钟."),
 )
@@ -130,6 +132,13 @@ class WindSyncMixin:
         terms = self.terms_cache.get(code)
         if terms is None:
             return
+        projection = project_terms(
+            code,
+            terms,
+            date.today(),
+            event_store=getattr(self, "event_store", None),
+        )
+        terms = projection.terms
         self._populate_down_reset_from_resolver(code, terms)
         iss_dt = terms.issue_date
         mat_dt = terms.maturity_date
@@ -147,6 +156,7 @@ class WindSyncMixin:
             "iss_date": iss_dt,
             "conv_date": conv_dt,
             "redemp": float(terms.redemption_price) if terms.redemption_price is not None else 107.0,
+            "down_reset_trigger_ratio": terms.down_reset_trigger_pct,
             "call_ratio": terms.call_trigger_pct,
             "put_ratio": terms.put_trigger_pct,
             "put_years": put_years,
@@ -160,10 +170,12 @@ class WindSyncMixin:
             "close": terms.close,
             "credit": terms.credit_rating,
             "outstanding": terms.outstanding_balance,
+            "_terms": terms,
             "provider_name": "本地",
             "market_source": self.v_data_source.get(),
             "terms_source": self._cache_meta_source(code),
             "terms_origin": "缓存",
+            "term_patch_fields": projection.patch_fields,
             "cache_age": self.terms_cache.fetched_at(code),
         })
 
@@ -205,7 +217,7 @@ class WindSyncMixin:
 
     # ── 全市场池同步 (替代命令行 cb-sync-* 调用) ─────────────────
     def _open_pool_sync_menu(self):
-        """弹出菜单选择: 同步基础 / 准入状态 / 公告事件."""
+        """弹出菜单选择: 同步基础 / 状态字段 / 公告事件."""
         menu = tk.Menu(self, tearoff=0, font=(FONT_FAMILY, 12))
         for label, module, extra_args, _desc in _POOL_SYNC_TARGETS:
             menu.add_command(
@@ -332,6 +344,13 @@ class WindSyncMixin:
             else:
                 terms = provider.get_bond_terms(code, val_date)
                 terms_origin = "cb_data" if had_cached and not force else "Wind刷新"
+            projection = project_terms(
+                code,
+                terms,
+                val_date,
+                event_store=getattr(self, "event_store", None),
+            )
+            terms = projection.terms
 
             stock_code = terms.underlying_code
             if not stock_code:
@@ -398,6 +417,7 @@ class WindSyncMixin:
                 "iss_date": iss_dt,
                 "conv_date": conv_dt,
                 "redemp": float(redemp),
+                "down_reset_trigger_ratio": terms.down_reset_trigger_pct,
                 "call_ratio": terms.call_trigger_pct,
                 "put_ratio": terms.put_trigger_pct,
                 "put_years": put_years,
@@ -416,6 +436,7 @@ class WindSyncMixin:
                 "market_source": market_source,
                 "terms_source": self._cache_meta_source(code),
                 "terms_origin": terms_origin,
+                "term_patch_fields": projection.patch_fields,
                 "cache_age": self.terms_cache.fetched_at(code),
                 "vol_window": vol_window_label,
             })
@@ -434,6 +455,8 @@ class WindSyncMixin:
         if data_code and self._normalize_bond_code(self.v_bond_code.get()) != data_code:
             return
         terms_for_dr = d.get("_terms") or self.terms_cache.get(data_code or "")
+        if terms_for_dr is not None:
+            self._current_projected_terms = terms_for_dr
         if data_code and terms_for_dr is not None:
             self._populate_down_reset_from_resolver(data_code, terms_for_dr)
         if data_code:
@@ -444,13 +467,15 @@ class WindSyncMixin:
         market_label = d.get("market_source") or self.v_data_source.get()
         coupon_src = d.get("coupon_src", "terms")
         coupon_label = "现金流" if coupon_src == "cashflow" else terms_label
+        patch_fields = set(d.get("term_patch_fields") or [])
 
         if d.get("S0") is not None:
             self._set_field(self.v_S0, f"{d['S0']:.4f}", self.v_src_S0, "行情")
         elif "S0" in d:
             self._set_field(self.v_S0, "", self.v_src_S0, "待行情")
         if d.get("K") is not None:
-            self._set_field(self.v_K, f"{d['K']:.2f}", self.v_src_K, terms_label)
+            k_label = "公告" if "conversion_price" in patch_fields else terms_label
+            self._set_field(self.v_K, f"{d['K']:.2f}", self.v_src_K, k_label)
         if d.get("face") is not None:
             self._set_field(self.v_face, f"{d['face']:.0f}", self.v_src_face, terms_label)
         self._set_field(self.v_cur_date, date.today().isoformat(), self.v_src_cur_date, "系统")
@@ -474,6 +499,20 @@ class WindSyncMixin:
         )
         if d.get("redemp") is not None:
             self._set_field(self.v_redemp, f"{d['redemp']:.1f}", self.v_src_redemp, coupon_label)
+        if d.get("down_reset_trigger_ratio") is not None:
+            self._set_field(
+                self.v_down_reset_trigger_ratio,
+                f"{float(d['down_reset_trigger_ratio']):.0f}",
+                self.v_src_down_reset_trigger_ratio,
+                terms_label,
+            )
+        elif "down_reset_trigger_ratio" in d:
+            self._set_field(
+                self.v_down_reset_trigger_ratio,
+                f"{DEFAULT_DOWN_RESET_TRIGGER_PCT:g}",
+                self.v_src_down_reset_trigger_ratio,
+                "默认",
+            )
         if d.get("call_ratio") is not None:
             self._set_field(self.v_call_ratio, f"{float(d['call_ratio']):.0f}", self.v_src_call_ratio, terms_label)
         if d.get("put_ratio") is not None:
@@ -502,13 +541,14 @@ class WindSyncMixin:
 
         self._last_stock_code = d.get("stock_code")
         self._last_credit = d.get("credit")
+        credit_label = "公告" if "credit_rating" in patch_fields else terms_label
 
         if d.get("credit") and d["credit"] in CREDIT_SPREAD_TABLE:
             self._set_field(
                 self.v_spread,
                 f"{CREDIT_SPREAD_TABLE[d['credit']]:.1f}",
                 self.v_src_spread,
-                "评级",
+                f"{credit_label}评级",
             )
         elif "credit" in d:
             self._set_field(
@@ -518,12 +558,22 @@ class WindSyncMixin:
                 "默认",
             )
 
-        self._set_field(
-            self.v_p_down,
-            self._fmt_pct(d.get("p_down_pct", DEFAULT_P_DOWN_PCT)),
-            self.v_src_p_down,
-            "模型",
-        )
+        if d.get("p_down_pct") is not None:
+            self._set_field(
+                self.v_p_down,
+                self._fmt_pct(d.get("p_down_pct", DEFAULT_P_DOWN_PCT)),
+                self.v_src_p_down,
+                "模型",
+            )
+        elif hasattr(self, "_auto_fill_p_down_from_current_x"):
+            self._auto_fill_p_down_from_current_x(force=True)
+        else:
+            self._set_field(
+                self.v_p_down,
+                self._fmt_pct(DEFAULT_P_DOWN_PCT),
+                self.v_src_p_down,
+                "模型",
+            )
         self._set_field(
             self.v_dk,
             self._fmt_pct(d.get("distress_k_pct", DEFAULT_DISTRESS_K_PCT)),
@@ -540,7 +590,7 @@ class WindSyncMixin:
         if d.get("close") is not None:
             ref_parts.append(f"市价 {float(d['close']):.2f}")
         if d.get("credit"):
-            ref_parts.append(f"评级 {d['credit']}")
+            ref_parts.append(f"评级 {d['credit']}({credit_label})")
         if d.get("outstanding") is not None:
             ref_parts.append(f"剩余规模 {float(d['outstanding']):.2f} 亿")
         if d.get("cache_age") and origin_tag == "缓存":
@@ -565,7 +615,7 @@ class WindSyncMixin:
         else:
             source_parts.append("股息率：默认 0")
         source_parts.append(f"利差：{self.v_src_spread.get()}")
-        source_parts.append("下修与信用扩张：模型")
+        source_parts.append("下修与低股价利差扩张：模型")
         detail_parts.append("参数来源：" + "；".join(source_parts))
         self.v_ref_detail.set("\n".join(detail_parts))
 
@@ -579,6 +629,8 @@ class WindSyncMixin:
         self._last_quote_fetch_ts = _dt.now()
         if hasattr(self, "_update_data_freshness"):
             self._update_data_freshness()
+        if hasattr(self, "_refresh_terms_snapshot_card"):
+            self._refresh_terms_snapshot_card()
 
     # ── 波动率窗口切换 ────────────────────────────────────
     def _on_vol_window_change(self, choice):

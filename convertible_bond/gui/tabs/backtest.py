@@ -9,14 +9,13 @@ from ..theme import (
 
 
 def build(app, tab):
-    """回测 Tab: 控制栏 + 图表区."""
+    """回测 Tab: 单债理论价 vs 实际收盘."""
     tab.grid_columnconfigure(0, weight=1)
     tab.grid_rowconfigure(0, weight=0)
     tab.grid_rowconfigure(1, weight=0)
     tab.grid_rowconfigure(2, weight=0)
     tab.grid_rowconfigure(3, weight=1)
 
-    # 控制栏
     ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
     ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 12), padx=6)
 
@@ -30,18 +29,11 @@ def build(app, tab):
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
     cc.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
 
-    ctk.CTkLabel(cc, text="开始", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(
-        side="left", padx=(0, 4))
-    ctk.CTkEntry(cc, textvariable=app.v_bt_start, width=110, font=(FONT_MONO, 13),
-                 fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(
-        side="left", padx=(0, 12))
-    ctk.CTkLabel(cc, text="结束", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(
-        side="left", padx=(0, 4))
-    ctk.CTkEntry(cc, textvariable=app.v_bt_end, width=110, font=(FONT_MONO, 13),
-                 fg_color=BG_INPUT, border_width=0, corner_radius=6).pack(
-        side="left", padx=(0, 12))
-    ctk.CTkLabel(cc, text="频率", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(
-        side="left", padx=(0, 4))
+    _label(cc, "开始")
+    _entry(cc, app.v_bt_start, 110).pack(side="left", padx=(0, 12))
+    _label(cc, "结束")
+    _entry(cc, app.v_bt_end, 110).pack(side="left", padx=(0, 12))
+    _label(cc, "频率")
     ctk.CTkOptionMenu(
         cc, variable=app.v_bt_freq, values=["日", "周", "月"],
         width=70, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
@@ -84,9 +76,6 @@ def build(app, tab):
         font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
     app.lbl_bt_status.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 6))
 
-    # 统计指标条 (回测完成后填充): 均偏差 / RMSE / 最大|偏差| / 命中率 / 相关系数 / IV-HV
-    tab.grid_rowconfigure(2, weight=0)
-    tab.grid_rowconfigure(3, weight=1)
     app._bt_stat_vars = {}
     stats_card = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
     stats_card.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 8))
@@ -114,3 +103,14 @@ def build(app, tab):
     app.bt_chart_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
     app.bt_chart_frame.grid_columnconfigure(0, weight=1)
     app.bt_chart_frame.grid_rowconfigure(0, weight=1)
+
+
+def _label(parent, text):
+    ctk.CTkLabel(parent, text=text, text_color=TEXT_DIM,
+                 font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
+
+
+def _entry(parent, var, width):
+    return ctk.CTkEntry(parent, textvariable=var, width=width, font=(FONT_MONO, 13),
+                        fg_color=BG_INPUT, border_width=0, corner_radius=6,
+                        text_color=TEXT, height=30)
