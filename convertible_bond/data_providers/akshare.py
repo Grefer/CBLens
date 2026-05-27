@@ -55,6 +55,8 @@ class AkshareDataProvider(DataProvider):
         self._ak = ak
         self._cb_list_cache = None
         self._profile_cache: dict = {}    # bond_code -> profile DataFrame
+        self._value_analysis_cache: dict = {}  # bond_code -> value-analysis DataFrame
+        self._historical_k_cache: dict[tuple[str, date], float | None] = {}
 
     def _cb_list(self):
         if self._cb_list_cache is None:
@@ -89,6 +91,69 @@ class AkshareDataProvider(DataProvider):
             return v
         except Exception:
             return None
+
+    def _value_analysis(self, bond_code):
+        """东方财富价值分析: 包含每日转股价值, 可用于反推历史转股价."""
+        ak_code = str(bond_code or "").split(".")[0]
+        if ak_code in self._value_analysis_cache:
+            return self._value_analysis_cache[ak_code]
+        try:
+            df = _retry(
+                lambda: self._ak.bond_zh_cov_value_analysis(symbol=ak_code),
+                label=f"bond_zh_cov_value_analysis({ak_code})",
+            )
+            if df is not None and len(df) > 0 and "日期" in df.columns:
+                df = df.copy()
+                df["_d"] = df["日期"].apply(self._safe_date_value)
+                df = df[df["_d"].notna()].sort_values("_d")
+        except Exception as e:
+            logger.debug("bond_zh_cov_value_analysis 取 %s 失败: %s", bond_code, e)
+            df = None
+        self._value_analysis_cache[ak_code] = df
+        return df
+
+    def _value_analysis_row(self, bond_code, valuation_date):
+        df = self._value_analysis(bond_code)
+        if df is None or len(df) == 0 or "_d" not in df.columns:
+            return None
+        try:
+            sub = df[df["_d"] <= valuation_date]
+            if len(sub) == 0:
+                return None
+            return sub.iloc[-1]
+        except Exception:
+            return None
+
+    def _historical_conversion_price(self, bond_code, stock_code, valuation_date) -> float | None:
+        """用 AkShare 历史转股价值 + 正股历史价反推估值日转股价.
+
+        ``bond_zh_cov`` 只给当前转股价; ``bond_zh_cov_value_analysis`` 有每日
+        转股价值。根据 ``转股价值 = 正股收盘价 / 转股价 * 100`` 可反推历史 K。
+        """
+        key = (bond_code, valuation_date)
+        if key in self._historical_k_cache:
+            return self._historical_k_cache[key]
+        value: float | None = None
+        row = self._value_analysis_row(bond_code, valuation_date)
+        if row is not None and stock_code:
+            conv_value = _float_or_none(row.get("转股价值"))
+            row_date = row.get("_d")
+            if conv_value is not None and conv_value > 0 and row_date is not None:
+                try:
+                    stock_close = self.get_stock_close(stock_code, row_date)
+                    if stock_close and stock_close > 0:
+                        value = float(stock_close) * 100.0 / float(conv_value)
+                except Exception as e:
+                    logger.debug("akshare 历史转股价反推失败 %s %s: %s", bond_code, valuation_date, e)
+        self._historical_k_cache[key] = value
+        return value
+
+    def _historical_bond_close_from_value_analysis(self, bond_code, valuation_date) -> float | None:
+        row = self._value_analysis_row(bond_code, valuation_date)
+        if row is None:
+            return None
+        value = _float_or_none(row.get("收盘价"))
+        return value if value is not None and value > 0 else None
 
     def get_bond_terms(self, bond_code, valuation_date):
         plain_code = bond_code.split(".")[0]
@@ -140,7 +205,13 @@ class AkshareDataProvider(DataProvider):
         # 3) 类型转换
         K = _gl("转股价")
         K_val = float(K) if K is not None and float(K) > 0 else None
-        close_val = _gl("债现价", "现价", "价格")
+        historical_k = self._historical_conversion_price(bond_code, underlying, valuation_date)
+        if historical_k is not None and historical_k > 0:
+            K_val = historical_k
+        close_val = (
+            self._historical_bond_close_from_value_analysis(bond_code, valuation_date)
+            or _gl("债现价", "现价", "价格")
+        )
         rating = _gl("信用评级") or rating_profile
         turnover = _float_or_none(_gl("成交额", "成交额(元)", "成交额(万元)"))
 
@@ -371,6 +442,8 @@ class AkshareDataProvider(DataProvider):
             11xxxx → SH (沪市), 其它 (12xxxx/13xxxx) → SZ (深市)
         返回 ``[(wind_code, sec_name), ...]``; akshare 的 '债券简称' 列充当 sec_name。
         """
+        if on_date is not None and on_date != date.today():
+            raise NotImplementedError("akshare 不支持历史可转债全市场成分")
         df = self._cb_list()
         if df is None or len(df) == 0:
             return []

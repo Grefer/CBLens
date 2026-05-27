@@ -266,12 +266,14 @@ class HistoricalBondDataProvider(DataProvider):
         patch_store: TermsPatchStore | None = None,
         event_store: CBEventStore | None = None,
         strip_fallback_status: bool = True,
+        merge_admission_status: bool = False,
     ):
         self.inner = inner
         self.history_store = history_store
         self.patch_store = patch_store or TermsPatchStore()
         self.event_store = event_store or CBEventStore(project_events_path())
         self.strip_fallback_status = strip_fallback_status
+        self.merge_admission_status = merge_admission_status
         self.name = f"{inner.name}+history"
 
     def get_bond_terms(self, bond_code: str, valuation_date: date) -> BondTerms:
@@ -283,6 +285,14 @@ class HistoricalBondDataProvider(DataProvider):
             terms = self.inner.get_bond_terms(bond_code, valuation_date)
             if self.strip_fallback_status:
                 terms = strip_current_status_fields(terms)
+
+        if self.merge_admission_status:
+            terms = _merge_admission_status(
+                self.inner,
+                bond_code,
+                valuation_date,
+                terms,
+            )
 
         terms = self.patch_store.apply(bond_code, terms, valuation_date)
         terms = apply_events_to_terms(
@@ -305,16 +315,25 @@ class HistoricalBondDataProvider(DataProvider):
             has_snapshot_terms = terms is not None
         patches = self.patch_store.list_patches(bond_code=bond_code, through_date=valuation_date)
         events = self.event_store.list_events(bond_code=bond_code, through_date=valuation_date)
-        uses_fallback = not has_snapshot_terms
+        if has_snapshot_terms:
+            terms_source = "history_snapshot"
+            uses_fallback = False
+        elif self.merge_admission_status and not self.strip_fallback_status:
+            terms_source = "provider_history"
+            uses_fallback = False
+        else:
+            terms_source = "current_fallback"
+            uses_fallback = True
         return {
             "bond_code": bond_code,
             "valuation_date": valuation_date,
-            "terms_source": "history_snapshot" if has_snapshot_terms else "current_fallback",
+            "terms_source": terms_source,
             "snapshot_date": snapshot_date,
             "patch_count": len(patches),
             "event_count": len(events),
             "uses_current_fallback": uses_fallback,
             "strip_fallback_status": bool(self.strip_fallback_status and uses_fallback),
+            "merge_admission_status": bool(self.merge_admission_status),
         }
 
     # 动态行情完全透传给内层 provider。
@@ -344,6 +363,79 @@ class HistoricalBondDataProvider(DataProvider):
 
     def list_tradable_cbs(self, on_date: date | None = None):
         return self.inner.list_tradable_cbs(on_date)
+
+
+def _merge_admission_status(
+    provider: DataProvider,
+    bond_code: str,
+    valuation_date: date,
+    base_terms: BondTerms,
+) -> BondTerms:
+    """把数据源按估值日提供的准入/状态字段合并到基础条款上."""
+    try:
+        status_terms = provider.get_admission_status(
+            bond_code,
+            valuation_date,
+            base_terms=base_terms,
+        )
+    except Exception:
+        return base_terms
+    if status_terms is None or status_terms is base_terms:
+        return _strip_unannounced_future_status(base_terms, valuation_date)
+    updates = {
+        field.name: value
+        for field in _BOND_FIELDS
+        if (value := getattr(status_terms, field.name, None)) is not None
+    }
+    merged = replace(base_terms, **updates) if updates else base_terms
+    return _strip_unannounced_future_status(merged, valuation_date)
+
+
+def _strip_unannounced_future_status(terms: BondTerms, valuation_date: date) -> BondTerms:
+    """Wind 部分生命周期字段会在历史 ``tradeDate`` 下暴露未来事件日期.
+
+    这类字段只有在已经公告或已经发生时才合并进历史视角; 未来已知但当时
+    不可见的强赎、最后交易、摘牌信息交给公告事件层按 ``event_date`` 应用。
+    """
+    call_announce = terms.call_announce_date
+    call_announced = call_announce is not None and call_announce <= valuation_date
+    call_redeemed = (
+        terms.call_redemption_date is not None
+        and terms.call_redemption_date <= valuation_date
+    )
+    delisted = terms.delisting_date is not None and terms.delisting_date <= valuation_date
+    call_visible = call_announced or call_redeemed or delisted
+    has_future_lifecycle = any(
+        value is not None and value > valuation_date
+        for value in (
+            terms.call_announce_date,
+            terms.call_redemption_date,
+            terms.last_trading_date,
+            terms.delisting_date,
+        )
+    )
+    if not has_future_lifecycle:
+        return terms
+    updates: dict[str, Any] = {}
+
+    if call_announce is not None and call_announce > valuation_date:
+        updates["call_announce_date"] = None
+    if not call_visible:
+        updates.update({
+            "call_status": None,
+            "call_redemption_date": None,
+            "call_redemption_price": None,
+        })
+
+    last_trading = terms.last_trading_date
+    if last_trading is not None and last_trading > valuation_date and not call_visible:
+        updates["last_trading_date"] = None
+
+    delisting = terms.delisting_date
+    if delisting is not None and delisting > valuation_date and not call_visible:
+        updates["delisting_date"] = None
+
+    return replace(terms, **updates) if updates else terms
 
 
 def strip_current_status_fields(terms: BondTerms) -> BondTerms:

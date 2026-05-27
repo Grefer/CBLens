@@ -267,6 +267,8 @@ class CBPricerApp(
         self.v_st_top_n = ctk.StringVar(value="10")
         self.v_st_template = ctk.StringVar(value="自定义")
         self.v_st_view = ctk.StringVar(value="低估候选")
+        self.v_st_pool_mode = ctk.StringVar(value="本地全市场")
+        self.v_st_history_mode = ctk.StringVar(value="标准")
         self.v_st_min_price = ctk.StringVar(value="")
         self.v_st_max_price = ctk.StringVar(value="")
         self.v_st_min_premium = ctk.StringVar(value="")
@@ -956,6 +958,7 @@ class CBPricerApp(
         "v_data_source",
         # 策略页配置 (模板/选债逻辑/范围过滤/成本); 文件路径与日期不纳入, 保持预设可移植
         "v_st_freq", "v_st_top_n", "v_st_template", "v_st_view",
+        "v_st_pool_mode", "v_st_history_mode", "v_st_codes",
         "v_st_min_price", "v_st_max_price",
         "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",
         "v_st_min_sigma", "v_st_max_sigma", "v_st_min_rating", "v_st_min_balance",

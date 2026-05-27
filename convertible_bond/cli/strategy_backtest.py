@@ -78,6 +78,8 @@ def main() -> int:
                         help="回测结束日期, YYYY-MM-DD")
     parser.add_argument("--freq", default="M", choices=["D", "W", "M", "Q"],
                         help="调仓频率: D/W/M/Q (默认 M)")
+    parser.add_argument("--pool-mode", default="static", choices=["static", "dynamic"],
+                        help="标的池模式: static=固定代码, dynamic=按日过滤 (默认 static)")
     parser.add_argument("--mode", default="standard", choices=["fast", "standard", "precise"],
                         help="定价速度/精度: fast=快速预览, standard=标准, precise=精确 (默认 standard)")
     parser.add_argument("--top-n", type=int, default=10,
@@ -202,6 +204,7 @@ def main() -> int:
         mark_to_market=not args.no_mark_to_market,
         transaction_cost=max(0.0, args.cost_bps) / 10000.0,
         compute_benchmark=not args.no_benchmark,
+        pool_mode=args.pool_mode,
     )
     if args.M is not None or args.N is not None:
         grid_M = args.M or 300

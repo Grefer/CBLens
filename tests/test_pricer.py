@@ -1524,6 +1524,74 @@ class TestAkshareStockFallbacks:
 
         assert provider.get_stock_dividend_yield("000001.SZ", date(2025, 1, 15)) == 2.5
 
+    def test_bond_terms_derives_historical_conversion_price_from_value_analysis(self):
+        """bond_zh_cov 只有当前 K; 历史估值日应从转股价值反推历史 K."""
+        import pandas as pd
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        class FakeAk:
+            def bond_zh_cov(self):
+                return pd.DataFrame({
+                    "债券代码": ["110073"],
+                    "债券简称": ["国投转债"],
+                    "正股代码": ["600061"],
+                    "正股简称": ["国投资本"],
+                    "转股价": [9.42],
+                    "债现价": [106.75],
+                    "信用评级": ["AAA"],
+                    "上市时间": ["2020-08-20"],
+                    "申购日期": ["2020-07-24"],
+            })
+
+            def bond_cb_profile_sina(self, symbol):
+                assert symbol == "sh110073"
+                return pd.DataFrame({
+                    "item": ["到期日", "起息日期", "利率说明", "发行规模（亿元）"],
+                    "value": [
+                        "2026-07-24",
+                        "2020-07-24",
+                        "第一年0.2%、第二年0.4%",
+                        "80",
+                    ],
+                })
+
+            def bond_zh_cov_value_analysis(self, symbol):
+                assert symbol == "110073"
+                return pd.DataFrame({
+                    "日期": ["2024-01-31"],
+                    "收盘价": [107.119],
+                    "转股价值": [69.1511387164],
+                })
+
+            def stock_zh_a_hist(self, **kwargs):
+                assert kwargs["symbol"] == "600061"
+                return pd.DataFrame({
+                    "日期": ["2024-01-31"],
+                    "收盘": [6.68],
+                })
+
+            def stock_zh_a_daily(self, **kwargs):
+                raise RuntimeError("daily fallback should not be used")
+
+        provider = object.__new__(AkshareDataProvider)
+        provider._ak = FakeAk()
+        provider._cb_list_cache = None
+        provider._profile_cache = {}
+        provider._value_analysis_cache = {}
+        provider._historical_k_cache = {}
+
+        terms = provider.get_bond_terms("110073.SH", date(2024, 1, 31))
+
+        assert terms.conversion_price == pytest.approx(9.66)
+        assert terms.close == pytest.approx(107.119)
+
+    def test_historical_list_tradable_cbs_is_not_supported(self):
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        provider = object.__new__(AkshareDataProvider)
+        with pytest.raises(NotImplementedError):
+            provider.list_tradable_cbs(date(2024, 1, 31))
+
 
 # ── 15. TermsBundle (单文件项目级 snapshot) ─────────────────
 class TestTermsBundle:

@@ -66,6 +66,34 @@ class FakeHistoricalProvider(DataProvider):
         return [(d, v) for d, v in self.bond_history if start <= d <= end]
 
 
+class FakeWindHistoricalProvider(FakeHistoricalProvider):
+    name = "fake-wind-history"
+
+    def get_admission_status(self, bond_code, valuation_date, base_terms=None):
+        return BondTerms(
+            suspension_status="交易",
+            underlying_status="正常",
+            underlying_trade_status="交易",
+            bond_turnover_amount=2.5,
+            call_status="历史强赎状态",
+        )
+
+
+class FakeFutureEventWindProvider(FakeHistoricalProvider):
+    name = "fake-future-event-wind"
+
+    def get_admission_status(self, bond_code, valuation_date, base_terms=None):
+        return BondTerms(
+            call_status="已公告强赎",
+            call_announce_date=None,
+            call_redemption_date=date(2025, 6, 30),
+            call_redemption_price=100.2,
+            last_trading_date=date(2025, 6, 29),
+            delisting_date=date(2025, 7, 10),
+            bond_turnover_amount=3.0,
+        )
+
+
 def test_terms_patch_store_applies_field_changes_as_of_date(tmp_path):
     path = tmp_path / "cb_terms_patches.json"
     path.write_text(json.dumps({
@@ -230,6 +258,52 @@ def test_historical_provider_prefers_snapshot_before_current_bundle(tmp_path):
 
     assert terms.sec_name == "历史转债"
     assert terms.conversion_price == 11.0
+
+
+def test_historical_provider_can_merge_wind_admission_status(tmp_path):
+    provider = HistoricalBondDataProvider(
+        FakeWindHistoricalProvider(),
+        patch_store=TermsPatchStore(tmp_path / "missing_patches.json"),
+        event_store=CBEventStore(tmp_path / "events.json"),
+        strip_fallback_status=False,
+        merge_admission_status=True,
+    )
+
+    terms = provider.get_bond_terms("113001.SH", date(2025, 2, 20))
+    diag = provider.get_terms_source_diagnostics("113001.SH", date(2025, 2, 20))
+
+    assert terms.conversion_price == 8.0
+    assert terms.suspension_status == "交易"
+    assert terms.underlying_status == "正常"
+    assert terms.underlying_trade_status == "交易"
+    assert terms.bond_turnover_amount == 2.5
+    assert diag["terms_source"] == "provider_history"
+    assert diag["uses_current_fallback"] is False
+    assert diag["merge_admission_status"] is True
+
+
+def test_historical_provider_strips_unannounced_future_wind_status(tmp_path):
+    provider = HistoricalBondDataProvider(
+        FakeFutureEventWindProvider(),
+        patch_store=TermsPatchStore(tmp_path / "missing_patches.json"),
+        event_store=CBEventStore(tmp_path / "events.json"),
+        strip_fallback_status=False,
+        merge_admission_status=True,
+    )
+
+    before = provider.get_bond_terms("113001.SH", date(2025, 1, 31))
+    after = provider.get_bond_terms("113001.SH", date(2025, 7, 11))
+
+    assert before.call_status is None
+    assert before.call_redemption_date is None
+    assert before.call_redemption_price is None
+    assert before.last_trading_date is None
+    assert before.delisting_date is None
+    assert before.bond_turnover_amount == 3.0
+    assert after.call_status == "已公告强赎"
+    assert after.call_redemption_date == date(2025, 6, 30)
+    assert after.last_trading_date == date(2025, 6, 29)
+    assert after.delisting_date == date(2025, 7, 10)
 
 
 def test_historical_provider_reports_terms_source_diagnostics(tmp_path):

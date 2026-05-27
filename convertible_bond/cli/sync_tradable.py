@@ -16,6 +16,7 @@
     - 临时: 单只债的 GUI 🔄 按钮 (重大事件后)
 """
 import argparse
+import shutil
 import sys
 import time
 from datetime import date
@@ -24,6 +25,21 @@ from pathlib import Path
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_data_sync import filter_listed_codes, sync_cb_terms
 from ..data_providers import DataProvider, WindDataProvider
+
+
+def _save_history_snapshot(bundle, bundle_path: Path) -> Path | None:
+    """把当前 cb_data bundle 复制一份到 cb_data_history/YYYY-MM-DD.json."""
+    from ..historical_terms import project_terms_history_dir
+    history_dir = project_terms_history_dir()
+    history_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_name = f"{date.today().isoformat()}.json"
+    snapshot_path = history_dir / snapshot_name
+    try:
+        shutil.copy2(bundle_path, snapshot_path)
+        return snapshot_path
+    except OSError as exc:
+        print(f"⚠️  保存历史快照失败: {exc}", file=sys.stderr)
+        return None
 
 
 def _make_provider(name: str) -> DataProvider:
@@ -134,6 +150,10 @@ def main():
     parts.append(f"耗时 {elapsed:.1f}s")
     print(f"\n{', '.join(parts)}")
     print(f"   bundle 文件: {bundle.path}")
+    # 自动保存 cb_data 历史快照, 积累后可用于策略回测防未来函数
+    snapshot_path = _save_history_snapshot(bundle, bundle_path)
+    if snapshot_path:
+        print(f"   历史快照: {snapshot_path}")
     if dropped:
         print("\n剔除列表 (前 20):")
         for code, reason in dropped[:20]:

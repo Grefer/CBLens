@@ -59,6 +59,7 @@ class ScoreStrategyConfig:
     pre_filter_prices: bool = True
     transaction_cost: float = 0.0
     compute_benchmark: bool = True
+    pool_mode: str = "static"  # "static" | "dynamic"
 
 
 @dataclass(frozen=True)
@@ -307,9 +308,14 @@ def backtest_score_strategy(
 
     for idx, period_start in enumerate(schedule[:-1]):
         period_end = schedule[idx + 1]
+        if cfg.pool_mode == "dynamic":
+            period_codes = _dynamic_pool_for_date(
+                provider, bond_codes, period_start, terms_cache=terms_cache)
+        else:
+            period_codes = bond_codes
         eligible, excluded, source_diagnostics = _eligible_codes_for_date(
             provider,
-            bond_codes,
+            period_codes,
             period_start,
             terms_cache=terms_cache,
             admission_config=admission_config,
@@ -504,6 +510,7 @@ def backtest_score_strategy(
             "pre_filter_prices": cfg.pre_filter_prices,
             "transaction_cost": cfg.transaction_cost,
             "compute_benchmark": cfg.compute_benchmark,
+            "pool_mode": cfg.pool_mode,
         },
         "equity_curve": equity_curve,
         "benchmark_curve": benchmark_curve,
@@ -851,6 +858,16 @@ def _eligible_codes_for_date(
             except Exception as exc:
                 excluded.append((code, f"条款获取失败: {exc}"))
                 continue
+        # 防前视: 回测日期早于发行日 → 该转债尚未存在
+        issue_dt = getattr(terms, 'issue_date', None) if terms is not None else None
+        if issue_dt is not None and issue_dt > on_date:
+            excluded.append((code, f"尚未发行 (发行日 {issue_dt})"))
+            continue
+        # 到期检查: strip_current_status_fields 不清 maturity_date, 此处冗余但安全
+        maturity_dt = getattr(terms, 'maturity_date', None) if terms is not None else None
+        if maturity_dt is not None and maturity_dt <= on_date:
+            excluded.append((code, f"已到期 (到期日 {maturity_dt})"))
+            continue
         source_diagnostics.append(_terms_source_diagnostic(provider, code, on_date))
         reason = batch_pricing_exclusion_reason(
             code,
@@ -895,6 +912,16 @@ def _period_data_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
     patch_count = sum(1 for row in rows if int(row.get("patch_count") or 0) > 0)
     event_count = sum(1 for row in rows if int(row.get("event_count") or 0) > 0)
     total = len(rows)
+    # 快照陈旧度: 各转债 (valuation_date - snapshot_date) 的最大天数
+    staleness_days: list[int] = []
+    without_snapshot = 0
+    for row in rows:
+        if row.get("uses_current_fallback"):
+            without_snapshot += 1
+        snap = row.get("snapshot_date")
+        val = row.get("valuation_date")
+        if isinstance(snap, date) and isinstance(val, date):
+            staleness_days.append((val - snap).days)
     return {
         "sample_count": total,
         "source_counts": dict(source_counts),
@@ -902,6 +929,8 @@ def _period_data_quality(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "current_fallback_ratio": fallback_count / total if total else 0.0,
         "patch_applied_count": patch_count,
         "event_applied_count": event_count,
+        "max_snapshot_staleness_days": max(staleness_days) if staleness_days else None,
+        "bonds_without_snapshot_count": without_snapshot,
     }
 
 
@@ -912,6 +941,45 @@ def _terms_from_cache(terms_cache, code: str):
         return terms_cache.get(code)
     except Exception:
         return None
+
+
+def _dynamic_pool_for_date(
+    provider: DataProvider,
+    base_codes: list[str],
+    on_date: date,
+    *,
+    terms_cache=None,
+) -> list[str]:
+    """动态标的池: 只保留估值日已发行且未到期的转债.
+
+    优先使用 provider.list_tradable_cbs(on_date), 取与 base_codes 的交集;
+    若 provider 不支持, 则根据 issue_date/maturity_date 过滤 base_codes.
+    """
+    try:
+        tradable = provider.list_tradable_cbs(on_date)
+        if tradable:
+            tradable_set = set(str(code) for code in tradable)
+            return [code for code in base_codes if code in tradable_set]
+    except (NotImplementedError, Exception):
+        pass
+    # Fallback: filter by issue_date/maturity_date
+    filtered: list[str] = []
+    for code in base_codes:
+        terms = _terms_from_cache(terms_cache, code)
+        if terms is None:
+            try:
+                terms = provider.get_bond_terms(code, on_date)
+            except Exception:
+                filtered.append(code)  # 无法获取条款, 保守保留
+                continue
+        issue_dt = getattr(terms, 'issue_date', None)
+        maturity_dt = getattr(terms, 'maturity_date', None)
+        if issue_dt is not None and issue_dt > on_date:
+            continue  # 尚未发行
+        if maturity_dt is not None and maturity_dt <= on_date:
+            continue  # 已到期
+        filtered.append(code)
+    return filtered
 
 
 def _select_candidate_rows(rows: list[dict[str, Any]], cfg: ScoreStrategyConfig) -> list[dict[str, Any]]:
@@ -1667,6 +1735,48 @@ def _equity_curve_returns(equity_curve: list[dict[str, Any]]) -> list[float]:
     return returns
 
 
+def _compute_patch_coverage(periods: list[dict[str, Any]]) -> dict[str, Any]:
+    """聚合各期 patch 覆盖信息, 用于诊断 patch 缺口."""
+    all_codes: set[str] = set()
+    codes_with_patches: set[str] = set()
+    earliest_patch_date: date | None = None
+    latest_patch_date: date | None = None
+    for period in periods:
+        period_start = period.get("start_date")
+        dq = period.get("data_quality") or {}
+        patch_applied = int(dq.get("patch_applied_count") or 0)
+        # 从 excluded_reasons 和 positions 中收集出现过的转债代码
+        for code_reason in period.get("excluded_reasons") or []:
+            if isinstance(code_reason, (list, tuple)) and len(code_reason) >= 1:
+                all_codes.add(str(code_reason[0]))
+        for pos in period.get("positions") or []:
+            code = str(pos.get("bond_code") or "")
+            if code:
+                all_codes.add(code)
+        for pos in period.get("skipped_positions") or []:
+            code = str(pos.get("bond_code") or "")
+            if code:
+                all_codes.add(code)
+        selected = period.get("selected_codes") or []
+        for code in selected:
+            all_codes.add(str(code))
+        if patch_applied > 0 and isinstance(period_start, date):
+            if earliest_patch_date is None or period_start < earliest_patch_date:
+                earliest_patch_date = period_start
+            if latest_patch_date is None or period_start > latest_patch_date:
+                latest_patch_date = period_start
+            # 记录有 patch 的期中出现过的转债
+            for code in selected:
+                codes_with_patches.add(str(code))
+    bonds_without_patches = sorted(all_codes - codes_with_patches)
+    return {
+        "earliest_patch_date": earliest_patch_date,
+        "latest_patch_date": latest_patch_date,
+        "bonds_with_patches": len(codes_with_patches),
+        "bonds_without_patches": bonds_without_patches,
+    }
+
+
 def _build_strategy_diagnostics(
     equity_curve: list[dict[str, Any]],
     periods: list[dict[str, Any]],
@@ -1674,6 +1784,9 @@ def _build_strategy_diagnostics(
 ) -> dict[str, Any]:
     data_quality = _summarize_data_quality(periods)
     attribution = _strategy_attribution(periods)
+    # patch_coverage: 聚合各期 patch 覆盖信息
+    patch_coverage = _compute_patch_coverage(periods)
+    data_quality["patch_coverage"] = patch_coverage
     diagnostics = {
         "data_quality": data_quality,
         "attribution": attribution,
@@ -1690,6 +1803,8 @@ def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
     fallback = 0
     patch_applied = 0
     event_applied = 0
+    max_staleness: int | None = None
+    total_without_snapshot = 0
     for period in periods:
         dq = period.get("data_quality") or {}
         count = int(dq.get("sample_count") or 0)
@@ -1697,6 +1812,11 @@ def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
         fallback += int(dq.get("current_fallback_count") or 0)
         patch_applied += int(dq.get("patch_applied_count") or 0)
         event_applied += int(dq.get("event_applied_count") or 0)
+        total_without_snapshot += int(dq.get("bonds_without_snapshot_count") or 0)
+        period_staleness = dq.get("max_snapshot_staleness_days")
+        if period_staleness is not None:
+            if max_staleness is None or int(period_staleness) > max_staleness:
+                max_staleness = int(period_staleness)
         for key, value in (dq.get("source_counts") or {}).items():
             source_counts[str(key)] += int(value or 0)
     return {
@@ -1706,6 +1826,8 @@ def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
         "current_fallback_ratio": fallback / total if total else 0.0,
         "patch_applied_count": patch_applied,
         "event_applied_count": event_applied,
+        "max_snapshot_staleness_days": max_staleness,
+        "bonds_without_snapshot_count": total_without_snapshot,
     }
 
 
@@ -1791,6 +1913,17 @@ def _strategy_warnings(
     fallback_ratio = finite_float(data_quality.get("current_fallback_ratio")) or 0.0
     if fallback_ratio > 0.2:
         warnings.append(f"{fallback_ratio*100:.0f}% 条款样本使用当前数据回退, 需警惕未来函数")
+    max_staleness = data_quality.get("max_snapshot_staleness_days")
+    if max_staleness is not None and int(max_staleness) > 90:
+        warnings.append(f"最近快照距估值日最大滞后 {int(max_staleness)} 天, 部分条款可能过时")
+    patch_coverage = data_quality.get("patch_coverage") or {}
+    without_patches = patch_coverage.get("bonds_without_patches") or []
+    with_patches = int(patch_coverage.get("bonds_with_patches") or 0)
+    total_patch_bonds = with_patches + len(without_patches)
+    if total_patch_bonds > 0 and len(without_patches) > total_patch_bonds * 0.5:
+        warnings.append(
+            f"{len(without_patches)}/{total_patch_bonds} 只转债无条款补丁, patch 覆盖率偏低"
+        )
     max_drawdown = finite_float(summary.get("max_drawdown")) or 0.0
     if max_drawdown > 0.2:
         warnings.append(f"最大回撤 {max_drawdown*100:.1f}%, 需要检查回撤区间持仓")

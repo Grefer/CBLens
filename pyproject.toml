@@ -30,6 +30,8 @@ desktop = ["pyinstaller>=6.10", "pillow>=10.0"]
 
 [project.scripts]
 cb-gui = "convertible_bond.gui.app:main"
+cb-backfill-delisted-cbs = "convertible_bond.cli.backfill_delisted_cbs:main"
+cb-backfill-down-reset-patches = "convertible_bond.cli.backfill_down_reset_patches:main"
 cb-calibrate-down-reset = "convertible_bond.cli.calibrate_down_reset:main"
 cb-screen-pool = "convertible_bond.cli.screen_pool:main"
 cb-strategy-backtest = "convertible_bond.cli.strategy_backtest:main"

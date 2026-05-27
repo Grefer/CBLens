@@ -23,10 +23,12 @@ from ...batch_pricing import (
     parse_bond_codes,
 )
 from ...cb_events import CBEventStore, project_events_path
+from ...data_providers import WindDataProvider
 from ...historical_terms import (
     HistoricalBondDataProvider,
     TermsHistoryStore,
     TermsPatchStore,
+    project_terms_history_dir,
     project_terms_patches_path,
 )
 from ...strategy_backtest import (
@@ -43,12 +45,20 @@ from ..theme import (
     VOL_WINDOW_MAP,
     get_color,
 )
+from ..constants import (
+    BOND_CODE_RE,
+    STRATEGY_HISTORY_DESCRIPTIONS,
+    STRATEGY_POOL_DESCRIPTIONS,
+    STRATEGY_TEMPLATE_DESCRIPTIONS,
+    STRATEGY_VIEW_DESCRIPTIONS,
+)
 from ..tabs.batch_common import (
     _TREE_ATTRS,
     _attach_column_sort,
     _configure_responsive_columns,
     _configure_tree_style,
 )
+from ..widgets import Tooltip
 
 
 STRATEGY_BACKTEST_PRO_FEATURE = "strategy_backtest"
@@ -57,6 +67,23 @@ STRATEGY_BACKTEST_PRO_PREVIEW = True
 
 class StrategyBacktestCancelled(Exception):
     """用户主动中断策略回测."""
+
+
+class _EmptyTermsPatchStore:
+    """快速模式用的空条款修正表, 避免默认 patch 被隐式应用."""
+
+    def apply(self, _bond_code, terms, _valuation_date):
+        return terms
+
+    def list_patches(self, *_, **__):
+        return []
+
+
+class _EmptyCBEventStore:
+    """快速模式用的空公告事件表."""
+
+    def list_events(self, *_, **__):
+        return []
 
 
 # 选债哲学由"视图"统一驱动: 置信度与硬复核风险按视图推导, 不再单独暴露控件。
@@ -167,14 +194,142 @@ class BacktestMixin:
         """套用策略模板; 选「自定义」不改动现有参数, 仅保留手动调整。"""
         overrides = STRATEGY_TEMPLATES.get(name)
         if overrides is None:  # 自定义
-            self.v_st_status.set("自定义模式: 在「高级设置」里自由调整选债与过滤条件")
+            view = self.v_st_view.get()
+            desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "可手动调整选债和过滤条件")
+            self.v_st_status.set(f"自定义模式 · 当前视图「{view}」: {desc}")
             return
         merged = {**_STRATEGY_TEMPLATE_BASE, **overrides}
-        for var_name, value in merged.items():
-            var = getattr(self, var_name, None)
-            if var is not None:
-                var.set(value)
-        self.v_st_status.set(f"已套用模板「{name}」 · 视图 {overrides.get('v_st_view', '')}; 可在高级设置里微调")
+        self._programmatic_update = True
+        try:
+            for var_name, value in merged.items():
+                var = getattr(self, var_name, None)
+                if var is not None:
+                    var.set(value)
+        finally:
+            self._programmatic_update = False
+        view = merged.get("v_st_view", self.v_st_view.get())
+        template_desc = STRATEGY_TEMPLATE_DESCRIPTIONS.get(name, "")
+        view_desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "")
+        self.v_st_status.set(f"已套用「{name}」: {template_desc} · {view_desc}")
+
+    def _describe_strategy_view(self, name):
+        """用户切换选债视图时, 直接解释这个视图代表的选债哲学。"""
+        desc = STRATEGY_VIEW_DESCRIPTIONS.get(name)
+        if desc:
+            self.v_st_status.set(f"选债视图「{name}」: {desc}")
+
+    def _strategy_codes_from_pool(self) -> tuple[list[str], str]:
+        mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
+        if mode == "当前筛选结果":
+            rows = list(getattr(self, "_batch_results", []) or [])
+            codes = self._dedupe_strategy_codes(row.get("bond_code") for row in rows)
+            return codes, "批量页当前筛选结果"
+        if mode == "自选代码":
+            codes, invalid = self._parse_strategy_manual_codes()
+            label = f"自选代码池"
+            if invalid:
+                label += f" (忽略无效 {len(invalid)} 个)"
+            return codes, label
+
+        cache = getattr(self, "terms_cache", None)
+        codes = list(cache.list_bonds()) if cache is not None else []
+        return self._dedupe_strategy_codes(codes), "本地条款库"
+
+    @staticmethod
+    def _dedupe_strategy_codes(codes) -> list[str]:
+        out: list[str] = []
+        seen = set()
+        for code in codes or []:
+            code = str(code or "").strip().upper()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            out.append(code)
+        return out
+
+    def _parse_strategy_manual_codes(self) -> tuple[list[str], list[str]]:
+        raw_codes = parse_bond_codes(self.v_st_codes.get())
+        valid = [code for code in raw_codes if BOND_CODE_RE.match(code)]
+        invalid = [code for code in raw_codes if code not in valid]
+        return self._dedupe_strategy_codes(valid), invalid
+
+    def _strategy_pool_preview_text(self) -> str:
+        mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
+        desc = STRATEGY_POOL_DESCRIPTIONS.get(mode, "")
+        try:
+            codes, label = self._strategy_codes_from_pool()
+            invalid_text = ""
+            if mode == "自选代码":
+                _, invalid = self._parse_strategy_manual_codes()
+                invalid_text = f" · 无效 {len(invalid)} 个" if invalid else " · 无效 0 个"
+            if mode == "当前筛选结果" and not codes:
+                return f"{desc}\n当前批量筛选结果为空, 请先到批量页刷新重算或切换视图"
+            return f"{desc}\n{label} · 已选择 {len(codes)} 只{invalid_text}"
+        except Exception as exc:
+            return f"{desc}\n读取失败: {exc}"
+
+    def _strategy_history_preview_text(self) -> str:
+        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        desc = STRATEGY_HISTORY_DESCRIPTIONS.get(mode, "")
+        try:
+            if mode == "快速":
+                return f"{desc}\n使用当前条款比例预计较高; 适合快速试参数"
+            history = self._strategy_history_precheck([])
+            patch = self._strategy_patch_precheck()
+            events = self._strategy_events_precheck()
+            if mode == "标准":
+                return (
+                    f"{desc}\n默认修正 {patch['count']} 条 · 公告事件 {events['count']} 条 · "
+                    "未使用历史条款快照"
+                )
+            if mode == "Wind防未来":
+                return (
+                    f"{desc}\n条款来源 {history['label']} · "
+                    f"公告修补 {patch['count']} 条 / {events['count']} 条事件"
+                )
+            return (
+                f"{desc}\n历史快照 {history['label']} · "
+                f"修正 {patch['count']} 条 · 公告事件 {events['count']} 条"
+            )
+        except Exception as exc:
+            return f"{desc}\n读取失败: {exc}"
+
+    def _refresh_strategy_setup_summary(self, *_):
+        pool_var = getattr(self, "v_st_pool_summary", None)
+        if pool_var is not None:
+            pool_var.set(self._strategy_pool_preview_text())
+        history_var = getattr(self, "v_st_history_summary", None)
+        if history_var is not None:
+            history_var.set(self._strategy_history_preview_text())
+
+    def _clear_strategy_codes(self):
+        self.v_st_codes.set("")
+        if hasattr(self, "v_st_pool_mode"):
+            self.v_st_pool_mode.set("自选代码")
+        self.v_st_status.set("已清空自选代码池")
+
+    def _import_strategy_codes_file(self):
+        path = filedialog.askopenfilename(
+            title="导入自选转债代码",
+            filetypes=[("CSV / TXT", "*.csv *.txt"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            try:
+                with open(path, "r", encoding="utf-8-sig", newline="") as f:
+                    text = f.read()
+            except UnicodeDecodeError:
+                with open(path, "r", encoding="gb18030", newline="") as f:
+                    text = f.read()
+            codes = parse_bond_codes(text)
+            self.v_st_codes.set("\n".join(codes))
+            if hasattr(self, "v_st_pool_mode"):
+                self.v_st_pool_mode.set("自选代码")
+            valid, invalid = self._parse_strategy_manual_codes()
+            self.v_st_status.set(f"已导入 {len(valid)} 个有效代码, 忽略 {len(invalid)} 个无效项")
+        except Exception as exc:
+            messagebox.showerror("导入失败", str(exc))
 
     def _precheck_strategy_backtest(self):
         """轻量检查策略回测输入、历史口径和预计工作量, 不触发批量定价。"""
@@ -194,13 +349,12 @@ class BacktestMixin:
         if start >= end:
             raise ValueError("开始日期应早于结束日期")
 
-        codes = parse_bond_codes(self.v_st_codes.get())
-        pool_label = "自定义代码池"
+        codes, pool_label = self._strategy_codes_from_pool()
         if not codes:
-            cache = getattr(self, "terms_cache", None)
-            codes = list(cache.list_bonds()) if cache is not None else []
-            pool_label = "本地条款库"
-        if not codes:
+            if getattr(self, "v_st_pool_mode", None) is not None and self.v_st_pool_mode.get() == "当前筛选结果":
+                raise ValueError("当前批量筛选结果为空, 请先到批量页刷新重算或切换视图")
+            if getattr(self, "v_st_pool_mode", None) is not None and self.v_st_pool_mode.get() == "自选代码":
+                raise ValueError("自选代码池为空, 请粘贴或导入转债代码")
             raise ValueError("代码池为空, 请先同步条款库或输入转债代码")
 
         freq_map = {"周": "W", "月": "M", "季": "Q"}
@@ -210,21 +364,36 @@ class BacktestMixin:
         top_n = max(1, int(float(self.v_st_top_n.get())))
         estimated_pricing = len(codes) * period_count
 
+        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
         history = self._strategy_history_precheck(schedule[:-1])
         patch = self._strategy_patch_precheck()
         events = self._strategy_events_precheck()
         warnings = []
-        if not history["enabled"]:
-            warnings.append("历史快照未启用, 过去条款会回退到当前条款视角")
+        if mode == "快速":
+            warnings.append("快速模式使用当前条款回看过去, 只适合先看方向")
+        elif not history["enabled"]:
+            warnings.append("历史条款快照未启用, 过去条款会回退到当前条款视角")
         elif history["coverage_ratio"] < 0.8:
-            warnings.append("历史快照覆盖不足 80%")
+            warnings.append("历史条款快照覆盖不足 80%")
+        if mode == "本地快照" and history["coverage_ratio"] < 0.8:
+            warnings.append("本地快照模式需要更完整的历史条款快照")
         if top_n > len(codes):
             warnings.append("TopN 大于代码池数量")
+        # 历史条款修正覆盖度检查。
+        if mode == "快速":
+            pass
+        elif patch["count"] > 0 and patch.get("earliest"):
+            if patch["earliest"] > start:
+                warnings.append(f"历史转股价修正最早日期 {patch['earliest']} 晚于回测起始 {start}")
+        else:
+            warnings.append("无历史转股价修正, 部分时期可能使用当前转股价")
 
         return {
             "start": start,
             "end": end,
             "pool_label": pool_label,
+            "pool_mode": self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场",
+            "history_mode": mode,
             "code_count": len(codes),
             "period_count": period_count,
             "top_n": top_n,
@@ -238,13 +407,30 @@ class BacktestMixin:
         }
 
     def _strategy_history_precheck(self, rebalance_dates) -> dict:
+        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        if mode in {"快速", "标准"}:
+            return {
+                "enabled": False,
+                "label": f"{mode}模式未启用",
+                "snapshot_count": 0,
+                "coverage_ratio": 0.0,
+            }
+        if mode == "Wind防未来":
+            return {
+                "enabled": True,
+                "label": "实时 Wind tradeDate 历史截面",
+                "snapshot_count": 0,
+                "coverage_ratio": 1.0,
+            }
         raw = self.v_st_terms_history_dir.get().strip()
+        if not raw and mode == "本地快照":
+            raw = str(project_terms_history_dir())
         if not raw:
             return {"enabled": False, "label": "未启用", "snapshot_count": 0, "coverage_ratio": 0.0}
         store = TermsHistoryStore(raw)
         snapshots = store.list_snapshot_dates()
         if not snapshots:
-            return {"enabled": True, "label": "无快照", "snapshot_count": 0, "coverage_ratio": 0.0}
+            return {"enabled": True, "label": f"无快照 ({raw})", "snapshot_count": 0, "coverage_ratio": 0.0}
         covered = sum(1 for d in rebalance_dates if store.snapshot_date_on_or_before(d) is not None)
         total = len(rebalance_dates)
         first, last = snapshots[0], snapshots[-1]
@@ -256,18 +442,43 @@ class BacktestMixin:
         }
 
     def _strategy_patch_precheck(self) -> dict:
-        raw = self.v_st_terms_patches.get().strip()
+        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        if mode == "快速":
+            return {
+                "path": None, "count": 0, "label": "快速模式未使用",
+                "earliest": None, "latest": None, "bonds_with_patches": 0,
+            }
+        raw = self.v_st_terms_patches.get().strip() if mode == "自定义文件" else ""
         path = Path(raw) if raw else project_terms_patches_path()
         try:
-            count = len(TermsPatchStore(path).list_patches())
+            store = TermsPatchStore(path)
+            patches = store.list_patches()
+            count = len(patches)
+            if patches:
+                dates = [p.effective_date for p in patches]
+                earliest = min(dates)
+                latest = max(dates)
+                bond_codes_with_patches = len(set(p.bond_code for p in patches))
+            else:
+                earliest = latest = None
+                bond_codes_with_patches = 0
         except Exception as exc:
-            return {"path": path, "count": 0, "label": f"读取失败: {exc}"}
+            return {"path": path, "count": 0, "label": f"读取失败: {exc}",
+                    "earliest": None, "latest": None, "bonds_with_patches": 0}
         mode = "自定义" if raw else "默认"
         exists = path.exists()
-        return {"path": path, "count": count, "label": f"{mode}{'已启用' if exists else '未找到'} · {count} 条"}
+        return {
+            "path": path, "count": count,
+            "label": f"{mode}{'已启用' if exists else '未找到'} · {count} 条",
+            "earliest": earliest, "latest": latest,
+            "bonds_with_patches": bond_codes_with_patches,
+        }
 
     def _strategy_events_precheck(self) -> dict:
-        raw = self.v_st_events_path.get().strip()
+        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        if mode == "快速":
+            return {"path": None, "count": 0, "label": "快速模式未使用"}
+        raw = self.v_st_events_path.get().strip() if mode == "自定义文件" else ""
         path = Path(raw) if raw else project_events_path()
         try:
             count = len(CBEventStore(path).list_events())
@@ -281,15 +492,18 @@ class BacktestMixin:
     def _format_strategy_precheck(info: dict) -> str:
         history = info["history"]
         warnings = info.get("warnings") or []
-        warning_text = f" · 提醒: {'; '.join(warnings[:2])}" if warnings else ""
-        return (
-            f"预检: {info['pool_label']} {info['code_count']} 只 · "
-            f"{info['period_count']} 期 · 预计定价≈{info['estimated_pricing']} 次 · "
-            f"PDE M{info['grid_M']}/N{info['grid_N']} · "
-            f"历史快照 {history['label']} 覆盖 {history['coverage_ratio']*100:.0f}% · "
-            f"Patch {info['patch']['count']} 条 · 事件 {info['events']['count']} 条"
-            f"{warning_text}"
-        )
+        patch_info = f"{info['patch']['count']} 条"
+        if info['patch'].get('earliest') and info['patch'].get('latest'):
+            patch_info += f" ({info['patch']['earliest']}~{info['patch']['latest']})"
+        warning_text = "; ".join(warnings[:3]) if warnings else "未发现明显口径问题"
+        return "\n".join((
+            f"规模: {info['pool_label']} {info['code_count']} 只 · "
+            f"{info['period_count']} 期 · Top{info['top_n']} · "
+            f"预计定价≈{info['estimated_pricing']} 次 · PDE M{info['grid_M']}/N{info['grid_N']}",
+            f"数据: {info.get('history_mode', '标准')}口径 · 条款来源 {history['label']} · 覆盖 {history['coverage_ratio']*100:.0f}% · "
+            f"历史转股价修正 {patch_info} · 公告事件 {info['events']['count']} 条",
+            f"提醒: {warning_text}",
+        ))
 
     def _run_strategy_backtest(self):
         if not self._strategy_backtest_pro_available():
@@ -305,11 +519,19 @@ class BacktestMixin:
             messagebox.showerror("错误", "策略回测开始日期应早于结束日期")
             return
 
-        codes = parse_bond_codes(self.v_st_codes.get())
+        try:
+            codes, _pool_label = self._strategy_codes_from_pool()
+        except Exception as exc:
+            messagebox.showerror("代码池错误", str(exc))
+            return
         if not codes:
-            codes = list(self.terms_cache.list_bonds())
-        if not codes:
-            messagebox.showwarning("提示", "本地条款库为空, 请先同步转债池")
+            mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
+            if mode == "当前筛选结果":
+                messagebox.showwarning("提示", "当前批量筛选结果为空, 请先到批量页刷新重算或切换视图")
+            elif mode == "自选代码":
+                messagebox.showwarning("提示", "自选代码池为空, 请粘贴或导入转债代码")
+            else:
+                messagebox.showwarning("提示", "本地条款库为空, 请先同步转债池")
             return
 
         freq_map = {"周": "W", "月": "M", "季": "Q"}
@@ -446,15 +668,40 @@ class BacktestMixin:
         self._render_strategy_backtest_result(result)
 
     def _build_strategy_provider(self, source):
+        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        if mode == "Wind防未来":
+            return HistoricalBondDataProvider(
+                WindDataProvider(),
+                history_store=None,
+                patch_store=TermsPatchStore(project_terms_patches_path()),
+                event_store=CBEventStore(project_events_path()),
+                strip_fallback_status=False,
+                merge_admission_status=True,
+            )
+
         base_provider = build_batch_provider(
             source,
             terms_cache=getattr(self, "terms_cache", None),
             csv_root=getattr(self, "_csv_root", None) or None,
             max_age_days=30,
         )
-        history_dir = self.v_st_terms_history_dir.get().strip()
-        patch_path = self.v_st_terms_patches.get().strip()
-        events_path = self.v_st_events_path.get().strip()
+        if mode == "快速":
+            return HistoricalBondDataProvider(
+                base_provider,
+                history_store=None,
+                patch_store=_EmptyTermsPatchStore(),
+                event_store=_EmptyCBEventStore(),
+                strip_fallback_status=False,
+            )
+
+        history_dir = ""
+        if mode == "本地快照":
+            history_dir = self.v_st_terms_history_dir.get().strip() or str(project_terms_history_dir())
+        elif mode == "自定义文件":
+            history_dir = self.v_st_terms_history_dir.get().strip()
+
+        patch_path = self.v_st_terms_patches.get().strip() if mode == "自定义文件" else ""
+        events_path = self.v_st_events_path.get().strip() if mode == "自定义文件" else ""
         return HistoricalBondDataProvider(
             base_provider,
             history_store=TermsHistoryStore(history_dir) if history_dir else None,
@@ -476,7 +723,9 @@ class BacktestMixin:
         path = filedialog.askdirectory(title="选择 cb_data_history 快照目录")
         if path:
             self.v_st_terms_history_dir.set(path)
-            self.v_st_status.set(f"历史快照目录: {path}")
+            if hasattr(self, "v_st_history_mode"):
+                self.v_st_history_mode.set("自定义文件")
+            self.v_st_status.set(f"历史条款快照目录: {path}")
 
     def _choose_strategy_patch_file(self):
         path = filedialog.askopenfilename(
@@ -485,7 +734,9 @@ class BacktestMixin:
         )
         if path:
             self.v_st_terms_patches.set(path)
-            self.v_st_status.set(f"条款 Patch: {path}")
+            if hasattr(self, "v_st_history_mode"):
+                self.v_st_history_mode.set("自定义文件")
+            self.v_st_status.set(f"历史转股价修正: {path}")
 
     def _choose_strategy_events_file(self):
         path = filedialog.askopenfilename(
@@ -494,7 +745,9 @@ class BacktestMixin:
         )
         if path:
             self.v_st_events_path.set(path)
-            self.v_st_status.set(f"事件表: {path}")
+            if hasattr(self, "v_st_history_mode"):
+                self.v_st_history_mode.set("自定义文件")
+            self.v_st_status.set(f"公告事件表: {path}")
 
     def _render_strategy_backtest_result(self, result):
         summary = result.get("summary", {})
@@ -1261,26 +1514,47 @@ class BacktestMixin:
                      font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
         ctk.CTkLabel(overview, text=quality, text_color=color,
                      font=(FONT_FAMILY, 28, "bold")).pack(anchor="w", pady=(4, 0))
+        data_tooltips = {
+            "当前回退": "使用当前条款替代历史条款快照的比例; 越高代表未来信息偏差风险越大",
+            "修正应用": "历史转股价等条款修正被应用的次数",
+            "事件应用": "公告事件表中下修、强赎、回售等事件被应用的次数",
+            "来源分布": "历史条款来自快照、修正、事件或当前回退的数量分布",
+        }
         for label, value in (
             ("条款样本", data_quality.get("sample_count") or 0),
             ("当前回退", self._fmt_strategy_pct(fallback_ratio)),
-            ("Patch 应用", data_quality.get("patch_applied_count") or 0),
+            ("修正应用", data_quality.get("patch_applied_count") or 0),
             ("事件应用", data_quality.get("event_applied_count") or 0),
             ("来源分布", data_quality.get("source_counts") or {}),
         ):
-            ctk.CTkLabel(overview, text=f"{label}: {value}", text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 12), wraplength=520).pack(anchor="w", pady=(4, 0))
+            lbl = ctk.CTkLabel(overview, text=f"{label}: {value}", text_color=TEXT_DIM,
+                               font=(FONT_FAMILY, 12), wraplength=520)
+            lbl.pack(anchor="w", pady=(4, 0))
+            if label in data_tooltips:
+                Tooltip(lbl, data_tooltips[label])
 
         params = ctk.CTkFrame(frame, fg_color="transparent")
         params.grid(row=0, column=1, sticky="nsew", padx=12, pady=10)
         ctk.CTkLabel(params, text="本次参数快照", text_color=TEXT,
                      font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
+        param_labels = {
+            "selection_view": "选债视图",
+            "rebalance_freq": "调仓频率",
+            "top_n": "Top N",
+            "execution_timing": "成交时点",
+            "mark_to_market": "逐日估值",
+            "transaction_cost": "交易成本",
+            "max_price_staleness_days": "成交价最长容忍天数",
+            "min_market_price": "最低价格",
+            "max_market_price": "最高价格",
+            "max_conversion_premium": "最高转股溢价",
+        }
         for key in (
             "selection_view", "rebalance_freq", "top_n", "execution_timing",
             "mark_to_market", "transaction_cost", "max_price_staleness_days",
             "min_market_price", "max_market_price", "max_conversion_premium",
         ):
-            ctk.CTkLabel(params, text=f"{key}: {config.get(key)}", text_color=TEXT_DIM,
+            ctk.CTkLabel(params, text=f"{param_labels.get(key, key)}: {config.get(key)}", text_color=TEXT_DIM,
                          font=(FONT_MONO, 12), wraplength=520).pack(anchor="w", pady=(4, 0))
         if performance:
             ctk.CTkLabel(params, text="缓存 / 性能", text_color=TEXT,
@@ -1313,7 +1587,7 @@ class BacktestMixin:
         self._render_strategy_small_tree(
             frame, 2, 0,
             ["date", "eligible", "candidate", "selected", "fallback", "patch", "event"],
-            ["调仓日", "可投", "候选", "选中", "当前回退", "Patch", "事件"],
+            ["调仓日", "可投", "候选", "选中", "当前回退", "修正", "事件"],
             [100, 70, 70, 70, 92, 70, 70],
             period_rows,
             columnspan=2,
