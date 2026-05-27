@@ -65,7 +65,7 @@ class CSVDataProvider(DataProvider):
         import json
         p = self.root / "terms" / f"{bond_code}.json"
         if not p.exists():
-            return BondTerms()
+            raise FileNotFoundError(f"未找到转债条款: {p}")
         with open(p, "r", encoding="utf-8") as f:
             d = json.load(f)
         coupons = d.get("coupon_rates")

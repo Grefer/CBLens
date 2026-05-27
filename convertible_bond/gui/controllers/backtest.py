@@ -5,7 +5,6 @@ import csv
 import threading
 from collections import Counter
 from datetime import date
-from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -26,9 +25,7 @@ from ...cb_events import CBEventStore, project_events_path
 from ...data_providers import WindDataProvider
 from ...historical_terms import (
     HistoricalBondDataProvider,
-    TermsHistoryStore,
     TermsPatchStore,
-    project_terms_history_dir,
     project_terms_patches_path,
 )
 from ...strategy_backtest import (
@@ -51,6 +48,7 @@ from ..constants import (
     STRATEGY_POOL_DESCRIPTIONS,
     STRATEGY_TEMPLATE_DESCRIPTIONS,
     STRATEGY_VIEW_DESCRIPTIONS,
+    normalize_strategy_history_mode,
 )
 from ..tabs.batch_common import (
     _TREE_ATTRS,
@@ -67,23 +65,6 @@ STRATEGY_BACKTEST_PRO_PREVIEW = True
 
 class StrategyBacktestCancelled(Exception):
     """用户主动中断策略回测."""
-
-
-class _EmptyTermsPatchStore:
-    """快速模式用的空条款修正表, 避免默认 patch 被隐式应用."""
-
-    def apply(self, _bond_code, terms, _valuation_date):
-        return terms
-
-    def list_patches(self, *_, **__):
-        return []
-
-
-class _EmptyCBEventStore:
-    """快速模式用的空公告事件表."""
-
-    def list_events(self, *_, **__):
-        return []
 
 
 # 选债哲学由"视图"统一驱动: 置信度与硬复核风险按视图推导, 不再单独暴露控件。
@@ -269,27 +250,20 @@ class BacktestMixin:
             return f"{desc}\n读取失败: {exc}"
 
     def _strategy_history_preview_text(self) -> str:
-        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        mode = normalize_strategy_history_mode(raw_mode)
         desc = STRATEGY_HISTORY_DESCRIPTIONS.get(mode, "")
         try:
-            if mode == "快速":
-                return f"{desc}\n使用当前条款比例预计较高; 适合快速试参数"
-            history = self._strategy_history_precheck([])
             patch = self._strategy_patch_precheck()
             events = self._strategy_events_precheck()
-            if mode == "标准":
-                return (
-                    f"{desc}\n默认修正 {patch['count']} 条 · 公告事件 {events['count']} 条 · "
-                    "未使用历史条款快照"
-                )
-            if mode == "Wind防未来":
+            if mode == "Wind高保真":
+                history = self._strategy_history_precheck([])
                 return (
                     f"{desc}\n条款来源 {history['label']} · "
                     f"公告修补 {patch['count']} 条 / {events['count']} 条事件"
                 )
             return (
-                f"{desc}\n历史快照 {history['label']} · "
-                f"修正 {patch['count']} 条 · 公告事件 {events['count']} 条"
+                f"{desc}\n默认修正 {patch['count']} 条 · 公告事件 {events['count']} 条"
             )
         except Exception as exc:
             return f"{desc}\n读取失败: {exc}"
@@ -364,25 +338,18 @@ class BacktestMixin:
         top_n = max(1, int(float(self.v_st_top_n.get())))
         estimated_pricing = len(codes) * period_count
 
-        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        mode = normalize_strategy_history_mode(raw_mode)
         history = self._strategy_history_precheck(schedule[:-1])
         patch = self._strategy_patch_precheck()
         events = self._strategy_events_precheck()
         warnings = []
-        if mode == "快速":
-            warnings.append("快速模式使用当前条款回看过去, 只适合先看方向")
-        elif not history["enabled"]:
-            warnings.append("历史条款快照未启用, 过去条款会回退到当前条款视角")
-        elif history["coverage_ratio"] < 0.8:
-            warnings.append("历史条款快照覆盖不足 80%")
-        if mode == "本地快照" and history["coverage_ratio"] < 0.8:
-            warnings.append("本地快照模式需要更完整的历史条款快照")
+        if mode == "Wind高保真" and not history["enabled"]:
+            warnings.append("Wind 历史条款未启用, 过去条款会回退到当前条款视角")
         if top_n > len(codes):
             warnings.append("TopN 大于代码池数量")
         # 历史条款修正覆盖度检查。
-        if mode == "快速":
-            pass
-        elif patch["count"] > 0 and patch.get("earliest"):
+        if patch["count"] > 0 and patch.get("earliest"):
             if patch["earliest"] > start:
                 warnings.append(f"历史转股价修正最早日期 {patch['earliest']} 晚于回测起始 {start}")
         else:
@@ -407,49 +374,24 @@ class BacktestMixin:
         }
 
     def _strategy_history_precheck(self, rebalance_dates) -> dict:
-        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
-        if mode in {"快速", "标准"}:
-            return {
-                "enabled": False,
-                "label": f"{mode}模式未启用",
-                "snapshot_count": 0,
-                "coverage_ratio": 0.0,
-            }
-        if mode == "Wind防未来":
+        raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        mode = normalize_strategy_history_mode(raw_mode)
+        if mode == "Wind高保真":
             return {
                 "enabled": True,
                 "label": "实时 Wind tradeDate 历史截面",
                 "snapshot_count": 0,
                 "coverage_ratio": 1.0,
             }
-        raw = self.v_st_terms_history_dir.get().strip()
-        if not raw and mode == "本地快照":
-            raw = str(project_terms_history_dir())
-        if not raw:
-            return {"enabled": False, "label": "未启用", "snapshot_count": 0, "coverage_ratio": 0.0}
-        store = TermsHistoryStore(raw)
-        snapshots = store.list_snapshot_dates()
-        if not snapshots:
-            return {"enabled": True, "label": f"无快照 ({raw})", "snapshot_count": 0, "coverage_ratio": 0.0}
-        covered = sum(1 for d in rebalance_dates if store.snapshot_date_on_or_before(d) is not None)
-        total = len(rebalance_dates)
-        first, last = snapshots[0], snapshots[-1]
         return {
-            "enabled": True,
-            "label": f"{len(snapshots)} 个快照 {first}~{last}",
-            "snapshot_count": len(snapshots),
-            "coverage_ratio": covered / total if total else 0.0,
+            "enabled": False,
+            "label": "标准模式不使用历史快照",
+            "snapshot_count": 0,
+            "coverage_ratio": 0.0,
         }
 
     def _strategy_patch_precheck(self) -> dict:
-        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
-        if mode == "快速":
-            return {
-                "path": None, "count": 0, "label": "快速模式未使用",
-                "earliest": None, "latest": None, "bonds_with_patches": 0,
-            }
-        raw = self.v_st_terms_patches.get().strip() if mode == "自定义文件" else ""
-        path = Path(raw) if raw else project_terms_patches_path()
+        path = project_terms_patches_path()
         try:
             store = TermsPatchStore(path)
             patches = store.list_patches()
@@ -465,28 +407,22 @@ class BacktestMixin:
         except Exception as exc:
             return {"path": path, "count": 0, "label": f"读取失败: {exc}",
                     "earliest": None, "latest": None, "bonds_with_patches": 0}
-        mode = "自定义" if raw else "默认"
         exists = path.exists()
         return {
             "path": path, "count": count,
-            "label": f"{mode}{'已启用' if exists else '未找到'} · {count} 条",
+            "label": f"默认{'已启用' if exists else '未找到'} · {count} 条",
             "earliest": earliest, "latest": latest,
             "bonds_with_patches": bond_codes_with_patches,
         }
 
     def _strategy_events_precheck(self) -> dict:
-        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
-        if mode == "快速":
-            return {"path": None, "count": 0, "label": "快速模式未使用"}
-        raw = self.v_st_events_path.get().strip() if mode == "自定义文件" else ""
-        path = Path(raw) if raw else project_events_path()
+        path = project_events_path()
         try:
             count = len(CBEventStore(path).list_events())
         except Exception as exc:
             return {"path": path, "count": 0, "label": f"读取失败: {exc}"}
-        mode = "自定义" if raw else "默认"
         exists = path.exists()
-        return {"path": path, "count": count, "label": f"{mode}{'已启用' if exists else '未找到'} · {count} 条"}
+        return {"path": path, "count": count, "label": f"默认{'已启用' if exists else '未找到'} · {count} 条"}
 
     @staticmethod
     def _format_strategy_precheck(info: dict) -> str:
@@ -668,8 +604,9 @@ class BacktestMixin:
         self._render_strategy_backtest_result(result)
 
     def _build_strategy_provider(self, source):
-        mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
-        if mode == "Wind防未来":
+        raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+        mode = normalize_strategy_history_mode(raw_mode)
+        if mode == "Wind高保真":
             return HistoricalBondDataProvider(
                 WindDataProvider(),
                 history_store=None,
@@ -685,28 +622,11 @@ class BacktestMixin:
             csv_root=getattr(self, "_csv_root", None) or None,
             max_age_days=30,
         )
-        if mode == "快速":
-            return HistoricalBondDataProvider(
-                base_provider,
-                history_store=None,
-                patch_store=_EmptyTermsPatchStore(),
-                event_store=_EmptyCBEventStore(),
-                strip_fallback_status=False,
-            )
-
-        history_dir = ""
-        if mode == "本地快照":
-            history_dir = self.v_st_terms_history_dir.get().strip() or str(project_terms_history_dir())
-        elif mode == "自定义文件":
-            history_dir = self.v_st_terms_history_dir.get().strip()
-
-        patch_path = self.v_st_terms_patches.get().strip() if mode == "自定义文件" else ""
-        events_path = self.v_st_events_path.get().strip() if mode == "自定义文件" else ""
         return HistoricalBondDataProvider(
             base_provider,
-            history_store=TermsHistoryStore(history_dir) if history_dir else None,
-            patch_store=TermsPatchStore(Path(patch_path) if patch_path else project_terms_patches_path()),
-            event_store=CBEventStore(Path(events_path) if events_path else project_events_path()),
+            history_store=None,
+            patch_store=TermsPatchStore(project_terms_patches_path()),
+            event_store=CBEventStore(project_events_path()),
         )
 
     @staticmethod
@@ -718,36 +638,6 @@ class BacktestMixin:
     def _optional_pct(var):
         raw = var.get().strip()
         return float(raw) / 100.0 if raw else None
-
-    def _choose_strategy_history_dir(self):
-        path = filedialog.askdirectory(title="选择 cb_data_history 快照目录")
-        if path:
-            self.v_st_terms_history_dir.set(path)
-            if hasattr(self, "v_st_history_mode"):
-                self.v_st_history_mode.set("自定义文件")
-            self.v_st_status.set(f"历史条款快照目录: {path}")
-
-    def _choose_strategy_patch_file(self):
-        path = filedialog.askopenfilename(
-            title="选择 cb_terms_patches.json",
-            filetypes=[("JSON", "*.json"), ("所有文件", "*.*")],
-        )
-        if path:
-            self.v_st_terms_patches.set(path)
-            if hasattr(self, "v_st_history_mode"):
-                self.v_st_history_mode.set("自定义文件")
-            self.v_st_status.set(f"历史转股价修正: {path}")
-
-    def _choose_strategy_events_file(self):
-        path = filedialog.askopenfilename(
-            title="选择 cb_events.json",
-            filetypes=[("JSON", "*.json"), ("所有文件", "*.*")],
-        )
-        if path:
-            self.v_st_events_path.set(path)
-            if hasattr(self, "v_st_history_mode"):
-                self.v_st_history_mode.set("自定义文件")
-            self.v_st_status.set(f"公告事件表: {path}")
 
     def _render_strategy_backtest_result(self, result):
         summary = result.get("summary", {})
@@ -867,7 +757,8 @@ class BacktestMixin:
         quality = "高" if fallback_ratio <= 0 else ("中" if fallback_ratio <= 0.2 else "低")
 
         row = ctk.CTkFrame(frame, fg_color="transparent")
-        row.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+        row.grid(row=0, column=0, sticky="nsew", padx=12, pady=(8, 2))
+        row.grid_rowconfigure(0, weight=1)
         for col in range(4):
             row.grid_columnconfigure(col, weight=1)
         items = [
@@ -882,12 +773,16 @@ class BacktestMixin:
             ("可信度", f"{quality} · 当前回退 {self._fmt_strategy_pct(fallback_ratio)}"),
         ]
         for col, (title, value) in enumerate(items):
-            cell = ctk.CTkFrame(row, fg_color="transparent")
-            cell.grid(row=0, column=col, sticky="ew", padx=8)
-            ctk.CTkLabel(cell, text=title, text_color=TEXT_DIM,
+            cell = ctk.CTkFrame(row, fg_color=BG_INPUT, corner_radius=8)
+            cell.grid(row=0, column=col, sticky="nsew", padx=6, pady=4)
+            
+            inner = ctk.CTkFrame(cell, fg_color="transparent")
+            inner.pack(fill="both", expand=True, padx=12, pady=8)
+            
+            ctk.CTkLabel(inner, text=title, text_color=TEXT_DIM,
                          font=(FONT_FAMILY, 11)).pack(anchor="w")
-            ctk.CTkLabel(cell, text=value, text_color=TEXT,
-                         font=(FONT_FAMILY, 13, "bold"), wraplength=260,
+            ctk.CTkLabel(inner, text=value, text_color=TEXT,
+                         font=(FONT_FAMILY, 13, "bold"), wraplength=240,
                          justify="left").pack(anchor="w")
 
     def _render_strategy_chart(self, result):

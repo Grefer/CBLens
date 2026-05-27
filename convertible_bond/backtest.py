@@ -71,6 +71,8 @@ def backtest_theoretical_price(
 
     if terms.conversion_price is None:
         raise ValueError(f"{bond_code} 数据源未返回转股价 K")
+    if maturity_dt is None:
+        raise ValueError(f"{bond_code} 数据源未返回到期日 maturity_date")
 
     K = float(terms.conversion_price)
     face_value = float(terms.face_value or DEFAULT_FACE_VALUE)
@@ -143,6 +145,7 @@ def backtest_theoretical_price(
     dates_out, theo_out, mkt_out, s0_out, sigma_out = [], [], [], [], []
     bf_out, par_out, iv_out = [], [], []
     total = len(sample_points)
+    last_progress = 0
     iv_M = max(150, M // 3)
     iv_N = max(500, N // 3)
 
@@ -226,7 +229,11 @@ def backtest_theoretical_price(
         par_out.append(parity)
         iv_out.append(iv_val)
         if progress_cb:
-            progress_cb(i + 1, total)
+            last_progress = i + 1
+            progress_cb(last_progress, total)
+
+    if progress_cb and last_progress < total:
+        progress_cb(total, total)
 
     return {
         "dates": dates_out,

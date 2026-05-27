@@ -36,6 +36,7 @@ from .constants import (
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
     EVENT_SYNC_STALE_HOURS,    # noqa: F401  (re-export for legacy callers)
+    normalize_strategy_history_mode,
 )
 from .controllers import (
     BacktestMixin,
@@ -286,9 +287,6 @@ class CBPricerApp(
         self.v_st_cost = ctk.StringVar(value="20")
         self.v_st_benchmark = ctk.BooleanVar(value=True)
         self.v_st_codes = ctk.StringVar(value="")
-        self.v_st_terms_history_dir = ctk.StringVar(value="")
-        self.v_st_terms_patches = ctk.StringVar(value="")
-        self.v_st_events_path = ctk.StringVar(value="")
         self.v_st_status = ctk.StringVar(value="Pro 预览: 设置条件后运行策略回测")
         self.v_st_precheck = ctk.StringVar(value="预检: 尚未运行")
 
@@ -976,8 +974,11 @@ class CBPricerApp(
             return
         try:
             data = {name: getattr(self, name).get() for name in self._PRESET_VARS}
-            with open(path, "w", encoding="utf-8") as f:
+            target = Path(path)
+            tmp = target.with_name(target.name + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            tmp.replace(target)
             self.v_status.set(f"已保存预设到 {path}")
         except Exception as exc:
             messagebox.showerror("保存失败", str(exc))
@@ -997,7 +998,10 @@ class CBPricerApp(
             try:
                 for name in self._PRESET_VARS:
                     if name in data:
-                        getattr(self, name).set(data[name])
+                        value = data[name]
+                        if name == "v_st_history_mode":
+                            value = normalize_strategy_history_mode(value)
+                        getattr(self, name).set(value)
             finally:
                 self._suppress_bond_autoload = False
                 self._programmatic_update = False

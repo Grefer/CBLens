@@ -9,7 +9,6 @@ DataProvider 驱动的可转债定价辅助接口.
 新代码应直接 import 本模块; CB.py 仅保留向后兼容 re-export.
 """
 from datetime import date, timedelta
-import math
 import os
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -784,9 +783,11 @@ def _batch_result_from_provider(
 
 
 def _sort_batch_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    results.sort(key=lambda x: x.get("deviation", float("inf"))
-                 if not math.isnan(x.get("deviation", float("nan")))
-                 else float("inf"))
+    def _key(row: dict[str, Any]) -> float:
+        deviation = _finite_float(row.get("deviation"))
+        return deviation if deviation is not None else float("inf")
+
+    results.sort(key=_key)
     return results
 
 

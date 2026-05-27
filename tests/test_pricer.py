@@ -888,6 +888,48 @@ class TestBacktest:
         assert seen_until
         assert all(d == date(2025, 12, 31) for d in seen_until)
 
+    def test_backtest_rejects_missing_maturity_date(self, fake_provider):
+        from convertible_bond.backtest import backtest_theoretical_price
+
+        provider, start, end = fake_provider
+        provider.terms.maturity_date = None
+
+        with pytest.raises(ValueError, match="数据源未返回到期日"):
+            backtest_theoretical_price(
+                "123001.SZ", start_date=start, end_date=end,
+                freq="M", M=80, N=200, provider=provider,
+            )
+
+    def test_backtest_progress_finishes_when_trailing_points_are_skipped(
+        self, fake_provider, monkeypatch,
+    ):
+        import convertible_bond.backtest as bt
+
+        provider, start, end = fake_provider
+        provider.terms.maturity_date = date(2025, 7, 15)
+        progress = []
+
+        class SpyPricer:
+            def __init__(self, *args, **kwargs):
+                self.ratio = 100.0 / float(kwargs["K"])
+
+            def price(self, **_kwargs):
+                return 100.0
+
+            def bond_floor_value(self, *_args, **_kwargs):
+                return 95.0
+
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+
+        bt.backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", M=80, N=200, provider=provider,
+            progress_cb=lambda done, total: progress.append((done, total)),
+        )
+
+        assert progress
+        assert progress[-1][0] == progress[-1][1]
+
 
 # ── 13. price_from_provider (provider 通用入口) ────────────
 class TestPriceFromProvider:
@@ -1482,6 +1524,18 @@ class TestAkshareStockFallbacks:
 
         assert provider.get_stock_close("000001.SZ", date(2025, 1, 10)) == 12.34
 
+    def test_stock_close_warns_when_history_price_is_stale(self, caplog):
+        from convertible_bond.data_providers import AkshareDataProvider
+
+        provider = object.__new__(AkshareDataProvider)
+        provider.get_stock_history = lambda *_args: [(date(2025, 1, 2), 10.5)]
+
+        with caplog.at_level("WARNING", logger="convertible_bond.data_providers.akshare"):
+            close = provider.get_stock_close("000001.SZ", date(2025, 1, 20))
+
+        assert close == 10.5
+        assert "使用 2025-01-02 的收盘价" in caplog.text
+
     def test_risk_free_rate_uses_on_date(self):
         """历史回测调用 get_risk_free_rate(过去某日) 应取该日期或之前最近一条 Shibor,
         而不是返回最新值 (回归 #akshare-shibor-historical)."""
@@ -1674,6 +1728,14 @@ class TestTermsBundle:
 
 
 class TestCSVDataProvider:
+
+    def test_missing_terms_file_raises_clear_error(self, tmp_path):
+        from convertible_bond.data_providers import CSVDataProvider
+
+        provider = CSVDataProvider(tmp_path)
+
+        with pytest.raises(FileNotFoundError, match="未找到转债条款"):
+            provider.get_bond_terms("123001.SZ", date(2025, 8, 31))
 
     def test_terms_loads_down_reset_fields(self, tmp_path):
         from convertible_bond.data_providers import CSVDataProvider

@@ -30,7 +30,7 @@ STRATEGY_SELECTION_VIEWS = ("综合机会", "低估候选", "转股折价")
 # 策略页顶部模板下拉的展示顺序; "自定义" 表示完全手动
 STRATEGY_TEMPLATE_NAMES = ("自定义", "低估轮动", "折价套利", "稳健打底")
 STRATEGY_POOL_MODES = ("本地全市场", "当前筛选结果", "自选代码")
-STRATEGY_HISTORY_MODES = ("标准", "快速", "Wind防未来", "本地快照", "自定义文件")
+STRATEGY_HISTORY_MODES = ("标准", "Wind高保真")
 STRATEGY_TEMPLATE_DESCRIPTIONS = {
     "自定义": "保留当前手动参数, 适合从已有结果继续微调",
     "低估轮动": "月频 · Top10 · 低估候选 · 转股溢价≤30%",
@@ -49,11 +49,23 @@ STRATEGY_POOL_DESCRIPTIONS = {
 }
 STRATEGY_HISTORY_DESCRIPTIONS = {
     "标准": "推荐 · 使用 cb_terms_patches 历史条款修正 + cb_events 公告事件回放, 离线可跑, 适合日常复盘",
-    "快速": "只用当前条款回看过去, 速度最快, 但未来信息偏差最大, 仅用于粗调",
-    "Wind防未来": "运行时直接用 Wind 按估值日查询历史条款和状态, 可信度最高, 需 Wind 接口且较慢",
-    "本地快照": "在标准基础上额外挂 cb_data_history 历史快照, 长跨度回测更稳, 需先归档快照",
-    "自定义文件": "高级模式 · 手动指定历史快照、条款修正和公告事件文件",
+    "Wind高保真": "运行时直接用 Wind 按估值日查询历史条款和状态, 可信度最高, 需 Wind 接口且较慢",
 }
+STRATEGY_HISTORY_LEGACY_ALIASES = {
+    "快速": "标准",
+    "Wind防未来": "Wind高保真",
+    "本地快照": "标准",
+    "自定义文件": "标准",
+}
+
+
+def normalize_strategy_history_mode(value: str | None) -> str:
+    """兼容旧预设/旧 UI 文案里的历史口径值."""
+    mode = str(value or "").strip()
+    mode = STRATEGY_HISTORY_LEGACY_ALIASES.get(mode, mode)
+    return mode if mode in STRATEGY_HISTORY_DESCRIPTIONS else "标准"
+
+
 STRATEGY_STAT_TOOLTIPS = {
     "final_equity": "初始净值为 1.0000, 这里是扣除交易成本后的期末组合净值",
     "total_return": "期末净值相对初始净值的累计收益",

@@ -446,6 +446,19 @@ def test_batch_price_from_provider_keeps_legacy_worker_default(monkeypatch):
     assert seen["max_workers"] == 4
 
 
+def test_sort_batch_results_tolerates_non_numeric_deviation():
+    rows = [
+        {"bond_code": "BAD", "deviation": {"not": "numeric"}},
+        {"bond_code": "NAN", "deviation": float("nan")},
+        {"bond_code": "LOW", "deviation": -0.10},
+        {"bond_code": "STR", "deviation": "0.20"},
+    ]
+
+    sorted_rows = pricing_api._sort_batch_results(rows)
+
+    assert [row["bond_code"] for row in sorted_rows] == ["LOW", "STR", "BAD", "NAN"]
+
+
 def test_batch_stock_cache_hist_vol_uses_shared_history_and_fills_close_cache():
     class HistoryProvider:
         name = "history"

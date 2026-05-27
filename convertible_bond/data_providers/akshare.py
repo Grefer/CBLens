@@ -29,7 +29,6 @@ from .base import (
 )
 from ._helpers import (
     _float_or_none,
-    _latest_finite,
     _retry,
     _row_value,
     _stock_history_from_df,
@@ -40,6 +39,7 @@ from ._helpers import (
 
 
 logger = logging.getLogger(__name__)
+_STALE_STOCK_CLOSE_DAYS = 7
 
 
 class AkshareDataProvider(DataProvider):
@@ -248,8 +248,25 @@ class AkshareDataProvider(DataProvider):
 
     def get_stock_close(self, stock_code, on_date):
         history = self.get_stock_history(stock_code, on_date - timedelta(days=15), on_date)
-        px = _latest_finite([v for _, v in history])
+        px = None
+        px_date = None
+        for d, value in history:
+            if d is None or d > on_date:
+                continue
+            try:
+                finite_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(finite_value):
+                px = finite_value
+                px_date = d
         if px is not None:
+            stale_days = (on_date - px_date).days if px_date is not None else 0
+            if stale_days > _STALE_STOCK_CLOSE_DAYS:
+                logger.warning(
+                    "akshare 正股 %s 在估值日 %s 未取到近期收盘价, 使用 %s 的收盘价 %.4f",
+                    stock_code, on_date, px_date, px,
+                )
             return px
 
         plain = _wind_to_ak_stock(stock_code).zfill(6)
