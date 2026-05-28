@@ -44,8 +44,6 @@ from ..theme import (
 )
 from ..constants import (
     BOND_CODE_RE,
-    STRATEGY_HISTORY_DESCRIPTIONS,
-    STRATEGY_POOL_DESCRIPTIONS,
     STRATEGY_TEMPLATE_DESCRIPTIONS,
     STRATEGY_VIEW_DESCRIPTIONS,
     normalize_strategy_history_mode,
@@ -236,7 +234,6 @@ class BacktestMixin:
 
     def _strategy_pool_preview_text(self) -> str:
         mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
-        desc = STRATEGY_POOL_DESCRIPTIONS.get(mode, "")
         try:
             codes, label = self._strategy_codes_from_pool()
             invalid_text = ""
@@ -244,29 +241,26 @@ class BacktestMixin:
                 _, invalid = self._parse_strategy_manual_codes()
                 invalid_text = f" · 无效 {len(invalid)} 个" if invalid else " · 无效 0 个"
             if mode == "当前筛选结果" and not codes:
-                return f"{desc}\n当前批量筛选结果为空, 请先到批量页刷新重算或切换视图"
-            return f"{desc}\n{label} · 已选择 {len(codes)} 只{invalid_text}"
+                return "批量筛选结果为空, 请先到批量页刷新"
+            return f"{label} · 已选择 {len(codes)} 只{invalid_text}"
         except Exception as exc:
-            return f"{desc}\n读取失败: {exc}"
+            return f"读取失败: {exc}"
 
     def _strategy_history_preview_text(self) -> str:
         raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
         mode = normalize_strategy_history_mode(raw_mode)
-        desc = STRATEGY_HISTORY_DESCRIPTIONS.get(mode, "")
         try:
             patch = self._strategy_patch_precheck()
             events = self._strategy_events_precheck()
             if mode == "Wind高保真":
                 history = self._strategy_history_precheck([])
                 return (
-                    f"{desc}\n条款来源 {history['label']} · "
+                    f"条款来源 {history['label']} · "
                     f"公告修补 {patch['count']} 条 / {events['count']} 条事件"
                 )
-            return (
-                f"{desc}\n默认修正 {patch['count']} 条 · 公告事件 {events['count']} 条"
-            )
+            return f"默认修正 {patch['count']} 条 · 公告事件 {events['count']} 条"
         except Exception as exc:
-            return f"{desc}\n读取失败: {exc}"
+            return f"读取失败: {exc}"
 
     def _refresh_strategy_setup_summary(self, *_):
         pool_var = getattr(self, "v_st_pool_summary", None)

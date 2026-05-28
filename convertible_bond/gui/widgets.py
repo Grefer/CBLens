@@ -1,13 +1,15 @@
 """
-可复用 GUI 组件: 表单行, 卡片, 折叠面板, 悬浮提示, 自动补全输入框.
+可复用 GUI 组件: 表单行, 卡片, 折叠面板, 悬浮提示, 自动补全输入框, 日期选择.
 """
+import calendar
+from datetime import date, datetime
 import tkinter as tk
 import numpy as np
 import customtkinter as ctk
 
 from .theme import (
-    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM, ORANGE, ACCENT, GREEN,
-    FONT_FAMILY, FONT_MONO, get_color,
+    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM, ORANGE, ACCENT, ACCENT_HOVER, GREEN,
+    BTN_HOVER, FONT_FAMILY, FONT_MONO, get_color,
 )
 
 
@@ -402,3 +404,242 @@ class AutocompleteEntry(ctk.CTkFrame):
         self._hide()
         if self.on_select:
             self.on_select(value)
+
+
+# ── 日期选择: entry + 📅 按钮, 点击弹出月历 ────────────────────────────────
+
+class DatePickerPopup(ctk.CTkToplevel):
+    """月历弹窗: 解析 var 当前值定位, 选定后写回 var 并关闭.
+
+    关闭策略 (避开 macOS Tk 8.6 的 overrideredirect+focus_force 闪退):
+    - 在 root 上绑定 Button-1, 点击 popup 外部区域时关闭
+    - ESC 键关闭
+    - 选中日期时关闭
+    """
+
+    def __init__(self, master, var, anchor, on_close=None):
+        super().__init__(master)
+        self.var = var
+        self._anchor = anchor
+        self._on_close_callback = on_close
+        # 不能用 self._root 命名 — 会覆盖 tkinter.Misc._root 方法
+        self._master_top = master.winfo_toplevel()
+
+        self.overrideredirect(True)
+        try:
+            self.transient(self._master_top)
+        except Exception:
+            pass
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+        self.configure(fg_color=BG_CARD)
+
+        try:
+            today = datetime.strptime(var.get(), "%Y-%m-%d").date()
+        except (ValueError, AttributeError, TypeError):
+            today = date.today()
+        self._selected = today
+        self._view = today.replace(day=1)
+
+        self._build_ui()
+        self._render_grid()
+
+        # 定位在 anchor 控件下方
+        self.update_idletasks()
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height() + 4
+        self.geometry(f"+{x}+{y}")
+        self.lift()  # macOS: 确保 popup 在所有窗口最上层
+
+        # 监听主窗 Configure (移动/缩放) → 关闭 popup, 避免位置错位
+        # 监听 Unmap (最小化/切 tab) → 关闭
+        self._config_bind_id = self._master_top.bind(
+            "<Configure>", self._on_master_configure, add="+")
+        self._unmap_bind_id = self._master_top.bind(
+            "<Unmap>", lambda _e: self._close(), add="+")
+
+        # 外部点击检测: after_idle 推迟到当前 Button-1 处理完毕之后,
+        # 否则触发本次创建的同一个 Button-1 事件会立刻把刚开的弹窗关掉.
+        self._root_bind_id = None
+
+        def _install_root_bind():
+            try:
+                self._root_bind_id = self._master_top.bind(
+                    "<Button-1>", self._on_root_click, add="+")
+            except Exception:
+                self._root_bind_id = None
+
+        self.after_idle(_install_root_bind)
+        self.bind("<Escape>", lambda _e: self._close())
+        self.bind("<Destroy>", self._on_destroy)
+
+    def _on_master_configure(self, _event=None):
+        # 主窗位置/大小变化, popup 不再可信, 关闭即可
+        self._close()
+
+    def _on_root_click(self, event):
+        if not self.winfo_exists():
+            return
+        x, y = event.x_root, event.y_root
+        # 点击在 popup 内部 → 不关
+        wx, wy = self.winfo_rootx(), self.winfo_rooty()
+        ww, wh = self.winfo_width(), self.winfo_height()
+        if wx <= x < wx + ww and wy <= y < wy + wh:
+            return
+        # 点击在 anchor entry 上 → 不关 (再次点击同一 entry 应该是切换, 而非关闭)
+        try:
+            if self._anchor is not None and self._anchor.winfo_exists():
+                ax = self._anchor.winfo_rootx()
+                ay = self._anchor.winfo_rooty()
+                aw = self._anchor.winfo_width()
+                ah = self._anchor.winfo_height()
+                if ax <= x < ax + aw and ay <= y < ay + ah:
+                    return
+        except Exception:
+            pass
+        self._close()
+
+    def _on_destroy(self, _event=None):
+        for attr, seq in (("_root_bind_id", "<Button-1>"),
+                          ("_config_bind_id", "<Configure>"),
+                          ("_unmap_bind_id", "<Unmap>")):
+            bid = getattr(self, attr, None)
+            if bid is not None:
+                try:
+                    self._master_top.unbind(seq, bid)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        if self._on_close_callback is not None:
+            try:
+                self._on_close_callback()
+            except Exception:
+                pass
+            self._on_close_callback = None
+
+    def _close(self):
+        try:
+            if self.winfo_exists():
+                self.destroy()
+        except Exception:
+            pass
+
+    def _build_ui(self):
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=8, pady=(8, 4))
+        ctk.CTkButton(
+            header, text="◀", width=28, height=24, corner_radius=4,
+            fg_color="transparent", hover_color=BTN_HOVER, text_color=TEXT,
+            font=(FONT_FAMILY, 11, "bold"),
+            command=lambda: self._shift_month(-1)
+        ).pack(side="left")
+        self.title_lbl = ctk.CTkLabel(
+            header, font=(FONT_FAMILY, 13, "bold"), text_color=TEXT)
+        self.title_lbl.pack(side="left", expand=True)
+        ctk.CTkButton(
+            header, text="▶", width=28, height=24, corner_radius=4,
+            fg_color="transparent", hover_color=BTN_HOVER, text_color=TEXT,
+            font=(FONT_FAMILY, 11, "bold"),
+            command=lambda: self._shift_month(1)
+        ).pack(side="right")
+
+        dow = ctk.CTkFrame(self, fg_color="transparent")
+        dow.pack(fill="x", padx=10)
+        for d in ("一", "二", "三", "四", "五", "六", "日"):
+            ctk.CTkLabel(dow, text=d, width=30, font=(FONT_FAMILY, 10),
+                         text_color=TEXT_DIM).pack(side="left", padx=1)
+
+        self._grid = ctk.CTkFrame(self, fg_color="transparent")
+        self._grid.pack(padx=10, pady=(2, 10))
+
+    def _shift_month(self, delta):
+        m = self._view.month + delta
+        y = self._view.year
+        while m < 1:
+            m += 12
+            y -= 1
+        while m > 12:
+            m -= 12
+            y += 1
+        self._view = self._view.replace(year=y, month=m)
+        self._render_grid()
+
+    def _render_grid(self):
+        for child in self._grid.winfo_children():
+            child.destroy()
+        self.title_lbl.configure(text=f"{self._view.year} 年 {self._view.month} 月")
+
+        weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(
+            self._view.year, self._view.month)
+        while len(weeks) < 6:
+            weeks.append([0] * 7)
+
+        today = date.today()
+        for week in weeks:
+            row = ctk.CTkFrame(self._grid, fg_color="transparent")
+            row.pack(fill="x")
+            for day in week:
+                if day == 0:
+                    ctk.CTkLabel(row, text="", width=30, height=24).pack(
+                        side="left", padx=1, pady=1)
+                    continue
+                cell_date = self._view.replace(day=day)
+                is_selected = (cell_date == self._selected)
+                is_today = (cell_date == today)
+                if is_selected:
+                    fg, txt = ACCENT, ("#ffffff", "#11111b")
+                elif is_today:
+                    fg, txt = "transparent", ACCENT
+                else:
+                    fg, txt = "transparent", TEXT
+                ctk.CTkButton(
+                    row, text=str(day), width=30, height=24,
+                    font=(FONT_MONO, 11), corner_radius=4,
+                    fg_color=fg, hover_color=BTN_HOVER, text_color=txt,
+                    command=lambda d=day: self._pick(d)
+                ).pack(side="left", padx=1, pady=1)
+
+    def _pick(self, day):
+        picked = self._view.replace(day=day)
+        self.var.set(picked.strftime("%Y-%m-%d"))
+        self._close()
+
+
+def make_date_picker(parent, var, *, entry_width=120):
+    """返回 CTkEntry: 点击时弹出 DatePickerPopup; 仍可手动输入(ESC 关闭弹窗)."""
+    entry = ctk.CTkEntry(
+        parent, textvariable=var, font=(FONT_MONO, 13),
+        fg_color=BG_INPUT, border_width=0, corner_radius=6,
+        text_color=TEXT, height=28, width=entry_width)
+    entry._date_popup = None
+
+    def _log(msg):
+        try:
+            with open("/tmp/cb-datepicker.log", "a") as _f:
+                _f.write(msg + "\n")
+        except Exception:
+            pass
+
+    def _open(_event=None):
+        _log(f"[OPEN] click, current popup={entry._date_popup}")
+        try:
+            existing = entry._date_popup
+            if existing is not None and existing.winfo_exists():
+                _log(f"[OPEN] already open, skip")
+                return
+            popup = DatePickerPopup(
+                entry.winfo_toplevel(), var, anchor=entry,
+                on_close=lambda: (_log(f"[CLOSE-CB] ref cleared"),
+                                  setattr(entry, "_date_popup", None)))
+            entry._date_popup = popup
+            _log(f"[OPEN] popup created at "
+                 f"({popup.winfo_rootx()},{popup.winfo_rooty()}) "
+                 f"size=({popup.winfo_width()}x{popup.winfo_height()})")
+        except Exception:
+            import traceback
+            _log(f"[OPEN-ERR] {traceback.format_exc()}")
+
+    entry.bind("<Button-1>", _open)
+    return entry

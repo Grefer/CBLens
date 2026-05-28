@@ -4,7 +4,7 @@
   - 标题栏与操作区：将标题、描述与“预检”、“运行策略”按钮合并至单行
   - 核心参数网格：采用 2×4 的网格布局常驻展示所有 8 个基本参数，美观对齐，标签在上，输入框在下
   - 联动逻辑：修改核心参数时，模板类型将自动联动切换至“自定义”
-  - 范围与可信度：采用分段选择器（Segmented Buttons）配置回测范围和历史条款口径
+  - 回测范围与历史口径：两列扁平化分段选择器, 与上方核心参数同栅格对齐
   - 指标看板：指标数据展示重构为 10 个独立的 Dashboard Tile（卡片磁贴）并配以 Emoji
   - 高级设置（默认折叠）内分两卡：
       · 选债条件：价格/溢价/偏差/HV (2×2 网格)，并带有“不限”灰色占位符
@@ -28,7 +28,7 @@ from ..theme import (
     ACCENT, ACCENT_HOVER, BTN_HOVER, ORANGE,
     FONT_FAMILY, FONT_MONO, E,
 )
-from ..widgets import CollapsibleSection, Tooltip
+from ..widgets import CollapsibleSection, Tooltip, make_date_picker
 
 
 def build(app, tab):
@@ -62,45 +62,54 @@ def build(app, tab):
     ctk.CTkLabel(title_box, text="选模板或选视图, 固定频率调仓回测; 细节在「高级设置」里调",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left")
 
-    # 右侧操作按钮
-    btn_box = ctk.CTkFrame(ch, fg_color="transparent")
-    btn_box.grid(row=0, column=1, sticky="e")
-
-    app.btn_strategy_precheck = ctk.CTkButton(
-        btn_box, text=E("📋 预检"), command=app._precheck_strategy_backtest,
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12, "bold"), width=76, height=32, corner_radius=6)
-    app.btn_strategy_precheck.pack(side="left", padx=(0, 8))
-    Tooltip(app.btn_strategy_precheck, "不跑定价, 先检查代码池、历史口径和预计工作量")
-
-    app.btn_strategy_backtest = ctk.CTkButton(
-        btn_box, text=E("⚡ 运行策略"), command=app._run_strategy_backtest,
-        fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
-        font=(FONT_FAMILY, 13, "bold"), width=112, height=32, corner_radius=6)
-    app.btn_strategy_backtest.pack(side="left")
+    # 操作按钮已移至底部执行控制台
 
     # ── 核心参数设置网格 (2×4 干净规整) ────────────────────────────────────
     # 结合 ctrl(padx=16) + cc(padx=8) + cell(padx=8) = 32px，第一列输入框与标题文字完美左对齐。
+    # 4 列等宽栅格, 每格内 inline label + control (label 在左, 控件按内容定宽)
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
-    cc.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+    cc.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
     for col in range(4):
         cc.grid_columnconfigure(col, weight=1, uniform="st_cols")
 
-    def _grid_cell(parent, label, var, row, col, widget_type="entry", values=None, tooltip=None, command=None):
+    def _grid_cell(parent, label, var, row, col, widget_type="entry", values=None,
+                   tooltip=None, command=None, control_width=140, label_width=60):
+        """Inline label cell: label 左(定宽) + control 右, 同列控件左边缘对齐."""
         cell = ctk.CTkFrame(parent, fg_color="transparent")
-        cell.grid(row=row, column=col, sticky="ew", padx=8, pady=6)
+        cell.grid(row=row, column=col, sticky="ew", padx=8, pady=4)
+
+        if widget_type == "checkbox":
+            # 占位 frame, 让 checkbox 左边缘对齐其他行的控件左边缘 (label_width + 8 gap)
+            spacer = ctk.CTkFrame(cell, width=label_width + 8, height=1,
+                                  fg_color="transparent")
+            spacer.pack(side="left")
+            spacer.pack_propagate(False)
+            w = ctk.CTkCheckBox(
+                cell, text="等权基准对标", variable=var, height=28,
+                font=(FONT_FAMILY, 12), text_color=TEXT_DIM, fg_color=ACCENT,
+                hover_color=ACCENT_HOVER, border_color=BORDER,
+                checkbox_width=16, checkbox_height=16, border_width=1, corner_radius=3)
+            w.pack(side="left", anchor="w")
+            if tooltip:
+                Tooltip(w, tooltip)
+            return w
 
         lbl = ctk.CTkLabel(cell, text=label, text_color=TEXT_DIM,
-                           font=(FONT_FAMILY, 12, "bold"), anchor="w")
-        lbl.pack(anchor="w", pady=(0, 2))
+                           font=(FONT_FAMILY, 13),
+                           width=label_width, anchor="w")
+        lbl.pack(side="left", padx=(0, 8))
 
         if widget_type == "entry":
             w = ctk.CTkEntry(cell, textvariable=var, font=(FONT_MONO, 13),
-                             fg_color=BG_INPUT, border_width=1, border_color=BORDER,
-                             corner_radius=6, text_color=TEXT, height=28)
-            w.pack(fill="x", expand=True)
+                             fg_color=BG_INPUT, border_width=0,
+                             corner_radius=6, text_color=TEXT, height=28,
+                             width=control_width)
+            w.pack(side="left")
+        elif widget_type == "date":
+            w = make_date_picker(cell, var, entry_width=control_width)
+            w.pack(side="left")
         elif widget_type == "optmenu":
-            menu_kwargs = {}
+            menu_kwargs = {"width": control_width}
             if command is not None:
                 menu_kwargs["command"] = command
             w = ctk.CTkOptionMenu(
@@ -108,48 +117,62 @@ def build(app, tab):
                 font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
                 text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
                 **menu_kwargs)
-            w.pack(fill="x", expand=True)
-        elif widget_type == "checkbox":
-            w = ctk.CTkCheckBox(
-                cell, text="等权基准对标", variable=var, height=28,
-                font=(FONT_FAMILY, 12), text_color=TEXT_DIM, fg_color=ACCENT,
-                hover_color=ACCENT_HOVER, border_color=BORDER,
-                checkbox_width=16, checkbox_height=16, border_width=1, corner_radius=3)
-            w.pack(anchor="w", pady=(2, 0))
+            w.pack(side="left")
 
         if tooltip:
             Tooltip(lbl, tooltip)
-            if widget_type != "checkbox":
-                Tooltip(w, tooltip)
+            Tooltip(w, tooltip)
         return w
 
-    # 第一行参数 (模板, 开始日期, 结束日期, 调仓频率)
+    # 每列 label_width 取该列两行 label 的最大宽度, 同列控件左边缘对齐
+    # col 0: 模板/选债视图 (4 CJK) → 64
+    # col 1: 开始日期/Top N (4 CJK) → 64
+    # col 2: 结束日期/成本 (bps) (8 mixed) → 80
+    # col 3: 频率/[checkbox 占位] (2 CJK) → 32
+
+    # 第一行: 模板, 开始日期, 结束日期, 频率
     _grid_cell(
         cc, "模板", app.v_st_template, 0, 0, "optmenu", list(STRATEGY_TEMPLATE_NAMES),
         lambda: STRATEGY_TEMPLATE_DESCRIPTIONS.get(app.v_st_template.get(), ""),
-        command=app._apply_strategy_template)
-    _grid_cell(cc, "开始日期", app.v_st_start, 0, 1, "entry", None, "回测的起始日期 (YYYY-MM-DD)")
-    _grid_cell(cc, "结束日期", app.v_st_end, 0, 2, "entry", None, "回测的结束日期 (YYYY-MM-DD)")
-    _grid_cell(cc, "调仓频率", app.v_st_freq, 0, 3, "optmenu", ["周", "月", "季"], "策略定期调仓重组的频率")
+        command=app._apply_strategy_template, control_width=130, label_width=64)
+    _grid_cell(cc, "开始日期", app.v_st_start, 0, 1, "date", None,
+               "回测的起始日期 (YYYY-MM-DD)", control_width=120, label_width=64)
+    _grid_cell(cc, "结束日期", app.v_st_end, 0, 2, "date", None,
+               "回测的结束日期 (YYYY-MM-DD)", control_width=120, label_width=80)
+    _grid_cell(cc, "频率", app.v_st_freq, 0, 3, "optmenu", ["周", "月", "季"],
+               "策略定期调仓重组的频率", control_width=80, label_width=32)
 
-    # 第二行参数 (选债视图, Top选中数, 交易成本, 基准设置)
+    # 第二行: 选债视图, Top N, 成本, 基准设置
     _grid_cell(
         cc, "选债视图", app.v_st_view, 1, 0, "optmenu", list(STRATEGY_SELECTION_VIEWS),
         lambda: STRATEGY_VIEW_DESCRIPTIONS.get(app.v_st_view.get(), ""),
-        command=app._describe_strategy_view)
-    _grid_cell(cc, "Top N 选中数", app.v_st_top_n, 1, 1, "entry", None, "每期最大持仓转债数量")
-    _grid_cell(cc, "交易成本 (bps)", app.v_st_cost, 1, 2, "entry", None, "单边调仓交易成本，单位为万分之一(bps)")
-    _grid_cell(cc, "基准设置", app.v_st_benchmark, 1, 3, "checkbox", None, "等权买入全市场合格转债作为比较基准")
+        command=app._describe_strategy_view, control_width=130, label_width=64)
+    _grid_cell(cc, "Top N", app.v_st_top_n, 1, 1, "entry", None,
+               "每期最大持仓转债数量", control_width=120, label_width=64)
+    _grid_cell(cc, "成本 (bps)", app.v_st_cost, 1, 2, "entry", None,
+               "单边调仓交易成本，单位为万分之一(bps)", control_width=120, label_width=80)
+    _grid_cell(cc, "基准设置", app.v_st_benchmark, 1, 3, "checkbox", None,
+               "等权买入全市场合格转债作为比较基准", label_width=32)
 
-    # 描述提示标签 (以圆角通知横幅形式承载，更显尊贵)
+    # 第三行: 回测范围, 历史口径 (col 2, 3 留空)
+    _grid_cell(
+        cc, "回测范围", app.v_st_pool_mode, 2, 0, "optmenu", list(STRATEGY_POOL_MODES),
+        lambda: STRATEGY_POOL_DESCRIPTIONS.get(app.v_st_pool_mode.get(), ""),
+        command=lambda _v: app._refresh_strategy_setup_summary(),
+        control_width=130, label_width=64)
+    _grid_cell(
+        cc, "历史口径", app.v_st_history_mode, 2, 1, "optmenu", list(STRATEGY_HISTORY_MODES),
+        lambda: STRATEGY_HISTORY_DESCRIPTIONS.get(app.v_st_history_mode.get(), ""),
+        command=lambda _v: app._refresh_strategy_setup_summary(),
+        control_width=130, label_width=64)
+
+    # 描述提示标签 (精简为无边框文本)
     app.v_st_hint = ctk.StringVar(value="")
-    hint_frame = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=8)
-    hint_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 10))
     hint_lbl = ctk.CTkLabel(
-        hint_frame, textvariable=app.v_st_hint,
-        font=(FONT_FAMILY, 12), text_color=TEXT_DIM,
+        ctrl, textvariable=app.v_st_hint,
+        font=(FONT_FAMILY, 11), text_color=TEXT_DIM,
         justify="left", anchor="w")
-    hint_lbl.pack(fill="x", padx=16, pady=6)
+    hint_lbl.grid(row=2, column=0, sticky="w", padx=24, pady=(0, 10))
 
     def _refresh_choice_hint(*_):
         template = app.v_st_template.get()
@@ -174,66 +197,19 @@ def build(app, tab):
                 app.v_st_benchmark):
         var.trace_add("write", _on_param_change)
 
-    # ── 回测范围与可信度: 整合后的高级分段控制 (去除外层大长条，改为独立的侧边卡片与底部自选卡片) ─────────────────────
-    scope = ctk.CTkFrame(ctrl, fg_color="transparent")
-    scope.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 12))
-    scope.grid_columnconfigure(0, weight=1)
-
-    head = ctk.CTkFrame(scope, fg_color="transparent")
-    head.grid(row=0, column=0, sticky="ew", padx=0, pady=(4, 8))
-    ctk.CTkLabel(head, text=E("🛡️ 回测范围与可信度"), text_color=ACCENT,
-                 font=(FONT_FAMILY, 12, "bold")).pack(side="left", padx=(0, 8))
-    ctk.CTkLabel(
-        head, text="先选回测哪些债, 再选历史条款口径",
-        text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(side="left")
-
-    scope_body = ctk.CTkFrame(scope, fg_color="transparent")
-    scope_body.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
-    scope_body.grid_columnconfigure(0, weight=1, uniform="scope")
-    scope_body.grid_columnconfigure(1, weight=1, uniform="scope")
-
-    # pool_box: 回测范围控制段 (作为一个独立的卡片式容器)
-    pool_box = ctk.CTkFrame(scope_body, fg_color=BG_INPUT, corner_radius=12,
-                            border_width=1, border_color=BORDER)
-    pool_box.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-    
-    pool_inner = ctk.CTkFrame(pool_box, fg_color="transparent")
-    pool_inner.pack(fill="both", expand=True, padx=14, pady=12)
-
-    pool_title = ctk.CTkLabel(pool_inner, text=E("🎯 回测范围"), text_color=TEXT,
-                              font=(FONT_FAMILY, 12, "bold"))
-    pool_title.pack(anchor="w")
-    Tooltip(pool_title, lambda: STRATEGY_POOL_DESCRIPTIONS.get(app.v_st_pool_mode.get(), ""))
-
-    pool_seg = ctk.CTkSegmentedButton(
-        pool_inner, variable=app.v_st_pool_mode, values=list(STRATEGY_POOL_MODES),
-        command=lambda _v: app._refresh_strategy_setup_summary(),
-        font=(FONT_FAMILY, 12), height=28,
-        selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
-        unselected_color=BG_CARD, unselected_hover_color=BTN_HOVER,
-        text_color=TEXT, corner_radius=6)
-    pool_seg.pack(fill="x", pady=(8, 6))
-
+    # 回测范围/历史口径 状态变量 (UI 已合并入 cc 栅格 row=2; 这两个 StringVar 由
+    # _refresh_strategy_setup_summary 维护, 供其他控制器逻辑读取, 不再常驻 UI)
     app.v_st_pool_summary = ctk.StringVar(value="")
-    pool_summary = ctk.CTkLabel(
-        pool_inner, textvariable=app.v_st_pool_summary,
-        font=(FONT_FAMILY, 11), text_color=TEXT_DIM,
-        justify="left", wraplength=480)
-    pool_summary.pack(anchor="w", fill="x")
-    Tooltip(pool_summary, lambda: STRATEGY_POOL_DESCRIPTIONS.get(app.v_st_pool_mode.get(), ""))
+    app.v_st_history_summary = ctk.StringVar(value="")
 
-    # manual_box: 自选代码输入框及右侧工具栏 (作为一个独立的卡片式容器，当需要时在下方跨列展示)
-    manual_box = ctk.CTkFrame(scope_body, fg_color=BG_INPUT, corner_radius=12,
-                              border_width=1, border_color=BORDER)
-    
-    manual_inner = ctk.CTkFrame(manual_box, fg_color="transparent")
-    manual_inner.pack(fill="both", expand=True, padx=14, pady=12)
-    manual_inner.grid_columnconfigure(0, weight=1)
-    manual_inner.grid_columnconfigure(1, weight=0)
+    # 自选代码输入: 仅当回测范围 = 自选代码 时, 在 ctrl 中显示
+    manual_box = ctk.CTkFrame(ctrl, fg_color="transparent")
+    manual_box.grid_columnconfigure(0, weight=1)
+    manual_box.grid_columnconfigure(1, weight=0)
 
     codes_text = ctk.CTkTextbox(
-        manual_inner, height=62, font=(FONT_MONO, 12),
-        fg_color=BG_CARD, border_width=1, border_color=BORDER, corner_radius=6,
+        manual_box, height=62, font=(FONT_MONO, 12),
+        fg_color=BG_INPUT, border_width=0, corner_radius=6,
         text_color=TEXT, wrap="word")
     codes_text.grid(row=0, column=0, sticky="ew", pady=0, padx=(0, 12))
 
@@ -252,55 +228,25 @@ def build(app, tab):
     app.v_st_codes.trace_add("write", _sync_codes_to_box)
     _sync_codes_to_box()
 
-    manual_actions = ctk.CTkFrame(manual_inner, fg_color="transparent")
+    manual_actions = ctk.CTkFrame(manual_box, fg_color="transparent")
     manual_actions.grid(row=0, column=1, sticky="ns")
 
     ctk.CTkButton(
         manual_actions, text=E("📥 导入"), command=app._import_strategy_codes_file,
-        fg_color=BG_CARD, hover_color=BTN_HOVER, text_color=TEXT,
+        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=76, height=24, corner_radius=6).pack(side="top", pady=1)
     ctk.CTkButton(
         manual_actions, text=E("🔍 校验"), command=app._refresh_strategy_setup_summary,
-        fg_color=BG_CARD, hover_color=BTN_HOVER, text_color=TEXT,
+        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=76, height=24, corner_radius=6).pack(side="top", pady=1)
     ctk.CTkButton(
         manual_actions, text=E("🗑 清空"), command=app._clear_strategy_codes,
-        fg_color=BG_CARD, hover_color=BTN_HOVER, text_color=TEXT_DIM,
+        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT_DIM,
         font=(FONT_FAMILY, 12), width=76, height=24, corner_radius=6).pack(side="top", pady=1)
-
-    # history_box: 历史口径选择 (作为一个独立的卡片式容器)
-    history_box = ctk.CTkFrame(scope_body, fg_color=BG_INPUT, corner_radius=12,
-                               border_width=1, border_color=BORDER)
-    history_box.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-
-    history_inner = ctk.CTkFrame(history_box, fg_color="transparent")
-    history_inner.pack(fill="both", expand=True, padx=14, pady=12)
-
-    history_title = ctk.CTkLabel(history_inner, text=E("📜 历史口径"), text_color=TEXT,
-                                 font=(FONT_FAMILY, 12, "bold"))
-    history_title.pack(anchor="w")
-    Tooltip(history_title, lambda: STRATEGY_HISTORY_DESCRIPTIONS.get(app.v_st_history_mode.get(), ""))
-
-    history_seg = ctk.CTkSegmentedButton(
-        history_inner, variable=app.v_st_history_mode, values=list(STRATEGY_HISTORY_MODES),
-        command=lambda _v: app._refresh_strategy_setup_summary(),
-        font=(FONT_FAMILY, 12), height=28,
-        selected_color=ACCENT, selected_hover_color=ACCENT_HOVER,
-        unselected_color=BG_CARD, unselected_hover_color=BTN_HOVER,
-        text_color=TEXT, corner_radius=6)
-    history_seg.pack(fill="x", pady=(8, 6))
-
-    app.v_st_history_summary = ctk.StringVar(value="")
-    history_summary = ctk.CTkLabel(
-        history_inner, textvariable=app.v_st_history_summary,
-        font=(FONT_FAMILY, 11), text_color=TEXT_DIM,
-        justify="left", wraplength=480)
-    history_summary.pack(anchor="w", fill="x")
-    Tooltip(history_summary, lambda: STRATEGY_HISTORY_DESCRIPTIONS.get(app.v_st_history_mode.get(), ""))
 
     def _refresh_scope_visibility(*_):
         if app.v_st_pool_mode.get() == "自选代码":
-            manual_box.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+            manual_box.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 10))
         else:
             manual_box.grid_forget()
         app._refresh_strategy_setup_summary()
@@ -333,54 +279,78 @@ def build(app, tab):
         range_grid, 1, 1, "HV%", app.v_st_min_sigma, app.v_st_max_sigma,
         tooltip="正股历史波动率; 使用顶部选择的波动率窗口")
 
-    # ── 状态 / 进度 / 导出 (左右边距对齐 32px) ────────────────────────────────
-    status_row = ctk.CTkFrame(tab, fg_color="transparent")
-    status_row.grid(row=1, column=0, sticky="ew", padx=32, pady=(4, 6))
-    status_row.grid_columnconfigure(0, weight=1)
-    app.lbl_strategy_bt_status = ctk.CTkLabel(
-        status_row, textvariable=app.v_st_status,
-        font=(FONT_FAMILY, 12), text_color=TEXT_DIM,
-        justify="left", wraplength=760)
-    app.lbl_strategy_bt_status.grid(row=0, column=0, sticky="w")
+    # ── 执行控制台 (整合状态、预检与核心操作，作为 ctrl 卡片的收尾) ────────────────
+    console = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=12)
+    console.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
+    console.grid_columnconfigure(0, weight=1)
+    console.grid_columnconfigure(1, weight=0)
+
+    # 左侧：状态与预检反馈区
+    status_box = ctk.CTkFrame(console, fg_color="transparent")
+    status_box.grid(row=0, column=0, sticky="ew", padx=16, pady=10)
+    
+    st_row1 = ctk.CTkFrame(status_box, fg_color="transparent")
+    st_row1.pack(fill="x", anchor="w")
     app.strategy_bt_progress = ctk.CTkProgressBar(
-        status_row, width=180, height=8, corner_radius=4,
-        progress_color=ACCENT, fg_color=BG_INPUT)
+        st_row1, width=160, height=6, corner_radius=3,
+        progress_color=ACCENT, fg_color=BG_CARD)
     app.strategy_bt_progress.set(0)
-    app.strategy_bt_progress.grid(row=0, column=1, sticky="e", padx=(12, 8))
-    app.btn_strategy_bt_csv = ctk.CTkButton(
-        status_row, text="导出CSV", command=app._export_strategy_backtest_csv,
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=72, height=28, corner_radius=6, state="disabled")
-    app.btn_strategy_bt_csv.grid(row=0, column=2, sticky="e")
-    Tooltip(app.btn_strategy_bt_csv, "导出逐期摘要、日频净值、持仓明细和汇总指标")
+    app.strategy_bt_progress.pack(side="left", pady=(1, 0))
+    
+    app.lbl_strategy_bt_status = ctk.CTkLabel(
+        st_row1, textvariable=app.v_st_status,
+        font=(FONT_FAMILY, 12, "bold"), text_color=TEXT_DIM, justify="left")
+    app.lbl_strategy_bt_status.pack(side="left", padx=12)
+
+    app.lbl_strategy_precheck = ctk.CTkLabel(
+        status_box, textvariable=app.v_st_precheck,
+        font=(FONT_FAMILY, 11), text_color=TEXT_DIM, justify="left")
+    app.lbl_strategy_precheck.pack(anchor="w", pady=(4, 0))
+
+    # 右侧：操作按钮组
+    action_box = ctk.CTkFrame(console, fg_color="transparent")
+    action_box.grid(row=0, column=1, sticky="e", padx=16, pady=10)
+
     app.btn_strategy_compare_clear = ctk.CTkButton(
-        status_row, text="清空对比", command=app._clear_strategy_comparison,
-        fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT_DIM,
-        font=(FONT_FAMILY, 12), width=78, height=28, corner_radius=6)
-    app.btn_strategy_compare_clear.grid(row=0, column=3, sticky="e", padx=(8, 0))
+        action_box, text="清空对比", command=app._clear_strategy_comparison,
+        fg_color="transparent", hover_color=BTN_HOVER, text_color=TEXT_DIM,
+        font=(FONT_FAMILY, 12), width=64, height=28, corner_radius=6)
+    app.btn_strategy_compare_clear.pack(side="left", padx=(0, 8))
     Tooltip(app.btn_strategy_compare_clear, "清除最近 8 次策略结果对比记录")
 
-    # 预检信息卡片化 (加入细致边框)
-    precheck_frame = ctk.CTkFrame(status_row, fg_color=BG_INPUT, corner_radius=8,
-                                  border_width=1, border_color=BORDER)
-    precheck_frame.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
-    precheck_frame.grid_columnconfigure(0, weight=1)
-    app.lbl_strategy_precheck = ctk.CTkLabel(
-        precheck_frame, textvariable=app.v_st_precheck,
-        font=(FONT_FAMILY, 11), text_color=TEXT_DIM, justify="left", anchor="w")
-    app.lbl_strategy_precheck.grid(row=0, column=0, sticky="ew", padx=12, pady=6)
+    app.btn_strategy_bt_csv = ctk.CTkButton(
+        action_box, text="导出CSV", command=app._export_strategy_backtest_csv,
+        fg_color=BG_CARD, border_width=1, border_color=BORDER, hover_color=BTN_HOVER, text_color=TEXT,
+        font=(FONT_FAMILY, 12), width=68, height=28, corner_radius=6, state="disabled")
+    app.btn_strategy_bt_csv.pack(side="left", padx=(0, 16))
+    Tooltip(app.btn_strategy_bt_csv, "导出逐期摘要、日频净值、持仓明细和汇总指标")
+
+    app.btn_strategy_precheck = ctk.CTkButton(
+        action_box, text=E("📋 预检"), command=app._precheck_strategy_backtest,
+        fg_color=BG_CARD, border_width=1, border_color=BORDER, hover_color=BTN_HOVER, text_color=TEXT,
+        font=(FONT_FAMILY, 12, "bold"), width=76, height=32, corner_radius=6)
+    app.btn_strategy_precheck.pack(side="left", padx=(0, 12))
+    Tooltip(app.btn_strategy_precheck, "不跑定价, 先检查代码池、历史口径和预计工作量")
+
+    app.btn_strategy_backtest = ctk.CTkButton(
+        action_box, text=E("⚡ 运行策略"), command=app._run_strategy_backtest,
+        fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
+        font=(FONT_FAMILY, 13, "bold"), width=112, height=32, corner_radius=6)
+    app.btn_strategy_backtest.pack(side="left")
 
     # ── 指标卡 Dashboard Tiles (对齐卡片 16px) ───────────────────
     app._strategy_stat_vars = {}
     app._strategy_stat_labels = {}
     stats_card = ctk.CTkFrame(tab, fg_color="transparent")
-    stats_card.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 8))
+    stats_card.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
     for col in range(5):
         stats_card.grid_columnconfigure(col, weight=1, uniform="stbts")
 
     def _stat(row, col, key, title, *, primary=True):
         var = ctk.StringVar(value="—")
-        cell = ctk.CTkFrame(stats_card, fg_color=BG_CARD, corner_radius=12, border_width=1, border_color=BORDER)
+        # 主指标赋予主题色边框高亮
+        border_c = ACCENT if primary else BORDER
+        cell = ctk.CTkFrame(stats_card, fg_color=BG_CARD, corner_radius=12, border_width=1, border_color=border_c)
         pady = (8, 4) if row == 0 else (2, 8)
         cell.grid(row=row, column=col, sticky="nsew", padx=4, pady=pady)
 
@@ -424,7 +394,7 @@ def build(app, tab):
         segmented_button_unselected_color=BG_INPUT,
         segmented_button_unselected_hover_color=BTN_HOVER,
         text_color=TEXT, corner_radius=16)
-    app.strategy_result_tabs.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 6))
+    app.strategy_result_tabs.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 6))
     for name in ("总览", "筛选", "持仓", "归因", "风险", "稳健性", "数据", "对比"):
         app.strategy_result_tabs.add(name)
 
@@ -473,7 +443,7 @@ def _label(parent, text):
 
 def _entry(parent, var, width):
     return ctk.CTkEntry(parent, textvariable=var, width=width, font=(FONT_MONO, 13),
-                        fg_color=BG_INPUT, border_width=1, border_color=BORDER, corner_radius=6,
+                        fg_color=BG_INPUT, border_width=0, corner_radius=6,
                         text_color=TEXT, height=30)
 
 
