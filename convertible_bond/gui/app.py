@@ -433,7 +433,8 @@ class CBPricerApp(
 
     def _build_header(self):
         # 投资者工作流: 先筛候选 → 钻单债 → 验模型 → 做压力测试
-        self._tab_names = [E("📦 批量"), E("⚡ 定价"), E("📈 回测"), E("🎯 策略"), E("🔥 敏感性")]
+        # tab 顺序: 多债视图 (批量 → 策略) → 单债钻取 (定价 → 回测 → 敏感性)
+        self._tab_names = [E("📦 批量"), E("🎯 策略"), E("⚡ 定价"), E("📈 回测"), E("🔥 敏感性")]
 
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
