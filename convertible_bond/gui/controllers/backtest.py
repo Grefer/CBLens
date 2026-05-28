@@ -523,8 +523,8 @@ class BacktestMixin:
         if hasattr(self, "strategy_bt_progress"):
             self.strategy_bt_progress.set(0)
         self.v_st_status.set(
-            f"Pro 预览 · 正在回测 {len(codes)} 只, "
-            f"{start} → {end}, {self.v_st_freq.get()}调仓 ..."
+            f"正在回测 {len(codes)} 只 · "
+            f"{start} → {end} · {self.v_st_freq.get()}调仓"
         )
         threading.Thread(
             target=self._strategy_backtest_worker,
@@ -558,7 +558,7 @@ class BacktestMixin:
                     expected = getattr(self, "_strategy_bt_expected_pricing", None)
                     suffix = f" · 预计定价≈{expected} 次" if expected else ""
                     self.v_st_status.set(
-                        f"Pro 预览 · 定价/选债/估值 {done}/{total} ({pct:.0%}){suffix}"
+                        f"定价/选债/估值 {done}/{total} ({pct:.0%}){suffix}"
                     )
                     if hasattr(self, "strategy_bt_progress"):
                         self.strategy_bt_progress.set(pct)

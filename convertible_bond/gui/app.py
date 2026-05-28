@@ -287,7 +287,7 @@ class CBPricerApp(
         self.v_st_cost = ctk.StringVar(value="20")
         self.v_st_benchmark = ctk.BooleanVar(value=True)
         self.v_st_codes = ctk.StringVar(value="")
-        self.v_st_status = ctk.StringVar(value="Pro 预览: 设置条件后运行策略回测")
+        self.v_st_status = ctk.StringVar(value="就绪 · 调整参数后点击「运行策略」")
         self.v_st_precheck = ctk.StringVar(value="预检: 尚未运行")
 
         # 价值分解 & 希腊值

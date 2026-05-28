@@ -154,30 +154,42 @@ def create_card(parent, title, row, col, icon=""):
 
 
 class CollapsibleSection(ctk.CTkFrame):
-    """可折叠面板: 点击标题行展开/收起内容"""
+    """可折叠面板: 点击标题行展开/收起内容
+
+    Header 设计 (强化可见性):
+    - 浅色背景块 (BG_INPUT) + 圆角, 像一个可点击容器
+    - 全色 (TEXT) bold 文字, 不再被当作 ambient hint
+    - ▾/▸ 实心三角箭头, 状态切换时方向变化
+    """
+    _ARROW_OPEN = "▾"
+    _ARROW_CLOSED = "▸"
+
     def __init__(self, parent, title, expanded=False, **kw):
         kw.setdefault("fg_color", "transparent")
         super().__init__(parent, **kw)
         self.grid_columnconfigure(0, weight=1)
         self._expanded = expanded
         self._title = title
-        arrow = "▼" if expanded else "▶"
         self.header_btn = ctk.CTkButton(
-            self, text=f"{arrow}  {title}", command=self.toggle,
-            anchor="w", fg_color="transparent", hover_color=BG_INPUT,
-            text_color=TEXT_DIM, font=(FONT_FAMILY, 13, "bold"), height=28)
-        self.header_btn.grid(row=0, column=0, sticky="ew", padx=10)
+            self, text=self._header_text(), command=self.toggle,
+            anchor="w", fg_color=BG_INPUT, hover_color=BTN_HOVER,
+            text_color=TEXT, font=(FONT_FAMILY, 13, "bold"),
+            height=34, corner_radius=8)
+        self.header_btn.grid(row=0, column=0, sticky="ew")
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.grid_columnconfigure(0, weight=1)
         if expanded:
-            self.content.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+            self.content.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+
+    def _header_text(self) -> str:
+        arrow = self._ARROW_OPEN if self._expanded else self._ARROW_CLOSED
+        return f"   {arrow}   {self._title}"
 
     def toggle(self):
         self._expanded = not self._expanded
-        arrow = "▼" if self._expanded else "▶"
-        self.header_btn.configure(text=f"{arrow}  {self._title}")
+        self.header_btn.configure(text=self._header_text())
         if self._expanded:
-            self.content.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+            self.content.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
         else:
             self.content.grid_remove()
 
@@ -219,15 +231,24 @@ class Tooltip:
         if not text:
             return
         x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
         tip = ctk.CTkToplevel(self.widget)
         tip.wm_overrideredirect(True)
-        tip.attributes("-topmost", True)
-        tip.configure(fg_color=BG_INPUT)
+        try:
+            tip.attributes("-topmost", True)
+        except Exception:
+            pass
+        tip.configure(fg_color=BG_CARD)
+        # 用 frame + 1px border 加细灰描边, 比纯色卡片更精致
+        frame = ctk.CTkFrame(
+            tip, fg_color=BG_CARD, corner_radius=8,
+            border_width=1, border_color=BORDER)
+        frame.pack()
         lbl = ctk.CTkLabel(
-            tip, text=text, font=(FONT_FAMILY, 11),
-            text_color=TEXT, fg_color=BG_INPUT, corner_radius=6,
-            padx=10, pady=4)
+            frame, text=text, font=(FONT_FAMILY, 12),
+            text_color=TEXT, fg_color=BG_CARD,
+            justify="left", anchor="w", wraplength=320,
+            padx=12, pady=8)
         lbl.pack()
         tip.update_idletasks()
         # 居中对齐到目标控件下方
