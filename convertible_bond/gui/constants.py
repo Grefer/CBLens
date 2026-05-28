@@ -25,9 +25,9 @@ DEFAULT_CREDIT_SPREAD_PCT = 3.0
 EVENT_SYNC_STALE_HOURS = 24
 
 
-# 策略页: 只保留对"系统化买入"有意义的视图 (剔除"需复核")
+# 策略页选债规则: 只保留对"系统化买入"有意义的规则 (剔除"需复核")
 STRATEGY_SELECTION_VIEWS = ("综合机会", "低估候选", "转股折价")
-# 策略页顶部模板下拉的展示顺序; "自定义" 表示完全手动
+# 策略页顶部策略方案的展示顺序; "自定义" 表示完全手动
 STRATEGY_TEMPLATE_NAMES = ("自定义", "低估轮动", "折价套利", "稳健打底")
 STRATEGY_POOL_MODES = ("本地全市场", "当前筛选结果", "自选代码")
 STRATEGY_HISTORY_MODES = ("标准", "Wind高保真")

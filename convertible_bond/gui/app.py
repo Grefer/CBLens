@@ -289,6 +289,8 @@ class CBPricerApp(
         self.v_st_codes = ctk.StringVar(value="")
         self.v_st_status = ctk.StringVar(value="就绪 · 调整参数后点击「运行策略」")
         self.v_st_precheck = ctk.StringVar(value="预检: 尚未运行")
+        # 已选策略摘要 (静态, 显示策略方案 + 选债规则), 与运行状态分离
+        self.v_st_summary = ctk.StringVar(value="")
 
         # 价值分解 & 希腊值
         self.v_bond_floor   = ctk.StringVar(value="—")

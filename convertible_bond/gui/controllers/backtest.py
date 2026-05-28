@@ -65,7 +65,7 @@ class StrategyBacktestCancelled(Exception):
     """用户主动中断策略回测."""
 
 
-# 选债哲学由"视图"统一驱动: 置信度与硬复核风险按视图推导, 不再单独暴露控件。
+# 选债哲学由"选债规则"统一驱动: 置信度与硬复核风险按规则推导。
 _DEFAULT_VIEW_POLICY = {"min_confidence": ("高", "中"), "exclude_review_risks": True}
 STRATEGY_VIEW_POLICY = {
     "综合机会": {"min_confidence": ("高", "中"), "exclude_review_risks": True},
@@ -73,8 +73,8 @@ STRATEGY_VIEW_POLICY = {
     "转股折价": {"min_confidence": ("高", "中"), "exclude_review_risks": True},
 }
 
-# 模板基线: 选模板时先重置这些"选债逻辑"字段 (未指定即清空), 避免上个模板残留;
-# 数据源 / 区间 / 代码池 / 文件路径属环境配置, 不在模板范围内。
+# 策略方案基线: 选择方案时先重置这些"选债逻辑"字段, 避免上个方案残留;
+# 数据源 / 区间 / 代码池属环境配置, 不在策略方案范围内。
 _STRATEGY_TEMPLATE_BASE = {
     "v_st_freq": "月", "v_st_top_n": "10", "v_st_view": "低估候选",
     "v_st_min_price": "", "v_st_max_price": "",
@@ -170,12 +170,12 @@ class BacktestMixin:
 
     # ── 策略回测 (Pro 预览) ───────────────────────────────
     def _apply_strategy_template(self, name):
-        """套用策略模板; 选「自定义」不改动现有参数, 仅保留手动调整。"""
+        """套用策略方案; 选「自定义」不改动现有参数, 仅保留手动调整。"""
         overrides = STRATEGY_TEMPLATES.get(name)
         if overrides is None:  # 自定义
             view = self.v_st_view.get()
             desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "可手动调整选债和过滤条件")
-            self.v_st_status.set(f"自定义模式 · 当前视图「{view}」: {desc}")
+            self.v_st_summary.set(f"自定义参数 · 选债规则「{view}」\n{desc}")
             return
         merged = {**_STRATEGY_TEMPLATE_BASE, **overrides}
         self._programmatic_update = True
@@ -189,13 +189,16 @@ class BacktestMixin:
         view = merged.get("v_st_view", self.v_st_view.get())
         template_desc = STRATEGY_TEMPLATE_DESCRIPTIONS.get(name, "")
         view_desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "")
-        self.v_st_status.set(f"已套用「{name}」: {template_desc} · {view_desc}")
+        self.v_st_summary.set(
+            f"策略方案「{name}」\n{template_desc}\n选债规则: {view_desc}")
 
     def _describe_strategy_view(self, name):
-        """用户切换选债视图时, 直接解释这个视图代表的选债哲学。"""
+        """用户切换选债规则时, 写入策略摘要区 (不覆盖运行状态)。"""
         desc = STRATEGY_VIEW_DESCRIPTIONS.get(name)
         if desc:
-            self.v_st_status.set(f"选债视图「{name}」: {desc}")
+            template = self.v_st_template.get() if hasattr(self, "v_st_template") else "自定义"
+            prefix = f"策略方案「{template}」" if template != "自定义" else "自定义参数"
+            self.v_st_summary.set(f"{prefix}\n选债规则「{name}」: {desc}")
 
     def _strategy_codes_from_pool(self) -> tuple[list[str], str]:
         mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
@@ -300,16 +303,21 @@ class BacktestMixin:
             messagebox.showerror("导入失败", str(exc))
 
     def _precheck_strategy_backtest(self):
-        """轻量检查策略回测输入、历史口径和预计工作量, 不触发批量定价。"""
+        """纯信息预览: 检查代码池、历史口径和预计工作量, 结果仅展示在面板内。"""
         try:
             info = self._strategy_precheck_info()
         except Exception as exc:
-            self.v_st_precheck.set(f"预检失败: {exc}")
-            messagebox.showerror("策略预检失败", str(exc))
+            self.v_st_precheck.set(f"⚠ 预检异常: {exc}")
+            self.v_st_status.set(f"预检异常 · {exc}")
             return
         text = self._format_strategy_precheck(info)
         self.v_st_precheck.set(text)
-        self.v_st_status.set(f"预检完成 · {info['code_count']} 只 · {info['period_count']} 个调仓区间")
+        warnings = info.get("warnings") or []
+        warn_suffix = f" · ⚠ {len(warnings)} 条提醒" if warnings else ""
+        self.v_st_status.set(
+            f"预检完成 · {info['code_count']} 只 · "
+            f"{info['period_count']} 个调仓区间{warn_suffix}"
+        )
 
     def _strategy_precheck_info(self) -> dict:
         start = date.fromisoformat(self.v_st_start.get().strip())
@@ -508,11 +516,13 @@ class BacktestMixin:
             messagebox.showerror("参数错误", f"策略参数解析失败: {exc}")
             return
 
+        # 运行前自动执行预检并展示, 预检失败不阻塞运行
         try:
             precheck = self._strategy_precheck_info()
             self.v_st_precheck.set(self._format_strategy_precheck(precheck))
             self._strategy_bt_expected_pricing = precheck.get("estimated_pricing")
-        except Exception:
+        except Exception as exc:
+            self.v_st_precheck.set(f"⚠ 预检异常: {exc}")
             self._strategy_bt_expected_pricing = None
 
         source = self.v_data_source.get()
@@ -1427,7 +1437,7 @@ class BacktestMixin:
         ctk.CTkLabel(params, text="本次参数快照", text_color=TEXT,
                      font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
         param_labels = {
-            "selection_view": "选债视图",
+            "selection_view": "选债规则",
             "rebalance_freq": "调仓频率",
             "top_n": "Top N",
             "execution_timing": "成交时点",
