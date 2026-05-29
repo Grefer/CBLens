@@ -711,8 +711,12 @@ class CBPricerApp(
             self.after_idle(self._refresh_strategy_after_show)
 
     def _refresh_strategy_after_show(self):
-        if isinstance(getattr(self, "_last_strategy_bt_result", None), dict):
-            self._refresh_strategy_active_result_tab()
+        result = getattr(self, "_last_strategy_bt_result", None)
+        if isinstance(result, dict):
+            try:
+                self._render_strategy_backtest_result(result)
+            except Exception as exc:
+                print(f"[策略] 渲染快照失败: {exc}")
         elif hasattr(self, "_load_strategy_backtest_snapshot"):
             self._load_strategy_backtest_snapshot(silent=True)
 
