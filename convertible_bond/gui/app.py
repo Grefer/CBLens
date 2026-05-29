@@ -713,8 +713,10 @@ class CBPricerApp(
     def _refresh_strategy_after_show(self):
         result = getattr(self, "_last_strategy_bt_result", None)
         if isinstance(result, dict):
+            # 有数据: 更新摘要 + 渲染当前选中的子页 (懒渲染)
             try:
-                self._render_strategy_backtest_result(result)
+                self._update_strategy_result_summary(result)
+                self._render_current_strategy_tab()
             except Exception as exc:
                 print(f"[策略] 渲染快照失败: {exc}")
         elif hasattr(self, "_load_strategy_backtest_snapshot"):

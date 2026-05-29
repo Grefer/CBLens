@@ -405,7 +405,7 @@ def build(app, tab):
         text_color=TEXT, corner_radius=16,
         command=lambda: app._on_strategy_result_tab_change())
     app.strategy_result_tabs.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 6))
-    for name in ("总览", "明细", "归因", "风险", "对比"):
+    for name in ("总览", "明细", "归因", "风险", "数据", "对比"):
         app.strategy_result_tabs.add(name)
 
     overview_tab = app.strategy_result_tabs.tab("总览")
@@ -487,6 +487,7 @@ def build(app, tab):
     for tab_name, attr in (
         ("归因", "strategy_bt_attribution_frame"),
         ("风险", "strategy_bt_risk_frame"),
+        ("数据", "strategy_bt_data_frame"),
         ("对比", "strategy_bt_compare_frame"),
     ):
         pane = app.strategy_result_tabs.tab(tab_name)

@@ -730,6 +730,8 @@ class BacktestMixin:
             # 修复旧快照中丢失的 drawdown 日期
             self._patch_snapshot_drawdown(result)
             self._last_strategy_bt_result = result
+            # 加入对比列表 (避免重启后对比页为空)
+            self._record_strategy_comparison_result(result)
             if render:
                 self._render_strategy_backtest_result(result)
             if not silent:
@@ -766,7 +768,55 @@ class BacktestMixin:
         from pathlib import Path
         return Path(__file__).resolve().parents[3] / "data" / "strategy_backtest_snapshot.json"
 
+    # ── 懒渲染: 子页 tab 名 → 渲染函数映射 ──────────────────
+    _STRATEGY_TAB_RENDERERS = {
+        "总览": "_render_strategy_overview_tab",
+        "明细": "_render_strategy_detail_tab",
+        "归因": "_render_strategy_attribution_tab",
+        "风险": "_render_strategy_risk_tab",
+        "数据": "_render_strategy_data_tab",
+        "对比": "_render_strategy_compare_tab",
+    }
+
     def _render_strategy_backtest_result(self, result):
+        """入口: 更新摘要 + 标记全部子页为 dirty + 渲染当前子页."""
+        self._strategy_dirty_tabs = set(self._STRATEGY_TAB_RENDERERS.keys())
+        self._update_strategy_result_summary(result)
+        self._render_current_strategy_tab(force=True)
+
+    def _on_strategy_result_tab_change(self):
+        """子页 Tabview command 回调: 切到哪页, 渲染哪页."""
+        self._render_current_strategy_tab()
+
+    def _render_current_strategy_tab(self, *, force=False):
+        """只渲染当前选中的子页 (dirty 或 force 时才重绘)."""
+        result = getattr(self, "_last_strategy_bt_result", None)
+        if not isinstance(result, dict):
+            return
+        tabs = getattr(self, "strategy_result_tabs", None)
+        if tabs is None:
+            return
+        selected = tabs.get()
+        dirty = getattr(self, "_strategy_dirty_tabs", set())
+        if not force and selected not in dirty:
+            return
+        renderer_name = self._STRATEGY_TAB_RENDERERS.get(selected)
+        if renderer_name is None:
+            return
+        renderer = getattr(self, renderer_name, None)
+        if renderer is None:
+            return
+        try:
+            renderer(result)
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            print(f"[策略回测] 渲染 '{selected}' 失败: {exc}")
+        dirty.discard(selected)
+
+    def _update_strategy_result_summary(self, result):
+        """只更新指标卡、状态栏、CSV 按钮 (不渲染任何子页面板)."""
+        # 清理旧 figure
         for fig_attr in ("_strategy_bt_waterfall_fig", "_strategy_bt_heatmap_fig",
                          "_strategy_bt_rolling_fig", "_strategy_bt_dist_fig",
                          "_strategy_bt_compare_fig"):
@@ -778,23 +828,6 @@ class BacktestMixin:
 
         summary = result.get("summary", {})
         self._update_strategy_stats(summary)
-
-        _panel_renderers = [
-            ("总览-insight", lambda: self._render_strategy_insight(result)),
-            ("总览-chart", lambda: self._render_strategy_chart(result)),
-            ("明细-筛选", lambda: self._render_strategy_selection_panel(result)),
-            ("明细-持仓", lambda: self._render_strategy_table(result)),
-            ("归因", lambda: self._render_strategy_attribution(result)),
-            ("风险", lambda: self._render_strategy_risk_panel(result)),
-            ("对比", lambda: self._render_strategy_comparison()),
-        ]
-        for panel_name, renderer in _panel_renderers:
-            try:
-                renderer()
-            except Exception as exc:
-                import traceback
-                traceback.print_exc()
-                print(f"[策略回测] 渲染面板 '{panel_name}' 失败: {exc}")
 
         periods = result.get("periods", [])
         excess = summary.get("excess_return")
@@ -810,12 +843,33 @@ class BacktestMixin:
             if hits or prefiltered:
                 perf_text = f" · 缓存命中 {hits} / 预筛 {prefiltered}"
         self.v_st_status.set(
-            f"✅ Pro 预览 · {len(periods)} 个调仓区间 · "
+            f"✅ {len(periods)} 个调仓区间 · "
             f"最终净值 {summary.get('final_equity', 1.0):.4f}{extra}{perf_text}{warning_text}"
         )
         if hasattr(self, "strategy_bt_progress"):
             self.strategy_bt_progress.set(1.0)
         self.btn_strategy_bt_csv.configure(state="normal")
+
+    # ── 各子页渲染入口 (被懒渲染调度器调用) ──────────────────
+    def _render_strategy_overview_tab(self, result):
+        self._render_strategy_insight(result)
+        self._render_strategy_chart(result)
+
+    def _render_strategy_detail_tab(self, result):
+        self._render_strategy_selection_panel(result)
+        self._render_strategy_table(result)
+
+    def _render_strategy_attribution_tab(self, result):
+        self._render_strategy_attribution(result)
+
+    def _render_strategy_risk_tab(self, result):
+        self._render_strategy_risk_panel(result)
+
+    def _render_strategy_data_tab(self, result):
+        self._render_strategy_data_panel(result)
+
+    def _render_strategy_compare_tab(self, result):
+        self._render_strategy_comparison()
 
     def _update_strategy_stats(self, summary):
         stats = getattr(self, "_strategy_stat_vars", None)
@@ -1823,6 +1877,118 @@ class BacktestMixin:
             suggestions.append("各项指标尚可, 用快速模式把 TopN 上下浮动一档加入对比验证")
         suggestions.append("切到精确模式 (M/N 调大) 复核最终候选策略")
         return suggestions
+
+    def _render_strategy_data_panel(self, result):
+        """数据可信度 + 参数快照 + 逐期口径."""
+        frame = getattr(self, "strategy_bt_data_frame", None)
+        if frame is None:
+            return
+        self._clear_strategy_panel(frame)
+        diagnostics = result.get("diagnostics") or {}
+        data_quality = diagnostics.get("data_quality") or {}
+        performance = diagnostics.get("performance") or {}
+        config = result.get("config") or {}
+        periods = result.get("periods") or []
+
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
+
+        # 左: 可信度
+        fallback_ratio = float(data_quality.get("current_fallback_ratio") or 0.0)
+        if fallback_ratio <= 0:
+            quality, color = "高", get_color(GREEN)
+        elif fallback_ratio <= 0.2:
+            quality, color = "中", get_color(ORANGE)
+        else:
+            quality, color = "低", get_color(RED)
+        overview = ctk.CTkFrame(frame, fg_color="transparent")
+        overview.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
+        ctk.CTkLabel(overview, text="回测可信度", text_color=TEXT,
+                     font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
+        ctk.CTkLabel(overview, text=quality, text_color=color,
+                     font=(FONT_FAMILY, 28, "bold")).pack(anchor="w", pady=(4, 0))
+        source_counts = data_quality.get("source_counts") or {}
+        if isinstance(source_counts, dict) and source_counts:
+            source_text = " / ".join(
+                f"{k.replace('current_fallback', '当前回退').replace('snapshot', '快照').replace('patch', '修正').replace('event', '事件')} {v}"
+                for k, v in source_counts.items()
+            )
+        else:
+            source_text = "—"
+        for label, value in (
+            ("条款样本", data_quality.get("sample_count") or 0),
+            ("当前回退", self._fmt_strategy_pct(fallback_ratio)),
+            ("修正应用", data_quality.get("patch_applied_count") or 0),
+            ("事件应用", data_quality.get("event_applied_count") or 0),
+            ("来源分布", source_text),
+        ):
+            ctk.CTkLabel(overview, text=f"{label}: {value}", text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 12), wraplength=460).pack(anchor="w", pady=(3, 0))
+
+        # 右: 参数快照
+        params = ctk.CTkFrame(frame, fg_color="transparent")
+        params.grid(row=0, column=1, sticky="nsew", padx=12, pady=10)
+        ctk.CTkLabel(params, text="本次参数快照", text_color=TEXT,
+                     font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
+        param_labels = {
+            "selection_view": "选债规则", "rebalance_freq": "调仓频率",
+            "top_n": "Top N", "execution_timing": "成交时点",
+            "transaction_cost": "交易成本", "compute_benchmark": "基准对标",
+        }
+        param_grid = ctk.CTkFrame(params, fg_color="transparent")
+        param_grid.pack(fill="x", pady=(4, 0))
+        param_grid.grid_columnconfigure(0, weight=0)
+        param_grid.grid_columnconfigure(1, weight=1)
+        for idx, key in enumerate(param_labels):
+            val = config.get(key)
+            if val is None:
+                val = "—"
+            ctk.CTkLabel(param_grid, text=param_labels[key], text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 11), width=80, anchor="w").grid(
+                             row=idx, column=0, sticky="w", pady=1)
+            ctk.CTkLabel(param_grid, text=str(val), text_color=TEXT,
+                         font=(FONT_MONO, 11), anchor="w").grid(
+                             row=idx, column=1, sticky="w", pady=1)
+        if performance:
+            ctk.CTkLabel(params, text="缓存 / 性能", text_color=TEXT,
+                         font=(FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(8, 0))
+            perf_labels = {
+                "pricing_snapshot_hits": "定价缓存命中",
+                "pricing_snapshot_misses": "定价缓存未命中",
+                "price_prefilter_excluded": "预筛排除",
+            }
+            for key, label in perf_labels.items():
+                if key in performance:
+                    ctk.CTkLabel(params, text=f"{label}: {performance[key]}",
+                                 text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+
+        # 逐期数据口径
+        period_rows = []
+        for period in periods:
+            dq = period.get("data_quality") or {}
+            fb = dq.get("current_fallback_ratio")
+            fb_pct = self._fmt_strategy_pct(fb)
+            if fb is not None and float(fb) > 0.3:
+                fb_pct = f"⚠ {fb_pct}"
+            period_rows.append([
+                period.get("start_date", ""),
+                period.get("eligible_count", 0),
+                period.get("candidate_count", 0),
+                period.get("selected_count", 0),
+                fb_pct,
+                dq.get("patch_applied_count", 0),
+                dq.get("event_applied_count", 0),
+            ])
+        self._strategy_section_title(frame, "逐期数据口径", 1, 0, columnspan=2)
+        self._render_strategy_small_tree(
+            frame, 2, 0,
+            ["date", "eligible", "candidate", "selected", "fallback", "patch", "event"],
+            ["调仓日", "可投", "候选", "选中", "当前回退", "修正", "事件"],
+            [100, 70, 70, 70, 92, 70, 70],
+            period_rows,
+            columnspan=2,
+        )
 
     def _record_strategy_comparison_result(self, result):
         summary = result.get("summary") or {}
