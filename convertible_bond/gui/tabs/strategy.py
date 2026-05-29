@@ -419,8 +419,10 @@ def build(app, tab):
     app._strategy_stat_labels = {}
     stats_card = ctk.CTkFrame(overview_tab, fg_color="transparent")
     stats_card.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
-    for col in range(10):
+    for col in range(5):
         stats_card.grid_columnconfigure(col, weight=1, uniform="stbts")
+    stats_card.grid_rowconfigure(0, weight=1)
+    stats_card.grid_rowconfigure(1, weight=1)
 
     def _stat(row, col, key, title, *, primary=True):
         var = ctk.StringVar(value="—")
@@ -456,11 +458,11 @@ def build(app, tab):
     _stat(0, 2, "annualized", E("📊 年化收益"))
     _stat(0, 3, "excess", E("✨ 超额收益"))
     _stat(0, 4, "max_drawdown", E("📉 最大回撤"))
-    _stat(0, 5, "sharpe", E("⚡ Sharpe"), primary=False)
-    _stat(0, 6, "sortino", E("🛡️ Sortino"), primary=False)
-    _stat(0, 7, "calmar", E("🎯 Calmar"), primary=False)
-    _stat(0, 8, "cash", E("💵 平均现金"), primary=False)
-    _stat(0, 9, "turnover", E("🔄 平均换手"), primary=False)
+    _stat(1, 0, "sharpe", E("⚡ Sharpe"), primary=False)
+    _stat(1, 1, "sortino", E("🛡️ Sortino"), primary=False)
+    _stat(1, 2, "calmar", E("🎯 Calmar"), primary=False)
+    _stat(1, 3, "cash", E("💵 平均现金"), primary=False)
+    _stat(1, 4, "turnover", E("🔄 平均换手"), primary=False)
 
     app.strategy_bt_insight_frame = ctk.CTkFrame(overview_tab, fg_color="transparent")
     app.strategy_bt_insight_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=(2, 0))

@@ -657,6 +657,142 @@ def test_strategy_result_tab_change_refreshes_selected_panel():
         assert app.calls == expected
 
 
+def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class DummyApp(BacktestMixin):
+        def __init__(self, path):
+            self._path = path
+            self.v_st_template = Var("自定义")
+            self.v_st_view = Var("低估候选")
+            self.v_st_freq = Var("月")
+            self.v_st_top_n = Var("10")
+            self._strategy_compare_results = []
+
+        def _strategy_snapshot_path(self):
+            return self._path
+
+    path = tmp_path / "strategy_backtest_snapshot.json"
+    path.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "saved_at": "2026-05-29T09:00:00",
+            "result": {
+                "start_date": "2025-01-01",
+                "end_date": "2025-02-01",
+                "summary": {"final_equity": 1.0},
+                "config": {"selection_view": "低估候选", "top_n": 10},
+                "periods": [],
+            },
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    app = DummyApp(path)
+    app._load_strategy_backtest_snapshot(silent=True, render=False)
+
+    assert app._last_strategy_bt_result["summary"]["final_equity"] == 1.0
+    assert "总览" in app._strategy_dirty_tabs
+    assert "数据" in app._strategy_dirty_tabs
+    assert len(app._strategy_compare_results) == 1
+
+
+def test_strategy_result_tab_failure_keeps_dirty_for_retry():
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class Tabs:
+        def __init__(self, selected):
+            self.selected = selected
+
+        def get(self):
+            return self.selected
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self._last_strategy_bt_result = {"summary": {}}
+            self.strategy_result_tabs = Tabs("总览")
+            self._strategy_dirty_tabs = {"总览"}
+            self.fail = True
+            self.calls = []
+
+        def update_idletasks(self):
+            self.calls.append("idle")
+
+        def _render_strategy_insight(self, result):
+            self.calls.append("insight")
+            if self.fail:
+                raise RuntimeError("boom")
+
+        def _render_strategy_chart(self, result):
+            self.calls.append("chart")
+
+    app = DummyApp()
+    app._on_strategy_result_tab_change()
+
+    assert app.calls == ["insight"]
+    assert "总览" in app._strategy_dirty_tabs
+
+    app.fail = False
+    app.calls.clear()
+    app._on_strategy_result_tab_change()
+
+    assert app.calls == ["insight", "chart", "idle"]
+    assert "总览" not in app._strategy_dirty_tabs
+
+
+def test_strategy_detail_period_filter_defaults_to_latest_and_aggregates_all():
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self.v_st_detail_period = Var("最近一期")
+
+    periods = [
+        {
+            "start_date": date(2025, 1, 1),
+            "end_date": date(2025, 2, 1),
+            "eligible_count": 10,
+            "priced_count": 8,
+            "candidate_count": 3,
+            "selected_count": 2,
+        },
+        {
+            "start_date": date(2025, 2, 1),
+            "end_date": date(2025, 3, 1),
+            "eligible_count": 12,
+            "priced_count": 11,
+            "candidate_count": 4,
+            "selected_count": 3,
+        },
+    ]
+
+    app = DummyApp()
+    assert app._strategy_detail_periods(periods) == [periods[-1]]
+
+    app.v_st_detail_period.set("全部")
+    assert app._strategy_detail_periods(periods) == periods
+    assert app._strategy_funnel_text(periods, "全部") == (
+        "全部 2 期: 合格 22 → 定价 19 → 候选 7 → 买入 5"
+    )
+
+
 def _latest(history, on_date):
     for d, v in reversed(history):
         if d <= on_date:

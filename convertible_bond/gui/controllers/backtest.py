@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import csv
 import threading
-from collections import Counter
-from datetime import date, timedelta
+from datetime import date
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -734,6 +733,8 @@ class BacktestMixin:
             self._record_strategy_comparison_result(result)
             if render:
                 self._render_strategy_backtest_result(result)
+            else:
+                self._mark_strategy_tabs_dirty()
             if not silent:
                 saved_at = payload.get("saved_at", "?")
                 self.v_st_status.set(f"已加载快照 ({saved_at})")
@@ -774,14 +775,19 @@ class BacktestMixin:
         "明细": "_render_strategy_detail_tab",
         "归因": "_render_strategy_attribution_tab",
         "风险": "_render_strategy_risk_tab",
+        "稳健性": "_render_strategy_robustness_tab",  # legacy alias, kept for tests/old callbacks
         "数据": "_render_strategy_data_tab",
         "对比": "_render_strategy_compare_tab",
     }
 
+    def _mark_strategy_tabs_dirty(self, *tab_names):
+        tabs = set(tab_names) if tab_names else set(self._STRATEGY_TAB_RENDERERS.keys())
+        self._strategy_dirty_tabs = tabs
+
     def _render_strategy_backtest_result(self, result):
         """入口: 更新摘要 + 标记全部子页为 dirty + 渲染当前子页."""
-        self._strategy_dirty_tabs = set(self._STRATEGY_TAB_RENDERERS.keys())
-        self._update_strategy_result_summary(result)
+        self._mark_strategy_tabs_dirty()
+        self._update_strategy_result_summary(result, reset_figures=True)
         self._render_current_strategy_tab(force=True)
 
     def _on_strategy_result_tab_change(self):
@@ -797,7 +803,10 @@ class BacktestMixin:
         if tabs is None:
             return
         selected = tabs.get()
-        dirty = getattr(self, "_strategy_dirty_tabs", set())
+        dirty = getattr(self, "_strategy_dirty_tabs", None)
+        if dirty is None:
+            dirty = set(self._STRATEGY_TAB_RENDERERS.keys())
+            self._strategy_dirty_tabs = dirty
         if not force and selected not in dirty:
             return
         renderer_name = self._STRATEGY_TAB_RENDERERS.get(selected)
@@ -812,19 +821,23 @@ class BacktestMixin:
             import traceback
             traceback.print_exc()
             print(f"[策略回测] 渲染 '{selected}' 失败: {exc}")
+            return
         dirty.discard(selected)
+        if hasattr(self, "update_idletasks"):
+            self.update_idletasks()
 
-    def _update_strategy_result_summary(self, result):
+    def _update_strategy_result_summary(self, result, *, reset_figures=False):
         """只更新指标卡、状态栏、CSV 按钮 (不渲染任何子页面板)."""
-        # 清理旧 figure
-        for fig_attr in ("_strategy_bt_waterfall_fig", "_strategy_bt_heatmap_fig",
-                         "_strategy_bt_rolling_fig", "_strategy_bt_dist_fig",
-                         "_strategy_bt_compare_fig"):
-            fig = getattr(self, fig_attr, None)
-            if fig is not None:
-                fig.clf()
-                plt.close(fig)
-                setattr(self, fig_attr, None)
+        if reset_figures:
+            # 新结果/主题刷新时清理旧 figure; 普通切回策略页只更新摘要, 避免把已渲染子页清空。
+            for fig_attr in ("_strategy_bt_waterfall_fig", "_strategy_bt_heatmap_fig",
+                             "_strategy_bt_rolling_fig", "_strategy_bt_dist_fig",
+                             "_strategy_bt_compare_fig"):
+                fig = getattr(self, fig_attr, None)
+                if fig is not None:
+                    fig.clf()
+                    plt.close(fig)
+                    setattr(self, fig_attr, None)
 
         summary = result.get("summary", {})
         self._update_strategy_stats(summary)
@@ -859,11 +872,25 @@ class BacktestMixin:
         self._render_strategy_selection_panel(result)
         self._render_strategy_table(result)
 
+    def _on_strategy_detail_filter_change(self, *_):
+        self._mark_strategy_tabs_dirty("明细")
+        if hasattr(self, "after_idle"):
+            self.after_idle(self._render_current_strategy_tab)
+        else:
+            self._render_current_strategy_tab()
+
     def _render_strategy_attribution_tab(self, result):
         self._render_strategy_attribution(result)
 
     def _render_strategy_risk_tab(self, result):
         self._render_strategy_risk_panel(result)
+
+    def _render_strategy_robustness_tab(self, result):
+        renderer = getattr(self, "_render_strategy_robustness_panel", None)
+        if callable(renderer):
+            renderer(result)
+        else:
+            self._render_strategy_risk_panel(result)
 
     def _render_strategy_data_tab(self, result):
         self._render_strategy_data_panel(result)
@@ -994,17 +1021,11 @@ class BacktestMixin:
             child.destroy()
 
         curve = result.get("equity_curve") or []
-        periods = result.get("periods") or []
         if not curve:
             return
 
         dates = [p["date"] for p in curve]
         equity = [float(p["equity"]) for p in curve]
-        ret_dates = [p["end_date"] for p in periods]
-        returns = [float(p.get("period_return") or 0.0) * 100.0 for p in periods]
-        bench_returns = [
-            float(p.get("benchmark_return") or 0.0) * 100.0 for p in periods
-        ]
 
         benchmark_curve = result.get("benchmark_curve") or []
         bench_dates = [p["date"] for p in benchmark_curve]
@@ -1017,15 +1038,12 @@ class BacktestMixin:
         border_color = get_color(BORDER)
         accent_color = get_color(ACCENT)
         orange_color = get_color(ORANGE)
-        green_color = get_color(GREEN)
         red_color = get_color(RED)
 
-        fig = Figure(figsize=(11, 6.6), dpi=100, facecolor=bg_card_color)
-        gs = fig.add_gridspec(3, 2, height_ratios=[1.25, 0.72, 0.95], width_ratios=[2.2, 1.0])
-        ax_eq = fig.add_subplot(gs[0, :], facecolor=bg_input_color)
-        ax_dd = fig.add_subplot(gs[1, :], facecolor=bg_input_color, sharex=ax_eq)
-        ax_ret = fig.add_subplot(gs[2, 0], facecolor=bg_input_color)
-        ax_hold = fig.add_subplot(gs[2, 1], facecolor=bg_input_color)
+        fig = Figure(figsize=(11, 5.2), dpi=100, facecolor=bg_card_color)
+        gs = fig.add_gridspec(2, 1, height_ratios=[2.2, 0.9])
+        ax_eq = fig.add_subplot(gs[0, 0], facecolor=bg_input_color)
+        ax_dd = fig.add_subplot(gs[1, 0], facecolor=bg_input_color, sharex=ax_eq)
 
         # 净值: 策略 vs 等权基准
         ax_eq.plot(dates, equity, color=accent_color, linewidth=2.2, marker="o",
@@ -1072,47 +1090,10 @@ class BacktestMixin:
         ax_dd.grid(True, color=border_color, linestyle="--", alpha=0.35)
         for spine in ax_dd.spines.values():
             spine.set_color(border_color)
-
-        # 区间收益柱 + 基准对比; 柱宽按调仓间隔自适应
-        bar_width = 8.0
-        if len(ret_dates) >= 2:
-            spacings = [(ret_dates[i + 1] - ret_dates[i]).days for i in range(len(ret_dates) - 1)]
-            spacings = [s for s in spacings if s > 0]
-            if spacings:
-                bar_width = max(2.0, 0.7 * min(spacings))
-        has_bench_ret = bench_equity and any(abs(r) > 1e-12 for r in bench_returns)
-        if has_bench_ret:
-            half = bar_width * 0.45
-            strat_x = [d - timedelta(days=half * 0.5) for d in ret_dates]
-            bench_x = [d + timedelta(days=half * 0.5) for d in ret_dates]
-            colors_s = [green_color if r >= 0 else red_color for r in returns]
-            ax_ret.bar(strat_x, returns, color=colors_s, alpha=0.72, width=half, label="策略")
-            ax_ret.bar(bench_x, bench_returns, color=orange_color, alpha=0.45,
-                       width=half, label="基准")
-            leg_ret = ax_ret.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
-                                    edgecolor=border_color, fontsize=8, labelcolor=text_color)
-            leg_ret.get_frame().set_linewidth(0.5)
-        else:
-            colors = [green_color if r >= 0 else red_color for r in returns]
-            ax_ret.bar(ret_dates, returns, color=colors, alpha=0.72, width=bar_width)
-        ax_ret.axhline(0.0, color=border_color, linewidth=1.0)
-        ax_ret.set_ylabel("区间收益 (%)", color=text_dim_color, fontsize=10)
-        ax_ret.set_xlabel("日期", color=text_dim_color, fontsize=10)
-        ax_ret.tick_params(colors=text_dim_color, labelsize=9)
-        ax_ret.grid(True, color=border_color, linestyle="--", alpha=0.35)
-        for spine in ax_ret.spines.values():
-            spine.set_color(border_color)
-        for lbl in ax_ret.get_xticklabels():
-            lbl.set_rotation(20)
+        ax_dd.set_xlabel("日期", color=text_dim_color, fontsize=10)
+        for lbl in ax_dd.get_xticklabels():
+            lbl.set_rotation(18)
             lbl.set_horizontalalignment("right")
-
-        # 持仓频次 + 平均贡献着色
-        self._render_holdings_frequency(
-            ax_hold, periods,
-            accent_color=accent_color, text_dim_color=text_dim_color,
-            text_color=text_color, border_color=border_color,
-            green_color=green_color, red_color=red_color,
-        )
 
         fig.tight_layout()
 
@@ -1131,54 +1112,49 @@ class BacktestMixin:
             out.append((value / peak - 1.0) * 100.0 if peak > 0 else 0.0)
         return out
 
-    def _render_holdings_frequency(self, ax, periods, *, accent_color,
-                                   text_dim_color, text_color, border_color,
-                                   green_color=None, red_color=None, top_k=10):
-        """画"最常入选标的"横向条形图, 按平均贡献着色."""
-        counts: Counter = Counter()
-        contrib_sum: dict[str, float] = {}
-        name_map: dict[str, str] = {}
-        for period in periods:
-            for code in (period.get("selected_codes") or []):
-                counts[str(code)] += 1
-            for pos in (period.get("positions") or []):
-                code = pos.get("bond_code")
-                if code:
-                    name_map[str(code)] = pos.get("bond_name") or str(code)
-                    rc = pos.get("return_contribution")
-                    if rc is not None:
-                        contrib_sum[str(code)] = contrib_sum.get(str(code), 0.0) + float(rc)
+    @staticmethod
+    def _strategy_period_label(period):
+        return f"{period.get('start_date')} → {period.get('end_date')}"
 
-        for spine in ax.spines.values():
-            spine.set_color(border_color)
-        ax.tick_params(colors=text_dim_color, labelsize=8)
-        ax.set_title("最常入选 (颜色=贡献)", color=text_dim_color, fontsize=10)
-        if not counts:
-            ax.text(0.5, 0.5, "无持仓", ha="center", va="center",
-                    color=text_dim_color, fontsize=10, transform=ax.transAxes)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            return
+    def _strategy_detail_period_options(self, periods):
+        labels = [self._strategy_period_label(period) for period in periods]
+        return ["最近一期", "全部", *labels]
 
-        gc = green_color or accent_color
-        rc = red_color or accent_color
-        top = counts.most_common(top_k)[::-1]
-        values = [n for _, n in top]
-        labels = []
-        bar_colors = []
-        for code, _ in top:
-            name = name_map.get(code) or code
-            labels.append(name[:6])
-            avg_c = contrib_sum.get(code, 0.0) / max(counts[code], 1)
-            bar_colors.append(gc if avg_c >= 0 else rc)
-        positions = list(range(len(top)))
-        ax.barh(positions, values, color=bar_colors, alpha=0.82, height=0.7)
-        ax.set_yticks(positions)
-        ax.set_yticklabels(labels, fontsize=8, color=text_color)
-        ax.set_xlabel("入选期数", color=text_dim_color, fontsize=9)
-        ax.grid(True, axis="x", color=border_color, linestyle="--", alpha=0.3)
-        max_v = max(values)
-        ax.set_xticks(range(0, max_v + 1, max(1, max_v // 4)))
+    def _strategy_detail_periods(self, periods):
+        if not periods:
+            return []
+        period_var = getattr(self, "v_st_detail_period", None)
+        selected = period_var.get() if period_var is not None else "最近一期"
+        if selected == "全部":
+            return list(periods)
+        if selected == "最近一期":
+            return [periods[-1]]
+        return [
+            period for period in periods
+            if self._strategy_period_label(period) == selected
+        ] or [periods[-1]]
+
+    @staticmethod
+    def _strategy_funnel_text(periods, label):
+        if not periods:
+            return "无调仓数据"
+        totals = {
+            "eligible_count": sum(int(p.get("eligible_count") or 0) for p in periods),
+            "priced_count": sum(int(p.get("priced_count") or 0) for p in periods),
+            "candidate_count": sum(int(p.get("candidate_count") or 0) for p in periods),
+            "selected_count": sum(int(p.get("selected_count") or 0) for p in periods),
+        }
+        prefix = label
+        if len(periods) == 1:
+            prefix = f"{periods[0].get('start_date')}"
+        elif label == "全部":
+            prefix = f"全部 {len(periods)} 期"
+        return (
+            f"{prefix}: 合格 {totals['eligible_count']} → "
+            f"定价 {totals['priced_count']} → "
+            f"候选 {totals['candidate_count']} → "
+            f"买入 {totals['selected_count']}"
+        )
 
     def _render_strategy_selection_panel(self, result):
         frame = getattr(self, "strategy_bt_selection_frame", None)
@@ -1187,34 +1163,62 @@ class BacktestMixin:
         self._clear_strategy_panel(frame)
         periods = result.get("periods") or []
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
 
-        # 紧凑筛选漏斗摘要 (一行文字代替整张表)
-        if periods:
-            last = periods[-1]
-            funnel_text = (
-                f"最近期 {last.get('start_date')}: "
-                f"合格 {last.get('eligible_count', 0)} → "
-                f"定价 {last.get('priced_count', 0)} → "
-                f"候选 {last.get('candidate_count', 0)} → "
-                f"买入 {last.get('selected_count', 0)}"
-            )
-        else:
-            funnel_text = "无调仓数据"
+        period_var = getattr(self, "v_st_detail_period", None)
+        status_var = getattr(self, "v_st_detail_status", None)
+        period_options = self._strategy_detail_period_options(periods)
+        if period_var is not None and period_var.get() not in period_options:
+            period_var.set("最近一期")
+        status_options = ["全部", "买入", "候选", "剔除"]
+        if status_var is not None and status_var.get() not in status_options:
+            status_var.set("全部")
+
+        filter_bar = ctk.CTkFrame(frame, fg_color="transparent")
+        filter_bar.grid(row=0, column=0, sticky="ew", padx=12, pady=(6, 2))
+        filter_bar.grid_columnconfigure(4, weight=1)
+        ctk.CTkLabel(filter_bar, text="调仓期", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11, "bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkOptionMenu(
+            filter_bar, variable=period_var, values=period_options,
+            command=self._on_strategy_detail_filter_change,
+            width=190, height=26, font=(FONT_FAMILY, 11),
+            fg_color=BG_INPUT, button_color=BORDER,
+            text_color=TEXT, dropdown_fg_color=BG_INPUT,
+            dropdown_text_color=TEXT,
+        ).grid(row=0, column=1, sticky="w", padx=(6, 16))
+        ctk.CTkLabel(filter_bar, text="筛选状态", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11, "bold")).grid(row=0, column=2, sticky="w")
+        ctk.CTkOptionMenu(
+            filter_bar, variable=status_var, values=status_options,
+            command=self._on_strategy_detail_filter_change,
+            width=92, height=26, font=(FONT_FAMILY, 11),
+            fg_color=BG_INPUT, button_color=BORDER,
+            text_color=TEXT, dropdown_fg_color=BG_INPUT,
+            dropdown_text_color=TEXT,
+        ).grid(row=0, column=3, sticky="w", padx=(6, 0))
+
+        selected_periods = self._strategy_detail_periods(periods)
+        period_label = period_var.get() if period_var is not None else "最近一期"
+        status_filter = status_var.get() if status_var is not None else "全部"
+        funnel_text = self._strategy_funnel_text(selected_periods, period_label)
         ctk.CTkLabel(
             frame, text=f"筛选漏斗  {funnel_text}",
             text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
             anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
+        ).grid(row=1, column=0, sticky="w", padx=12, pady=(2, 4))
 
         candidate_rows = []
         rejection_rows = []
-        for period in periods:
-            period_label = f"{period.get('start_date')} → {period.get('end_date')}"
+        for period in selected_periods:
+            period_label = self._strategy_period_label(period)
             for row in period.get("candidate_rows") or []:
+                row_status = "买入" if row.get("selected") else "候选"
+                if status_filter != "全部" and row_status != status_filter:
+                    continue
                 candidate_rows.append([
                     period_label,
-                    "买入" if row.get("selected") else "候选",
+                    row_status,
                     row.get("rank", ""),
                     row.get("bond_code", ""),
                     row.get("bond_name", ""),
@@ -1226,24 +1230,34 @@ class BacktestMixin:
                     row.get("selection_reason", ""),
                 ])
             for row in period.get("rejection_rows") or []:
+                if status_filter not in ("全部", "剔除"):
+                    continue
+                source = row.get("source") or "剔除"
+                reason = row.get("reason") or ""
+                reason_text = f"{source}: {reason}" if reason else source
                 rejection_rows.append([
                     period_label,
-                    row.get("source", ""),
+                    "剔除",
+                    "",
                     row.get("bond_code", ""),
                     row.get("bond_name", ""),
-                    row.get("reason", ""),
                     f"{float(row.get('score')):.1f}" if row.get("score") is not None else "—",
                     self._fmt_strategy_price(row.get("market_price")),
                     self._fmt_strategy_pct(row.get("deviation"), sign=True),
                     self._fmt_strategy_pct(row.get("conversion_premium"), sign=True),
                     row.get("confidence", ""),
-                    " / ".join(str(tag) for tag in row.get("risk_tags") or []),
+                    " / ".join(
+                        text for text in (
+                            reason_text,
+                            " / ".join(str(tag) for tag in row.get("risk_tags") or []),
+                        ) if text
+                    ),
                 ])
 
         # 候选 + 剔除合并为一张表
         all_rows = candidate_rows + rejection_rows
         self._render_strategy_small_tree(
-            frame, 1, 0,
+            frame, 2, 0,
             ["period", "status", "rank", "code", "name", "score", "price",
              "dev", "premium", "confidence", "reason"],
             ["区间", "状态", "排名", "代码", "名称", "分数", "价格",
@@ -1257,7 +1271,8 @@ class BacktestMixin:
         for child in self.strategy_bt_table_frame.winfo_children():
             child.destroy()
 
-        periods = result.get("periods") or []
+        all_periods = result.get("periods") or []
+        periods = self._strategy_detail_periods(all_periods)
         if not periods:
             ctk.CTkLabel(
                 self.strategy_bt_table_frame,
@@ -1274,13 +1289,21 @@ class BacktestMixin:
         self._strategy_section_title(self.strategy_bt_table_frame, "调仓流水", 0, 0)
         summary_rows = []
         name_map: dict[str, str] = {}
-        for period in periods:
+        for period in all_periods:
             for pos in period.get("positions") or []:
                 code = pos.get("bond_code")
                 if code:
                     name_map[str(code)] = pos.get("bond_name") or str(code)
+        previous_by_period: dict[str, set[str]] = {}
         previous: set[str] = set()
+        for period in all_periods:
+            period_label = self._strategy_period_label(period)
+            previous_by_period[period_label] = set(previous)
+            selected = {str(code) for code in period.get("selected_codes") or []}
+            previous = selected
         for period in periods:
+            period_label = self._strategy_period_label(period)
+            previous = previous_by_period.get(period_label, set())
             selected = {str(code) for code in period.get("selected_codes") or []}
             buys = selected - previous
             sells = previous - selected
@@ -1294,7 +1317,7 @@ class BacktestMixin:
             buy_names = ", ".join(sorted(name_map.get(c, c)[:4] for c in buys)) or "—"
             sell_names = ", ".join(sorted(name_map.get(c, c)[:4] for c in sells)) or "—"
             summary_rows.append([
-                f"{period.get('start_date')} → {period.get('end_date')}",
+                period_label,
                 self._fmt_strategy_pct(period_return, sign=True),
                 self._fmt_strategy_pct(excess, sign=True),
                 period.get("selected_count", 0),
@@ -1306,7 +1329,6 @@ class BacktestMixin:
                 buy_names,
                 sell_names,
             ])
-            previous = selected
         self._render_strategy_small_tree(
             self.strategy_bt_table_frame, 1, 0,
             ["period", "return", "excess", "selected", "buy", "sell", "hold",
