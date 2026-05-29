@@ -498,12 +498,6 @@ def build(app, tab):
         frame.grid_rowconfigure(0, weight=1)
         setattr(app, attr, frame)
 
-    # 稳健性和数据的 frame 挂在风险 tab 下作为隐藏容器 (渲染逻辑仍保留, 内容合并到风险)
-    app.strategy_bt_robustness_frame = app.strategy_bt_risk_frame
-    app.strategy_bt_data_frame = ctk.CTkFrame(
-        app.strategy_result_tabs.tab("风险"), fg_color="transparent")
-    # data_frame 不 grid — 数据面板独立渲染时已合并到风险 tab 内
-
     # 初始化已选策略摘要 (默认选债规则描述)
     app._describe_strategy_view(app.v_st_view.get())
     # 启动时仅载入快照数据并刷新指标卡, 不渲染结果面板 (render=False);
