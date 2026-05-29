@@ -1,3 +1,4 @@
+import json
 from datetime import date, timedelta
 
 import pytest
@@ -558,6 +559,102 @@ def test_skipped_position_counts_as_cash(monkeypatch):
     assert period["cash_weight"] == pytest.approx(0.5)
     # 仅 113001 +10% 成交, 另一半按现金 -> 0.10 / 2
     assert period["period_return"] == pytest.approx(0.05)
+
+
+def test_strategy_snapshot_json_round_trips_dates_and_nonfinite_values():
+    from convertible_bond.gui.controllers.backtest import (
+        _strategy_snapshot_jsonable,
+        _strategy_snapshot_object_hook,
+    )
+
+    payload = {
+        "saved_at": date(2026, 5, 28),
+        "result": {
+            "start_date": date(2025, 5, 28),
+            "equity_curve": [
+                {"date": date(2025, 6, 1), "equity": 1.0},
+                {"date": date(2025, 7, 1), "equity": float("nan")},
+            ],
+            "summary": {"sharpe": float("inf")},
+        },
+    }
+
+    encoded = json.dumps(
+        _strategy_snapshot_jsonable(payload),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    restored = json.loads(encoded, object_hook=_strategy_snapshot_object_hook)
+
+    assert restored["saved_at"] == date(2026, 5, 28)
+    assert restored["result"]["start_date"] == date(2025, 5, 28)
+    assert restored["result"]["equity_curve"][0]["date"] == date(2025, 6, 1)
+    assert restored["result"]["equity_curve"][1]["equity"] is None
+    assert restored["result"]["summary"]["sharpe"] is None
+
+
+def test_strategy_result_tab_change_refreshes_selected_panel():
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class Tabs:
+        def __init__(self, selected):
+            self.selected = selected
+
+        def get(self):
+            return self.selected
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self._last_strategy_bt_result = {"summary": {}}
+            self.strategy_result_tabs = Tabs("总览")
+            self.calls = []
+
+        def after_idle(self, callback):
+            callback()
+
+        def update_idletasks(self):
+            self.calls.append("idle")
+
+        def _render_strategy_insight(self, result):
+            self.calls.append("insight")
+
+        def _render_strategy_chart(self, result):
+            self.calls.append("chart")
+
+        def _render_strategy_selection_panel(self, result):
+            self.calls.append("selection")
+
+        def _render_strategy_table(self, result):
+            self.calls.append("table")
+
+        def _render_strategy_attribution(self, result):
+            self.calls.append("attribution")
+
+        def _render_strategy_risk_panel(self, result):
+            self.calls.append("risk")
+
+        def _render_strategy_robustness_panel(self, result):
+            self.calls.append("robustness")
+
+        def _render_strategy_data_panel(self, result):
+            self.calls.append("data")
+
+        def _render_strategy_comparison(self):
+            self.calls.append("comparison")
+
+    app = DummyApp()
+    for selected, expected in (
+        ("总览", ["insight", "chart", "idle"]),
+        ("风险", ["risk", "idle"]),
+        ("稳健性", ["robustness", "idle"]),
+        ("数据", ["data", "idle"]),
+        ("对比", ["comparison", "idle"]),
+    ):
+        app.strategy_result_tabs.selected = selected
+        app.calls.clear()
+        app._on_strategy_result_tab_change()
+
+        assert app.calls == expected
 
 
 def _latest(history, on_date):

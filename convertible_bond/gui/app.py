@@ -707,6 +707,14 @@ class CBPricerApp(
         self._sync_active_tab_frame()
         if selected == E("⚡ 定价"):
             self.after_idle(self._place_pricing_sash)
+        elif selected == E("🎯 策略"):
+            self.after_idle(self._refresh_strategy_after_show)
+
+    def _refresh_strategy_after_show(self):
+        if isinstance(getattr(self, "_last_strategy_bt_result", None), dict):
+            self._refresh_strategy_active_result_tab()
+        elif hasattr(self, "_load_strategy_backtest_snapshot"):
+            self._load_strategy_backtest_snapshot(silent=True)
 
     # ── 字段来源与自动加载 ─────────────────────────────────
     def _attach_manual_source_tracking(self):

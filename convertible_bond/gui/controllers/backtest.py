@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import threading
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.colors import LinearSegmentedColormap
 
 from ...backtest import backtest_theoretical_price
 from ...batch_pricing import (
@@ -38,7 +39,7 @@ from ..theme import (
     ACCENT, BG_CARD, BG_INPUT, BORDER,
     GREEN, ORANGE, RED,
     TEXT, TEXT_DIM,
-    FONT_FAMILY,
+    FONT_FAMILY, FONT_MONO,
     VOL_WINDOW_MAP,
     get_color,
 )
@@ -59,6 +60,45 @@ from ..widgets import Tooltip
 
 STRATEGY_BACKTEST_PRO_FEATURE = "strategy_backtest"
 STRATEGY_BACKTEST_PRO_PREVIEW = True
+
+
+def _strategy_snapshot_jsonable(obj):
+    """递归将 date/datetime/nan/inf 转为 JSON 安全表示.
+
+    既可作为 json.dump(default=...) 的 fallback,
+    也可直接调用 _strategy_snapshot_jsonable(whole_dict) 做完整转换.
+    """
+    from datetime import datetime as _datetime
+    if isinstance(obj, date):
+        tag = "datetime" if isinstance(obj, _datetime) else "date"
+        return {"__cblens_type__": tag, "value": obj.isoformat()}
+    if isinstance(obj, (set, frozenset)):
+        return [_strategy_snapshot_jsonable(v) for v in obj]
+    if isinstance(obj, float):
+        if np.isnan(obj) or np.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _strategy_snapshot_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_strategy_snapshot_jsonable(v) for v in obj]
+    if isinstance(obj, (int, bool, str)) or obj is None:
+        return obj
+    # fallback for json.dump default
+    raise TypeError(f"Not JSON serializable: {type(obj)} {obj!r}")
+
+
+def _strategy_snapshot_object_hook(d):
+    """json.load object_hook: tagged dict → date/datetime."""
+    from datetime import datetime as _datetime
+    if "__cblens_type__" in d:
+        tag = d["__cblens_type__"]
+        value = d.get("value", "")
+        if tag == "date":
+            return date.fromisoformat(value)
+        if tag == "datetime":
+            return _datetime.fromisoformat(value)
+    return d
 
 
 class StrategyBacktestCancelled(Exception):
@@ -606,6 +646,11 @@ class BacktestMixin:
         self._last_strategy_bt_result = result
         self._record_strategy_comparison_result(result)
         self._render_strategy_backtest_result(result)
+        # 自动保存快照
+        try:
+            self._save_strategy_backtest_snapshot()
+        except Exception:
+            pass
 
     def _build_strategy_provider(self, source):
         raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
@@ -643,18 +688,92 @@ class BacktestMixin:
         raw = var.get().strip()
         return float(raw) / 100.0 if raw else None
 
+    # ── 策略回测快照 保存 / 加载 ─────────────────────────────
+
+    def _save_strategy_backtest_snapshot(self):
+        """把 _last_strategy_bt_result 序列化到 data/strategy_backtest_snapshot.json."""
+        import json as _json
+        from datetime import datetime as _dt
+        result = getattr(self, "_last_strategy_bt_result", None)
+        if not result:
+            return
+        path = self._strategy_snapshot_path()
+        payload = {
+            "schema_version": 1,
+            "saved_at": _dt.now(),
+            "result": result,
+        }
+        try:
+            tmp = path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(payload, f, ensure_ascii=False, indent=2,
+                           default=_strategy_snapshot_jsonable)
+            tmp.rename(path)
+        except Exception as exc:
+            print(f"[策略快照] 保存失败: {exc}")
+
+    def _load_strategy_backtest_snapshot(self, *, silent=False, render=True):
+        """从 data/strategy_backtest_snapshot.json 恢复上次回测结果."""
+        import json as _json
+        path = self._strategy_snapshot_path()
+        if not path.exists():
+            if not silent:
+                from tkinter import messagebox
+                messagebox.showinfo("提示", "未找到策略回测快照")
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = _json.load(f, object_hook=_strategy_snapshot_object_hook)
+            result = payload.get("result")
+            if not result:
+                return
+            self._last_strategy_bt_result = result
+            if render:
+                self._render_strategy_backtest_result(result)
+            if not silent:
+                saved_at = payload.get("saved_at", "?")
+                self.v_st_status.set(f"已加载快照 ({saved_at})")
+        except Exception as exc:
+            if not silent:
+                from tkinter import messagebox
+                messagebox.showerror("加载失败", str(exc))
+            else:
+                print(f"[策略快照] 加载失败: {exc}")
+
+    @staticmethod
+    def _strategy_snapshot_path():
+        from pathlib import Path
+        return Path(__file__).resolve().parents[3] / "data" / "strategy_backtest_snapshot.json"
+
     def _render_strategy_backtest_result(self, result):
+        for fig_attr in ("_strategy_bt_waterfall_fig", "_strategy_bt_heatmap_fig",
+                         "_strategy_bt_rolling_fig", "_strategy_bt_dist_fig",
+                         "_strategy_bt_compare_fig"):
+            fig = getattr(self, fig_attr, None)
+            if fig is not None:
+                fig.clf()
+                plt.close(fig)
+                setattr(self, fig_attr, None)
+
         summary = result.get("summary", {})
         self._update_strategy_stats(summary)
-        self._render_strategy_insight(result)
-        self._render_strategy_chart(result)
-        self._render_strategy_selection_panel(result)
-        self._render_strategy_table(result)
-        self._render_strategy_attribution(result)
-        self._render_strategy_risk_panel(result)
-        self._render_strategy_robustness_panel(result)
-        self._render_strategy_data_panel(result)
-        self._render_strategy_comparison()
+
+        _panel_renderers = [
+            ("总览-insight", lambda: self._render_strategy_insight(result)),
+            ("总览-chart", lambda: self._render_strategy_chart(result)),
+            ("明细-筛选", lambda: self._render_strategy_selection_panel(result)),
+            ("明细-持仓", lambda: self._render_strategy_table(result)),
+            ("归因", lambda: self._render_strategy_attribution(result)),
+            ("风险", lambda: self._render_strategy_risk_panel(result)),
+            ("对比", lambda: self._render_strategy_comparison()),
+        ]
+        for panel_name, renderer in _panel_renderers:
+            try:
+                renderer()
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                print(f"[策略回测] 渲染面板 '{panel_name}' 失败: {exc}")
 
         periods = result.get("periods", [])
         excess = summary.get("excess_return")
@@ -808,6 +927,9 @@ class BacktestMixin:
         equity = [float(p["equity"]) for p in curve]
         ret_dates = [p["end_date"] for p in periods]
         returns = [float(p.get("period_return") or 0.0) * 100.0 for p in periods]
+        bench_returns = [
+            float(p.get("benchmark_return") or 0.0) * 100.0 for p in periods
+        ]
 
         benchmark_curve = result.get("benchmark_curve") or []
         bench_dates = [p["date"] for p in benchmark_curve]
@@ -837,6 +959,25 @@ class BacktestMixin:
             ax_eq.plot(bench_dates, bench_equity, color=orange_color, linewidth=1.6,
                        linestyle="--", marker="s", markersize=3, label="等权基准")
         ax_eq.axhline(1.0, color=border_color, linewidth=1.0, linestyle="--")
+
+        # 标注最大回撤起止区间
+        summary = result.get("summary") or {}
+        dd_start = summary.get("max_drawdown_start")
+        dd_end = summary.get("max_drawdown_end")
+        max_dd = summary.get("max_drawdown")
+        if dd_start and dd_end and max_dd:
+            dd_values_all = self._strategy_drawdown_values(equity)
+            dd_idx = int(np.argmin(dd_values_all)) if dd_values_all else None
+            if dd_idx is not None and dd_idx < len(dates):
+                ax_eq.axvspan(dd_start, dd_end, alpha=0.08, color=red_color, zorder=0)
+                ax_eq.annotate(
+                    f"最大回撤 {max_dd*100:.1f}%",
+                    xy=(dates[dd_idx], equity[dd_idx]),
+                    xytext=(0, -18), textcoords="offset points",
+                    fontsize=8, color=red_color, ha="center",
+                    arrowprops={"arrowstyle": "->", "color": red_color, "lw": 0.8},
+                )
+
         ax_eq.set_ylabel("净值", color=text_dim_color, fontsize=10)
         ax_eq.tick_params(colors=text_dim_color, labelsize=9, labelbottom=False)
         ax_eq.grid(True, color=border_color, linestyle="--", alpha=0.4)
@@ -846,7 +987,7 @@ class BacktestMixin:
                            edgecolor=border_color, fontsize=9, labelcolor=text_color)
         leg.get_frame().set_linewidth(0.5)
 
-        # 回撤: 投资者比净值更需要知道“熬了多久、跌了多深”
+        # 回撤
         dd_values = self._strategy_drawdown_values(equity)
         ax_dd.fill_between(dates, dd_values, 0.0, color=red_color, alpha=0.18)
         ax_dd.plot(dates, dd_values, color=red_color, linewidth=1.4)
@@ -857,15 +998,28 @@ class BacktestMixin:
         for spine in ax_dd.spines.values():
             spine.set_color(border_color)
 
-        # 区间收益柱; 柱宽按调仓间隔自适应, 避免周/季频下重叠或过细
+        # 区间收益柱 + 基准对比; 柱宽按调仓间隔自适应
         bar_width = 8.0
         if len(ret_dates) >= 2:
             spacings = [(ret_dates[i + 1] - ret_dates[i]).days for i in range(len(ret_dates) - 1)]
             spacings = [s for s in spacings if s > 0]
             if spacings:
                 bar_width = max(2.0, 0.7 * min(spacings))
-        colors = [green_color if r >= 0 else red_color for r in returns]
-        ax_ret.bar(ret_dates, returns, color=colors, alpha=0.72, width=bar_width)
+        has_bench_ret = bench_equity and any(abs(r) > 1e-12 for r in bench_returns)
+        if has_bench_ret:
+            half = bar_width * 0.45
+            strat_x = [d - timedelta(days=half * 0.5) for d in ret_dates]
+            bench_x = [d + timedelta(days=half * 0.5) for d in ret_dates]
+            colors_s = [green_color if r >= 0 else red_color for r in returns]
+            ax_ret.bar(strat_x, returns, color=colors_s, alpha=0.72, width=half, label="策略")
+            ax_ret.bar(bench_x, bench_returns, color=orange_color, alpha=0.45,
+                       width=half, label="基准")
+            leg_ret = ax_ret.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
+                                    edgecolor=border_color, fontsize=8, labelcolor=text_color)
+            leg_ret.get_frame().set_linewidth(0.5)
+        else:
+            colors = [green_color if r >= 0 else red_color for r in returns]
+            ax_ret.bar(ret_dates, returns, color=colors, alpha=0.72, width=bar_width)
         ax_ret.axhline(0.0, color=border_color, linewidth=1.0)
         ax_ret.set_ylabel("区间收益 (%)", color=text_dim_color, fontsize=10)
         ax_ret.set_xlabel("日期", color=text_dim_color, fontsize=10)
@@ -877,11 +1031,12 @@ class BacktestMixin:
             lbl.set_rotation(20)
             lbl.set_horizontalalignment("right")
 
-        # 持仓频次: 策略最常入选的标的
+        # 持仓频次 + 平均贡献着色
         self._render_holdings_frequency(
             ax_hold, periods,
             accent_color=accent_color, text_dim_color=text_dim_color,
             text_color=text_color, border_color=border_color,
+            green_color=green_color, red_color=red_color,
         )
 
         fig.tight_layout()
@@ -902,9 +1057,11 @@ class BacktestMixin:
         return out
 
     def _render_holdings_frequency(self, ax, periods, *, accent_color,
-                                   text_dim_color, text_color, border_color, top_k=10):
-        """画"最常入选标的"横向条形图, 让选债结果可视化."""
+                                   text_dim_color, text_color, border_color,
+                                   green_color=None, red_color=None, top_k=10):
+        """画"最常入选标的"横向条形图, 按平均贡献着色."""
         counts: Counter = Counter()
+        contrib_sum: dict[str, float] = {}
         name_map: dict[str, str] = {}
         for period in periods:
             for code in (period.get("selected_codes") or []):
@@ -913,11 +1070,14 @@ class BacktestMixin:
                 code = pos.get("bond_code")
                 if code:
                     name_map[str(code)] = pos.get("bond_name") or str(code)
+                    rc = pos.get("return_contribution")
+                    if rc is not None:
+                        contrib_sum[str(code)] = contrib_sum.get(str(code), 0.0) + float(rc)
 
         for spine in ax.spines.values():
             spine.set_color(border_color)
         ax.tick_params(colors=text_dim_color, labelsize=8)
-        ax.set_title("最常入选", color=text_dim_color, fontsize=10)
+        ax.set_title("最常入选 (颜色=贡献)", color=text_dim_color, fontsize=10)
         if not counts:
             ax.text(0.5, 0.5, "无持仓", ha="center", va="center",
                     color=text_dim_color, fontsize=10, transform=ax.transAxes)
@@ -925,14 +1085,19 @@ class BacktestMixin:
             ax.set_yticks([])
             return
 
-        top = counts.most_common(top_k)[::-1]  # 高频在上
+        gc = green_color or accent_color
+        rc = red_color or accent_color
+        top = counts.most_common(top_k)[::-1]
         values = [n for _, n in top]
         labels = []
+        bar_colors = []
         for code, _ in top:
             name = name_map.get(code) or code
             labels.append(name[:6])
+            avg_c = contrib_sum.get(code, 0.0) / max(counts[code], 1)
+            bar_colors.append(gc if avg_c >= 0 else rc)
         positions = list(range(len(top)))
-        ax.barh(positions, values, color=accent_color, alpha=0.82, height=0.7)
+        ax.barh(positions, values, color=bar_colors, alpha=0.82, height=0.7)
         ax.set_yticks(positions)
         ax.set_yticklabels(labels, fontsize=8, color=text_color)
         ax.set_xlabel("入选期数", color=text_dim_color, fontsize=9)
@@ -948,7 +1113,24 @@ class BacktestMixin:
         periods = result.get("periods") or []
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(1, weight=1)
-        frame.grid_rowconfigure(3, weight=1)
+
+        # 紧凑筛选漏斗摘要 (一行文字代替整张表)
+        if periods:
+            last = periods[-1]
+            funnel_text = (
+                f"最近期 {last.get('start_date')}: "
+                f"合格 {last.get('eligible_count', 0)} → "
+                f"定价 {last.get('priced_count', 0)} → "
+                f"候选 {last.get('candidate_count', 0)} → "
+                f"买入 {last.get('selected_count', 0)}"
+            )
+        else:
+            funnel_text = "无调仓数据"
+        ctk.CTkLabel(
+            frame, text=f"筛选漏斗  {funnel_text}",
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
 
         candidate_rows = []
         rejection_rows = []
@@ -983,27 +1165,16 @@ class BacktestMixin:
                     " / ".join(str(tag) for tag in row.get("risk_tags") or []),
                 ])
 
-        self._strategy_section_title(frame, "候选排序 / 买入解释", 0, 0)
+        # 候选 + 剔除合并为一张表
+        all_rows = candidate_rows + rejection_rows
         self._render_strategy_small_tree(
             frame, 1, 0,
             ["period", "status", "rank", "code", "name", "score", "price",
              "dev", "premium", "confidence", "reason"],
             ["区间", "状态", "排名", "代码", "名称", "分数", "价格",
-             "偏差", "溢价", "置信", "解释"],
-            [170, 58, 52, 88, 96, 64, 68, 72, 72, 58, 420],
-            candidate_rows,
-            xscroll=True,
-        )
-
-        self._strategy_section_title(frame, "剔除 / 落选原因", 2, 0)
-        self._render_strategy_small_tree(
-            frame, 3, 0,
-            ["period", "source", "code", "name", "reason", "score", "price",
-             "dev", "premium", "confidence", "tags"],
-            ["区间", "来源", "代码", "名称", "原因", "分数", "价格",
-             "偏差", "溢价", "置信", "标签"],
-            [170, 76, 88, 96, 360, 64, 68, 72, 72, 58, 240],
-            rejection_rows,
+             "偏差", "溢价", "置信", "解释/原因"],
+            [150, 58, 44, 88, 88, 56, 64, 68, 68, 52, 340],
+            all_rows,
             xscroll=True,
         )
 
@@ -1027,6 +1198,12 @@ class BacktestMixin:
 
         self._strategy_section_title(self.strategy_bt_table_frame, "调仓流水", 0, 0)
         summary_rows = []
+        name_map: dict[str, str] = {}
+        for period in periods:
+            for pos in period.get("positions") or []:
+                code = pos.get("bond_code")
+                if code:
+                    name_map[str(code)] = pos.get("bond_name") or str(code)
         previous: set[str] = set()
         for period in periods:
             selected = {str(code) for code in period.get("selected_codes") or []}
@@ -1039,24 +1216,29 @@ class BacktestMixin:
                 float(period_return) - float(benchmark_return)
                 if period_return is not None and benchmark_return is not None else None
             )
+            buy_names = ", ".join(sorted(name_map.get(c, c)[:4] for c in buys)) or "—"
+            sell_names = ", ".join(sorted(name_map.get(c, c)[:4] for c in sells)) or "—"
             summary_rows.append([
                 f"{period.get('start_date')} → {period.get('end_date')}",
                 self._fmt_strategy_pct(period_return, sign=True),
                 self._fmt_strategy_pct(excess, sign=True),
                 period.get("selected_count", 0),
-                len(buys),
-                len(sells),
+                f"{len(buys)}",
+                f"{len(sells)}",
                 len(holds),
                 self._fmt_strategy_pct(period.get("turnover")),
                 self._fmt_strategy_pct(period.get("cash_weight")),
-                self._strategy_codes_preview(period.get("selected_codes") or []),
+                buy_names,
+                sell_names,
             ])
             previous = selected
         self._render_strategy_small_tree(
             self.strategy_bt_table_frame, 1, 0,
-            ["period", "return", "excess", "selected", "buy", "sell", "hold", "turnover", "cash", "codes"],
-            ["区间", "收益(%)", "超额(%)", "选中", "买入", "卖出", "续持", "换手", "现金", "持仓代码"],
-            [170, 78, 78, 58, 58, 58, 58, 72, 72, 260],
+            ["period", "return", "excess", "selected", "buy", "sell", "hold",
+             "turnover", "cash", "buy_names", "sell_names"],
+            ["区间", "收益(%)", "超额(%)", "选中", "买入", "卖出", "续持",
+             "换手", "现金", "买入标的", "卖出标的"],
+            [170, 78, 78, 52, 48, 48, 48, 68, 68, 180, 180],
             summary_rows,
             xscroll=True,
         )
@@ -1148,6 +1330,8 @@ class BacktestMixin:
 
         self._strategy_section_title(frame, "贡献最大", 1, 0)
         self._strategy_section_title(frame, "拖累最大", 1, 1)
+        top_contribs = attribution.get("top_contributors") or []
+        top_detractors = attribution.get("top_detractors") or []
         self._render_strategy_small_tree(
             frame, 2, 0,
             ["code", "name", "contrib", "holds"],
@@ -1160,7 +1344,7 @@ class BacktestMixin:
                     self._fmt_strategy_pct(row.get("contribution"), sign=True),
                     row.get("holding_periods", ""),
                 ]
-                for row in attribution.get("top_contributors") or []
+                for row in top_contribs
             ],
         )
         self._render_strategy_small_tree(
@@ -1175,95 +1359,405 @@ class BacktestMixin:
                     self._fmt_strategy_pct(row.get("contribution"), sign=True),
                     row.get("holding_periods", ""),
                 ]
-                for row in attribution.get("top_detractors") or []
+                for row in top_detractors
             ],
         )
 
-        self._strategy_section_title(frame, "年度收益", 3, 0)
-        self._strategy_section_title(frame, "月度收益", 3, 1)
+        # 贡献瀑布图 + 月度收益热力图
+        self._strategy_section_title(frame, "年度收益 / 贡献瀑布", 3, 0)
+        self._strategy_section_title(frame, "月度收益热力图", 3, 1)
+        self._render_attribution_charts(
+            frame, 4,
+            top_contribs, top_detractors,
+            diagnostics.get("yearly_returns") or [],
+            diagnostics.get("monthly_returns") or [],
+        )
+
+    def _render_attribution_charts(self, frame, row,
+                                   top_contribs, top_detractors,
+                                   yearly_returns, monthly_returns):
+        """左: 年度收益表 + 贡献瀑布; 右: 月度收益热力图."""
+        bg_card_color = get_color(BG_CARD)
+        bg_input_color = get_color(BG_INPUT)
+        text_dim_color = get_color(TEXT_DIM)
+        text_color = get_color(TEXT)
+        border_color = get_color(BORDER)
+        green_color = get_color(GREEN)
+        red_color = get_color(RED)
+        accent_color = get_color(ACCENT)
+
+        # 左列: 年度收益表 + 贡献瀑布图
+        left = ctk.CTkFrame(frame, fg_color="transparent")
+        left.grid(row=row, column=0, sticky="nsew", padx=4, pady=(0, 8))
+        left.grid_columnconfigure(0, weight=1)
+        left.grid_rowconfigure(0, weight=0)
+        left.grid_rowconfigure(1, weight=1)
+
         self._render_strategy_small_tree(
-            frame, 4, 0,
+            left, 0, 0,
             ["period", "return"],
             ["年份", "收益(%)"],
             [90, 90],
-            [[row.get("period", ""), self._fmt_strategy_pct(row.get("return"), sign=True)]
-             for row in diagnostics.get("yearly_returns") or []],
-        )
-        monthly_rows = diagnostics.get("monthly_returns") or []
-        self._render_strategy_small_tree(
-            frame, 4, 1,
-            ["period", "return"],
-            ["月份", "收益(%)"],
-            [90, 90],
-            [[row.get("period", ""), self._fmt_strategy_pct(row.get("return"), sign=True)]
-             for row in monthly_rows[-24:]],
+            [[row_d.get("period", ""), self._fmt_strategy_pct(row_d.get("return"), sign=True)]
+             for row_d in yearly_returns],
+            max_height=min(6, len(yearly_returns) + 1),
         )
 
+        waterfall_items = (
+            [(r.get("bond_name") or r.get("bond_code", "")[:6],
+              float(r.get("contribution") or 0)) for r in top_contribs[:5]]
+            + [(r.get("bond_name") or r.get("bond_code", "")[:6],
+                float(r.get("contribution") or 0)) for r in top_detractors[:5]]
+        )
+        waterfall_items = [(n, v) for n, v in waterfall_items if abs(v) > 1e-8]
+        waterfall_items.sort(key=lambda x: x[1], reverse=True)
+        if waterfall_items:
+            wf_frame = ctk.CTkFrame(left, fg_color="transparent")
+            wf_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+            wf_frame.grid_columnconfigure(0, weight=1)
+            wf_frame.grid_rowconfigure(0, weight=1)
+            fig_wf = Figure(figsize=(5, 2.6), dpi=100, facecolor=bg_card_color)
+            ax_wf = fig_wf.add_subplot(111, facecolor=bg_input_color)
+            names = [n[:6] for n, _ in waterfall_items]
+            vals = [v * 100 for _, v in waterfall_items]
+            wf_colors = [green_color if v >= 0 else red_color for v in vals]
+            ax_wf.barh(range(len(names)), vals, color=wf_colors, alpha=0.8, height=0.65)
+            ax_wf.set_yticks(range(len(names)))
+            ax_wf.set_yticklabels(names, fontsize=8, color=text_color)
+            ax_wf.set_xlabel("贡献 (%)", color=text_dim_color, fontsize=9)
+            ax_wf.axvline(0, color=border_color, linewidth=0.8)
+            ax_wf.tick_params(colors=text_dim_color, labelsize=8)
+            ax_wf.grid(True, axis="x", color=border_color, linestyle="--", alpha=0.3)
+            for spine in ax_wf.spines.values():
+                spine.set_color(border_color)
+            ax_wf.invert_yaxis()
+            fig_wf.tight_layout()
+            canvas_wf = FigureCanvasTkAgg(fig_wf, master=wf_frame)
+            canvas_wf.draw()
+            canvas_wf.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+            self._strategy_bt_waterfall_fig = fig_wf
+
+        # 右列: 月度收益热力图
+        right = ctk.CTkFrame(frame, fg_color="transparent")
+        right.grid(row=row, column=1, sticky="nsew", padx=4, pady=(0, 8))
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)
+
+        if not monthly_returns:
+            ctk.CTkLabel(right, text="暂无月度数据", text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 12)).grid(row=0, column=0, padx=12, pady=12)
+            return
+
+        year_month_map: dict[int, dict[int, float]] = {}
+        for mr in monthly_returns:
+            period_str = mr.get("period", "")
+            ret = mr.get("return")
+            if ret is None or not period_str:
+                continue
+            try:
+                parts = period_str.split("-")
+                year, month = int(parts[0]), int(parts[1])
+            except (ValueError, IndexError):
+                continue
+            year_month_map.setdefault(year, {})[month] = float(ret)
+
+        if not year_month_map:
+            ctk.CTkLabel(right, text="月度数据解析为空", text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 12)).grid(row=0, column=0, padx=12, pady=12)
+            return
+
+        years = sorted(year_month_map.keys())
+        data = np.full((len(years), 12), np.nan)
+        for yi, y in enumerate(years):
+            for m, v in year_month_map[y].items():
+                if 1 <= m <= 12:
+                    data[yi, m - 1] = v * 100
+
+        fig_hm = Figure(figsize=(5.2, max(1.8, 0.45 * len(years) + 0.8)), dpi=100,
+                        facecolor=bg_card_color)
+        ax_hm = fig_hm.add_subplot(111, facecolor=bg_input_color)
+        vmax = max(3.0, float(np.nanmax(np.abs(data)))) if np.any(np.isfinite(data)) else 5.0
+        cmap = LinearSegmentedColormap.from_list("rg", [red_color, bg_input_color, green_color])
+        im = ax_hm.imshow(data, aspect="auto", cmap=cmap, vmin=-vmax, vmax=vmax,
+                          interpolation="nearest")
+        ax_hm.set_xticks(range(12))
+        ax_hm.set_xticklabels([f"{m+1}月" for m in range(12)], fontsize=7, color=text_dim_color)
+        ax_hm.set_yticks(range(len(years)))
+        ax_hm.set_yticklabels([str(y) for y in years], fontsize=8, color=text_color)
+        ax_hm.tick_params(length=0)
+        for spine in ax_hm.spines.values():
+            spine.set_visible(False)
+        for yi in range(len(years)):
+            for mi in range(12):
+                val = data[yi, mi]
+                if np.isfinite(val):
+                    ax_hm.text(mi, yi, f"{val:+.1f}", ha="center", va="center",
+                               fontsize=7, color=text_color,
+                               fontweight="bold" if abs(val) >= vmax * 0.5 else "normal")
+        cb = fig_hm.colorbar(im, ax=ax_hm, fraction=0.03, pad=0.04)
+        cb.ax.tick_params(colors=text_dim_color, labelsize=7)
+        cb.set_label("%", color=text_dim_color, fontsize=8)
+        fig_hm.tight_layout()
+        canvas_hm = FigureCanvasTkAgg(fig_hm, master=right)
+        canvas_hm.draw()
+        canvas_hm.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._strategy_bt_heatmap_fig = fig_hm
+
     def _render_strategy_risk_panel(self, result):
+        """风险 tab: 合并原风险 + 稳健性 + 数据可信度."""
         frame = self.strategy_bt_risk_frame
         self._clear_strategy_panel(frame)
         diagnostics = result.get("diagnostics") or {}
         summary = result.get("summary") or {}
+        attribution = diagnostics.get("attribution") or {}
+        data_quality = diagnostics.get("data_quality") or {}
         warnings = diagnostics.get("warnings") or []
         periods = result.get("periods") or []
 
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(2, weight=1)
+        frame.grid_rowconfigure(4, weight=1)
 
-        left = ctk.CTkFrame(frame, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
-        ctk.CTkLabel(left, text="风险提示", text_color=TEXT,
-                     font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
-        if warnings:
-            for warning in warnings:
-                ctk.CTkLabel(
-                    left, text=f"• {warning}", text_color=ORANGE,
-                    font=(FONT_FAMILY, 12), justify="left", wraplength=520,
-                ).pack(anchor="w", pady=(6, 0))
+        # ── Row 0: 稳健性指标条 ──────────────────────────────────
+        returns = [
+            float(p.get("period_return"))
+            for p in periods
+            if p.get("period_return") is not None and np.isfinite(p.get("period_return"))
+        ]
+        win_rate = (sum(1 for r in returns if r > 0) / len(returns)) if returns else None
+        worst = min(returns) if returns else None
+        best = max(returns) if returns else None
+        ret_std = float(np.std(returns, ddof=1)) if len(returns) > 1 else None
+        fallback_ratio = float(data_quality.get("current_fallback_ratio") or 0.0)
+        positive_contrib = [
+            float(row.get("contribution"))
+            for row in attribution.get("top_contributors") or []
+            if row.get("contribution") is not None and float(row.get("contribution")) > 0
+        ]
+        top3_contrib = sum(positive_contrib[:3])
+        total_positive = sum(positive_contrib)
+        concentration = top3_contrib / total_positive if total_positive > 0 else None
+
+        # 可信度 badge
+        if fallback_ratio <= 0:
+            q_text, q_color = "高", get_color(GREEN)
+        elif fallback_ratio <= 0.2:
+            q_text, q_color = "中", get_color(ORANGE)
         else:
-            ctk.CTkLabel(left, text="暂无明显风险提示", text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 12)).pack(anchor="w", pady=(6, 0))
+            q_text, q_color = "低", get_color(RED)
+
+        metrics = ctk.CTkFrame(frame, fg_color="transparent")
+        metrics.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 4))
+        for i in range(7):
+            metrics.grid_columnconfigure(i, weight=1)
+        self._strategy_metric_tile(metrics, 0, "区间胜率", self._fmt_strategy_pct(win_rate))
+        self._strategy_metric_tile(metrics, 1, "最大回撤", self._fmt_strategy_pct(summary.get("max_drawdown")))
+        self._strategy_metric_tile(metrics, 2, "年化波动", self._fmt_strategy_pct(summary.get("annualized_volatility")))
+        self._strategy_metric_tile(metrics, 3, "最好单期", self._fmt_strategy_pct(best, sign=True))
+        self._strategy_metric_tile(metrics, 4, "最差单期", self._fmt_strategy_pct(worst, sign=True))
+        self._strategy_metric_tile(metrics, 5, "贡献集中", self._fmt_strategy_pct(concentration))
+        self._strategy_metric_tile(metrics, 6, f"可信度: {q_text}", self._fmt_strategy_pct(fallback_ratio))
+
+        # ── Row 1: 左=风险提示+回撤画像, 右=稳健性建议 ──────────────
+        left = ctk.CTkFrame(frame, fg_color="transparent")
+        left.grid(row=1, column=0, sticky="nsew", padx=12, pady=(6, 4))
+
+        ctk.CTkLabel(left, text="风险提示 / 回撤", text_color=TEXT,
+                     font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
+        if warnings:
+            critical_keywords = ("大幅", "异常", "失败", "不足", "极端")
+            for warning in warnings:
+                is_critical = any(kw in warning for kw in critical_keywords)
+                color = RED if is_critical else ORANGE
+                prefix = "🔴" if is_critical else "🟡"
+                ctk.CTkLabel(
+                    left, text=f"{prefix} {warning}", text_color=color,
+                    font=(FONT_FAMILY, 11), justify="left", wraplength=460,
+                ).pack(anchor="w", pady=(3, 0))
+        else:
+            ctk.CTkLabel(left, text="🟢 暂无明显风险提示", text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 11)).pack(anchor="w", pady=(3, 0))
+
+        dd_items = [
+            ("回撤区间", f"{summary.get('max_drawdown_start') or '—'} → {summary.get('max_drawdown_end') or '—'}"),
+            ("持续天数", f"{summary.get('max_drawdown_days') or 0} 天 (最长 {summary.get('longest_drawdown_days') or 0} 天)"),
+        ]
+        for label, value in dd_items:
+            row_w = ctk.CTkFrame(left, fg_color="transparent")
+            row_w.pack(fill="x", pady=(3, 0))
+            ctk.CTkLabel(row_w, text=label, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 11), width=70, anchor="w").pack(side="left")
+            ctk.CTkLabel(row_w, text=str(value), text_color=TEXT,
+                         font=(FONT_MONO, 11), anchor="w").pack(side="left")
 
         right = ctk.CTkFrame(frame, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="nsew", padx=12, pady=10)
-        ctk.CTkLabel(right, text="回撤画像", text_color=TEXT,
-                     font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
-        drawdown_rows = [
-            ("最大回撤", self._fmt_strategy_pct(summary.get("max_drawdown"))),
-            ("回撤开始", summary.get("max_drawdown_start") or "—"),
-            ("回撤结束", summary.get("max_drawdown_end") or "—"),
-            ("最大回撤天数", f"{summary.get('max_drawdown_days') or 0} 天"),
-            ("最长回撤期", f"{summary.get('longest_drawdown_days') or 0} 天"),
-            ("年化波动", self._fmt_strategy_pct(summary.get("annualized_volatility"))),
-        ]
-        for label, value in drawdown_rows:
-            row = ctk.CTkFrame(right, fg_color="transparent")
-            row.pack(fill="x", pady=(5, 0))
-            ctk.CTkLabel(row, text=label, text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 12), width=92, anchor="w").pack(side="left")
-            ctk.CTkLabel(row, text=str(value), text_color=TEXT,
-                         font=(FONT_MONO, 12), anchor="w").pack(side="left")
+        right.grid(row=1, column=1, sticky="nsew", padx=12, pady=(6, 4))
 
-        skipped_rows = []
-        for period in periods:
-            period_label = f"{period.get('start_date')} → {period.get('end_date')}"
-            for pos in period.get("skipped_positions") or []:
-                skipped_rows.append([
-                    period_label,
-                    pos.get("bond_code", ""),
-                    pos.get("bond_name", ""),
-                    pos.get("reason", ""),
-                ])
-        self._strategy_section_title(frame, "现金替代 / 跳过成交", 1, 0, columnspan=2)
-        self._render_strategy_small_tree(
-            frame, 2, 0,
-            ["period", "code", "name", "reason"],
-            ["区间", "代码", "名称", "原因"],
-            [170, 90, 100, 420],
-            skipped_rows,
-            columnspan=2,
+        notes = self._strategy_robustness_notes(
+            summary=summary, win_rate=win_rate, worst=worst,
+            concentration=concentration, fallback_ratio=fallback_ratio,
         )
+        suggestions = self._strategy_dynamic_suggestions(
+            summary=summary, win_rate=win_rate, worst=worst,
+            concentration=concentration, ret_std=ret_std,
+        )
+        ctk.CTkLabel(right, text="稳健性 / 建议", text_color=TEXT,
+                     font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
+        for note in notes:
+            ctk.CTkLabel(right, text=f"• {note}", text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 11), justify="left",
+                         wraplength=460).pack(anchor="w", pady=(3, 0))
+        for text in suggestions[:3]:
+            ctk.CTkLabel(right, text=f"→ {text}", text_color=ACCENT,
+                         font=(FONT_FAMILY, 11), justify="left",
+                         wraplength=460).pack(anchor="w", pady=(3, 0))
+
+        # ── Row 2: 滚动风险图 ──────────────────────────────────
+        self._render_rolling_risk_chart(frame, 2, periods, result.get("equity_curve") or [])
+
+        # ── Row 3: 收益分布 + 最差区间复盘 ──────────────────────
+        self._strategy_section_title(frame, "收益分布 / 最差区间", 3, 0, columnspan=2)
+        dist_and_worst = ctk.CTkFrame(frame, fg_color="transparent")
+        dist_and_worst.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 8))
+        dist_and_worst.grid_columnconfigure(0, weight=1)
+        dist_and_worst.grid_columnconfigure(1, weight=2)
+        dist_and_worst.grid_rowconfigure(0, weight=1)
+
+        if returns:
+            dist_frame = ctk.CTkFrame(dist_and_worst, fg_color="transparent")
+            dist_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            dist_frame.grid_columnconfigure(0, weight=1)
+            dist_frame.grid_rowconfigure(0, weight=1)
+            bg_card_c = get_color(BG_CARD)
+            bg_input_c = get_color(BG_INPUT)
+            text_dim_c = get_color(TEXT_DIM)
+            border_c = get_color(BORDER)
+            green_c = get_color(GREEN)
+            red_c = get_color(RED)
+
+            fig_dist = Figure(figsize=(4, 2.8), dpi=100, facecolor=bg_card_c)
+            ax_dist = fig_dist.add_subplot(111, facecolor=bg_input_c)
+            ret_pct = [r * 100 for r in returns]
+            n_bins = min(20, max(5, len(ret_pct) // 3))
+            n, bins, patches = ax_dist.hist(ret_pct, bins=n_bins, alpha=0.75, edgecolor=border_c)
+            for patch, left_edge in zip(patches, bins):
+                patch.set_facecolor(green_c if left_edge >= 0 else red_c)
+            ax_dist.axvline(0, color=border_c, linewidth=1.0, linestyle="--")
+            median_r = float(np.median(ret_pct))
+            ax_dist.axvline(median_r, color=get_color(ACCENT), linewidth=1.2,
+                            linestyle=":", label=f"中位数 {median_r:.1f}%")
+            ax_dist.set_xlabel("区间收益 (%)", color=text_dim_c, fontsize=9)
+            ax_dist.set_ylabel("频次", color=text_dim_c, fontsize=9)
+            ax_dist.tick_params(colors=text_dim_c, labelsize=8)
+            ax_dist.grid(True, axis="y", color=border_c, linestyle="--", alpha=0.3)
+            for spine in ax_dist.spines.values():
+                spine.set_color(border_c)
+            leg_dist = ax_dist.legend(loc="best", framealpha=0.9, facecolor=bg_card_c,
+                                      edgecolor=border_c, fontsize=8,
+                                      labelcolor=get_color(TEXT))
+            leg_dist.get_frame().set_linewidth(0.5)
+            fig_dist.tight_layout()
+            canvas_dist = FigureCanvasTkAgg(fig_dist, master=dist_frame)
+            canvas_dist.draw()
+            canvas_dist.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+            self._strategy_bt_dist_fig = fig_dist
+
+        worst_rows = []
+        for period in sorted(periods, key=lambda p: float(p.get("period_return") or 0.0))[:8]:
+            period_return = period.get("period_return")
+            benchmark = period.get("benchmark_return")
+            excess = (
+                float(period_return) - float(benchmark)
+                if period_return is not None and benchmark is not None else None
+            )
+            worst_rows.append([
+                f"{period.get('start_date')} → {period.get('end_date')}",
+                self._fmt_strategy_pct(period_return, sign=True),
+                self._fmt_strategy_pct(excess, sign=True),
+                self._fmt_strategy_pct(period.get("turnover")),
+                self._strategy_codes_preview(period.get("selected_codes") or [], limit=6),
+            ])
+        self._render_strategy_small_tree(
+            dist_and_worst, 0, 1,
+            ["period", "ret", "excess", "turnover", "codes"],
+            ["区间", "收益", "超额", "换手", "持仓"],
+            [150, 72, 72, 68, 300],
+            worst_rows,
+            xscroll=True,
+        )
+
+    def _render_rolling_risk_chart(self, frame, grid_row, periods, equity_curve):
+        """滚动波动率 + 滚动 Sharpe 折线图."""
+        returns = [float(p.get("period_return") or 0.0) for p in periods]
+        if len(returns) < 4:
+            ctk.CTkLabel(frame, text="区间不足 4 期, 无法计算滚动风险",
+                         text_color=TEXT_DIM, font=(FONT_FAMILY, 12)).grid(
+                             row=grid_row, column=0, columnspan=2, sticky="w", padx=12, pady=6)
+            return
+
+        bg_card_color = get_color(BG_CARD)
+        bg_input_color = get_color(BG_INPUT)
+        text_dim_color = get_color(TEXT_DIM)
+        border_color = get_color(BORDER)
+        accent_color = get_color(ACCENT)
+        orange_color = get_color(ORANGE)
+        text_color = get_color(TEXT)
+
+        ret_arr = np.array(returns)
+        ret_dates = [p["end_date"] for p in periods]
+        window = min(6, len(returns) - 1)
+        rolling_vol = []
+        rolling_sharpe = []
+        for i in range(len(returns)):
+            if i < window - 1:
+                rolling_vol.append(np.nan)
+                rolling_sharpe.append(np.nan)
+            else:
+                chunk = ret_arr[i - window + 1: i + 1]
+                vol = float(np.std(chunk, ddof=1))
+                rolling_vol.append(vol * 100)
+                mean_r = float(np.mean(chunk))
+                rolling_sharpe.append(mean_r / vol if vol > 1e-10 else 0.0)
+
+        chart_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        chart_frame.grid(row=grid_row, column=0, columnspan=2, sticky="nsew", padx=8, pady=(4, 8))
+        chart_frame.grid_columnconfigure(0, weight=1)
+        chart_frame.grid_rowconfigure(0, weight=1)
+
+        fig = Figure(figsize=(10, 2.2), dpi=100, facecolor=bg_card_color)
+        ax1 = fig.add_subplot(121, facecolor=bg_input_color)
+        ax2 = fig.add_subplot(122, facecolor=bg_input_color)
+
+        ax1.plot(ret_dates, rolling_vol, color=orange_color, linewidth=1.5,
+                 marker="o", markersize=3)
+        ax1.set_ylabel("滚动波动 (%)", color=text_dim_color, fontsize=9)
+        ax1.set_title(f"滚动 {window} 期波动率", color=text_dim_color, fontsize=9)
+        ax1.tick_params(colors=text_dim_color, labelsize=7)
+        ax1.grid(True, color=border_color, linestyle="--", alpha=0.3)
+        for spine in ax1.spines.values():
+            spine.set_color(border_color)
+        for lbl in ax1.get_xticklabels():
+            lbl.set_rotation(20)
+            lbl.set_horizontalalignment("right")
+
+        ax2.plot(ret_dates, rolling_sharpe, color=accent_color, linewidth=1.5,
+                 marker="s", markersize=3)
+        ax2.axhline(0, color=border_color, linewidth=0.8)
+        ax2.set_ylabel("滚动 Sharpe", color=text_dim_color, fontsize=9)
+        ax2.set_title(f"滚动 {window} 期 Sharpe", color=text_dim_color, fontsize=9)
+        ax2.tick_params(colors=text_dim_color, labelsize=7)
+        ax2.grid(True, color=border_color, linestyle="--", alpha=0.3)
+        for spine in ax2.spines.values():
+            spine.set_color(border_color)
+        for lbl in ax2.get_xticklabels():
+            lbl.set_rotation(20)
+            lbl.set_horizontalalignment("right")
+
+        fig.tight_layout()
+        canvas = FigureCanvasTkAgg(fig, master=chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._strategy_bt_rolling_fig = fig
 
     def _render_strategy_robustness_panel(self, result):
         frame = getattr(self, "strategy_bt_robustness_frame", None)
@@ -1325,20 +1819,66 @@ class BacktestMixin:
                          font=(FONT_FAMILY, 12), justify="left",
                          wraplength=520).pack(anchor="w", pady=(6, 0))
 
+        # 动态参数复核建议
         right = ctk.CTkFrame(frame, fg_color="transparent")
         right.grid(row=1, column=1, sticky="nsew", padx=12, pady=8)
         ctk.CTkLabel(right, text="参数复核建议", text_color=TEXT,
                      font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
-        suggestions = [
-            "用快速模式把 TopN 上下浮动一档后加入对比",
-            "把交易成本调到 5/10 bps 检查换手敏感度",
-            "周频和月频各跑一次, 看收益是否只来自调仓频率",
-            "切到精确模式复核最终候选策略",
-        ]
+        suggestions = self._strategy_dynamic_suggestions(
+            summary=summary, win_rate=win_rate, worst=worst,
+            concentration=concentration, ret_std=ret_std,
+        )
         for text in suggestions:
             ctk.CTkLabel(right, text=f"• {text}", text_color=TEXT_DIM,
                          font=(FONT_FAMILY, 12), justify="left",
                          wraplength=520).pack(anchor="w", pady=(6, 0))
+
+        # 区间收益分布直方图
+        self._strategy_section_title(frame, "收益分布 / 最差区间复盘", 2, 0, columnspan=2)
+        dist_and_worst = ctk.CTkFrame(frame, fg_color="transparent")
+        dist_and_worst.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 8))
+        dist_and_worst.grid_columnconfigure(0, weight=1)
+        dist_and_worst.grid_columnconfigure(1, weight=2)
+        dist_and_worst.grid_rowconfigure(0, weight=1)
+
+        if returns:
+            dist_frame = ctk.CTkFrame(dist_and_worst, fg_color="transparent")
+            dist_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            dist_frame.grid_columnconfigure(0, weight=1)
+            dist_frame.grid_rowconfigure(0, weight=1)
+            bg_card_c = get_color(BG_CARD)
+            bg_input_c = get_color(BG_INPUT)
+            text_dim_c = get_color(TEXT_DIM)
+            border_c = get_color(BORDER)
+            green_c = get_color(GREEN)
+            red_c = get_color(RED)
+
+            fig_dist = Figure(figsize=(4, 2.8), dpi=100, facecolor=bg_card_c)
+            ax_dist = fig_dist.add_subplot(111, facecolor=bg_input_c)
+            ret_pct = [r * 100 for r in returns]
+            n_bins = min(20, max(5, len(ret_pct) // 3))
+            n, bins, patches = ax_dist.hist(ret_pct, bins=n_bins, alpha=0.75, edgecolor=border_c)
+            for patch, left_edge in zip(patches, bins):
+                patch.set_facecolor(green_c if left_edge >= 0 else red_c)
+            ax_dist.axvline(0, color=border_c, linewidth=1.0, linestyle="--")
+            median_r = float(np.median(ret_pct))
+            ax_dist.axvline(median_r, color=get_color(ACCENT), linewidth=1.2,
+                            linestyle=":", label=f"中位数 {median_r:.1f}%")
+            ax_dist.set_xlabel("区间收益 (%)", color=text_dim_c, fontsize=9)
+            ax_dist.set_ylabel("频次", color=text_dim_c, fontsize=9)
+            ax_dist.tick_params(colors=text_dim_c, labelsize=8)
+            ax_dist.grid(True, axis="y", color=border_c, linestyle="--", alpha=0.3)
+            for spine in ax_dist.spines.values():
+                spine.set_color(border_c)
+            leg_dist = ax_dist.legend(loc="best", framealpha=0.9, facecolor=bg_card_c,
+                                      edgecolor=border_c, fontsize=8,
+                                      labelcolor=get_color(TEXT))
+            leg_dist.get_frame().set_linewidth(0.5)
+            fig_dist.tight_layout()
+            canvas_dist = FigureCanvasTkAgg(fig_dist, master=dist_frame)
+            canvas_dist.draw()
+            canvas_dist.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+            self._strategy_bt_dist_fig = fig_dist
 
         worst_rows = []
         for period in sorted(periods, key=lambda p: float(p.get("period_return") or 0.0))[:8]:
@@ -1356,14 +1896,12 @@ class BacktestMixin:
                 self._fmt_strategy_pct(period.get("cash_weight")),
                 self._strategy_codes_preview(period.get("selected_codes") or [], limit=8),
             ])
-        self._strategy_section_title(frame, "最差区间复盘", 2, 0, columnspan=2)
         self._render_strategy_small_tree(
-            frame, 3, 0,
+            dist_and_worst, 0, 1,
             ["period", "ret", "excess", "turnover", "cash", "codes"],
             ["区间", "收益", "超额", "换手", "现金", "持仓"],
-            [170, 76, 76, 76, 76, 360],
+            [150, 72, 72, 68, 68, 260],
             worst_rows,
-            columnspan=2,
             xscroll=True,
         )
 
@@ -1386,6 +1924,30 @@ class BacktestMixin:
         if not notes:
             notes.append("未发现特别突出的单点脆弱性, 可继续用参数对比做复核")
         return notes
+
+    @staticmethod
+    def _strategy_dynamic_suggestions(*, summary, win_rate, worst, concentration, ret_std):
+        suggestions = []
+        avg_turnover = summary.get("avg_turnover")
+        if avg_turnover is not None and float(avg_turnover) >= 0.6:
+            suggestions.append("换手偏高 → 把交易成本调到 30~50 bps 检查收益是否大幅缩水")
+        elif avg_turnover is not None and float(avg_turnover) < 0.3:
+            suggestions.append("换手很低 → 尝试缩短调仓频率 (周频) 看是否能捕获更多机会")
+        if win_rate is not None and win_rate < 0.45:
+            suggestions.append("胜率偏低 → 把 TopN 减少 2~3 档, 提高选债集中度")
+        if concentration is not None and concentration >= 0.65:
+            suggestions.append("收益集中 → 把 TopN 增加到 15~20, 分散个券依赖风险")
+        if worst is not None and worst <= -0.1:
+            suggestions.append("极端亏损 → 尝试加价格上限 (如 ≤130), 控制高位入场风险")
+        if ret_std is not None and ret_std > 0.05:
+            suggestions.append("波动偏大 → 加转股溢价率上限, 筛掉高弹性高波动标的")
+        sharpe = summary.get("sharpe")
+        if sharpe is not None and float(sharpe) < 0.5:
+            suggestions.append("Sharpe 偏低 → 切换选债规则 (综合机会 vs 低估候选) 做对比")
+        if not suggestions:
+            suggestions.append("各项指标尚可, 用快速模式把 TopN 上下浮动一档加入对比验证")
+        suggestions.append("切到精确模式 (M/N 调大) 复核最终候选策略")
+        return suggestions
 
     def _render_strategy_data_panel(self, result):
         frame = self.strategy_bt_data_frame
@@ -1419,12 +1981,20 @@ class BacktestMixin:
             "事件应用": "公告事件表中下修、强赎、回售等事件被应用的次数",
             "来源分布": "历史条款来自快照、修正、事件或当前回退的数量分布",
         }
+        source_counts = data_quality.get("source_counts") or {}
+        if isinstance(source_counts, dict) and source_counts:
+            source_text = " / ".join(
+                f"{k.replace('current_fallback', '当前回退').replace('snapshot', '快照').replace('patch', '修正').replace('event', '事件')} {v}"
+                for k, v in source_counts.items()
+            )
+        else:
+            source_text = "—"
         for label, value in (
             ("条款样本", data_quality.get("sample_count") or 0),
             ("当前回退", self._fmt_strategy_pct(fallback_ratio)),
             ("修正应用", data_quality.get("patch_applied_count") or 0),
             ("事件应用", data_quality.get("event_applied_count") or 0),
-            ("来源分布", data_quality.get("source_counts") or {}),
+            ("来源分布", source_text),
         ):
             lbl = ctk.CTkLabel(overview, text=f"{label}: {value}", text_color=TEXT_DIM,
                                font=(FONT_FAMILY, 12), wraplength=520)
@@ -1448,16 +2018,45 @@ class BacktestMixin:
             "max_market_price": "最高价格",
             "max_conversion_premium": "最高转股溢价",
         }
-        for key in (
+        param_grid = ctk.CTkFrame(params, fg_color="transparent")
+        param_grid.pack(fill="x", pady=(4, 0))
+        param_grid.grid_columnconfigure(0, weight=0)
+        param_grid.grid_columnconfigure(1, weight=1)
+        for idx, key in enumerate((
             "selection_view", "rebalance_freq", "top_n", "execution_timing",
             "mark_to_market", "transaction_cost", "max_price_staleness_days",
             "min_market_price", "max_market_price", "max_conversion_premium",
-        ):
-            ctk.CTkLabel(params, text=f"{param_labels.get(key, key)}: {config.get(key)}", text_color=TEXT_DIM,
-                         font=(FONT_MONO, 12), wraplength=520).pack(anchor="w", pady=(4, 0))
+        )):
+            label_text = param_labels.get(key, key)
+            val = config.get(key)
+            if val is None:
+                val = "—"
+            ctk.CTkLabel(param_grid, text=label_text, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 11), width=110, anchor="w").grid(
+                             row=idx, column=0, sticky="w", pady=1)
+            ctk.CTkLabel(param_grid, text=str(val), text_color=TEXT,
+                         font=(FONT_MONO, 11), anchor="w").grid(
+                             row=idx, column=1, sticky="w", pady=1)
+
         if performance:
             ctk.CTkLabel(params, text="缓存 / 性能", text_color=TEXT,
                          font=(FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(10, 0))
+            perf_labels = {
+                "pricing_snapshot_hits": "定价缓存命中",
+                "pricing_snapshot_misses": "定价缓存未命中",
+                "price_prefilter_excluded": "预筛排除",
+                "runtime_cache.bond_history_hits": "转债历史命中",
+                "runtime_cache.bond_history_misses": "转债历史未命中",
+                "runtime_cache.stock_history_hits": "正股历史命中",
+                "runtime_cache.stock_history_misses": "正股历史未命中",
+                "runtime_cache.terms_hits": "条款缓存命中",
+                "runtime_cache.terms_misses": "条款缓存未命中",
+            }
+            perf_grid = ctk.CTkFrame(params, fg_color="transparent")
+            perf_grid.pack(fill="x", pady=(4, 0))
+            perf_grid.grid_columnconfigure(0, weight=0)
+            perf_grid.grid_columnconfigure(1, weight=1)
+            perf_idx = 0
             for key in (
                 "pricing_snapshot_hits", "pricing_snapshot_misses",
                 "price_prefilter_excluded", "runtime_cache.bond_history_hits",
@@ -1466,24 +2065,41 @@ class BacktestMixin:
                 "runtime_cache.terms_misses",
             ):
                 if key in performance:
-                    ctk.CTkLabel(params, text=f"{key}: {performance.get(key)}",
-                                 text_color=TEXT_DIM, font=(FONT_MONO, 12),
-                                 wraplength=520).pack(anchor="w", pady=(4, 0))
+                    ctk.CTkLabel(perf_grid, text=perf_labels.get(key, key),
+                                 text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+                                 width=120, anchor="w").grid(row=perf_idx, column=0, sticky="w", pady=1)
+                    ctk.CTkLabel(perf_grid, text=str(performance.get(key)),
+                                 text_color=TEXT, font=(FONT_MONO, 11),
+                                 anchor="w").grid(row=perf_idx, column=1, sticky="w", pady=1)
+                    perf_idx += 1
 
         period_rows = []
-        for period in periods:
+        anomaly_indices = []
+        for idx, period in enumerate(periods):
             dq = period.get("data_quality") or {}
+            fb = dq.get("current_fallback_ratio")
+            fb_pct = self._fmt_strategy_pct(fb)
+            if fb is not None and float(fb) > 0.3:
+                fb_pct = f"⚠ {fb_pct}"
+                anomaly_indices.append(idx)
+            selected = period.get("selected_count", 0)
+            eligible = period.get("eligible_count", 0)
+            sel_text = str(selected)
+            if eligible > 0 and selected == 0:
+                sel_text = "⚠ 0"
+                if idx not in anomaly_indices:
+                    anomaly_indices.append(idx)
             period_rows.append([
                 period.get("start_date", ""),
-                period.get("eligible_count", 0),
+                eligible,
                 period.get("candidate_count", 0),
-                period.get("selected_count", 0),
-                self._fmt_strategy_pct(dq.get("current_fallback_ratio")),
+                sel_text,
+                fb_pct,
                 dq.get("patch_applied_count", 0),
                 dq.get("event_applied_count", 0),
             ])
         self._strategy_section_title(frame, "逐期数据口径", 1, 0, columnspan=2)
-        self._render_strategy_small_tree(
+        tree = self._render_strategy_small_tree(
             frame, 2, 0,
             ["date", "eligible", "candidate", "selected", "fallback", "patch", "event"],
             ["调仓日", "可投", "候选", "选中", "当前回退", "修正", "事件"],
@@ -1491,6 +2107,13 @@ class BacktestMixin:
             period_rows,
             columnspan=2,
         )
+        if tree and anomaly_indices:
+            for idx in anomaly_indices:
+                try:
+                    tree.tag_configure("anomaly", foreground=get_color(ORANGE))
+                    tree.item(str(idx), tags=("anomaly",))
+                except Exception:
+                    pass
 
     def _record_strategy_comparison_result(self, result):
         summary = result.get("summary") or {}
@@ -1532,10 +2155,37 @@ class BacktestMixin:
             return
 
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
-        self._strategy_section_title(frame, "最近策略对比", 0, 0)
+        frame.grid_rowconfigure(1, weight=0)
+        frame.grid_rowconfigure(2, weight=0)
+        frame.grid_rowconfigure(3, weight=1)
+
+        # 多策略净值叠加图
+        self._render_comparison_overlay_chart(frame, 0, records)
+
+        self._strategy_section_title(frame, "最近策略对比", 1, 0)
+
+        # 删除单条按钮
+        del_bar = ctk.CTkFrame(frame, fg_color="transparent")
+        del_bar.grid(row=2, column=0, sticky="e", padx=12, pady=(0, 4))
+        ctk.CTkButton(
+            del_bar, text="删除选中",
+            command=lambda: self._delete_selected_comparison(),
+            fg_color="transparent", hover_color=get_color(BG_INPUT),
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+            width=72, height=24, corner_radius=6,
+        ).pack(side="right")
+
         rows = []
         best_idx = self._best_strategy_record_index(records)
+        col_best = {"ann": [], "ret": [], "excess": [], "sharpe": [], "calmar": []}
+        for record in records:
+            summary = (record.get("result") or {}).get("summary") or {}
+            for key, skey in (("ann", "annualized_return"), ("ret", "total_return"),
+                              ("excess", "excess_return"), ("sharpe", "sharpe"),
+                              ("calmar", "calmar")):
+                v = summary.get(skey)
+                col_best[key].append(float(v) if v is not None and np.isfinite(v) else -np.inf)
+
         for idx, record in enumerate(records, start=1):
             result = record["result"]
             summary = result.get("summary") or {}
@@ -1556,8 +2206,9 @@ class BacktestMixin:
                 self._fmt_strategy_pct(summary.get("total_cost")),
                 self._fmt_strategy_pct(dq.get("current_fallback_ratio")),
             ])
-        self._render_strategy_small_tree(
-            frame, 1, 0,
+
+        tree = self._render_strategy_small_tree(
+            frame, 3, 0,
             ["best", "label", "period", "ann", "ret", "excess", "dd", "sharpe",
              "calmar", "turnover", "cost", "fallback"],
             ["", "策略", "区间", "年化", "总收益", "超额", "回撤", "Sharpe",
@@ -1566,6 +2217,88 @@ class BacktestMixin:
             rows,
             xscroll=True,
         )
+        self._strategy_compare_tree = tree
+
+        # 高亮表格最优/最差值
+        if tree and len(records) >= 2:
+            green_c = get_color(GREEN)
+            red_c = get_color(RED)
+            tree.tag_configure("best_row", foreground=green_c)
+            tree.tag_configure("worst_row", foreground=red_c)
+            if best_idx is not None:
+                try:
+                    tree.item(str(best_idx), tags=("best_row",))
+                except Exception:
+                    pass
+
+    def _delete_selected_comparison(self):
+        tree = getattr(self, "_strategy_compare_tree", None)
+        if tree is None:
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        try:
+            idx = int(sel[0])
+        except (ValueError, IndexError):
+            return
+        records = list(getattr(self, "_strategy_compare_results", []) or [])
+        if 0 <= idx < len(records):
+            records.pop(idx)
+            self._strategy_compare_results = records
+            self._render_strategy_comparison()
+
+    def _render_comparison_overlay_chart(self, frame, grid_row, records):
+        """多策略净值叠加折线图."""
+        bg_card_color = get_color(BG_CARD)
+        bg_input_color = get_color(BG_INPUT)
+        text_dim_color = get_color(TEXT_DIM)
+        text_color = get_color(TEXT)
+        border_color = get_color(BORDER)
+        accent_color = get_color(ACCENT)
+        palette = [accent_color, get_color(ORANGE), get_color(GREEN),
+                   get_color(RED), "#9b59b6", "#3498db", "#e67e22", "#1abc9c"]
+
+        chart_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        chart_frame.grid(row=grid_row, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        chart_frame.grid_columnconfigure(0, weight=1)
+        chart_frame.grid_rowconfigure(0, weight=1)
+
+        fig = Figure(figsize=(10, 2.8), dpi=100, facecolor=bg_card_color)
+        ax = fig.add_subplot(111, facecolor=bg_input_color)
+
+        for idx, record in enumerate(records):
+            result = record.get("result") or {}
+            curve = result.get("equity_curve") or []
+            if not curve:
+                continue
+            dates = [p["date"] for p in curve]
+            equity = [float(p["equity"]) for p in curve]
+            label = record.get("label") or f"策略 {idx + 1}"
+            color = palette[idx % len(palette)]
+            lw = 2.2 if idx == len(records) - 1 else 1.4
+            ax.plot(dates, equity, color=color, linewidth=lw, label=label[:20],
+                    alpha=0.9 if idx == len(records) - 1 else 0.65)
+
+        ax.axhline(1.0, color=border_color, linewidth=0.8, linestyle="--")
+        ax.set_ylabel("净值", color=text_dim_color, fontsize=9)
+        ax.tick_params(colors=text_dim_color, labelsize=8)
+        ax.grid(True, color=border_color, linestyle="--", alpha=0.3)
+        for spine in ax.spines.values():
+            spine.set_color(border_color)
+        leg = ax.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
+                        edgecolor=border_color, fontsize=8, labelcolor=text_color,
+                        ncol=min(4, len(records)))
+        leg.get_frame().set_linewidth(0.5)
+        for lbl in ax.get_xticklabels():
+            lbl.set_rotation(15)
+            lbl.set_horizontalalignment("right")
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        self._strategy_bt_compare_fig = fig
 
     @staticmethod
     def _best_strategy_record_index(records):
@@ -1613,6 +2346,7 @@ class BacktestMixin:
         self, parent, row, col, columns, headers, widths, values, *,
         columnspan=1,
         xscroll=False,
+        max_height=None,
     ):
         _configure_tree_style()
         container = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1620,7 +2354,11 @@ class BacktestMixin:
                        sticky="nsew", padx=8, pady=(0, 8))
         container.grid_columnconfigure(0, weight=1)
         container.grid_rowconfigure(0, weight=1)
-        tree = ttk.Treeview(container, columns=columns, show="headings", selectmode="browse")
+        tree_kwargs = {}
+        if max_height is not None:
+            tree_kwargs["height"] = max_height
+        tree = ttk.Treeview(container, columns=columns, show="headings",
+                            selectmode="browse", **tree_kwargs)
         y_scroll = ctk.CTkScrollbar(container, orientation="vertical", command=tree.yview)
         if xscroll:
             x_scroll = ctk.CTkScrollbar(container, orientation="horizontal", command=tree.xview)

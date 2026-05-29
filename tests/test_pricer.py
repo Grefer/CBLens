@@ -830,6 +830,48 @@ class TestBacktest:
                 f"parity 一致性破坏: {par:.4f} vs {s0 * face / K:.4f}"
             assert bf > 0, f"bond_floor 应为正: {bf:.4f}"
 
+    def test_backtest_uses_terms_as_of_each_sample_date(self, fake_provider, monkeypatch):
+        """单债回测不应把区间末/当前转股价带回每个历史采样日."""
+        from dataclasses import replace
+        import convertible_bond.backtest as bt
+
+        provider, start, end = fake_provider
+        switch_date = date(2025, 5, 1)
+        seen: list[tuple[date, float]] = []
+        requested_terms_dates = []
+
+        def get_terms(_bond_code, valuation_date):
+            requested_terms_dates.append(valuation_date)
+            k = 45.0 if valuation_date >= switch_date else 52.77
+            return replace(provider.terms, conversion_price=k)
+
+        class SpyPricer:
+            def __init__(self, *args, **kwargs):
+                seen.append((kwargs["current_date"], float(kwargs["K"])))
+                self.ratio = 100.0 / float(kwargs["K"])
+
+            def price(self, **_kwargs):
+                return 100.0
+
+            def bond_floor_value(self, *_args, **_kwargs):
+                return 95.0
+
+        monkeypatch.setattr(provider, "get_bond_terms", get_terms)
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+
+        result = bt.backtest_theoretical_price(
+            "123001.SZ", start_date=start, end_date=end,
+            freq="M", M=80, N=200, provider=provider,
+        )
+
+        assert seen
+        assert len(set(requested_terms_dates)) > 2
+        assert all(
+            k == (45.0 if val_date >= switch_date else 52.77)
+            for val_date, k in seen
+        )
+        assert result["conversion_prices"] == [k for _, k in seen]
+
     def test_backtest_applies_down_reset_p_scale(self, fake_provider, monkeypatch):
         """回测应和单点/批量一样应用下修强度缩放."""
         import convertible_bond.backtest as bt
