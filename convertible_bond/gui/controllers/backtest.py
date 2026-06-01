@@ -836,8 +836,9 @@ class BacktestMixin:
         if snap_dir.exists():
             files = sorted(snap_dir.glob("strategy_backtest_*.json"),
                            key=lambda p: p.stat().st_mtime)
-        if not files and legacy_path.exists():
-            files = [legacy_path]
+        if legacy_path.exists() and legacy_path not in files:
+            files.append(legacy_path)
+            files = sorted(files, key=lambda p: p.stat().st_mtime)
         if not files:
             if not silent:
                 from tkinter import messagebox

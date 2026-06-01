@@ -627,6 +627,57 @@ def test_strategy_snapshot_json_round_trips_dates_and_nonfinite_values():
     assert restored["result"]["summary"]["sharpe"] is None
 
 
+def test_strategy_snapshot_loader_includes_newer_legacy_file(tmp_path):
+    from convertible_bond.gui.controllers.backtest import (
+        BacktestMixin,
+        _strategy_snapshot_jsonable,
+    )
+
+    snap_dir = tmp_path / "strategy_backtest_snapshots"
+    snap_dir.mkdir()
+    old_snapshot = snap_dir / "strategy_backtest_2025-05-28_2026-05-28_Q_top10_old.json"
+    legacy_snapshot = tmp_path / "strategy_backtest_snapshot.json"
+
+    def write_snapshot(path, final_equity):
+        payload = {
+            "schema_version": 1,
+            "saved_at": date(2026, 5, 30),
+            "result": {
+                "start_date": date(2025, 5, 30),
+                "end_date": date(2026, 5, 30),
+                "summary": {"final_equity": final_equity},
+            },
+        }
+        path.write_text(json.dumps(_strategy_snapshot_jsonable(payload)), encoding="utf-8")
+
+    write_snapshot(old_snapshot, 0.90)
+    write_snapshot(legacy_snapshot, 1.35)
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self.records = []
+            self.dirty = False
+
+        def _strategy_snapshots_dir(self):
+            return snap_dir
+
+        def _strategy_snapshot_path(self):
+            return legacy_snapshot
+
+        def _record_strategy_comparison_result(self, result):
+            self.records.append(result)
+
+        def _mark_strategy_tabs_dirty(self):
+            self.dirty = True
+
+    app = DummyApp()
+    app._load_strategy_backtest_snapshot(silent=True, render=False)
+
+    assert [record["summary"]["final_equity"] for record in app.records] == [0.90, 1.35]
+    assert app._last_strategy_bt_result["summary"]["final_equity"] == 1.35
+    assert app.dirty is True
+
+
 def test_strategy_result_tab_change_refreshes_selected_panel():
     from convertible_bond.gui.controllers.backtest import BacktestMixin
 
