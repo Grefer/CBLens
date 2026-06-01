@@ -340,6 +340,40 @@ def test_pricing_snapshot_cache_reuses_pricing_rows(monkeypatch):
     assert second["diagnostics"]["performance"]["pricing_snapshot_hits"] == 1
 
 
+def test_score_strategy_reports_stage_progress_before_period_finish(monkeypatch):
+    provider = StrategyFakeProvider()
+    events = []
+
+    def fake_batch_price(provider_arg, codes, *, valuation_date, progress_cb=None, **kwargs):
+        if progress_cb is not None:
+            progress_cb(1, len(codes))
+            progress_cb(len(codes), len(codes))
+        return [
+            _row(code, provider_arg, _latest(provider_arg.bond_history[code], valuation_date), -0.10)
+            for code in codes
+        ]
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        fake_batch_price,
+    )
+
+    backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(top_n=1, min_confidence=None, compute_benchmark=False),
+        stage_cb=lambda *args: events.append(args),
+    )
+
+    stages = [event[0] for event in events]
+    assert "准入筛选" in stages
+    assert "价格预筛" in stages
+    assert "定价" in stages
+    assert events[0] == ("准入筛选", 0, 2, 0, 1)
+
+
 def _row(code, provider, market, deviation):
     return {
         "bond_code": code,

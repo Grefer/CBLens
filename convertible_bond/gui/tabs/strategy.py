@@ -37,13 +37,13 @@ def build(app, tab):
 
     # ── 外边沿对齐 ──────────────────────────────────────────
     # 各主要卡片组件 (ctrl, stats_card, strategy_result_tabs) 外边沿统一对齐在 16px 处。
-    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
-    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 8), padx=16)
+    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 6), padx=16)
     ctrl.grid_columnconfigure(0, weight=1)
 
     # ── 标题与操作栏合并 (首屏高聚合) ──────────────────────────────────
     ch = ctk.CTkFrame(ctrl, fg_color="transparent")
-    ch.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
+    ch.grid(row=0, column=0, sticky="ew", padx=14, pady=(8, 2))
     ch.grid_columnconfigure(0, weight=1)
     ch.grid_columnconfigure(1, weight=0)
 
@@ -51,7 +51,7 @@ def build(app, tab):
     title_box = ctk.CTkFrame(ch, fg_color="transparent")
     title_box.grid(row=0, column=0, sticky="w")
     ctk.CTkLabel(title_box, text=E("🎯 策略"),
-                 font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
+                 font=(FONT_FAMILY, 15, "bold"), text_color=TEXT).pack(side="left")
     ctk.CTkLabel(title_box, text="选择方案和规则, 定频调仓回测",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
 
@@ -68,13 +68,13 @@ def build(app, tab):
     # 结合 ctrl(padx=16) + cc(padx=8) + cell(padx=8) = 32px，第一列输入框与标题文字完美左对齐。
     # 4 列等宽栅格, 每格内 inline label + control (label 在左, 控件按内容定宽)
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
-    cc.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 4))
+    cc.grid(row=1, column=0, sticky="ew", padx=6, pady=(0, 2))
     for col in range(4):
         cc.grid_columnconfigure(col, weight=1, uniform="st_cols")
 
     def _grid_cell(parent, label, var, row, col, widget_type="entry", values=None,
                    tooltip=None, command=None, control_width=140, label_width=60,
-                   cell_pady=4):
+                   cell_pady=2):
         """Inline label cell: label 左(定宽) + control 右, 同列控件左边缘对齐."""
         cell = ctk.CTkFrame(parent, fg_color="transparent")
         cell.grid(row=row, column=col, sticky="ew", padx=8, pady=cell_pady)
@@ -86,7 +86,7 @@ def build(app, tab):
             spacer.pack(side="left")
             spacer.pack_propagate(False)
             w = ctk.CTkCheckBox(
-                cell, text="等权基准对标", variable=var, height=28,
+                cell, text="等权基准对标", variable=var, height=26,
                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM, fg_color=ACCENT,
                 hover_color=ACCENT_HOVER, border_color=BORDER,
                 checkbox_width=16, checkbox_height=16, border_width=1, corner_radius=3)
@@ -103,7 +103,7 @@ def build(app, tab):
         if widget_type == "entry":
             w = ctk.CTkEntry(cell, textvariable=var, font=(FONT_MONO, 13),
                              fg_color=BG_INPUT, border_width=0,
-                             corner_radius=6, text_color=TEXT, height=28,
+                             corner_radius=6, text_color=TEXT, height=26,
                              width=control_width)
             w.pack(side="left")
         elif widget_type == "date":
@@ -114,7 +114,7 @@ def build(app, tab):
             if command is not None:
                 menu_kwargs["command"] = command
             w = ctk.CTkOptionMenu(
-                cell, variable=var, values=values or [], height=28,
+                cell, variable=var, values=values or [], height=26,
                 font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
                 text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
                 **menu_kwargs)
@@ -217,7 +217,7 @@ def build(app, tab):
 
     def _refresh_scope_visibility(*_):
         if app.v_st_pool_mode.get() == "自选代码":
-            manual_box.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 10))
+            manual_box.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 8))
         else:
             manual_box.grid_forget()
         app._refresh_strategy_setup_summary()
@@ -227,18 +227,18 @@ def build(app, tab):
     _refresh_scope_visibility()
 
     # ── 高级设置 (整体浅底卡片, 内部两张设置子卡) ─────────────────────
-    adv_shell = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=12)
-    adv_shell.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 8))
+    adv_shell = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=10)
+    adv_shell.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
     adv_shell.grid_columnconfigure(0, weight=1)
 
     adv = CollapsibleSection(adv_shell, "高级设置", expanded=False)
-    adv.grid(row=0, column=0, sticky="ew", padx=16, pady=(4, 8))
+    adv.grid(row=0, column=0, sticky="ew", padx=12, pady=(2, 5))
     adv.header_btn.grid_configure(sticky="w")
     adv.header_btn.configure(
         fg_color="transparent",
         hover_color=BG_INPUT,
         corner_radius=8,
-        height=28,
+        height=24,
         width=118,
     )
     body = adv.content
@@ -286,75 +286,49 @@ def build(app, tab):
         range_grid, 1, 1, "HV%", app.v_st_min_sigma, app.v_st_max_sigma,
         tooltip="正股历史波动率\n窗口跟随顶部 σ 设置")
 
-    # ── 执行控制台: 分为上方信息区(左策略, 右预检) 与 下方操作区(左状态, 右按钮) ────────────────
-    console = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=12)
-    console.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 12))
+    # ── 执行状态栏: 摘要/预检压成一条信息带, 把首屏空间让给结果区 ────────────────
+    console = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=10)
+    console.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 10))
+    console.grid_columnconfigure(0, weight=1)
+    console.grid_columnconfigure(1, weight=0)
 
-    # 上半部：信息展示区 (左右两列). 两列顶端对齐 (sticky "new"), 高度各随内容,
-    # 不再用 nsew 把仅一行的预检卡拉到与策略摘要等高, 省掉大片留白。
-    info_row = ctk.CTkFrame(console, fg_color="transparent")
-    info_row.pack(fill="x", padx=12, pady=(8, 2))
-    info_row.grid_columnconfigure(0, weight=1, uniform="info")
-    info_row.grid_columnconfigure(1, weight=1, uniform="info")
+    status_box = ctk.CTkFrame(console, fg_color="transparent")
+    status_box.grid(row=0, column=0, sticky="ew", padx=12, pady=(7, 5))
+    status_box.grid_columnconfigure(0, weight=1)
 
-    # 左列：已选策略摘要 (内部带有独立底色卡片，增加视觉边界)
-    summary_box = ctk.CTkFrame(info_row, fg_color=BG_CARD, corner_radius=8)
-    summary_box.grid(row=0, column=0, sticky="new", padx=(0, 6))
-
-    summary_inner = ctk.CTkFrame(summary_box, fg_color="transparent")
-    summary_inner.pack(fill="both", expand=True, padx=12, pady=8)
-
-    ctk.CTkLabel(
-        summary_inner, text="📌 已选策略", text_color=TEXT_DIM,
-        font=(FONT_FAMILY, 11, "bold"), anchor="w").pack(anchor="w")
-    app.lbl_strategy_summary = ctk.CTkLabel(
-        summary_inner, textvariable=app.v_st_summary,
-        font=(FONT_FAMILY, 12), text_color=TEXT,
-        anchor="w", justify="left", wraplength=460)
-    app.lbl_strategy_summary.pack(anchor="w", pady=(4, 0))
-
-    # 右列：预检与数据信息 (内部带有独立底色卡片，增加视觉边界)
-    precheck_box = ctk.CTkFrame(info_row, fg_color=BG_CARD, corner_radius=8)
-    precheck_box.grid(row=0, column=1, sticky="new", padx=(6, 0))
-
-    precheck_inner = ctk.CTkFrame(precheck_box, fg_color="transparent")
-    precheck_inner.pack(fill="both", expand=True, padx=12, pady=8)
-
-    ctk.CTkLabel(
-        precheck_inner, text="🔍 预检与口径信息", text_color=TEXT_DIM,
-        font=(FONT_FAMILY, 11, "bold"), anchor="w").pack(anchor="w")
-    app.lbl_strategy_precheck = ctk.CTkLabel(
-        precheck_inner, textvariable=app.v_st_precheck,
-        font=(FONT_FAMILY, 11), text_color=TEXT_DIM,
-        anchor="w", justify="left", wraplength=480)
-    app.lbl_strategy_precheck.pack(anchor="w", pady=(4, 0))
-
-    # 让两张信息卡的文字宽度跟随卡片实际宽度: 宽屏下摘要/预检从多行压到 1~2 行,
-    # console 显著变矮, 把垂直空间让给下方结果区; 同时随窗口缩放自适应。
-    def _bind_card_wrap(box, label, pad=28):
-        def _on_resize(event, label=label, pad=pad):
-            target = max(160, event.width - pad)
-            if label.cget("wraplength") != target:
-                label.configure(wraplength=target)
-        box.bind("<Configure>", _on_resize)
-
-    _bind_card_wrap(summary_box, app.lbl_strategy_summary)
-    _bind_card_wrap(precheck_box, app.lbl_strategy_precheck)
-
-    # 下半部：操作与状态区
-    action_row = ctk.CTkFrame(console, fg_color="transparent")
-    action_row.pack(fill="x", padx=12, pady=(2, 8))
-
-    # 运行状态 (左对齐)
     app.lbl_strategy_bt_status = ctk.CTkLabel(
-        action_row, textvariable=app.v_st_status,
-        font=(FONT_FAMILY, 12, "bold"), text_color=TEXT, anchor="w", justify="left")
-    app.lbl_strategy_bt_status.pack(side="left")
+        status_box, textvariable=app.v_st_status,
+        font=(FONT_FAMILY, 12, "bold"), text_color=TEXT,
+        anchor="w", justify="left")
+    app.lbl_strategy_bt_status.grid(row=0, column=0, sticky="ew")
 
-    # 操作按钮组 (右对齐)
-    action_box = ctk.CTkFrame(action_row, fg_color="transparent")
-    action_box.pack(side="right")
-    BTN_H, BTN_R = 32, 8
+    meta_row = ctk.CTkFrame(status_box, fg_color="transparent")
+    meta_row.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+    meta_row.grid_columnconfigure(0, weight=3, uniform="strategy-meta")
+    meta_row.grid_columnconfigure(1, weight=2, uniform="strategy-meta")
+    app.lbl_strategy_summary = ctk.CTkLabel(
+        meta_row, textvariable=app.v_st_summary,
+        font=(FONT_FAMILY, 11), text_color=TEXT_DIM,
+        anchor="w", justify="left", wraplength=620)
+    app.lbl_strategy_summary.grid(row=0, column=0, sticky="ew", padx=(0, 14))
+    app.lbl_strategy_precheck = ctk.CTkLabel(
+        meta_row, textvariable=app.v_st_precheck,
+        font=(FONT_FAMILY, 11), text_color=TEXT_DIM,
+        anchor="w", justify="left", wraplength=440)
+    app.lbl_strategy_precheck.grid(row=0, column=1, sticky="ew")
+
+    def _bind_meta_wrap(container):
+        def _on_resize(event):
+            width = max(320, event.width)
+            app.lbl_strategy_summary.configure(wraplength=max(240, int(width * 0.58)))
+            app.lbl_strategy_precheck.configure(wraplength=max(180, int(width * 0.36)))
+        container.bind("<Configure>", _on_resize)
+
+    _bind_meta_wrap(status_box)
+
+    action_box = ctk.CTkFrame(console, fg_color="transparent")
+    action_box.grid(row=0, column=1, sticky="e", padx=(0, 12), pady=(7, 5))
+    BTN_H, BTN_R = 30, 7
 
     app.btn_strategy_compare_clear = ctk.CTkButton(
         action_box, text="清空对比", command=app._clear_strategy_comparison,
@@ -393,7 +367,8 @@ def build(app, tab):
         console, height=3, corner_radius=2,
         progress_color=ACCENT, fg_color=BG_CARD)
     app.strategy_bt_progress.set(0)
-    app.strategy_bt_progress.pack(fill="x", padx=12, pady=(0, 8))
+    app.strategy_bt_progress.grid(row=1, column=0, columnspan=2,
+                                  sticky="ew", padx=12, pady=(0, 6))
 
     # ── 结果 Tabview (指标卡已移入总览页, 不再常驻占用空间) ───────────────
     app.strategy_result_tabs = ctk.CTkTabview(
@@ -402,23 +377,32 @@ def build(app, tab):
         segmented_button_selected_hover_color=ACCENT_HOVER,
         segmented_button_unselected_color=BG_INPUT,
         segmented_button_unselected_hover_color=BTN_HOVER,
-        text_color=TEXT, corner_radius=16,
+        text_color=TEXT, corner_radius=12,
         command=lambda: app._on_strategy_result_tab_change())
     app.strategy_result_tabs.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 6))
     for name in ("总览", "明细", "归因", "风险", "数据", "对比"):
         app.strategy_result_tabs.add(name)
 
-    overview_tab = app.strategy_result_tabs.tab("总览")
-    overview_tab.grid_columnconfigure(0, weight=1)
-    overview_tab.grid_rowconfigure(0, weight=0)  # 指标卡
-    overview_tab.grid_rowconfigure(1, weight=0)  # 一句话结论条
-    overview_tab.grid_rowconfigure(2, weight=1)  # 净值/回撤图
+    # ── 所有子页统一使用 ScrollableFrame ─────────────────────────
+    def _scrollable_pane(tab_name):
+        pane = app.strategy_result_tabs.tab(tab_name)
+        pane.grid_columnconfigure(0, weight=1)
+        pane.grid_rowconfigure(0, weight=1)
+        scroll = ctk.CTkScrollableFrame(pane, fg_color="transparent")
+        scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
+        scroll.grid_columnconfigure(0, weight=1)
+        inner = ctk.CTkFrame(scroll, fg_color="transparent")
+        inner.pack(fill="x", expand=False)
+        inner.grid_columnconfigure(0, weight=1)
+        return inner
+
+    overview_inner = _scrollable_pane("总览")
 
     # ── 指标卡 Dashboard Tiles (移入总览页顶部) ───────────────────
     app._strategy_stat_vars = {}
     app._strategy_stat_labels = {}
-    stats_card = ctk.CTkFrame(overview_tab, fg_color="transparent")
-    stats_card.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
+    stats_card = ctk.CTkFrame(overview_inner, fg_color="transparent")
+    stats_card.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 2))
     for col in range(5):
         stats_card.grid_columnconfigure(col, weight=1, uniform="stbts")
     stats_card.grid_rowconfigure(0, weight=1)
@@ -429,7 +413,7 @@ def build(app, tab):
         # 主指标赋予主题色边框高亮
         border_c = ACCENT if primary else BORDER
         cell = ctk.CTkFrame(stats_card, fg_color=BG_CARD, corner_radius=8, border_width=1, border_color=border_c)
-        cell.grid(row=row, column=col, sticky="nsew", padx=3, pady=(2, 4))
+        cell.grid(row=row, column=col, sticky="nsew", padx=4, pady=(2, 4))
 
         inner = ctk.CTkFrame(cell, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=9, pady=4)
@@ -464,42 +448,31 @@ def build(app, tab):
     _stat(1, 3, "cash", E("💵 平均现金"), primary=False)
     _stat(1, 4, "turnover", E("🔄 平均换手"), primary=False)
 
-    app.strategy_bt_insight_frame = ctk.CTkFrame(overview_tab, fg_color="transparent")
-    app.strategy_bt_insight_frame.grid(row=1, column=0, sticky="ew", padx=4, pady=(2, 0))
+    app.strategy_bt_insight_frame = ctk.CTkFrame(overview_inner, fg_color="transparent")
+    app.strategy_bt_insight_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 0))
     app.strategy_bt_insight_frame.grid_columnconfigure(0, weight=1)
-    app.strategy_bt_chart_frame = ctk.CTkFrame(overview_tab, fg_color="transparent")
-    app.strategy_bt_chart_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=4)
+    app.strategy_bt_chart_frame = ctk.CTkFrame(overview_inner, fg_color="transparent")
+    app.strategy_bt_chart_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 8))
     app.strategy_bt_chart_frame.grid_columnconfigure(0, weight=1)
-    app.strategy_bt_chart_frame.grid_rowconfigure(0, weight=1)
 
-    # 明细 tab: 上半筛选漏斗 + 下半持仓流水 (原筛选+持仓合并)
-    detail_tab = app.strategy_result_tabs.tab("明细")
-    detail_tab.grid_columnconfigure(0, weight=1)
-    detail_tab.grid_rowconfigure(0, weight=1)
-    detail_tab.grid_rowconfigure(1, weight=1)
-    app.strategy_bt_selection_frame = ctk.CTkFrame(detail_tab, fg_color="transparent")
-    app.strategy_bt_selection_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=(4, 2))
+    # 明细 tab
+    detail_inner = _scrollable_pane("明细")
+    app.strategy_bt_selection_frame = ctk.CTkFrame(detail_inner, fg_color="transparent")
+    app.strategy_bt_selection_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 2))
     app.strategy_bt_selection_frame.grid_columnconfigure(0, weight=1)
-    app.strategy_bt_selection_frame.grid_rowconfigure(0, weight=1)
-    app.strategy_bt_table_frame = ctk.CTkFrame(detail_tab, fg_color="transparent")
-    app.strategy_bt_table_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=(2, 4))
+    app.strategy_bt_table_frame = ctk.CTkFrame(detail_inner, fg_color="transparent")
+    app.strategy_bt_table_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 8))
     app.strategy_bt_table_frame.grid_columnconfigure(0, weight=1)
-    app.strategy_bt_table_frame.grid_rowconfigure(0, weight=1)
 
+    # 归因 / 风险 / 数据 / 对比
     for tab_name, attr in (
         ("归因", "strategy_bt_attribution_frame"),
         ("风险", "strategy_bt_risk_frame"),
         ("数据", "strategy_bt_data_frame"),
         ("对比", "strategy_bt_compare_frame"),
     ):
-        pane = app.strategy_result_tabs.tab(tab_name)
-        pane.grid_columnconfigure(0, weight=1)
-        pane.grid_rowconfigure(0, weight=1)
-        frame = ctk.CTkFrame(pane, fg_color="transparent")
-        frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(0, weight=1)
-        setattr(app, attr, frame)
+        inner = _scrollable_pane(tab_name)
+        setattr(app, attr, inner)
 
     # 初始化已选策略摘要 (默认选债规则描述)
     app._describe_strategy_view(app.v_st_view.get())

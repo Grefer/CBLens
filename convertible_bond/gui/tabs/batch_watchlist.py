@@ -329,13 +329,21 @@ def _render_watchlist_table(app):
         show="headings",
         selectmode="extended",
     )
-    y_scroll = ctk.CTkScrollbar(frame, orientation="vertical", command=tree.yview)
-    x_scroll = ctk.CTkScrollbar(frame, orientation="horizontal", command=tree.xview)
+    y_scroll = ctk.CTkScrollbar(
+        frame, orientation="vertical", command=tree.yview,
+        width=10, fg_color="transparent", button_color=BORDER,
+        button_hover_color=TEXT_DIM,
+    )
+    x_scroll = ctk.CTkScrollbar(
+        frame, orientation="horizontal", command=tree.xview,
+        height=8, fg_color="transparent", button_color=BORDER,
+        button_hover_color=TEXT_DIM,
+    )
     tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 
-    tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
-    y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
-    x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
+    tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=(6, 0))
+    y_scroll.grid(row=0, column=1, sticky="ns", pady=(6, 0), padx=(0, 10))
+    x_scroll.grid(row=1, column=0, sticky="ew", padx=(10, 0), pady=(0, 8))
 
     _configure_responsive_columns(
         tree, columns, headers, col_widths,

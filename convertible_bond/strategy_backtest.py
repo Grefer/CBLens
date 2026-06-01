@@ -260,6 +260,8 @@ def backtest_score_strategy(
     use_runtime_cache: bool = True,
     pricing_snapshot_cache: dict[Any, list[dict[str, Any]]] | None = None,
     progress_cb=None,
+    stage_cb=None,
+    cancel_cb=None,
     **pricer_overrides,
 ) -> dict[str, Any]:
     """回测机会分选债策略.
@@ -307,28 +309,38 @@ def backtest_score_strategy(
     performance_stats: Counter = Counter()
 
     for idx, period_start in enumerate(schedule[:-1]):
+        _check_cancel(cancel_cb)
         period_end = schedule[idx + 1]
         if cfg.pool_mode == "dynamic":
             period_codes = _dynamic_pool_for_date(
                 provider, bond_codes, period_start, terms_cache=terms_cache)
         else:
             period_codes = bond_codes
+        _emit_stage_progress(stage_cb, "准入筛选", 0, len(period_codes), idx, total_periods)
         eligible, excluded, source_diagnostics = _eligible_codes_for_date(
             provider,
             period_codes,
             period_start,
             terms_cache=terms_cache,
             admission_config=admission_config,
+            progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
+                stage_cb, "准入筛选", done, total, idx, total_periods),
+            cancel_cb=cancel_cb,
         )
+        _emit_stage_progress(stage_cb, "价格预筛", 0, len(eligible), idx, total_periods)
         pricing_codes, prefilter_excluded = _pre_filter_codes_by_price(
             provider,
             eligible,
             period_start,
             cfg,
+            progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
+                stage_cb, "价格预筛", done, total, idx, total_periods),
+            cancel_cb=cancel_cb,
         )
         if prefilter_excluded:
             excluded.extend(prefilter_excluded)
             performance_stats["price_prefilter_excluded"] += len(prefilter_excluded)
+        _emit_stage_progress(stage_cb, "定价", 0, len(pricing_codes), idx, total_periods)
         priced_rows = _batch_price_with_snapshot_cache(
             provider,
             pricing_codes,
@@ -345,6 +357,8 @@ def backtest_score_strategy(
             M=M,
             N=N,
             max_workers=max_workers,
+            progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
+                stage_cb, "定价", done, total, idx, total_periods),
             **pricer_overrides,
         )
 
@@ -360,6 +374,7 @@ def backtest_score_strategy(
             cfg,
             candidate_codes={str(row.get("bond_code")) for row in candidates},
         )
+        _emit_stage_progress(stage_cb, "持仓估值", 0, len(selected), idx, total_periods)
         positions, skipped_positions = _position_returns(
             provider,
             selected,
@@ -371,6 +386,7 @@ def backtest_score_strategy(
             execution_lookahead_days=cfg.execution_lookahead_days,
             price_cache=price_cache,
         )
+        _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
 
         turnover = _equal_weight_turnover(previous_codes, selected_codes)
         previous_codes = selected_codes
@@ -407,6 +423,7 @@ def backtest_score_strategy(
 
         benchmark_return = None
         if cfg.compute_benchmark:
+            _emit_stage_progress(stage_cb, "基准估值", 0, len(priced_rows), idx, total_periods)
             benchmark_return = _benchmark_period_return(
                 provider,
                 priced_rows,
@@ -420,6 +437,7 @@ def backtest_score_strategy(
             )
             benchmark_equity *= 1.0 + (benchmark_return or 0.0)
             benchmark_curve.append({"date": period_end, "equity": benchmark_equity})
+            _emit_stage_progress(stage_cb, "基准估值", len(priced_rows), len(priced_rows), idx, total_periods)
 
         scored = [finite_float(row.get("opportunity_score")) for row in selected]
         finite_scores = [s for s in scored if s is not None]
@@ -811,31 +829,63 @@ def _copy_pricing_row(row: dict[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _check_cancel(cancel_cb) -> None:
+    if cancel_cb is not None:
+        cancel_cb()
+
+
+def _emit_stage_progress(
+    stage_cb,
+    stage: str,
+    done: int,
+    total: int,
+    period_index: int,
+    total_periods: int,
+) -> None:
+    if stage_cb is not None:
+        stage_cb(stage, done, total, period_index, total_periods)
+
+
+def _should_emit_code_progress(done: int, total: int) -> bool:
+    return done <= 1 or done == total or done % 10 == 0
+
+
 def _pre_filter_codes_by_price(
     provider: DataProvider,
     codes: list[str],
     valuation_date: date,
     cfg: ScoreStrategyConfig,
+    *,
+    progress_cb=None,
+    cancel_cb=None,
 ) -> tuple[list[str], list[tuple[str, str]]]:
     if not cfg.pre_filter_prices or (cfg.min_market_price is None and cfg.max_market_price is None):
+        if progress_cb is not None:
+            progress_cb(len(codes), len(codes))
         return codes, []
     kept: list[str] = []
     excluded: list[tuple[str, str]] = []
-    for code in codes:
-        point = _latest_bond_price_point(
-            provider,
-            code,
-            valuation_date,
-            lookback_days=cfg.price_lookback_days,
-            max_staleness_days=cfg.max_price_staleness_days,
-        )
-        if point is None:
-            excluded.append((code, "价格预筛: 缺少有效转债收盘价"))
-            continue
-        if not _passes_range(point.price, cfg.min_market_price, cfg.max_market_price):
-            excluded.append((code, f"价格预筛: {point.price:.2f} 不在区间内"))
-            continue
-        kept.append(code)
+    total = len(codes)
+    for done, code in enumerate(codes, start=1):
+        _check_cancel(cancel_cb)
+        try:
+            point = _latest_bond_price_point(
+                provider,
+                code,
+                valuation_date,
+                lookback_days=cfg.price_lookback_days,
+                max_staleness_days=cfg.max_price_staleness_days,
+            )
+            if point is None:
+                excluded.append((code, "价格预筛: 缺少有效转债收盘价"))
+                continue
+            if not _passes_range(point.price, cfg.min_market_price, cfg.max_market_price):
+                excluded.append((code, f"价格预筛: {point.price:.2f} 不在区间内"))
+                continue
+            kept.append(code)
+        finally:
+            if progress_cb is not None and _should_emit_code_progress(done, total):
+                progress_cb(done, total)
     return kept, excluded
 
 
@@ -846,39 +896,47 @@ def _eligible_codes_for_date(
     *,
     terms_cache=None,
     admission_config: AdmissionFilterConfig | None = None,
+    progress_cb=None,
+    cancel_cb=None,
 ) -> tuple[list[str], list[tuple[str, str]], list[dict[str, Any]]]:
     eligible: list[str] = []
     excluded: list[tuple[str, str]] = []
     source_diagnostics: list[dict[str, Any]] = []
-    for code in bond_codes:
-        terms = _terms_from_cache(terms_cache, code)
-        if terms is None:
-            try:
-                terms = provider.get_bond_terms(code, on_date)
-            except Exception as exc:
-                excluded.append((code, f"条款获取失败: {exc}"))
+    total = len(bond_codes)
+    for done, code in enumerate(bond_codes, start=1):
+        _check_cancel(cancel_cb)
+        try:
+            terms = _terms_from_cache(terms_cache, code)
+            if terms is None:
+                try:
+                    terms = provider.get_bond_terms(code, on_date)
+                except Exception as exc:
+                    excluded.append((code, f"条款获取失败: {exc}"))
+                    continue
+            # 防前视: 回测日期早于发行日 → 该转债尚未存在
+            issue_dt = getattr(terms, 'issue_date', None) if terms is not None else None
+            if issue_dt is not None and issue_dt > on_date:
+                excluded.append((code, f"尚未发行 (发行日 {issue_dt})"))
                 continue
-        # 防前视: 回测日期早于发行日 → 该转债尚未存在
-        issue_dt = getattr(terms, 'issue_date', None) if terms is not None else None
-        if issue_dt is not None and issue_dt > on_date:
-            excluded.append((code, f"尚未发行 (发行日 {issue_dt})"))
-            continue
-        # 到期检查: strip_current_status_fields 不清 maturity_date, 此处冗余但安全
-        maturity_dt = getattr(terms, 'maturity_date', None) if terms is not None else None
-        if maturity_dt is not None and maturity_dt <= on_date:
-            excluded.append((code, f"已到期 (到期日 {maturity_dt})"))
-            continue
-        source_diagnostics.append(_terms_source_diagnostic(provider, code, on_date))
-        reason = batch_pricing_exclusion_reason(
-            code,
-            terms,
-            on_date=on_date,
-            admission_config=admission_config,
-        )
-        if reason is None:
-            eligible.append(code)
-        else:
-            excluded.append((code, reason))
+            # 到期检查: strip_current_status_fields 不清 maturity_date, 此处冗余但安全
+            maturity_dt = getattr(terms, 'maturity_date', None) if terms is not None else None
+            if maturity_dt is not None and maturity_dt <= on_date:
+                excluded.append((code, f"已到期 (到期日 {maturity_dt})"))
+                continue
+            source_diagnostics.append(_terms_source_diagnostic(provider, code, on_date))
+            reason = batch_pricing_exclusion_reason(
+                code,
+                terms,
+                on_date=on_date,
+                admission_config=admission_config,
+            )
+            if reason is None:
+                eligible.append(code)
+            else:
+                excluded.append((code, reason))
+        finally:
+            if progress_cb is not None and _should_emit_code_progress(done, total):
+                progress_cb(done, total)
     return eligible, excluded, source_diagnostics
 
 

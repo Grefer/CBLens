@@ -9,6 +9,7 @@ import logging
 import os
 import site
 import sys
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -173,9 +174,13 @@ class WindDataProvider(DataProvider):
 
     def __init__(self):
         self._w = None
+        self._wind_lock = threading.RLock()
         # Wind 字段在不同终端版本/账户权限下偶尔会失效 (返回 "CWSSService: invalid indicators").
         # 首次批量调用失败时探测一次, 把坏字段缓存到此集合, 后续直接跳过, 避免每只债都重复探测.
         self._bad_bond_fields: set[str] = set()
+        # get_admission_status 等候选字段逐个 wss 时也会遇到无效字段。缓存全局无效字段,
+        # 避免全市场历史回测时每只债、每个日期都重复触发 Wind invalid indicators。
+        self._bad_wss_fields: set[str] = set()
 
     def _ensure(self):
         """启动 Wind 连接，若未安装或 DLL 加载失败则抛出详尽提示。
@@ -187,48 +192,66 @@ class WindDataProvider(DataProvider):
         if self._w is not None:
             return self._w
 
-        frozen = bool(getattr(sys, "frozen", False))
-        prepare_windpy_import_path()
+        with self._wind_lock:
+            if self._w is not None:
+                return self._w
 
-        try:
-            from WindPy import w  # type: ignore[import-not-found]
-        except Exception as e:
-            frozen_hint = ""
-            if frozen:
-                frozen_hint = (
-                    "\n  [frozen build] 下载版不会自带 WindPy; 请确认本机已安装 "
-                    "Wind API/金融终端 Python 接口。macOS 常见路径为 "
-                    "`/Applications/Wind API.app/Contents/python/WindPy.py`。"
-                    "如安装在自定义位置, 请设置环境变量 CBLENS_WINDPY_PATH。"
-                )
-            raise ImportError(
-                "未安装 WindPy，请安装 Wind 金融终端并配置 Python 插件。\n"
-                "  pip install WindPy  或在 Wind 终端中设置 Python 接口。"
-                f"{frozen_hint}\n  原始错误: {type(e).__name__}: {e}"
-            ) from e
+            frozen = bool(getattr(sys, "frozen", False))
+            prepare_windpy_import_path()
 
-        if not w.isconnected():
-            ret = w.start()
-            if getattr(ret, "ErrorCode", -1) != 0:
-                raise ConnectionError(
-                    f"Wind 连接失败: ErrorCode={getattr(ret, 'ErrorCode', -1)}, Data={getattr(ret, 'Data', '')}"
-                    + (
-                        "\n  [frozen build] 请确认 Wind 终端已在本机启动并已登录."
-                        if frozen else ""
+            try:
+                from WindPy import w  # type: ignore[import-not-found]
+            except Exception as e:
+                frozen_hint = ""
+                if frozen:
+                    frozen_hint = (
+                        "\n  [frozen build] 下载版不会自带 WindPy; 请确认本机已安装 "
+                        "Wind API/金融终端 Python 接口。macOS 常见路径为 "
+                        "`/Applications/Wind API.app/Contents/python/WindPy.py`。"
+                        "如安装在自定义位置, 请设置环境变量 CBLENS_WINDPY_PATH。"
                     )
-                )
-        self._w = w
-        return w
+                raise ImportError(
+                    "未安装 WindPy，请安装 Wind 金融终端并配置 Python 插件。\n"
+                    "  pip install WindPy  或在 Wind 终端中设置 Python 接口。"
+                    f"{frozen_hint}\n  原始错误: {type(e).__name__}: {e}"
+                ) from e
+
+            if not w.isconnected():
+                ret = w.start()
+                if getattr(ret, "ErrorCode", -1) != 0:
+                    raise ConnectionError(
+                        f"Wind 连接失败: ErrorCode={getattr(ret, 'ErrorCode', -1)}, Data={getattr(ret, 'Data', '')}"
+                        + (
+                            "\n  [frozen build] 请确认 Wind 终端已在本机启动并已登录."
+                            if frozen else ""
+                        )
+                    )
+            self._w = w
+            return w
+
+    def _call_wss(self, *args):
+        w = self._ensure()
+        with self._wind_lock:
+            return w.wss(*args)
+
+    def _call_wsd(self, *args):
+        w = self._ensure()
+        with self._wind_lock:
+            return w.wsd(*args)
+
+    def _call_wset(self, *args):
+        w = self._ensure()
+        with self._wind_lock:
+            return w.wset(*args)
 
     def get_bond_terms(self, bond_code, valuation_date):
-        w = self._ensure()
         val_str = valuation_date.strftime("%Y%m%d")
         fields = [f for f in self._BOND_FIELDS if f not in self._bad_bond_fields]
         if not fields:
             raise RuntimeError(
                 f"Wind 取 {bond_code} 条款失败: 所有候选字段都被 Wind 拒绝, "
                 f"已知失效字段 = {sorted(self._bad_bond_fields)}")
-        res = w.wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
+        res = self._call_wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
         if res.ErrorCode != 0:
             # "invalid indicators" → 单字段探测找出失效字段, 缓存后用剩余字段重试一次
             err_str = str(getattr(res, "Data", "") or "").lower()
@@ -243,7 +266,7 @@ class WindDataProvider(DataProvider):
                         raise RuntimeError(
                             f"Wind 取 {bond_code} 条款失败: 探测后无可用字段, "
                             f"失效字段 = {sorted(newly_bad)}")
-                    res = w.wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
+                    res = self._call_wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
                     if res.ErrorCode != 0:
                         raise RuntimeError(
                             f"Wind 取 {bond_code} 条款失败 (重试后仍报错): {res.Data}")
@@ -288,7 +311,7 @@ class WindDataProvider(DataProvider):
         bad: set[str] = set()
         for field in fields:
             try:
-                res = self._w.wss(code, field, f"tradeDate={val_str}")
+                res = self._call_wss(code, field, f"tradeDate={val_str}")
             except Exception:
                 continue
             if getattr(res, "ErrorCode", -1) == 0:
@@ -396,13 +419,18 @@ class WindDataProvider(DataProvider):
         return None
 
     def _wss_value(self, code, field_name, valuation_date):
-        w = self._ensure()
+        if field_name in self._bad_wss_fields:
+            return None
         val_str = valuation_date.strftime("%Y%m%d")
         try:
-            res = w.wss(code, field_name, f"tradeDate={val_str}")
+            res = self._call_wss(code, field_name, f"tradeDate={val_str}")
         except Exception:
             return None
         if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
+            data_str = str(getattr(res, "Data", "") or "").lower()
+            if "invalid indicators" in data_str:
+                self._bad_wss_fields.add(field_name)
+                logger.debug("Wind 候选字段无效, 后续跳过: %s", field_name)
             return None
         try:
             value = res.Data[0][0]
@@ -411,10 +439,9 @@ class WindDataProvider(DataProvider):
         return value if value not in ("", "--") else None
 
     def _wsd_latest_number(self, code, field_name, valuation_date):
-        w = self._ensure()
         d = valuation_date.isoformat()
         try:
-            res = w.wsd(code, field_name, d, d, "")
+            res = self._call_wsd(code, field_name, d, d, "")
         except Exception:
             return None
         if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
@@ -430,7 +457,6 @@ class WindDataProvider(DataProvider):
         Wind 的公告 wset 字段在不同环境中可能有差异; 本实现只做容错尝试,
         失败时返回空列表, 不影响状态字段同步和人工事件表。
         """
-        w = self._ensure()
         options = (
             f"windcode={bond_code};startdate={start.isoformat()};enddate={end.isoformat()}",
             f"windcode={bond_code};startDate={start.isoformat()};endDate={end.isoformat()}",
@@ -440,7 +466,7 @@ class WindDataProvider(DataProvider):
         for dataset in datasets:
             for option in options:
                 try:
-                    res = w.wset(dataset, option)
+                    res = self._call_wset(dataset, option)
                 except Exception:
                     continue
                 if getattr(res, "ErrorCode", -1) != 0 or not getattr(res, "Data", None):
@@ -453,16 +479,14 @@ class WindDataProvider(DataProvider):
         return []
 
     def get_stock_close(self, stock_code, on_date):
-        w = self._ensure()
         val_str = on_date.strftime("%Y%m%d")
-        res = w.wss(stock_code, "close", f"tradeDate={val_str};priceAdj=U")
+        res = self._call_wss(stock_code, "close", f"tradeDate={val_str};priceAdj=U")
         if res.ErrorCode != 0:
             raise RuntimeError(f"Wind 取正股 {stock_code} 现价失败: {res.Data}")
         return float(res.Data[0][0])
 
     def get_stock_history(self, stock_code, start, end):
-        w = self._ensure()
-        res = w.wsd(stock_code, "close", start.isoformat(), end.isoformat(), "priceAdj=U")
+        res = self._call_wsd(stock_code, "close", start.isoformat(), end.isoformat(), "priceAdj=U")
         if res.ErrorCode != 0:
             raise RuntimeError(f"Wind 取正股 {stock_code} 历史价失败: {res.Data}")
         return [
@@ -489,8 +513,7 @@ class WindDataProvider(DataProvider):
         return _float_or_none(value)
 
     def get_bond_history(self, bond_code, start, end):
-        w = self._ensure()
-        res = w.wsd(bond_code, "close", start.isoformat(), end.isoformat())
+        res = self._call_wsd(bond_code, "close", start.isoformat(), end.isoformat())
         if res.ErrorCode != 0:
             raise RuntimeError(f"Wind 取 {bond_code} 历史价失败: {res.Data}")
         return [
@@ -499,8 +522,7 @@ class WindDataProvider(DataProvider):
         ]
 
     def get_cashflow(self, bond_code):
-        w = self._ensure()
-        res = w.wset("cashflow", f"windcode={bond_code}")
+        res = self._call_wset("cashflow", f"windcode={bond_code}")
         if res.ErrorCode != 0 or not res.Data:
             return None
         fields = [f.lower() for f in res.Fields]
@@ -528,12 +550,11 @@ class WindDataProvider(DataProvider):
         )
 
     def get_risk_free_rate(self, on_date):
-        w = self._ensure()
         # SHIBOR1Y.IR 用 w.wsd (证券日频接口) 而不是 w.edb: 后者需要 EDB (经济数据库)
         # 订阅, 普通账户会返回 ErrorCode=-40521007 "权限验证不通过"; wsd 仅需基础行情权限.
-        rr = w.wsd("SHIBOR1Y.IR", "close",
-                   (on_date - timedelta(days=10)).isoformat(),
-                   on_date.isoformat())
+        rr = self._call_wsd("SHIBOR1Y.IR", "close",
+                            (on_date - timedelta(days=10)).isoformat(),
+                            on_date.isoformat())
         if rr.ErrorCode == 0:
             if not rr.Data or not rr.Data[0]:
                 return None
@@ -563,9 +584,8 @@ class WindDataProvider(DataProvider):
         sectorid 'a101020600000000' = 沪深可转债 (含已退市标记的债不入此列).
         返回 ``[(wind_code, sec_name), ...]``; ``sec_name`` 留给上层过滤定向转债。
         """
-        w = self._ensure()
         d = (on_date or date.today()).isoformat()
-        res = w.wset(
+        res = self._call_wset(
             "sectorconstituent",
             f"date={d};sectorid=a101020600000000;field=wind_code,sec_name",
         )

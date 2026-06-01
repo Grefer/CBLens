@@ -123,18 +123,18 @@ def build(app, tab):
     tab.grid_rowconfigure(3, weight=1)  # results frame
 
     # 控制栏
-    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
-    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 12), padx=6)
+    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 8), padx=16)
 
     ch = ctk.CTkFrame(ctrl, fg_color="transparent")
-    ch.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 8))
+    ch.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
     ctk.CTkLabel(ch, text="📦 批量定价 / 转债池筛选",
                  font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
     ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按机会分筛选复核",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
 
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
-    cc.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
+    cc.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
 
     app.v_batch_source = ctk.StringVar(value="Wind")
     ctk.CTkLabel(cc, text="行情源", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(8, 4))
@@ -216,7 +216,7 @@ def build(app, tab):
     app.v_batch_status = ctk.StringVar(value=f"将基于本地条款库的公开交易转债池定价 ({len(codes)} 只{suffix})")
     ctk.CTkLabel(tab, textvariable=app.v_batch_status,
                  font=(FONT_FAMILY, 13, "bold"), text_color=TEXT).grid(
-                     row=1, column=0, sticky="w", padx=16, pady=(2, 8))
+                     row=1, column=0, sticky="w", padx=24, pady=(2, 8))
 
     # 事件 banner (近 30 天关注池内事件), 仅在有内容时显示; 单击弹窗展开全部
     app.v_batch_events_banner = ctk.StringVar(value="")
@@ -227,14 +227,14 @@ def build(app, tab):
         fg_color=BG_CARD, corner_radius=12,
         padx=12, pady=8,
         anchor="w", justify="left", wraplength=1080, cursor="hand2")
-    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
+    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
     app.lbl_batch_events_banner.grid_remove()
     app.lbl_batch_events_banner.bind(
         "<Button-1>", lambda _e: _show_events_banner_full(app))
 
     # 结果表格区: 主批量列表 + 我的关注池 (含自动发现的即将上市新债)
     app.batch_results_frame = ctk.CTkFrame(tab, fg_color="transparent")
-    app.batch_results_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
+    app.batch_results_frame.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 6))
     app.batch_results_frame.grid_columnconfigure(0, weight=1)
     app.batch_results_frame.grid_rowconfigure(0, weight=3)
     app.batch_results_frame.grid_rowconfigure(1, weight=2)
@@ -258,12 +258,12 @@ def build(app, tab):
 
 
 def _create_table_section(parent, *, row, title, with_summary=False):
-    section = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=16)
+    section = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
     section.grid(row=row, column=0, sticky="nsew", pady=(0, 8) if row == 0 else (0, 0))
     section.grid_columnconfigure(0, weight=1)
 
     header = ctk.CTkFrame(section, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 0))
+    header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
     header.grid_columnconfigure(1, weight=1)
     ctk.CTkLabel(
         header, text=title,
@@ -588,13 +588,21 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         show="headings",
         selectmode="extended",
     )
-    y_scroll = ctk.CTkScrollbar(app.batch_table_frame, orientation="vertical", command=tree.yview)
-    x_scroll = ctk.CTkScrollbar(app.batch_table_frame, orientation="horizontal", command=tree.xview)
+    y_scroll = ctk.CTkScrollbar(
+        app.batch_table_frame, orientation="vertical", command=tree.yview,
+        width=10, fg_color="transparent", button_color=BORDER,
+        button_hover_color=TEXT_DIM,
+    )
+    x_scroll = ctk.CTkScrollbar(
+        app.batch_table_frame, orientation="horizontal", command=tree.xview,
+        height=8, fg_color="transparent", button_color=BORDER,
+        button_hover_color=TEXT_DIM,
+    )
     tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 
-    tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
-    y_scroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
-    x_scroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
+    tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=(6, 0))
+    y_scroll.grid(row=0, column=1, sticky="ns", pady=(6, 0), padx=(0, 10))
+    x_scroll.grid(row=1, column=0, sticky="ew", padx=(10, 0), pady=(0, 8))
 
     _configure_responsive_columns(
         tree, columns, headers, col_widths,

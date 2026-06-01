@@ -59,6 +59,10 @@ from ..widgets import Tooltip
 
 STRATEGY_BACKTEST_PRO_FEATURE = "strategy_backtest"
 STRATEGY_BACKTEST_PRO_PREVIEW = True
+STRATEGY_DETAIL_TABLE_HEIGHT = 7
+WIND_HIGH_FIDELITY_CODE_WARN_LIMIT = 120
+WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT = 1000
+WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER = 10
 
 
 def _strategy_snapshot_jsonable(obj):
@@ -214,7 +218,7 @@ class BacktestMixin:
         if overrides is None:  # 自定义
             view = self.v_st_view.get()
             desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "可手动调整选债和过滤条件")
-            self.v_st_summary.set(f"自定义参数 · 选债规则「{view}」\n{desc}")
+            self.v_st_summary.set(f"自定义参数 · 选债规则「{view}」: {desc}")
             return
         merged = {**_STRATEGY_TEMPLATE_BASE, **overrides}
         self._programmatic_update = True
@@ -229,7 +233,7 @@ class BacktestMixin:
         template_desc = STRATEGY_TEMPLATE_DESCRIPTIONS.get(name, "")
         view_desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "")
         self.v_st_summary.set(
-            f"策略方案「{name}」\n{template_desc}\n选债规则: {view_desc}")
+            f"策略方案「{name}」 · {template_desc} · 选债规则: {view_desc}")
 
     def _describe_strategy_view(self, name):
         """用户切换选债规则时, 写入策略摘要区 (不覆盖运行状态)。"""
@@ -237,7 +241,7 @@ class BacktestMixin:
         if desc:
             template = self.v_st_template.get() if hasattr(self, "v_st_template") else "自定义"
             prefix = f"策略方案「{template}」" if template != "自定义" else "自定义参数"
-            self.v_st_summary.set(f"{prefix}\n选债规则「{name}」: {desc}")
+            self.v_st_summary.set(f"{prefix} · 选债规则「{name}」: {desc}")
 
     def _strategy_codes_from_pool(self) -> tuple[list[str], str]:
         mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
@@ -378,15 +382,25 @@ class BacktestMixin:
         period_count = max(0, len(schedule) - 1)
         top_n = max(1, int(float(self.v_st_top_n.get())))
         estimated_pricing = len(codes) * period_count
-
         raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
         mode = normalize_strategy_history_mode(raw_mode)
+        estimated_wind_requests = (
+            estimated_pricing * WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER
+            if mode == "Wind高保真" else 0
+        )
         history = self._strategy_history_precheck(schedule[:-1])
         patch = self._strategy_patch_precheck()
         events = self._strategy_events_precheck()
         warnings = []
         if mode == "Wind高保真" and not history["enabled"]:
             warnings.append("Wind 历史条款未启用, 过去条款会回退到当前条款视角")
+        if mode == "Wind高保真" and (
+            len(codes) > WIND_HIGH_FIDELITY_CODE_WARN_LIMIT
+            or estimated_pricing > WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT
+        ):
+            warnings.append(
+                "Wind高保真会逐债拉取历史条款/状态/行情, 大池回测可能耗时数小时"
+            )
         if top_n > len(codes):
             warnings.append("TopN 大于代码池数量")
         # 历史条款修正覆盖度检查。
@@ -408,6 +422,7 @@ class BacktestMixin:
             "grid_M": _STRATEGY_PDE_GRID_M,
             "grid_N": _STRATEGY_PDE_GRID_N,
             "estimated_pricing": estimated_pricing,
+            "estimated_wind_requests": estimated_wind_requests,
             "history": history,
             "patch": patch,
             "events": events,
@@ -473,14 +488,18 @@ class BacktestMixin:
         if info['patch'].get('earliest') and info['patch'].get('latest'):
             patch_info += f" ({info['patch']['earliest']}~{info['patch']['latest']})"
         warning_text = "; ".join(warnings[:3]) if warnings else "未发现明显口径问题"
-        return "\n".join((
-            f"规模: {info['pool_label']} {info['code_count']} 只 · "
+        wind_text = ""
+        if info.get("estimated_wind_requests"):
+            wind_text = f" · Wind请求估算≈{info['estimated_wind_requests']} 次"
+        return (
+            f"规模 {info['pool_label']} {info['code_count']} 只 · "
             f"{info['period_count']} 期 · Top{info['top_n']} · "
-            f"预计定价≈{info['estimated_pricing']} 次 · PDE M{info['grid_M']}/N{info['grid_N']}",
-            f"数据: {info.get('history_mode', '标准')}口径 · 条款来源 {history['label']} · 覆盖 {history['coverage_ratio']*100:.0f}% · "
-            f"历史转股价修正 {patch_info} · 公告事件 {info['events']['count']} 条",
-            f"提醒: {warning_text}",
-        ))
+            f"预计定价≈{info['estimated_pricing']} 次{wind_text} · "
+            f"{info.get('history_mode', '标准')}口径 · "
+            f"条款 {history['label']} 覆盖 {history['coverage_ratio']*100:.0f}% · "
+            f"修正 {patch_info} · 事件 {info['events']['count']} 条 · "
+            f"提醒: {warning_text}"
+        )
 
     def _run_strategy_backtest(self):
         if not self._strategy_backtest_pro_available():
@@ -556,6 +575,7 @@ class BacktestMixin:
             return
 
         # 运行前自动执行预检并展示, 预检失败不阻塞运行
+        precheck = None
         try:
             precheck = self._strategy_precheck_info()
             self.v_st_precheck.set(self._format_strategy_precheck(precheck))
@@ -563,6 +583,13 @@ class BacktestMixin:
         except Exception as exc:
             self.v_st_precheck.set(f"⚠ 预检异常: {exc}")
             self._strategy_bt_expected_pricing = None
+
+        if precheck is not None and precheck.get("history_mode") == "Wind高保真":
+            params["max_workers"] = 1
+            if self._strategy_wind_high_fidelity_is_expensive(precheck):
+                if not self._confirm_expensive_wind_strategy_backtest(precheck):
+                    self.v_st_status.set("已取消 Wind高保真大池回测")
+                    return
 
         source = self.v_data_source.get()
         self._strategy_bt_cancel = threading.Event()
@@ -584,7 +611,29 @@ class BacktestMixin:
     def _cancel_strategy_backtest(self):
         if self._strategy_bt_cancel is not None:
             self._strategy_bt_cancel.set()
-        self.v_st_status.set("⏹ 正在停止 (完成当前调仓后中断) ...")
+        self.v_st_status.set("⏹ 正在停止 (完成当前 Wind/定价请求后中断) ...")
+
+    @staticmethod
+    def _strategy_wind_high_fidelity_is_expensive(precheck: dict) -> bool:
+        if precheck.get("history_mode") != "Wind高保真":
+            return False
+        return (
+            int(precheck.get("code_count") or 0) > WIND_HIGH_FIDELITY_CODE_WARN_LIMIT
+            or int(precheck.get("estimated_pricing") or 0) > WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT
+        )
+
+    @staticmethod
+    def _confirm_expensive_wind_strategy_backtest(precheck: dict) -> bool:
+        return messagebox.askokcancel(
+            "Wind高保真回测耗时很长",
+            "当前配置会对 Wind 做大量同步请求:\n\n"
+            f"代码池: {precheck.get('code_count')} 只\n"
+            f"调仓期: {precheck.get('period_count')} 期\n"
+            f"预计定价: ≈{precheck.get('estimated_pricing')} 次\n"
+            f"Wind请求估算: ≈{precheck.get('estimated_wind_requests')} 次\n\n"
+            "建议改用「标准」历史口径, 或切换到「当前筛选结果/自选代码」的小池再跑。"
+            "仍要继续时将自动把 Wind 调用设为单线程, 但耗时仍可能很长。",
+        )
 
     def _strategy_backtest_pro_available(self) -> bool:
         """未来接授权时只需替换这里的判断."""
@@ -598,9 +647,12 @@ class BacktestMixin:
         try:
             provider = self._build_strategy_provider(source)
 
-            def progress(done, total):
+            def cancel_check():
                 if self._strategy_bt_cancel is not None and self._strategy_bt_cancel.is_set():
                     raise StrategyBacktestCancelled()
+
+            def progress(done, total):
+                cancel_check()
 
                 def _update():
                     pct = done / total if total else 0
@@ -608,6 +660,20 @@ class BacktestMixin:
                     suffix = f" · 预计定价≈{expected} 次" if expected else ""
                     self.v_st_status.set(
                         f"定价/选债/估值 {done}/{total} ({pct:.0%}){suffix}"
+                    )
+                    if hasattr(self, "strategy_bt_progress"):
+                        self.strategy_bt_progress.set(pct)
+                self.after(0, _update)
+
+            def stage_progress(stage, done, total, period_idx, total_periods):
+                cancel_check()
+
+                def _update():
+                    pct = self._strategy_stage_progress_pct(
+                        stage, done, total, period_idx, total_periods)
+                    self.v_st_status.set(
+                        f"{stage} {done}/{total} · "
+                        f"第 {period_idx + 1}/{total_periods} 期"
                     )
                     if hasattr(self, "strategy_bt_progress"):
                         self.strategy_bt_progress.set(pct)
@@ -623,6 +689,8 @@ class BacktestMixin:
                 admission_config=admission_config,
                 pricing_snapshot_cache=getattr(self, "_strategy_pricing_cache", None),
                 progress_cb=progress,
+                stage_cb=stage_progress,
+                cancel_cb=cancel_check,
                 **params,
             )
             self._last_strategy_bt_result = result
@@ -634,6 +702,21 @@ class BacktestMixin:
             self.after(0, lambda exc=exc: messagebox.showerror("策略回测失败", str(exc)))
         finally:
             self.after(0, self._finish_strategy_backtest)
+
+    @staticmethod
+    def _strategy_stage_progress_pct(stage, done, total, period_idx, total_periods) -> float:
+        if total_periods <= 0:
+            return 0.0
+        phase = {
+            "准入筛选": (0.00, 0.28),
+            "价格预筛": (0.28, 0.12),
+            "定价": (0.40, 0.34),
+            "持仓估值": (0.74, 0.12),
+            "基准估值": (0.86, 0.14),
+        }.get(stage, (0.0, 0.0))
+        inner = (done / total) if total else 1.0
+        pct = (period_idx + phase[0] + phase[1] * inner) / total_periods
+        return max(0.0, min(1.0, pct))
 
     def _finish_strategy_backtest(self):
         self._strategy_bt_running = False
@@ -781,8 +864,12 @@ class BacktestMixin:
     }
 
     def _mark_strategy_tabs_dirty(self, *tab_names):
-        tabs = set(tab_names) if tab_names else set(self._STRATEGY_TAB_RENDERERS.keys())
-        self._strategy_dirty_tabs = tabs
+        dirty = getattr(self, "_strategy_dirty_tabs", set())
+        if tab_names:
+            dirty |= set(tab_names)
+        else:
+            dirty = set(self._STRATEGY_TAB_RENDERERS.keys())
+        self._strategy_dirty_tabs = dirty
 
     def _render_strategy_backtest_result(self, result):
         """入口: 更新摘要 + 标记全部子页为 dirty + 渲染当前子页."""
@@ -1019,6 +1106,8 @@ class BacktestMixin:
 
         for child in self.strategy_bt_chart_frame.winfo_children():
             child.destroy()
+        self.strategy_bt_chart_frame.configure(height=540)
+        self.strategy_bt_chart_frame.grid_propagate(False)
 
         curve = result.get("equity_curve") or []
         if not curve:
@@ -1062,13 +1151,15 @@ class BacktestMixin:
             dd_values_all = self._strategy_drawdown_values(equity)
             dd_idx = int(np.argmin(dd_values_all)) if dd_values_all else None
             if dd_idx is not None and dd_idx < len(dates):
-                ax_eq.axvspan(dd_start, dd_end, alpha=0.08, color=red_color, zorder=0)
+                ax_eq.axvspan(dd_start, dd_end, alpha=0.10, color=red_color, zorder=0)
                 ax_eq.annotate(
-                    f"最大回撤 {max_dd*100:.1f}%",
+                    f" 最大回撤 {max_dd*100:.1f}% ",
                     xy=(dates[dd_idx], equity[dd_idx]),
-                    xytext=(0, -18), textcoords="offset points",
-                    fontsize=8, color=red_color, ha="center",
-                    arrowprops={"arrowstyle": "->", "color": red_color, "lw": 0.8},
+                    xytext=(30, -28), textcoords="offset points",
+                    fontsize=10, fontweight="bold", color="#ffffff",
+                    ha="left", va="top",
+                    bbox={"boxstyle": "round,pad=0.3", "fc": red_color, "alpha": 0.85, "ec": "none"},
+                    arrowprops={"arrowstyle": "->", "color": red_color, "lw": 1.2},
                 )
 
         ax_eq.set_ylabel("净值", color=text_dim_color, fontsize=10)
@@ -1163,7 +1254,9 @@ class BacktestMixin:
         self._clear_strategy_panel(frame)
         periods = result.get("periods") or []
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(2, weight=1)
+        frame.grid_rowconfigure(0, weight=0)
+        frame.grid_rowconfigure(1, weight=0)
+        frame.grid_rowconfigure(2, weight=0)
 
         period_var = getattr(self, "v_st_detail_period", None)
         status_var = getattr(self, "v_st_detail_status", None)
@@ -1202,11 +1295,7 @@ class BacktestMixin:
         period_label = period_var.get() if period_var is not None else "最近一期"
         status_filter = status_var.get() if status_var is not None else "全部"
         funnel_text = self._strategy_funnel_text(selected_periods, period_label)
-        ctk.CTkLabel(
-            frame, text=f"筛选漏斗  {funnel_text}",
-            text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
-            anchor="w",
-        ).grid(row=1, column=0, sticky="w", padx=12, pady=(2, 4))
+        self._strategy_section_title(frame, f"筛选漏斗 · {funnel_text}", 1, 0)
 
         candidate_rows = []
         rejection_rows = []
@@ -1265,6 +1354,7 @@ class BacktestMixin:
             [150, 58, 44, 88, 88, 56, 64, 68, 68, 52, 340],
             all_rows,
             xscroll=True,
+            max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
         )
 
     def _render_strategy_table(self, result):
@@ -1283,8 +1373,10 @@ class BacktestMixin:
             return
 
         self.strategy_bt_table_frame.grid_columnconfigure(0, weight=1)
-        self.strategy_bt_table_frame.grid_rowconfigure(1, weight=1)
-        self.strategy_bt_table_frame.grid_rowconfigure(3, weight=2)
+        self.strategy_bt_table_frame.grid_rowconfigure(0, weight=0)
+        self.strategy_bt_table_frame.grid_rowconfigure(1, weight=0)
+        self.strategy_bt_table_frame.grid_rowconfigure(2, weight=0)
+        self.strategy_bt_table_frame.grid_rowconfigure(3, weight=0)
 
         self._strategy_section_title(self.strategy_bt_table_frame, "调仓流水", 0, 0)
         summary_rows = []
@@ -1338,6 +1430,7 @@ class BacktestMixin:
             [170, 78, 78, 52, 48, 48, 48, 68, 68, 180, 180],
             summary_rows,
             xscroll=True,
+            max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
         )
 
         detail_rows = []
@@ -1375,34 +1468,19 @@ class BacktestMixin:
                 ])
 
         self._strategy_section_title(self.strategy_bt_table_frame, "持仓 / 跳过明细", 2, 0)
-        _configure_tree_style()
-        columns = ["period", "status", "rank", "code", "name", "contrib", "ret",
-                   "score", "confidence", "entry", "exit", "note"]
-        headers = ["区间", "状态", "排名", "代码", "名称", "贡献(%)", "收益(%)",
-                   "分数", "置信", "买入", "卖出", "标签/原因"]
-        widths = [170, 56, 52, 88, 96, 76, 76, 62, 58, 122, 122, 260]
-        tree = ttk.Treeview(
-            self.strategy_bt_table_frame,
-            columns=columns,
-            show="headings",
-            selectmode="browse",
+        tree = self._render_strategy_small_tree(
+            self.strategy_bt_table_frame, 3, 0,
+            ["period", "status", "rank", "code", "name", "contrib", "ret",
+             "score", "confidence", "entry", "exit", "note"],
+            ["区间", "状态", "排名", "代码", "名称", "贡献(%)", "收益(%)",
+             "分数", "置信", "买入", "卖出", "标签/原因"],
+            [170, 56, 52, 88, 96, 76, 76, 62, 58, 122, 122, 260],
+            detail_rows,
+            xscroll=True,
+            max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
         )
-        y_scroll = ctk.CTkScrollbar(
-            self.strategy_bt_table_frame, orientation="vertical", command=tree.yview)
-        x_scroll = ctk.CTkScrollbar(
-            self.strategy_bt_table_frame, orientation="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-        tree.grid(row=3, column=0, sticky="nsew", padx=(8, 0), pady=(0, 0))
-        y_scroll.grid(row=3, column=1, sticky="ns", padx=(0, 8), pady=(0, 0))
-        x_scroll.grid(row=4, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
-
-        _configure_responsive_columns(tree, columns, headers, widths)
-        _attach_column_sort(tree, columns, headers)
         self._strategy_bt_tree = tree
         _TREE_ATTRS.add("_strategy_bt_tree")
-
-        for idx, values in enumerate(detail_rows):
-            tree.insert("", "end", iid=str(idx), values=values)
 
     def _render_strategy_attribution(self, result):
         frame = self.strategy_bt_attribution_frame
@@ -1411,10 +1489,10 @@ class BacktestMixin:
         attribution = diagnostics.get("attribution") or {}
         summary = result.get("summary") or {}
 
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(2, weight=1)
-        frame.grid_rowconfigure(4, weight=1)
+        frame.grid_columnconfigure(0, weight=3)
+        frame.grid_columnconfigure(1, weight=2)
+        frame.grid_rowconfigure(2, minsize=180)
+        frame.grid_rowconfigure(4, minsize=340)
 
         metrics = ctk.CTkFrame(frame, fg_color="transparent")
         metrics.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 4))
@@ -1513,7 +1591,7 @@ class BacktestMixin:
             wf_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
             wf_frame.grid_columnconfigure(0, weight=1)
             wf_frame.grid_rowconfigure(0, weight=1)
-            fig_wf = Figure(figsize=(5, 2.6), dpi=100, facecolor=bg_card_color)
+            fig_wf = Figure(figsize=(5.5, 3.2), dpi=100, facecolor=bg_card_color)
             ax_wf = fig_wf.add_subplot(111, facecolor=bg_input_color)
             names = [n[:6] for n, _ in waterfall_items]
             vals = [v * 100 for _, v in waterfall_items]
@@ -1613,7 +1691,8 @@ class BacktestMixin:
 
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(4, weight=1)
+        frame.grid_rowconfigure(2, minsize=240)
+        frame.grid_rowconfigure(4, minsize=300)
 
         # ── Row 0: 稳健性指标条 ──────────────────────────────────
         returns = [
@@ -1714,11 +1793,12 @@ class BacktestMixin:
 
         # ── Row 3: 收益分布 + 最差区间复盘 ──────────────────────
         self._strategy_section_title(frame, "收益分布 / 最差区间", 3, 0, columnspan=2)
-        dist_and_worst = ctk.CTkFrame(frame, fg_color="transparent")
-        dist_and_worst.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 8))
+        dist_and_worst = ctk.CTkFrame(frame, fg_color="transparent", height=300)
+        dist_and_worst.grid(row=4, column=0, columnspan=2, sticky="ew", padx=4, pady=(0, 8))
         dist_and_worst.grid_columnconfigure(0, weight=1)
         dist_and_worst.grid_columnconfigure(1, weight=2)
         dist_and_worst.grid_rowconfigure(0, weight=1)
+        dist_and_worst.grid_propagate(False)
 
         if returns:
             dist_frame = ctk.CTkFrame(dist_and_worst, fg_color="transparent")
@@ -1816,10 +1896,11 @@ class BacktestMixin:
                 mean_r = float(np.mean(chunk))
                 rolling_sharpe.append(mean_r / vol if vol > 1e-10 else 0.0)
 
-        chart_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        chart_frame = ctk.CTkFrame(frame, fg_color="transparent", height=240)
         chart_frame.grid(row=grid_row, column=0, columnspan=2, sticky="nsew", padx=8, pady=(4, 8))
         chart_frame.grid_columnconfigure(0, weight=1)
         chart_frame.grid_rowconfigure(0, weight=1)
+        chart_frame.grid_propagate(False)
 
         fig = Figure(figsize=(10, 2.2), dpi=100, facecolor=bg_card_color)
         ax1 = fig.add_subplot(121, facecolor=bg_input_color)
@@ -1844,6 +1925,11 @@ class BacktestMixin:
         ax2.set_title(f"滚动 {window} 期 Sharpe", color=text_dim_color, fontsize=9)
         ax2.tick_params(colors=text_dim_color, labelsize=7)
         ax2.grid(True, color=border_color, linestyle="--", alpha=0.3)
+        finite_sharpe = [v for v in rolling_sharpe if np.isfinite(v)]
+        if finite_sharpe:
+            s_min, s_max = min(finite_sharpe), max(finite_sharpe)
+            pad = max(0.3, (s_max - s_min) * 0.15)
+            ax2.set_ylim(s_min - pad, s_max + pad)
         for spine in ax2.spines.values():
             spine.set_color(border_color)
         for lbl in ax2.get_xticklabels():
@@ -1937,7 +2023,7 @@ class BacktestMixin:
                 for k, v in source_counts.items()
             )
         else:
-            source_text = "—"
+            source_text = "全部当前回退" if fallback_ratio >= 0.99 else "—"
         for label, value in (
             ("条款样本", data_quality.get("sample_count") or 0),
             ("当前回退", self._fmt_strategy_pct(fallback_ratio)),
@@ -2156,10 +2242,11 @@ class BacktestMixin:
         palette = [accent_color, get_color(ORANGE), get_color(GREEN),
                    get_color(RED), "#9b59b6", "#3498db", "#e67e22", "#1abc9c"]
 
-        chart_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        chart_frame.grid(row=grid_row, column=0, sticky="nsew", padx=8, pady=(4, 8))
+        chart_frame = ctk.CTkFrame(frame, fg_color="transparent", height=300)
+        chart_frame.grid(row=grid_row, column=0, sticky="ew", padx=8, pady=(4, 8))
         chart_frame.grid_columnconfigure(0, weight=1)
         chart_frame.grid_rowconfigure(0, weight=1)
+        chart_frame.grid_propagate(False)
 
         fig = Figure(figsize=(10, 2.8), dpi=100, facecolor=bg_card_color)
         ax = fig.add_subplot(111, facecolor=bg_input_color)
@@ -2256,9 +2343,17 @@ class BacktestMixin:
             tree_kwargs["height"] = max_height
         tree = ttk.Treeview(container, columns=columns, show="headings",
                             selectmode="browse", **tree_kwargs)
-        y_scroll = ctk.CTkScrollbar(container, orientation="vertical", command=tree.yview)
+        y_scroll = ctk.CTkScrollbar(
+            container, orientation="vertical", command=tree.yview,
+            width=12, fg_color=BG_INPUT, button_color=TEXT_DIM,
+            button_hover_color=ACCENT,
+        )
         if xscroll:
-            x_scroll = ctk.CTkScrollbar(container, orientation="horizontal", command=tree.xview)
+            x_scroll = ctk.CTkScrollbar(
+                container, orientation="horizontal", command=tree.xview,
+                height=10, fg_color=BG_INPUT, button_color=TEXT_DIM,
+                button_hover_color=ACCENT,
+            )
             tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
         else:
             x_scroll = None
@@ -2269,11 +2364,24 @@ class BacktestMixin:
             x_scroll.grid(row=1, column=0, sticky="ew")
         _configure_responsive_columns(tree, columns, headers, widths)
         _attach_column_sort(tree, columns, headers)
+        self._style_strategy_tree_rows(tree)
         for idx, vals in enumerate(values):
-            tree.insert("", "end", iid=str(idx), values=vals)
+            tree.insert("", "end", iid=str(idx), values=vals,
+                        tags=(self._strategy_tree_row_tag(idx),))
         if not values:
             tree.insert("", "end", values=["—"] + [""] * (len(columns) - 1))
         return tree
+
+    @staticmethod
+    def _strategy_tree_row_tag(index: int) -> str:
+        return "strategy_even" if index % 2 == 0 else "strategy_odd"
+
+    @staticmethod
+    def _style_strategy_tree_rows(tree) -> None:
+        tree.tag_configure(
+            "strategy_even", background=get_color(BG_CARD), foreground=get_color(TEXT))
+        tree.tag_configure(
+            "strategy_odd", background=get_color(BG_INPUT), foreground=get_color(TEXT))
 
     @staticmethod
     def _fmt_strategy_pct(value, sign=False):
@@ -2368,14 +2476,25 @@ class BacktestMixin:
                  if len(ivs) else np.array([])
         has_iv = iv_arr.size > 0 and bool(np.any(np.isfinite(iv_arr)))
         show_decomp = bool(self.v_bt_show_decomp.get()) and bond_floors and parities
+        theo_arr = np.array(theo, dtype=float)
+        mkt_arr = np.array(mkt, dtype=float)
+        metrics = self._compute_backtest_metrics(
+            dates, theo_arr, mkt_arr, sigmas, iv_arr,
+            bond_floors=bond_floors, parities=parities,
+        )
+        rel_dev = metrics["rel_dev"]
 
         if has_iv:
-            fig = Figure(figsize=(11, 6), dpi=100, facecolor=bg_card_color)
-            ax = fig.add_subplot(2, 1, 1, facecolor=bg_input_color)
-            ax_iv = fig.add_subplot(2, 1, 2, facecolor=bg_input_color, sharex=ax)
+            fig = Figure(figsize=(11, 7.2), dpi=100, facecolor=bg_card_color)
+            gs = fig.add_gridspec(3, 1, height_ratios=[2.0, 0.9, 0.9])
+            ax = fig.add_subplot(gs[0, 0], facecolor=bg_input_color)
+            ax_dev = fig.add_subplot(gs[1, 0], facecolor=bg_input_color, sharex=ax)
+            ax_iv = fig.add_subplot(gs[2, 0], facecolor=bg_input_color, sharex=ax)
         else:
-            fig = Figure(figsize=(11, 5), dpi=100, facecolor=bg_card_color)
-            ax = fig.add_subplot(111, facecolor=bg_input_color)
+            fig = Figure(figsize=(11, 6.2), dpi=100, facecolor=bg_card_color)
+            gs = fig.add_gridspec(2, 1, height_ratios=[2.1, 0.9])
+            ax = fig.add_subplot(gs[0, 0], facecolor=bg_input_color)
+            ax_dev = fig.add_subplot(gs[1, 0], facecolor=bg_input_color, sharex=ax)
             ax_iv = None
 
         ax.plot(dates, theo, color=accent_color, linewidth=2.0, marker="o", markersize=4,
@@ -2389,15 +2508,13 @@ class BacktestMixin:
             ax.plot(dates, parities, color=green_color, linewidth=1.2,
                     linestyle=":", alpha=0.7, label="转股价值", zorder=1)
 
-        theo_arr = np.array(theo)
-        mkt_arr = np.array(mkt)
         ax.fill_between(dates, theo_arr, mkt_arr,
                         where=(mkt_arr >= theo_arr).tolist(), color=red_color, alpha=0.12, label="市价溢价")
         ax.fill_between(dates, theo_arr, mkt_arr,
                         where=(mkt_arr < theo_arr).tolist(), color=green_color, alpha=0.12, label="市价折价")
 
         ax.set_ylabel("价格", color=text_dim_color, fontsize=10)
-        ax.tick_params(colors=text_dim_color, labelsize=9)
+        ax.tick_params(colors=text_dim_color, labelsize=9, labelbottom=False)
         for spine in ax.spines.values():
             spine.set_color(border_color)
         ax.grid(True, color=border_color, linestyle="--", alpha=0.4)
@@ -2405,6 +2522,41 @@ class BacktestMixin:
         legend = ax.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
                            edgecolor=border_color, fontsize=9, labelcolor=text_color)
         legend.get_frame().set_linewidth(0.5)
+
+        dev_pct = rel_dev * 100
+        ax_dev.axhspan(-5, 5, color=green_color, alpha=0.08, label="±5% 命中带")
+        ax_dev.axhline(0.0, color=border_color, linewidth=1.0)
+        ax_dev.axhline(5.0, color=border_color, linewidth=0.8, linestyle="--", alpha=0.7)
+        ax_dev.axhline(-5.0, color=border_color, linewidth=0.8, linestyle="--", alpha=0.7)
+        ax_dev.plot(dates, dev_pct, color=accent_color, linewidth=1.8,
+                    marker="o", markersize=3, label="理论−市价")
+        ax_dev.fill_between(
+            dates, dev_pct, 0.0,
+            where=np.nan_to_num(dev_pct, nan=0.0) >= 0,
+            color=green_color, alpha=0.14)
+        ax_dev.fill_between(
+            dates, dev_pct, 0.0,
+            where=np.nan_to_num(dev_pct, nan=0.0) < 0,
+            color=red_color, alpha=0.14)
+        max_idx = metrics.get("max_abs_idx")
+        if max_idx is not None and np.isfinite(dev_pct[max_idx]):
+            ax_dev.scatter([dates[max_idx]], [dev_pct[max_idx]], s=32,
+                           color=red_color, zorder=4)
+            ax_dev.annotate(
+                f"最大偏差 {dev_pct[max_idx]:+.1f}%",
+                xy=(dates[max_idx], dev_pct[max_idx]),
+                xytext=(8, 10), textcoords="offset points",
+                fontsize=8, color=red_color,
+                arrowprops={"arrowstyle": "->", "color": red_color, "lw": 0.8},
+            )
+        ax_dev.set_ylabel("偏差 (%)", color=text_dim_color, fontsize=10)
+        ax_dev.tick_params(colors=text_dim_color, labelsize=9, labelbottom=ax_iv is None)
+        ax_dev.grid(True, color=border_color, linestyle="--", alpha=0.35)
+        for spine in ax_dev.spines.values():
+            spine.set_color(border_color)
+        leg_dev = ax_dev.legend(loc="best", framealpha=0.9, facecolor=bg_card_color,
+                                edgecolor=border_color, fontsize=8, labelcolor=text_color)
+        leg_dev.get_frame().set_linewidth(0.5)
 
         if ax_iv is not None:
             hv_pct = np.array(sigmas) * 100
@@ -2434,7 +2586,7 @@ class BacktestMixin:
                                   edgecolor=border_color, fontsize=9, labelcolor=text_color)
             leg_iv.get_frame().set_linewidth(0.5)
         else:
-            ax.set_xlabel("日期", color=text_dim_color, fontsize=10)
+            ax_dev.set_xlabel("日期", color=text_dim_color, fontsize=10)
 
         fig.autofmt_xdate(rotation=25)
         fig.tight_layout()
@@ -2446,42 +2598,196 @@ class BacktestMixin:
         self._bt_figure = fig
         self._bt_canvas = canvas
 
-        # 统计指标: 偏差 = (理论 − 市价) / 市价  (相对值, 投资者角度更直观)
-        valid = (mkt_arr > 0) & np.isfinite(mkt_arr) & np.isfinite(theo_arr)
-        rel_dev = np.full(theo_arr.shape, np.nan)
-        rel_dev[valid] = (theo_arr[valid] - mkt_arr[valid]) / mkt_arr[valid]
-        rel_clean = rel_dev[np.isfinite(rel_dev)]
-        mean_basis_abs = float(np.mean(mkt_arr - theo_arr))
-        corr = float(np.corrcoef(theo_arr, mkt_arr)[0, 1]) if len(theo) > 1 else float("nan")
-        if rel_clean.size:
-            mean_dev = float(np.mean(rel_clean))
-            rmse = float(np.sqrt(np.mean(rel_clean ** 2)))
-            max_abs = float(np.max(np.abs(rel_clean)))
-            hit_rate = float(np.mean(np.abs(rel_clean) <= 0.05))
-        else:
-            mean_dev = rmse = max_abs = hit_rate = float("nan")
-
-        iv_hv_pp: float | None = None
-        if has_iv:
-            iv_valid = iv_arr[np.isfinite(iv_arr)]
-            hv_arr = np.array(sigmas)
-            hv_for_iv = hv_arr[np.isfinite(iv_arr)]
-            if iv_valid.size:
-                iv_hv_pp = float(np.mean(iv_valid - hv_for_iv)) * 100
-
-        self._update_backtest_stats(mean_dev, rmse, max_abs, hit_rate, corr, iv_hv_pp)
+        self._update_backtest_stats(
+            metrics["mean_dev"], metrics["rmse"], metrics["max_abs"],
+            metrics["hit_rate"], metrics["corr"], metrics["iv_hv_pp"],
+        )
+        self._render_backtest_result_panel(result, metrics)
         status_parts = [
             f"✅ {len(dates)} 个采样点",
-            f"平均基差(市价−理论)={mean_basis_abs:+.2f}",
+            f"平均基差(市价−理论)={metrics['mean_basis_abs']:+.2f}",
         ]
         self.v_bt_status.set("  ·  ".join(status_parts))
         self.btn_bt_png.configure(state="normal")
         self.btn_bt_csv.configure(state="normal")
 
+    @staticmethod
+    def _compute_backtest_metrics(
+        dates, theo_arr, mkt_arr, sigmas, iv_arr, *, bond_floors=None, parities=None,
+    ):
+        """汇总单债回测展示所需指标; 偏差 = (理论 − 市价) / 市价."""
+        valid = (mkt_arr > 0) & np.isfinite(mkt_arr) & np.isfinite(theo_arr)
+        rel_dev = np.full(theo_arr.shape, np.nan)
+        rel_dev[valid] = (theo_arr[valid] - mkt_arr[valid]) / mkt_arr[valid]
+        rel_clean = rel_dev[np.isfinite(rel_dev)]
+        basis = mkt_arr - theo_arr
+        basis_clean = basis[np.isfinite(basis)]
+        mean_basis_abs = float(np.mean(basis_clean)) if basis_clean.size else float("nan")
+        corr = float("nan")
+        if int(np.sum(valid)) > 1:
+            theo_valid = theo_arr[valid]
+            mkt_valid = mkt_arr[valid]
+            if np.std(theo_valid) > 1e-12 and np.std(mkt_valid) > 1e-12:
+                corr = float(np.corrcoef(theo_valid, mkt_valid)[0, 1])
+        if rel_clean.size:
+            mean_dev = float(np.mean(rel_clean))
+            rmse = float(np.sqrt(np.mean(rel_clean ** 2)))
+            max_abs = float(np.max(np.abs(rel_clean)))
+            hit_rate = float(np.mean(np.abs(rel_clean) <= 0.05))
+            finite_idx = np.where(np.isfinite(rel_dev))[0]
+            max_abs_idx = int(finite_idx[np.argmax(np.abs(rel_dev[finite_idx]))])
+            under_idx = int(finite_idx[np.argmax(rel_dev[finite_idx])])
+            over_idx = int(finite_idx[np.argmin(rel_dev[finite_idx])])
+            latest_idx = int(finite_idx[-1])
+        else:
+            mean_dev = rmse = max_abs = hit_rate = float("nan")
+            max_abs_idx = under_idx = over_idx = latest_idx = None
+
+        iv_hv_pp: float | None = None
+        if iv_arr.size:
+            hv_arr = np.array(sigmas, dtype=float)
+            n = min(iv_arr.size, hv_arr.size)
+            iv_valid_mask = np.isfinite(iv_arr[:n]) & np.isfinite(hv_arr[:n])
+            if np.any(iv_valid_mask):
+                iv_hv_pp = float(
+                    np.mean(iv_arr[:n][iv_valid_mask] - hv_arr[:n][iv_valid_mask])
+                ) * 100
+
+        latest = {}
+        if latest_idx is not None:
+            latest = {
+                "date": dates[latest_idx],
+                "theo": float(theo_arr[latest_idx]),
+                "market": float(mkt_arr[latest_idx]),
+                "basis": float(mkt_arr[latest_idx] - theo_arr[latest_idx]),
+                "dev": float(rel_dev[latest_idx]),
+                "sigma": float(sigmas[latest_idx]) if latest_idx < len(sigmas) else float("nan"),
+                "iv": float(iv_arr[latest_idx]) if latest_idx < iv_arr.size else float("nan"),
+                "bond_floor": (
+                    float(bond_floors[latest_idx])
+                    if bond_floors and latest_idx < len(bond_floors) else float("nan")
+                ),
+                "parity": (
+                    float(parities[latest_idx])
+                    if parities and latest_idx < len(parities) else float("nan")
+                ),
+            }
+
+        return {
+            "rel_dev": rel_dev,
+            "mean_dev": mean_dev,
+            "rmse": rmse,
+            "max_abs": max_abs,
+            "hit_rate": hit_rate,
+            "corr": corr,
+            "iv_hv_pp": iv_hv_pp,
+            "mean_basis_abs": mean_basis_abs,
+            "max_abs_idx": max_abs_idx,
+            "under_idx": under_idx,
+            "over_idx": over_idx,
+            "latest_idx": latest_idx,
+            "latest": latest,
+        }
+
+    def _render_backtest_result_panel(self, result, metrics):
+        frame = getattr(self, "bt_result_frame", None)
+        if frame is None:
+            return
+        for child in frame.winfo_children():
+            child.destroy()
+
+        frame.grid_columnconfigure(0, weight=2, uniform="bt-result")
+        frame.grid_columnconfigure(1, weight=3, uniform="bt-result")
+        dates = result.get("dates") or []
+        rel_dev = metrics["rel_dev"]
+        latest = metrics.get("latest") or {}
+        latest_dev = latest.get("dev")
+
+        if latest_dev is None or not np.isfinite(latest_dev):
+            verdict = "最新采样点暂无有效偏差"
+        elif latest_dev >= 0.05:
+            verdict = "最新理论价高于市价, 偏低估信号较明显"
+        elif latest_dev > 0:
+            verdict = "最新理论价略高于市价, 估值略有安全垫"
+        elif latest_dev <= -0.05:
+            verdict = "最新市价高于理论价, 估值偏贵需复核"
+        else:
+            verdict = "最新市价贴近模型中枢"
+
+        rmse = metrics.get("rmse")
+        hit_rate = metrics.get("hit_rate")
+        if np.isfinite(rmse) and np.isfinite(hit_rate):
+            if rmse <= 0.03 and hit_rate >= 0.7:
+                quality = "模型跟踪稳定"
+            elif rmse <= 0.07:
+                quality = "模型跟踪一般"
+            else:
+                quality = "偏差波动较大, 建议复核条款、波动率或信用利差"
+        else:
+            quality = "样本不足, 暂不评价跟踪质量"
+
+        max_idx = metrics.get("max_abs_idx")
+        max_text = "最大偏差 —"
+        if max_idx is not None and max_idx < len(dates):
+            max_text = (
+                f"最大偏差 {dates[max_idx]} "
+                f"{self._fmt_bt_pct(rel_dev[max_idx], sign=True)}"
+            )
+
+        left = ctk.CTkFrame(frame, fg_color=BG_INPUT, corner_radius=8)
+        left.grid(row=0, column=0, sticky="nsew", padx=(10, 5), pady=8)
+        ctk.CTkLabel(left, text="结果解读", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11, "bold")).pack(anchor="w", padx=12, pady=(8, 2))
+        ctk.CTkLabel(left, text=verdict, text_color=TEXT,
+                     font=(FONT_FAMILY, 14, "bold"),
+                     wraplength=480, justify="left").pack(anchor="w", padx=12)
+        ctk.CTkLabel(
+            left,
+            text=(
+                f"{quality} · 平均偏差 "
+                f"{self._fmt_bt_pct(metrics.get('mean_dev'), sign=True)} · {max_text}"
+            ),
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+            wraplength=520, justify="left",
+        ).pack(anchor="w", padx=12, pady=(4, 8))
+
+        right = ctk.CTkFrame(frame, fg_color=BG_INPUT, corner_radius=8)
+        right.grid(row=0, column=1, sticky="nsew", padx=(5, 10), pady=8)
+        for col in range(4):
+            right.grid_columnconfigure(col, weight=1, uniform="bt-latest")
+        ctk.CTkLabel(right, text="最新样本", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11, "bold")).grid(
+                         row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(8, 2))
+
+        items = [
+            ("日期", str(latest.get("date", "—"))),
+            ("理论 / 市价", (
+                f"{self._fmt_bt_price(latest.get('theo'))} / "
+                f"{self._fmt_bt_price(latest.get('market'))}"
+            )),
+            ("偏差", self._fmt_bt_pct(latest.get("dev"), sign=True)),
+            ("基差", self._fmt_bt_price(latest.get("basis"), sign=True)),
+            ("HV", self._fmt_bt_pct(latest.get("sigma"))),
+            ("IV", self._fmt_bt_pct(latest.get("iv"))),
+            ("纯债价值", self._fmt_bt_price(latest.get("bond_floor"))),
+            ("转股价值", self._fmt_bt_price(latest.get("parity"))),
+        ]
+        for idx, (label, value) in enumerate(items):
+            cell = ctk.CTkFrame(right, fg_color=BG_CARD, corner_radius=6)
+            cell.grid(row=1 + idx // 4, column=idx % 4, sticky="nsew",
+                      padx=(12 if idx % 4 == 0 else 4, 12 if idx % 4 == 3 else 4),
+                      pady=(2, 8 if idx // 4 == 1 else 4))
+            ctk.CTkLabel(cell, text=label, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 10)).pack(anchor="w", padx=8, pady=(5, 0))
+            ctk.CTkLabel(cell, text=value, text_color=TEXT,
+                         font=(FONT_MONO, 12, "bold")).pack(anchor="w", padx=8, pady=(0, 5))
+
     def _update_backtest_stats(self, mean_dev, rmse, max_abs, hit_rate, corr, iv_hv_pp):
         stats = getattr(self, "_bt_stat_vars", None)
         if not stats:
             return
+        labels = getattr(self, "_bt_stat_labels", {})
+        green, red, base = get_color(GREEN), get_color(RED), get_color(TEXT)
 
         def _fmt_pct(v, sign=False):
             if not np.isfinite(v):
@@ -2494,6 +2800,41 @@ class BacktestMixin:
         stats["hit_rate"].set(f"{hit_rate*100:.1f}%" if np.isfinite(hit_rate) else "—")
         stats["corr"].set(f"{corr:.3f}" if np.isfinite(corr) else "—")
         stats["iv_hv"].set(f"{iv_hv_pp:+.2f}pp" if iv_hv_pp is not None and np.isfinite(iv_hv_pp) else "—")
+        color_rules = {
+            "mean_dev": green if np.isfinite(mean_dev) and mean_dev > 0 else red,
+            "rmse": green if np.isfinite(rmse) and rmse <= 0.05 else red,
+            "max_abs": green if np.isfinite(max_abs) and max_abs <= 0.10 else red,
+            "hit_rate": green if np.isfinite(hit_rate) and hit_rate >= 0.70 else red,
+            "corr": green if np.isfinite(corr) and corr >= 0.80 else red,
+            "iv_hv": green if iv_hv_pp is not None and np.isfinite(iv_hv_pp) and iv_hv_pp <= 0 else red,
+        }
+        for key, label in labels.items():
+            raw = stats.get(key).get() if stats.get(key) is not None else "—"
+            label.configure(text_color=base if raw == "—" else color_rules.get(key, base))
+
+    @staticmethod
+    def _fmt_bt_pct(value, sign=False):
+        if value is None:
+            return "—"
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        if not np.isfinite(f):
+            return "—"
+        return f"{f*100:+.2f}%" if sign else f"{f*100:.2f}%"
+
+    @staticmethod
+    def _fmt_bt_price(value, sign=False):
+        if value is None:
+            return "—"
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        if not np.isfinite(f):
+            return "—"
+        return f"{f:+.2f}" if sign else f"{f:.2f}"
 
     # ── 回测结果导出 ──────────────────────────────────────
     def _export_bt_png(self):

@@ -90,3 +90,29 @@ def test_get_bond_terms_reads_wind_reset_trigger_ratio(monkeypatch):
 
     assert "clause_reset_resettriggerratio" in fake_wind.requested_fields
     assert terms.down_reset_trigger_pct == 85.0
+
+
+def test_wss_candidate_invalid_indicator_is_cached(monkeypatch):
+    class Result:
+        def __init__(self, error_code, data):
+            self.ErrorCode = error_code
+            self.Data = data
+
+    class FakeWind:
+        def __init__(self):
+            self.calls = []
+
+        def wss(self, code, field, options):
+            self.calls.append(field)
+            if field == "bad_field":
+                return Result(-40522006, [["CWSSService: invalid indicators."]])
+            return Result(0, [[42]])
+
+    fake_wind = FakeWind()
+    provider = WindDataProvider()
+    monkeypatch.setattr(provider, "_ensure", lambda: fake_wind)
+
+    assert provider._wss_first_available("113001.SH", ("bad_field", "good_field"), date(2026, 5, 25)) == 42
+    assert provider._wss_first_available("113002.SH", ("bad_field", "good_field"), date(2026, 5, 25)) == 42
+
+    assert fake_wind.calls == ["bad_field", "good_field", "good_field"]

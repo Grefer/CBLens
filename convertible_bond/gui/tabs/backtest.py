@@ -2,7 +2,7 @@
 import customtkinter as ctk
 
 from ..theme import (
-    BG_CARD, BG_INPUT, TEXT, TEXT_DIM,
+    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM,
     ACCENT, ACCENT_HOVER, BTN_HOVER,
     FONT_FAMILY, FONT_MONO,
 )
@@ -14,20 +14,22 @@ def build(app, tab):
     tab.grid_rowconfigure(0, weight=0)
     tab.grid_rowconfigure(1, weight=0)
     tab.grid_rowconfigure(2, weight=0)
-    tab.grid_rowconfigure(3, weight=1)
+    tab.grid_rowconfigure(3, weight=0)
+    tab.grid_rowconfigure(4, weight=1)
 
-    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
-    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 12), padx=6)
+    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 8), padx=16)
+    ctrl.grid_columnconfigure(0, weight=1)
 
     ch = ctk.CTkFrame(ctrl, fg_color="transparent")
-    ch.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 8))
+    ch.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
     ctk.CTkLabel(ch, text="📈 历史回测对比",
                  font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
     ctk.CTkLabel(ch, text="理论价 vs 实际收盘 (条款/模型参数 = 当前界面值)",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
 
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
-    cc.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 15))
+    cc.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
 
     _label(cc, "开始")
     _entry(cc, app.v_bt_start, 110).pack(side="left", padx=(0, 12))
@@ -74,23 +76,30 @@ def build(app, tab):
     app.lbl_bt_status = ctk.CTkLabel(
         tab, textvariable=app.v_bt_status,
         font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
-    app.lbl_bt_status.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 6))
+    app.lbl_bt_status.grid(row=1, column=0, sticky="w", padx=24, pady=(0, 6))
 
     app._bt_stat_vars = {}
-    stats_card = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
-    stats_card.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 8))
+    app._bt_stat_labels = {}
+    stats_card = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    stats_card.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
     for col in range(6):
         stats_card.grid_columnconfigure(col, weight=1, uniform="bts")
 
     def _stat_tile(col, key, title):
         var = ctk.StringVar(value="—")
-        cell = ctk.CTkFrame(stats_card, fg_color="transparent")
-        cell.grid(row=0, column=col, sticky="nsew", padx=8, pady=10)
-        ctk.CTkLabel(cell, text=title, text_color=TEXT_DIM,
-                     font=(FONT_FAMILY, 11)).pack(anchor="w")
-        ctk.CTkLabel(cell, textvariable=var, text_color=TEXT,
-                     font=(FONT_FAMILY, 16, "bold")).pack(anchor="w")
+        cell = ctk.CTkFrame(
+            stats_card, fg_color=BG_INPUT, corner_radius=8,
+            border_width=1, border_color=BORDER)
+        cell.grid(row=0, column=col, sticky="nsew", padx=5, pady=8)
+        inner = ctk.CTkFrame(cell, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=10, pady=6)
+        ctk.CTkLabel(inner, text=title, text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 10, "bold")).pack(anchor="w")
+        value = ctk.CTkLabel(inner, textvariable=var, text_color=TEXT,
+                             font=(FONT_FAMILY, 15, "bold"))
+        value.pack(anchor="w", pady=(2, 0))
         app._bt_stat_vars[key] = var
+        app._bt_stat_labels[key] = value
 
     _stat_tile(0, "mean_dev",  "均偏差 (理论−市价, %)")
     _stat_tile(1, "rmse",      "RMSE (%)")
@@ -99,8 +108,12 @@ def build(app, tab):
     _stat_tile(4, "corr",      "相关系数")
     _stat_tile(5, "iv_hv",     "IV − HV 均值 (pp)")
 
-    app.bt_chart_frame = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=16)
-    app.bt_chart_frame.grid(row=3, column=0, sticky="nsew", padx=6, pady=(0, 6))
+    app.bt_result_frame = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    app.bt_result_frame.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+    app.bt_result_frame.grid_columnconfigure(0, weight=1)
+
+    app.bt_chart_frame = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    app.bt_chart_frame.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 6))
     app.bt_chart_frame.grid_columnconfigure(0, weight=1)
     app.bt_chart_frame.grid_rowconfigure(0, weight=1)
 

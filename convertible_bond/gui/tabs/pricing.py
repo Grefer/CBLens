@@ -29,7 +29,7 @@ def build(app, tab):
         sashrelief="flat",
         showhandle=False,
     )
-    paned.grid(row=0, column=0, sticky="nsew")
+    paned.grid(row=0, column=0, sticky="nsew", padx=16, pady=(6, 6))
     app.pricing_paned = paned
 
     # paned 是 tk.PanedWindow, 子 CTkFrame 用 transparent 会把 master.cget("bg") 冻结成字符串, 主题切换不更新; 这里给 tuple 颜色避开
@@ -48,7 +48,7 @@ def build(app, tab):
     # ── 左列: 参数面板 (可滚动) ──
     lp = ctk.CTkScrollableFrame(lp_host, fg_color="transparent", width=460,
                                 scrollbar_button_color=BORDER)
-    lp.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+    lp.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
     lp.grid_columnconfigure(0, weight=1)
 
     sec1 = create_card(lp, "定价核心", 0, 0, icon="⚡")
@@ -161,13 +161,13 @@ def build(app, tab):
 
     # ── 右列: 结果面板 ──
     rp = ctk.CTkFrame(rp_host, fg_color="transparent")
-    rp.grid(row=0, column=0, sticky="nsew", padx=(5, 0))
+    rp.grid(row=0, column=0, sticky="nsew", padx=(6, 0))
     rp.grid_columnconfigure(0, weight=1)
     rp.grid_rowconfigure(2, weight=1)  # 指标仪表盘铺满右侧剩余空间
 
     # 英雄结果卡
-    rc = ctk.CTkFrame(rp, fg_color=BG_CARD, corner_radius=16)
-    rc.grid(row=0, column=0, sticky="ew", pady=(6, 12))
+    rc = ctk.CTkFrame(rp, fg_color=BG_CARD, corner_radius=12)
+    rc.grid(row=0, column=0, sticky="ew", pady=(0, 8))
     rc.grid_columnconfigure(0, weight=1)
     rc.grid_columnconfigure(1, weight=1)
 
@@ -241,13 +241,13 @@ def build(app, tab):
 
     # 指标仪表盘: 8 个 tile 铺满剩余空间, 每项补一句解释避免空白只放数字。
     dc = ctk.CTkFrame(rp, fg_color="transparent")
-    dc.grid(row=2, column=0, sticky="nsew", pady=(0, 6))
+    dc.grid(row=2, column=0, sticky="nsew", pady=(0, 0))
     dc.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="dec")
     dc.grid_rowconfigure((0, 1), weight=1, uniform="r")
 
     def _metric(parent, row, col, label, var, desc, hl=False):
-        t = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=16)
-        t.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
+        t = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
+        t.grid(row=row, column=col, sticky="nsew", padx=4, pady=4)
         t.grid_columnconfigure(0, weight=1)
         t.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(t, text=label, text_color=TEXT_DIM,
