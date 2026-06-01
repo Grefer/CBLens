@@ -774,6 +774,90 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
     assert "_snapshot_path" not in archive_payload["result"]
 
 
+def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp_path):
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class Var:
+        def __init__(self, value=None):
+            self.value = value
+
+        def set(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class Button:
+        def __init__(self):
+            self.state = None
+
+        def configure(self, **kwargs):
+            self.state = kwargs.get("state", self.state)
+
+    class Label:
+        def __init__(self):
+            self.text_color = None
+
+        def configure(self, **kwargs):
+            self.text_color = kwargs.get("text_color", self.text_color)
+
+    class Tree:
+        def selection(self):
+            return ("0",)
+
+    class DummyApp(BacktestMixin):
+        def __init__(self, archive_path, latest_path):
+            result = {
+                "_snapshot_id": "snap-current",
+                "_snapshot_path": str(archive_path),
+                "summary": {"final_equity": 1.2},
+            }
+            self._last_strategy_bt_result = result
+            self._strategy_compare_results = [{
+                "snapshot_id": "snap-current",
+                "result": result,
+                "snapshot_path": str(archive_path),
+            }]
+            self._strategy_compare_tree = Tree()
+            self.v_st_status = Var()
+            self.strategy_bt_progress = Var(1.0)
+            self.btn_strategy_bt_csv = Button()
+            self._strategy_stat_vars = {"final_equity": Var("1.2000")}
+            self._strategy_stat_labels = {"final_equity": Label()}
+            self.strategy_bt_compare_frame = object()
+            self.rendered_compare = 0
+            self.cleared_panels = 0
+            self._latest_path = latest_path
+
+        def _strategy_snapshot_path(self):
+            return self._latest_path
+
+        def _render_strategy_comparison(self):
+            self.rendered_compare += 1
+
+        def _clear_strategy_panel(self, frame):
+            self.cleared_panels += 1
+
+    archive_path = tmp_path / "strategy_backtest_snapshots" / "strategy_backtest_current.json"
+    archive_path.parent.mkdir()
+    archive_path.write_text('{"snapshot_id":"snap-current","result":{"summary":{}}}', encoding="utf-8")
+    latest_path = tmp_path / "strategy_backtest_snapshot.json"
+    latest_path.write_text('{"snapshot_id":"snap-current","result":{"summary":{}}}', encoding="utf-8")
+
+    app = DummyApp(archive_path, latest_path)
+    app._delete_selected_comparison()
+
+    assert app._strategy_compare_results == []
+    assert app._last_strategy_bt_result is None
+    assert app.strategy_bt_progress.get() == 0
+    assert app.btn_strategy_bt_csv.state == "disabled"
+    assert app._strategy_stat_vars["final_equity"].get() == "—"
+    assert "当前回测结果" in app.v_st_status.get()
+    assert app.rendered_compare == 1
+    assert not archive_path.exists()
+    assert not latest_path.exists()
+
+
 def test_strategy_result_tab_change_refreshes_selected_panel():
     from convertible_bond.gui.controllers.backtest import BacktestMixin
 

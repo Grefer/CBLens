@@ -1044,6 +1044,59 @@ class BacktestMixin:
         if hasattr(self, "update_idletasks"):
             self.update_idletasks()
 
+    def _clear_active_strategy_backtest_result(self, *, status: str | None = None):
+        """清空当前活跃策略回测结果, 防止删除快照后其他页继续显示旧数据."""
+        self._last_strategy_bt_result = None
+        self._mark_strategy_tabs_dirty()
+        self._reset_strategy_stats()
+        if hasattr(self, "strategy_bt_progress"):
+            self.strategy_bt_progress.set(0)
+        btn_csv = getattr(self, "btn_strategy_bt_csv", None)
+        if btn_csv is not None:
+            try:
+                btn_csv.configure(state="disabled")
+            except Exception:
+                pass
+        for fig_attr in ("_strategy_bt_waterfall_fig", "_strategy_bt_heatmap_fig",
+                         "_strategy_bt_rolling_fig", "_strategy_bt_dist_fig",
+                         "_strategy_bt_compare_fig"):
+            fig = getattr(self, fig_attr, None)
+            if fig is not None:
+                fig.clf()
+                plt.close(fig)
+                setattr(self, fig_attr, None)
+        for frame_attr in (
+            "strategy_bt_insight_frame",
+            "strategy_bt_chart_frame",
+            "strategy_bt_selection_frame",
+            "strategy_bt_table_frame",
+            "strategy_bt_attribution_frame",
+            "strategy_bt_risk_frame",
+            "strategy_bt_data_frame",
+        ):
+            frame = getattr(self, frame_attr, None)
+            if frame is not None:
+                self._clear_strategy_panel(frame)
+        compare_frame = getattr(self, "strategy_bt_compare_frame", None)
+        if compare_frame is not None:
+            self._render_strategy_comparison()
+        if status and hasattr(self, "v_st_status"):
+            self.v_st_status.set(status)
+
+    def _reset_strategy_stats(self):
+        stats = getattr(self, "_strategy_stat_vars", None) or {}
+        for var in stats.values():
+            try:
+                var.set("—")
+            except Exception:
+                pass
+        labels = getattr(self, "_strategy_stat_labels", None) or {}
+        for label in labels.values():
+            try:
+                label.configure(text_color=get_color(TEXT))
+            except Exception:
+                pass
+
     def _update_strategy_result_summary(self, result, *, reset_figures=False):
         """只更新指标卡、状态栏、CSV 按钮 (不渲染任何子页面板)."""
         if reset_figures:
@@ -2301,19 +2354,10 @@ class BacktestMixin:
             return
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         for record in records:
-            snap_path = record.get("snapshot_path")
-            if snap_path:
-                from pathlib import Path
-                p = Path(snap_path)
-                if p.exists():
-                    try:
-                        p.unlink()
-                    except Exception:
-                        pass
+            self._delete_strategy_snapshot_for_record(record)
+        self._delete_strategy_snapshot_path(self._strategy_snapshot_path())
         self._strategy_compare_results = []
-        self._mark_strategy_tabs_dirty("对比")
-        self._render_current_strategy_tab(force=True)
-        self.v_st_status.set("已清空策略对比")
+        self._clear_active_strategy_backtest_result(status="已清空策略对比和当前回测结果")
 
     def _render_strategy_comparison(self):
         frame = getattr(self, "strategy_bt_compare_frame", None)
@@ -2427,20 +2471,64 @@ class BacktestMixin:
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         if 0 <= idx < len(records):
             record = records.pop(idx)
-            # 同时删除磁盘快照文件
-            snap_path = record.get("snapshot_path")
-            if snap_path:
-                from pathlib import Path
-                p = Path(snap_path)
-                if p.exists():
-                    try:
-                        p.unlink()
-                    except Exception:
-                        pass
+            deleted_current = self._strategy_record_matches_current_result(record)
+            # 同时删除磁盘快照文件和可能指向同一结果的 latest 文件。
+            self._delete_strategy_snapshot_for_record(record)
+            self._delete_latest_strategy_snapshot_if_matches(record.get("snapshot_id"))
             self._strategy_compare_results = records
-            self._mark_strategy_tabs_dirty("对比")
-            self._render_current_strategy_tab(force=True)
-            self.v_st_status.set(f"已删除 · 剩余 {len(records)} 条对比记录")
+            if deleted_current or not records:
+                self._clear_active_strategy_backtest_result(
+                    status=f"已删除当前回测结果 · 剩余 {len(records)} 条对比记录")
+            else:
+                self._mark_strategy_tabs_dirty("对比")
+                self._render_strategy_comparison()
+                self.v_st_status.set(f"已删除 · 剩余 {len(records)} 条对比记录")
+
+    def _strategy_record_matches_current_result(self, record) -> bool:
+        current = getattr(self, "_last_strategy_bt_result", None)
+        if not isinstance(current, dict):
+            return False
+        current_id = current.get("_snapshot_id")
+        record_id = record.get("snapshot_id")
+        if current_id and record_id:
+            return str(current_id) == str(record_id)
+        try:
+            return self._strategy_snapshot_dedupe_key({}, current) == self._strategy_snapshot_dedupe_key(
+                {}, record.get("result") or {})
+        except Exception:
+            return (record.get("result") is current)
+
+    def _delete_strategy_snapshot_for_record(self, record) -> None:
+        self._delete_strategy_snapshot_path(record.get("snapshot_path"))
+
+    @staticmethod
+    def _delete_strategy_snapshot_path(path) -> None:
+        if not path:
+            return
+        from pathlib import Path
+        p = Path(path)
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+    def _delete_latest_strategy_snapshot_if_matches(self, snapshot_id) -> None:
+        if not snapshot_id:
+            return
+        latest = self._strategy_snapshot_path()
+        if not latest.exists():
+            return
+        try:
+            import json as _json
+            with open(latest, "r", encoding="utf-8") as f:
+                payload = _json.load(f, object_hook=_strategy_snapshot_object_hook)
+            result = payload.get("result") or {}
+            latest_id = self._strategy_snapshot_dedupe_key(payload, result)
+        except Exception:
+            return
+        if str(latest_id) == str(snapshot_id):
+            self._delete_strategy_snapshot_path(latest)
 
     def _load_comparison_record(self):
         """双击: 把选中的对比记录加载为当前活跃结果."""
