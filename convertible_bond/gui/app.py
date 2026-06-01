@@ -267,7 +267,7 @@ class CBPricerApp(
         self.v_st_freq = ctk.StringVar(value="月")
         self.v_st_top_n = ctk.StringVar(value="10")
         self.v_st_template = ctk.StringVar(value="自定义")
-        self.v_st_view = ctk.StringVar(value="低估候选")
+        self.v_st_view = ctk.StringVar(value="综合机会")
         self.v_st_pool_mode = ctk.StringVar(value="本地全市场")
         self.v_st_history_mode = ctk.StringVar(value="标准")
         self.v_st_min_price = ctk.StringVar(value="")

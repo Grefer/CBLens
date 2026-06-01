@@ -119,7 +119,7 @@ STRATEGY_VIEW_POLICY = {
 # 策略方案基线: 选择方案时先重置这些"选债逻辑"字段, 避免上个方案残留;
 # 数据源 / 区间 / 代码池属环境配置, 不在策略方案范围内。
 _STRATEGY_TEMPLATE_BASE = {
-    "v_st_freq": "月", "v_st_top_n": "10", "v_st_view": "低估候选",
+    "v_st_freq": "月", "v_st_top_n": "10", "v_st_view": "综合机会",
     "v_st_min_price": "", "v_st_max_price": "",
     "v_st_min_premium": "", "v_st_max_premium": "",
     "v_st_min_deviation": "", "v_st_max_deviation": "",
@@ -766,6 +766,8 @@ class BacktestMixin:
             history_store=None,
             patch_store=TermsPatchStore(project_terms_patches_path()),
             event_store=CBEventStore(project_events_path()),
+            strip_fallback_status=False,
+            merge_admission_status=True,
         )
 
     @staticmethod
@@ -1211,7 +1213,7 @@ class BacktestMixin:
             ("主要贡献", (
                 f"{top_name} {self._fmt_strategy_pct(top_contrib.get('contribution'), sign=True)}"
             )),
-            ("可信度", f"{quality} · 当前回退 {self._fmt_strategy_pct(fallback_ratio)}"),
+            ("数据质量", f"{quality} · 条款回退占比 {self._fmt_strategy_pct(fallback_ratio)}"),
         ]
         for col, (title, value) in enumerate(items):
             cell = ctk.CTkFrame(row, fg_color=BG_INPUT, corner_radius=8)
@@ -1507,7 +1509,7 @@ class BacktestMixin:
         self.strategy_bt_table_frame.grid_rowconfigure(2, weight=0)
         self.strategy_bt_table_frame.grid_rowconfigure(3, weight=0)
 
-        self._strategy_section_title(self.strategy_bt_table_frame, "调仓流水", 0, 0)
+        self._strategy_section_title(self.strategy_bt_table_frame, "换仓记录", 0, 0)
         summary_rows = []
         name_map: dict[str, str] = {}
         for period in all_periods:
@@ -1554,7 +1556,7 @@ class BacktestMixin:
             self.strategy_bt_table_frame, 1, 0,
             ["period", "return", "excess", "selected", "buy", "sell", "hold",
              "turnover", "cash", "buy_names", "sell_names"],
-            ["区间", "收益(%)", "超额(%)", "选中", "买入", "卖出", "续持",
+            ["区间", "收益(%)", "超额(%)", "持有", "新买", "卖出", "不动",
              "换手", "现金", "买入标的", "卖出标的"],
             [170, 78, 78, 52, 48, 48, 48, 68, 68, 180, 180],
             summary_rows,
@@ -1596,7 +1598,7 @@ class BacktestMixin:
                     pos.get("reason", ""),
                 ])
 
-        self._strategy_section_title(self.strategy_bt_table_frame, "持仓 / 跳过明细", 2, 0)
+        self._strategy_section_title(self.strategy_bt_table_frame, "买卖明细", 2, 0)
         tree = self._render_strategy_small_tree(
             self.strategy_bt_table_frame, 3, 0,
             ["period", "status", "rank", "code", "name", "contrib", "ret",
@@ -1627,10 +1629,10 @@ class BacktestMixin:
         metrics.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 4))
         for i in range(4):
             metrics.grid_columnconfigure(i, weight=1)
-        self._strategy_metric_tile(metrics, 0, "成本拖累", self._fmt_strategy_pct(attribution.get("cost_drag"), sign=True))
+        self._strategy_metric_tile(metrics, 0, "交易成本", self._fmt_strategy_pct(attribution.get("cost_drag"), sign=True))
         self._strategy_metric_tile(metrics, 1, "平均现金", self._fmt_strategy_pct(summary.get("avg_cash_weight")))
-        self._strategy_metric_tile(metrics, 2, "跳过仓位", str(attribution.get("skipped_positions") or 0))
-        self._strategy_metric_tile(metrics, 3, "累计成本", self._fmt_strategy_pct(summary.get("total_cost")))
+        self._strategy_metric_tile(metrics, 2, "未成交笔数", str(attribution.get("skipped_positions") or 0))
+        self._strategy_metric_tile(metrics, 3, "总交易费", self._fmt_strategy_pct(summary.get("total_cost")))
 
         self._strategy_section_title(frame, "贡献最大", 1, 0)
         self._strategy_section_title(frame, "拖累最大", 1, 1)
@@ -1668,8 +1670,8 @@ class BacktestMixin:
         )
 
         # 贡献瀑布图 + 月度收益热力图
-        self._strategy_section_title(frame, "年度收益 / 贡献瀑布", 3, 0)
-        self._strategy_section_title(frame, "月度收益热力图", 3, 1)
+        self._strategy_section_title(frame, "年度收益 / 个券贡献", 3, 0)
+        self._strategy_section_title(frame, "月度收益分布", 3, 1)
         self._render_attribution_charts(
             frame, 4,
             top_contribs, top_detractors,
@@ -1860,14 +1862,14 @@ class BacktestMixin:
         self._strategy_metric_tile(metrics, 2, "年化波动", self._fmt_strategy_pct(summary.get("annualized_volatility")))
         self._strategy_metric_tile(metrics, 3, "最好单期", self._fmt_strategy_pct(best, sign=True))
         self._strategy_metric_tile(metrics, 4, "最差单期", self._fmt_strategy_pct(worst, sign=True))
-        self._strategy_metric_tile(metrics, 5, "贡献集中", self._fmt_strategy_pct(concentration))
+        self._strategy_metric_tile(metrics, 5, "前三集中度", self._fmt_strategy_pct(concentration))
         self._strategy_metric_tile(metrics, 6, f"可信度: {q_text}", self._fmt_strategy_pct(fallback_ratio))
 
         # ── Row 1: 左=风险提示+回撤画像, 右=稳健性建议 ──────────────
         left = ctk.CTkFrame(frame, fg_color="transparent")
         left.grid(row=1, column=0, sticky="nsew", padx=12, pady=(6, 4))
 
-        ctk.CTkLabel(left, text="风险提示 / 回撤", text_color=TEXT,
+        ctk.CTkLabel(left, text="风险提醒", text_color=TEXT,
                      font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
         if warnings:
             critical_keywords = ("大幅", "异常", "失败", "不足", "极端")
@@ -1906,7 +1908,7 @@ class BacktestMixin:
             summary=summary, win_rate=win_rate, worst=worst,
             concentration=concentration, ret_std=ret_std,
         )
-        ctk.CTkLabel(right, text="稳健性 / 建议", text_color=TEXT,
+        ctk.CTkLabel(right, text="改进建议", text_color=TEXT,
                      font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
         for note in notes:
             ctk.CTkLabel(right, text=f"• {note}", text_color=TEXT_DIM,
@@ -2037,8 +2039,8 @@ class BacktestMixin:
 
         ax1.plot(ret_dates, rolling_vol, color=orange_color, linewidth=1.5,
                  marker="o", markersize=3)
-        ax1.set_ylabel("滚动波动 (%)", color=text_dim_color, fontsize=9)
-        ax1.set_title(f"滚动 {window} 期波动率", color=text_dim_color, fontsize=9)
+        ax1.set_ylabel("波动率 (%)", color=text_dim_color, fontsize=9)
+        ax1.set_title(f"近 {window} 期波动率走势", color=text_dim_color, fontsize=9)
         ax1.tick_params(colors=text_dim_color, labelsize=7)
         ax1.grid(True, color=border_color, linestyle="--", alpha=0.3)
         for spine in ax1.spines.values():
@@ -2050,8 +2052,8 @@ class BacktestMixin:
         ax2.plot(ret_dates, rolling_sharpe, color=accent_color, linewidth=1.5,
                  marker="s", markersize=3)
         ax2.axhline(0, color=border_color, linewidth=0.8)
-        ax2.set_ylabel("滚动 Sharpe", color=text_dim_color, fontsize=9)
-        ax2.set_title(f"滚动 {window} 期 Sharpe", color=text_dim_color, fontsize=9)
+        ax2.set_ylabel("风险收益比", color=text_dim_color, fontsize=9)
+        ax2.set_title(f"近 {window} 期风险收益比 (Sharpe)", color=text_dim_color, fontsize=9)
         ax2.tick_params(colors=text_dim_color, labelsize=7)
         ax2.grid(True, color=border_color, linestyle="--", alpha=0.3)
         finite_sharpe = [v for v in rolling_sharpe if np.isfinite(v)]
@@ -2116,7 +2118,7 @@ class BacktestMixin:
         return suggestions
 
     def _render_strategy_data_panel(self, result):
-        """数据可信度 + 参数快照 + 逐期口径."""
+        """数据质量 + 回测参数 + 各期质量表."""
         frame = getattr(self, "strategy_bt_data_frame", None)
         if frame is None:
             return
@@ -2128,77 +2130,99 @@ class BacktestMixin:
         periods = result.get("periods") or []
 
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_columnconfigure(1, weight=1)
         frame.grid_rowconfigure(2, weight=1)
 
-        # 左: 可信度
+        # ── 顶部指标条 (一行 5 个 tile) ──────────────────────────
         fallback_ratio = float(data_quality.get("current_fallback_ratio") or 0.0)
         if fallback_ratio <= 0:
-            quality, color = "高", get_color(GREEN)
+            quality, q_color = "高", get_color(GREEN)
         elif fallback_ratio <= 0.2:
-            quality, color = "中", get_color(ORANGE)
+            quality, q_color = "中", get_color(ORANGE)
         else:
-            quality, color = "低", get_color(RED)
-        overview = ctk.CTkFrame(frame, fg_color="transparent")
-        overview.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
-        ctk.CTkLabel(overview, text="回测可信度", text_color=TEXT,
-                     font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
-        ctk.CTkLabel(overview, text=quality, text_color=color,
-                     font=(FONT_FAMILY, 28, "bold")).pack(anchor="w", pady=(4, 0))
+            quality, q_color = "低", get_color(RED)
+
+        sample_count = data_quality.get("sample_count") or 0
+        patch_count = data_quality.get("patch_applied_count") or 0
+        event_count = data_quality.get("event_applied_count") or 0
         source_counts = data_quality.get("source_counts") or {}
         if isinstance(source_counts, dict) and source_counts:
             source_text = " / ".join(
-                f"{k.replace('current_fallback', '当前回退').replace('snapshot', '快照').replace('patch', '修正').replace('event', '事件')} {v}"
+                f"{k.replace('current_fallback', '回退').replace('snapshot', '快照').replace('patch', '修正').replace('event', '事件')} {v}"
                 for k, v in source_counts.items()
             )
         else:
-            source_text = "全部当前回退" if fallback_ratio >= 0.99 else "—"
-        for label, value in (
-            ("条款样本", data_quality.get("sample_count") or 0),
-            ("当前回退", self._fmt_strategy_pct(fallback_ratio)),
-            ("修正应用", data_quality.get("patch_applied_count") or 0),
-            ("事件应用", data_quality.get("event_applied_count") or 0),
-            ("来源分布", source_text),
-        ):
-            ctk.CTkLabel(overview, text=f"{label}: {value}", text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 12), wraplength=460).pack(anchor="w", pady=(3, 0))
+            source_text = "全部回退" if fallback_ratio >= 0.99 else "—"
 
-        # 右: 参数快照
-        params = ctk.CTkFrame(frame, fg_color="transparent")
-        params.grid(row=0, column=1, sticky="nsew", padx=12, pady=10)
-        ctk.CTkLabel(params, text="本次参数快照", text_color=TEXT,
-                     font=(FONT_FAMILY, 14, "bold")).pack(anchor="w")
-        param_labels = {
-            "selection_view": "选债规则", "rebalance_freq": "调仓频率",
-            "top_n": "Top N", "execution_timing": "成交时点",
-            "transaction_cost": "交易成本", "compute_benchmark": "基准对标",
-        }
-        param_grid = ctk.CTkFrame(params, fg_color="transparent")
-        param_grid.pack(fill="x", pady=(4, 0))
-        param_grid.grid_columnconfigure(0, weight=0)
-        param_grid.grid_columnconfigure(1, weight=1)
-        for idx, key in enumerate(param_labels):
-            val = config.get(key)
-            if val is None:
-                val = "—"
-            ctk.CTkLabel(param_grid, text=param_labels[key], text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 11), width=80, anchor="w").grid(
-                             row=idx, column=0, sticky="w", pady=1)
-            ctk.CTkLabel(param_grid, text=str(val), text_color=TEXT,
-                         font=(FONT_MONO, 11), anchor="w").grid(
-                             row=idx, column=1, sticky="w", pady=1)
+        tiles_row = ctk.CTkFrame(frame, fg_color="transparent")
+        tiles_row.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        for c in range(5):
+            tiles_row.grid_columnconfigure(c, weight=1)
+
+        def _data_tile(col, title, value, *, color=None):
+            border_c = ACCENT if col == 0 else BORDER
+            cell = ctk.CTkFrame(tiles_row, fg_color=BG_INPUT, corner_radius=8,
+                                border_width=1, border_color=border_c)
+            cell.grid(row=0, column=col, sticky="nsew", padx=4, pady=2)
+            inner = ctk.CTkFrame(cell, fg_color="transparent")
+            inner.pack(fill="both", expand=True, padx=10, pady=6)
+            ctk.CTkLabel(inner, text=title, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 10, "bold")).pack(anchor="w")
+            ctk.CTkLabel(inner, text=str(value),
+                         text_color=color or TEXT,
+                         font=(FONT_MONO, 15, "bold")).pack(anchor="w", pady=(2, 0))
+
+        _data_tile(0, "数据质量", quality, color=q_color)
+        _data_tile(1, "条款样本", f"{sample_count:,}")
+        _data_tile(2, "条款回退", self._fmt_strategy_pct(fallback_ratio))
+        _data_tile(3, "转股价修正", f"{patch_count:,}")
+        _data_tile(4, "公告修正", f"{event_count:,}")
+
+        # ── 中部: 左=条款来源+运算, 右=回测参数 ──────────────────
+        mid = ctk.CTkFrame(frame, fg_color="transparent")
+        mid.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 4))
+        mid.grid_columnconfigure(0, weight=1)
+        mid.grid_columnconfigure(1, weight=1)
+
+        # 左: 来源 + 性能
+        left = ctk.CTkFrame(mid, fg_color=BG_INPUT, corner_radius=8)
+        left.grid(row=0, column=0, sticky="nsew", padx=4, pady=2)
+        left_inner = ctk.CTkFrame(left, fg_color="transparent")
+        left_inner.pack(fill="both", expand=True, padx=12, pady=8)
+        ctk.CTkLabel(left_inner, text=f"条款来源: {source_text}", text_color=TEXT_DIM,
+                     font=(FONT_FAMILY, 11)).pack(anchor="w")
         if performance:
-            ctk.CTkLabel(params, text="缓存 / 性能", text_color=TEXT,
-                         font=(FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(8, 0))
-            perf_labels = {
-                "pricing_snapshot_hits": "定价缓存命中",
-                "pricing_snapshot_misses": "定价缓存未命中",
-                "price_prefilter_excluded": "预筛排除",
-            }
-            for key, label in perf_labels.items():
-                if key in performance:
-                    ctk.CTkLabel(params, text=f"{label}: {performance[key]}",
-                                 text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+            perf_parts = []
+            hits = performance.get("pricing_snapshot_hits")
+            misses = performance.get("pricing_snapshot_misses")
+            if hits is not None:
+                perf_parts.append(f"定价缓存 {hits} 命中")
+            if misses is not None:
+                perf_parts.append(f"{misses} 未命中")
+            excluded = performance.get("price_prefilter_excluded")
+            if excluded is not None:
+                perf_parts.append(f"预筛排除 {excluded}")
+            if perf_parts:
+                ctk.CTkLabel(left_inner, text="运算: " + " · ".join(perf_parts),
+                             text_color=TEXT_DIM, font=(FONT_FAMILY, 11)).pack(anchor="w", pady=(3, 0))
+
+        # 右: 参数
+        right = ctk.CTkFrame(mid, fg_color=BG_INPUT, corner_radius=8)
+        right.grid(row=0, column=1, sticky="nsew", padx=4, pady=2)
+        right_inner = ctk.CTkFrame(right, fg_color="transparent")
+        right_inner.pack(fill="both", expand=True, padx=12, pady=8)
+        param_items = {
+            "selection_view": "选债规则", "rebalance_freq": "频率",
+            "top_n": "Top N", "transaction_cost": "成本",
+            "compute_benchmark": "基准",
+        }
+        parts = []
+        for key, label in param_items.items():
+            val = config.get(key)
+            if val is not None:
+                parts.append(f"{label} {val}")
+        ctk.CTkLabel(right_inner, text=" · ".join(parts) if parts else "—",
+                     text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+                     wraplength=500).pack(anchor="w")
 
         # 逐期数据口径
         period_rows = []
@@ -2217,11 +2241,11 @@ class BacktestMixin:
                 dq.get("patch_applied_count", 0),
                 dq.get("event_applied_count", 0),
             ])
-        self._strategy_section_title(frame, "逐期数据口径", 1, 0, columnspan=2)
+        self._strategy_section_title(frame, "各期数据质量", 1, 0, columnspan=2)
         self._render_strategy_small_tree(
             frame, 2, 0,
             ["date", "eligible", "candidate", "selected", "fallback", "patch", "event"],
-            ["调仓日", "可投", "候选", "选中", "当前回退", "修正", "事件"],
+            ["换仓日", "可交易", "待选", "入选", "条款回退%", "转股价修正", "公告修正"],
             [100, 70, 70, 70, 92, 70, 70],
             period_rows,
             columnspan=2,
@@ -2364,7 +2388,7 @@ class BacktestMixin:
             ["best", "label", "period", "ann", "ret", "excess", "dd", "sharpe",
              "calmar", "turnover", "cost", "fallback"],
             ["", "策略", "区间", "年化", "总收益", "超额", "回撤", "Sharpe",
-             "Calmar", "换手", "成本", "当前回退"],
+             "Calmar", "换手", "成本", "数据回退"],
             [34, 230, 190, 76, 76, 76, 76, 70, 70, 76, 76, 86],
             rows,
             xscroll=True,
