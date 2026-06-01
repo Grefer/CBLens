@@ -726,13 +726,21 @@ class BacktestMixin:
 
     def _handle_strategy_backtest_success(self, result):
         self._last_strategy_bt_result = result
+        snapshot_info = None
+        snapshot_error = None
+        try:
+            snapshot_info = self._save_strategy_backtest_snapshot()
+            if snapshot_info:
+                result["_snapshot_id"] = snapshot_info.get("snapshot_id")
+                result["_snapshot_path"] = str(snapshot_info.get("path"))
+        except Exception as exc:
+            snapshot_error = exc
         self._record_strategy_comparison_result(result)
         self._render_strategy_backtest_result(result)
-        # 自动保存快照
-        try:
-            self._save_strategy_backtest_snapshot()
-        except Exception:
-            pass
+        if snapshot_error is not None:
+            self.v_st_status.set(f"策略回测完成 · 快照保存失败: {snapshot_error}")
+        elif snapshot_info:
+            self.v_st_status.set(f"策略回测完成 · 快照已保存: {snapshot_info['path'].name}")
 
     def _build_strategy_provider(self, source):
         raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
@@ -776,43 +784,95 @@ class BacktestMixin:
 
     def _save_strategy_backtest_snapshot(self):
         """保存到 data/strategy_backtest_snapshots/ 目录, 保留最近 N 份."""
-        import json as _json
         from datetime import datetime as _dt
         result = getattr(self, "_last_strategy_bt_result", None)
         if not result:
-            return
-        payload = {
-            "schema_version": 1,
-            "saved_at": _dt.now(),
-            "result": result,
+            return None
+        snap_dir = self._strategy_snapshots_dir()
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        saved_at = _dt.now()
+        payload = self._build_strategy_snapshot_payload(result, saved_at=saved_at)
+        encoded = _strategy_snapshot_jsonable(payload)
+        config = payload.get("meta", {}).get("config") or {}
+        freq = config.get("rebalance_freq", "M")
+        top_n = config.get("top_n", "?")
+        ts = saved_at.strftime("%Y%m%d-%H%M%S")
+        start = payload.get("meta", {}).get("start_date", "")
+        end = payload.get("meta", {}).get("end_date", "")
+        snapshot_id = str(payload.get("snapshot_id") or "")[:12]
+        fname = f"strategy_backtest_{start}_{end}_{freq}_top{top_n}_{ts}_{snapshot_id}.json"
+        path = snap_dir / fname
+        self._write_strategy_snapshot_json(path, encoded)
+        latest = self._strategy_snapshot_path()
+        self._write_strategy_snapshot_json(latest, encoded)
+        self._prune_old_snapshots()
+        return {"path": path, "latest_path": latest, "snapshot_id": payload.get("snapshot_id")}
+
+    @staticmethod
+    def _write_strategy_snapshot_json(path, encoded_payload):
+        import json as _json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(encoded_payload, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+
+    @classmethod
+    def _build_strategy_snapshot_payload(cls, result, *, saved_at):
+        clean_result = cls._strategy_snapshot_result_for_save(result)
+        encoded_result = _strategy_snapshot_jsonable(clean_result)
+        snapshot_id = cls._strategy_snapshot_id(encoded_result)
+        config = clean_result.get("config") or {}
+        summary = clean_result.get("summary") or {}
+        meta = {
+            "snapshot_id": snapshot_id,
+            "start_date": clean_result.get("start_date"),
+            "end_date": clean_result.get("end_date"),
+            "config": {
+                "rebalance_freq": config.get("rebalance_freq"),
+                "top_n": config.get("top_n"),
+                "selection_view": config.get("selection_view"),
+            },
+            "summary": {
+                "final_equity": summary.get("final_equity"),
+                "total_return": summary.get("total_return"),
+                "max_drawdown": summary.get("max_drawdown"),
+                "sharpe": summary.get("sharpe"),
+                "calmar": summary.get("calmar"),
+            },
+            "period_count": len(clean_result.get("periods") or []),
+            "equity_curve_points": len(clean_result.get("equity_curve") or []),
         }
-        try:
-            snap_dir = self._strategy_snapshots_dir()
-            snap_dir.mkdir(parents=True, exist_ok=True)
-            config = result.get("config") or {}
-            freq = config.get("rebalance_freq", "M")
-            top_n = config.get("top_n", "?")
-            ts = _dt.now().strftime("%Y%m%d-%H%M%S")
-            start = result.get("start_date", "")
-            end = result.get("end_date", "")
-            fname = f"strategy_backtest_{start}_{end}_{freq}_top{top_n}_{ts}.json"
-            path = snap_dir / fname
-            encoded = _strategy_snapshot_jsonable(payload)
-            tmp = path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                _json.dump(encoded, f, ensure_ascii=False, indent=2)
-            tmp.rename(path)
-            # 也更新 latest 单文件 (兼容旧逻辑)
-            latest = self._strategy_snapshot_path()
-            try:
-                import shutil
-                shutil.copy2(path, latest)
-            except Exception:
-                pass
-            # 清理超出上限的旧快照
-            self._prune_old_snapshots()
-        except Exception as exc:
-            print(f"[策略快照] 保存失败: {exc}")
+        return {
+            "schema_version": 2,
+            "snapshot_id": snapshot_id,
+            "saved_at": saved_at,
+            "meta": meta,
+            "result": clean_result,
+        }
+
+    @staticmethod
+    def _strategy_snapshot_result_for_save(result):
+        if not isinstance(result, dict):
+            return result
+        cleaned = {}
+        for key, value in result.items():
+            if str(key).startswith("_"):
+                continue
+            cleaned[key] = value
+        return cleaned
+
+    @staticmethod
+    def _strategy_snapshot_id(encoded_result) -> str:
+        import hashlib
+        import json as _json
+        raw = _json.dumps(
+            encoded_result,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     def _prune_old_snapshots(self):
         snap_dir = self._strategy_snapshots_dir()
@@ -847,6 +907,7 @@ class BacktestMixin:
         loaded_count = 0
         latest_result = None
         latest_saved_at = None
+        seen_snapshot_keys: set[str] = set()
         for path in files:
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -854,8 +915,13 @@ class BacktestMixin:
                 result = payload.get("result")
                 if not result:
                     continue
+                dedupe_key = self._strategy_snapshot_dedupe_key(payload, result)
+                if dedupe_key in seen_snapshot_keys:
+                    continue
+                seen_snapshot_keys.add(dedupe_key)
                 self._patch_snapshot_drawdown(result)
                 # 记录快照文件路径 (用于删除)
+                result["_snapshot_id"] = dedupe_key
                 result["_snapshot_path"] = str(path)
                 self._record_strategy_comparison_result(result)
                 latest_result = result
@@ -874,6 +940,17 @@ class BacktestMixin:
                     f"已加载 {loaded_count} 份快照 (最新 {latest_saved_at or '?'})")
         elif not silent:
             self.v_st_status.set("快照文件存在但无有效数据")
+
+    @classmethod
+    def _strategy_snapshot_dedupe_key(cls, payload, result) -> str:
+        snapshot_id = payload.get("snapshot_id")
+        if not snapshot_id:
+            meta = payload.get("meta") or {}
+            snapshot_id = meta.get("snapshot_id")
+        if snapshot_id:
+            return str(snapshot_id)
+        clean_result = cls._strategy_snapshot_result_for_save(result)
+        return cls._strategy_snapshot_id(_strategy_snapshot_jsonable(clean_result))
 
     @staticmethod
     def _patch_snapshot_drawdown(result):
@@ -2175,9 +2252,19 @@ class BacktestMixin:
             summary.get("final_equity"),
             summary.get("max_drawdown"),
         )
-        records = [row for row in records if row.get("key") != key]
+        snapshot_id = result.get("_snapshot_id")
+        if not snapshot_id:
+            try:
+                snapshot_id = self._strategy_snapshot_dedupe_key({}, result)
+            except Exception:
+                snapshot_id = None
+        records = [
+            row for row in records
+            if row.get("key") != key and (not snapshot_id or row.get("snapshot_id") != snapshot_id)
+        ]
         records.append({
             "key": key,
+            "snapshot_id": snapshot_id,
             "label": label,
             "result": result,
             "snapshot_path": result.get("_snapshot_path"),

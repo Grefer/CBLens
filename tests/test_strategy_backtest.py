@@ -678,6 +678,102 @@ def test_strategy_snapshot_loader_includes_newer_legacy_file(tmp_path):
     assert app.dirty is True
 
 
+def test_strategy_snapshot_loader_dedupes_latest_copy(tmp_path):
+    from convertible_bond.gui.controllers.backtest import (
+        BacktestMixin,
+        _strategy_snapshot_jsonable,
+    )
+
+    snap_dir = tmp_path / "strategy_backtest_snapshots"
+    snap_dir.mkdir()
+    archived_snapshot = snap_dir / "strategy_backtest_2025-05-30_2026-05-30_M_top10_copy.json"
+    legacy_snapshot = tmp_path / "strategy_backtest_snapshot.json"
+    payload = {
+        "schema_version": 1,
+        "saved_at": date(2026, 6, 1),
+        "result": {
+            "start_date": date(2025, 5, 30),
+            "end_date": date(2026, 5, 30),
+            "summary": {"final_equity": 1.35},
+        },
+    }
+    text = json.dumps(_strategy_snapshot_jsonable(payload), ensure_ascii=False)
+    archived_snapshot.write_text(text, encoding="utf-8")
+    legacy_snapshot.write_text(text, encoding="utf-8")
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self.records = []
+            self.dirty = False
+
+        def _strategy_snapshots_dir(self):
+            return snap_dir
+
+        def _strategy_snapshot_path(self):
+            return legacy_snapshot
+
+        def _record_strategy_comparison_result(self, result):
+            self.records.append(result)
+
+        def _mark_strategy_tabs_dirty(self):
+            self.dirty = True
+
+    app = DummyApp()
+    app._load_strategy_backtest_snapshot(silent=True, render=False)
+
+    assert len(app.records) == 1
+    assert app.records[0]["_snapshot_path"] == str(archived_snapshot)
+
+
+def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_path):
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self._last_strategy_bt_result = {
+                "start_date": date(2025, 5, 30),
+                "end_date": date(2026, 5, 30),
+                "config": {
+                    "selection_view": "综合机会",
+                    "rebalance_freq": "M",
+                    "top_n": 10,
+                },
+                "summary": {
+                    "final_equity": 1.35,
+                    "total_return": 0.35,
+                    "max_drawdown": 0.07,
+                    "sharpe": 1.8,
+                    "calmar": 5.1,
+                },
+                "periods": [{"start_date": date(2025, 5, 30)}],
+                "equity_curve": [{"date": date(2025, 5, 30), "equity": 1.0}],
+                "_snapshot_path": "/tmp/old.json",
+            }
+
+        def _strategy_snapshots_dir(self):
+            return tmp_path / "strategy_backtest_snapshots"
+
+        def _strategy_snapshot_path(self):
+            return tmp_path / "strategy_backtest_snapshot.json"
+
+    app = DummyApp()
+    info = app._save_strategy_backtest_snapshot()
+
+    assert info is not None
+    archive_path = info["path"]
+    latest_path = info["latest_path"]
+    assert archive_path.exists()
+    assert latest_path.exists()
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    latest_payload = json.loads(latest_path.read_text(encoding="utf-8"))
+    assert archive_payload == latest_payload
+    assert archive_payload["schema_version"] == 2
+    assert archive_payload["snapshot_id"] == info["snapshot_id"]
+    assert archive_payload["meta"]["config"]["selection_view"] == "综合机会"
+    assert archive_payload["meta"]["period_count"] == 1
+    assert "_snapshot_path" not in archive_payload["result"]
+
+
 def test_strategy_result_tab_change_refreshes_selected_panel():
     from convertible_bond.gui.controllers.backtest import BacktestMixin
 
