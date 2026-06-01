@@ -772,61 +772,107 @@ class BacktestMixin:
 
     # ── 策略回测快照 保存 / 加载 ─────────────────────────────
 
+    _MAX_SNAPSHOTS = 8
+
     def _save_strategy_backtest_snapshot(self):
-        """把 _last_strategy_bt_result 序列化到 data/strategy_backtest_snapshot.json."""
+        """保存到 data/strategy_backtest_snapshots/ 目录, 保留最近 N 份."""
         import json as _json
         from datetime import datetime as _dt
         result = getattr(self, "_last_strategy_bt_result", None)
         if not result:
             return
-        path = self._strategy_snapshot_path()
         payload = {
             "schema_version": 1,
             "saved_at": _dt.now(),
             "result": result,
         }
         try:
+            snap_dir = self._strategy_snapshots_dir()
+            snap_dir.mkdir(parents=True, exist_ok=True)
+            config = result.get("config") or {}
+            freq = config.get("rebalance_freq", "M")
+            top_n = config.get("top_n", "?")
+            ts = _dt.now().strftime("%Y%m%d-%H%M%S")
+            start = result.get("start_date", "")
+            end = result.get("end_date", "")
+            fname = f"strategy_backtest_{start}_{end}_{freq}_top{top_n}_{ts}.json"
+            path = snap_dir / fname
+            encoded = _strategy_snapshot_jsonable(payload)
             tmp = path.with_suffix(".tmp")
             with open(tmp, "w", encoding="utf-8") as f:
-                _json.dump(payload, f, ensure_ascii=False, indent=2,
-                           default=_strategy_snapshot_jsonable)
+                _json.dump(encoded, f, ensure_ascii=False, indent=2)
             tmp.rename(path)
+            # 也更新 latest 单文件 (兼容旧逻辑)
+            latest = self._strategy_snapshot_path()
+            try:
+                import shutil
+                shutil.copy2(path, latest)
+            except Exception:
+                pass
+            # 清理超出上限的旧快照
+            self._prune_old_snapshots()
         except Exception as exc:
             print(f"[策略快照] 保存失败: {exc}")
 
+    def _prune_old_snapshots(self):
+        snap_dir = self._strategy_snapshots_dir()
+        if not snap_dir.exists():
+            return
+        files = sorted(snap_dir.glob("strategy_backtest_*.json"), key=lambda p: p.stat().st_mtime)
+        while len(files) > self._MAX_SNAPSHOTS:
+            oldest = files.pop(0)
+            try:
+                oldest.unlink()
+            except Exception:
+                pass
+
     def _load_strategy_backtest_snapshot(self, *, silent=False, render=True):
-        """从 data/strategy_backtest_snapshot.json 恢复上次回测结果."""
+        """从 snapshots 目录加载所有快照到对比列表, 最新一份设为当前结果."""
         import json as _json
-        path = self._strategy_snapshot_path()
-        if not path.exists():
+        snap_dir = self._strategy_snapshots_dir()
+        legacy_path = self._strategy_snapshot_path()
+        # 收集所有快照文件 (按修改时间排序)
+        files = []
+        if snap_dir.exists():
+            files = sorted(snap_dir.glob("strategy_backtest_*.json"),
+                           key=lambda p: p.stat().st_mtime)
+        if not files and legacy_path.exists():
+            files = [legacy_path]
+        if not files:
             if not silent:
                 from tkinter import messagebox
                 messagebox.showinfo("提示", "未找到策略回测快照")
             return
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                payload = _json.load(f, object_hook=_strategy_snapshot_object_hook)
-            result = payload.get("result")
-            if not result:
-                return
-            # 修复旧快照中丢失的 drawdown 日期
-            self._patch_snapshot_drawdown(result)
-            self._last_strategy_bt_result = result
-            # 加入对比列表 (避免重启后对比页为空)
-            self._record_strategy_comparison_result(result)
+        loaded_count = 0
+        latest_result = None
+        latest_saved_at = None
+        for path in files:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = _json.load(f, object_hook=_strategy_snapshot_object_hook)
+                result = payload.get("result")
+                if not result:
+                    continue
+                self._patch_snapshot_drawdown(result)
+                # 记录快照文件路径 (用于删除)
+                result["_snapshot_path"] = str(path)
+                self._record_strategy_comparison_result(result)
+                latest_result = result
+                latest_saved_at = payload.get("saved_at")
+                loaded_count += 1
+            except Exception as exc:
+                print(f"[策略快照] 加载 {path.name} 失败: {exc}")
+        if latest_result:
+            self._last_strategy_bt_result = latest_result
             if render:
-                self._render_strategy_backtest_result(result)
+                self._render_strategy_backtest_result(latest_result)
             else:
                 self._mark_strategy_tabs_dirty()
             if not silent:
-                saved_at = payload.get("saved_at", "?")
-                self.v_st_status.set(f"已加载快照 ({saved_at})")
-        except Exception as exc:
-            if not silent:
-                from tkinter import messagebox
-                messagebox.showerror("加载失败", str(exc))
-            else:
-                print(f"[策略快照] 加载失败: {exc}")
+                self.v_st_status.set(
+                    f"已加载 {loaded_count} 份快照 (最新 {latest_saved_at or '?'})")
+        elif not silent:
+            self.v_st_status.set("快照文件存在但无有效数据")
 
     @staticmethod
     def _patch_snapshot_drawdown(result):
@@ -851,6 +897,11 @@ class BacktestMixin:
     def _strategy_snapshot_path():
         from pathlib import Path
         return Path(__file__).resolve().parents[3] / "data" / "strategy_backtest_snapshot.json"
+
+    @staticmethod
+    def _strategy_snapshots_dir():
+        from pathlib import Path
+        return Path(__file__).resolve().parents[3] / "data" / "strategy_backtest_snapshots"
 
     # ── 懒渲染: 子页 tab 名 → 渲染函数映射 ──────────────────
     _STRATEGY_TAB_RENDERERS = {
@@ -2101,9 +2152,19 @@ class BacktestMixin:
     def _record_strategy_comparison_result(self, result):
         summary = result.get("summary") or {}
         config = result.get("config") or {}
+        try:
+            template = self.v_st_template.get()
+            view = self.v_st_view.get()
+            freq = self.v_st_freq.get()
+            top_n = self.v_st_top_n.get()
+        except Exception:
+            template = "—"
+            view = config.get("selection_view", "—")
+            freq = config.get("rebalance_freq", "—")
+            top_n = config.get("top_n", "—")
         label = (
-            f"{self.v_st_template.get()} · {config.get('selection_view') or self.v_st_view.get()} · "
-            f"{self.v_st_freq.get()}频 Top{config.get('top_n') or self.v_st_top_n.get()}"
+            f"{template} · {config.get('selection_view') or view} · "
+            f"{freq}频 Top{config.get('top_n') or top_n}"
         )
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         key = (
@@ -2114,12 +2175,32 @@ class BacktestMixin:
             summary.get("max_drawdown"),
         )
         records = [row for row in records if row.get("key") != key]
-        records.append({"key": key, "label": label, "result": result})
-        self._strategy_compare_results = records[-8:]
+        records.append({
+            "key": key,
+            "label": label,
+            "result": result,
+            "snapshot_path": result.get("_snapshot_path"),
+        })
+        self._strategy_compare_results = records[-self._MAX_SNAPSHOTS:]
 
     def _clear_strategy_comparison(self):
+        from tkinter import messagebox
+        if not messagebox.askyesno("确认", "清空所有对比记录并删除磁盘快照?"):
+            return
+        records = list(getattr(self, "_strategy_compare_results", []) or [])
+        for record in records:
+            snap_path = record.get("snapshot_path")
+            if snap_path:
+                from pathlib import Path
+                p = Path(snap_path)
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
         self._strategy_compare_results = []
-        self._render_strategy_comparison()
+        self._mark_strategy_tabs_dirty("对比")
+        self._render_current_strategy_tab(force=True)
         self.v_st_status.set("已清空策略对比")
 
     def _render_strategy_comparison(self):
@@ -2202,17 +2283,23 @@ class BacktestMixin:
         )
         self._strategy_compare_tree = tree
 
-        # 高亮表格最优/最差值
+        # 高亮最优行
         if tree and len(records) >= 2:
             green_c = get_color(GREEN)
-            red_c = get_color(RED)
             tree.tag_configure("best_row", foreground=green_c)
-            tree.tag_configure("worst_row", foreground=red_c)
             if best_idx is not None:
                 try:
                     tree.item(str(best_idx), tags=("best_row",))
                 except Exception:
                     pass
+
+        # 双击加载 + 右键菜单
+        if tree:
+            tree.bind("<Double-1>", lambda e: self._load_comparison_record())
+            tree.bind("<Button-2>", lambda e: self._show_comparison_context_menu(e))
+            # macOS 右键也可能是 <Button-3> 或 <Control-Button-1>
+            tree.bind("<Button-3>", lambda e: self._show_comparison_context_menu(e))
+            tree.bind("<Control-Button-1>", lambda e: self._show_comparison_context_menu(e))
 
     def _delete_selected_comparison(self):
         tree = getattr(self, "_strategy_compare_tree", None)
@@ -2227,9 +2314,64 @@ class BacktestMixin:
             return
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         if 0 <= idx < len(records):
-            records.pop(idx)
+            record = records.pop(idx)
+            # 同时删除磁盘快照文件
+            snap_path = record.get("snapshot_path")
+            if snap_path:
+                from pathlib import Path
+                p = Path(snap_path)
+                if p.exists():
+                    try:
+                        p.unlink()
+                    except Exception:
+                        pass
             self._strategy_compare_results = records
-            self._render_strategy_comparison()
+            self._mark_strategy_tabs_dirty("对比")
+            self._render_current_strategy_tab(force=True)
+            self.v_st_status.set(f"已删除 · 剩余 {len(records)} 条对比记录")
+
+    def _load_comparison_record(self):
+        """双击: 把选中的对比记录加载为当前活跃结果."""
+        tree = getattr(self, "_strategy_compare_tree", None)
+        if tree is None:
+            return
+        sel = tree.selection()
+        if not sel:
+            return
+        try:
+            idx = int(sel[0])
+        except (ValueError, IndexError):
+            return
+        records = list(getattr(self, "_strategy_compare_results", []) or [])
+        if 0 <= idx < len(records):
+            result = records[idx].get("result")
+            if result:
+                self._last_strategy_bt_result = result
+                self._mark_strategy_tabs_dirty()
+                self._update_strategy_result_summary(result)
+                label = records[idx].get("label", f"策略 {idx + 1}")
+                self.v_st_status.set(f"已加载: {label}")
+
+    def _show_comparison_context_menu(self, event):
+        """右键: 显示加载/删除上下文菜单."""
+        tree = getattr(self, "_strategy_compare_tree", None)
+        if tree is None:
+            return
+        # 选中点击的行
+        row_id = tree.identify_row(event.y)
+        if row_id:
+            tree.selection_set(row_id)
+        else:
+            return
+        import tkinter as tk
+        menu = tk.Menu(tree, tearoff=0)
+        menu.add_command(label="加载为当前结果", command=self._load_comparison_record)
+        menu.add_separator()
+        menu.add_command(label="删除此记录", command=self._delete_selected_comparison)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def _render_comparison_overlay_chart(self, frame, grid_row, records):
         """多策略净值叠加折线图."""

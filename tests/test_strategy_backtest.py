@@ -702,8 +702,9 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
             return self.value
 
     class DummyApp(BacktestMixin):
-        def __init__(self, path):
+        def __init__(self, path, snap_dir):
             self._path = path
+            self._snap_dir = snap_dir
             self.v_st_template = Var("自定义")
             self.v_st_view = Var("低估候选")
             self.v_st_freq = Var("月")
@@ -712,6 +713,9 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
 
         def _strategy_snapshot_path(self):
             return self._path
+
+        def _strategy_snapshots_dir(self):
+            return self._snap_dir
 
     path = tmp_path / "strategy_backtest_snapshot.json"
     path.write_text(
@@ -729,7 +733,7 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
         encoding="utf-8",
     )
 
-    app = DummyApp(path)
+    app = DummyApp(path, tmp_path / "nonexistent_snapshots")
     app._load_strategy_backtest_snapshot(silent=True, render=False)
 
     assert app._last_strategy_bt_result["summary"]["final_equity"] == 1.0
