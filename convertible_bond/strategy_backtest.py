@@ -1091,7 +1091,12 @@ def _dynamic_pool_for_date(
     try:
         tradable = provider.list_tradable_cbs(on_date)
         if tradable:
-            tradable_set = set(str(code) for code in tradable)
+            # list_tradable_cbs 返回 [(wind_code, sec_name), ...]; 仅取代码做交集。
+            # 兼容个别 provider 直接返回代码字符串的情况。
+            tradable_set = {
+                str(entry[0] if isinstance(entry, (tuple, list)) else entry)
+                for entry in tradable
+            }
             return [code for code in base_codes if code in tradable_set]
     except (NotImplementedError, Exception):
         pass

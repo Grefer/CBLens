@@ -542,6 +542,11 @@ class BacktestMixin:
         freq_map = {"周": "W", "月": "M", "季": "Q"}
         view = self.v_st_view.get()
         policy = STRATEGY_VIEW_POLICY.get(view, _DEFAULT_VIEW_POLICY)
+        # 本地全市场池含大量退市/已到期/定向债, 静态全量送 Wind 会大面积取数失败。
+        # 改用动态时点池: 每期先按 list_tradable_cbs(当期) 取存活券再筛选定价,
+        # 无幸存者偏差且从源头避开死债的 Wind 请求。自选/当前筛选池保持静态。
+        gui_pool_mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
+        engine_pool_mode = "dynamic" if gui_pool_mode == "本地全市场" else "static"
         try:
             config = ScoreStrategyConfig(
                 top_n=max(1, int(float(self.v_st_top_n.get()))),
@@ -563,6 +568,7 @@ class BacktestMixin:
                 execution_timing="next_close",
                 transaction_cost=max(0.0, self._optional_float(self.v_st_cost) or 0.0) / 10000.0,
                 compute_benchmark=bool(self.v_st_benchmark.get()),
+                pool_mode=engine_pool_mode,
             )
             admission_config = AdmissionFilterConfig(
                 delist_window_days=max(0, int(float(self.v_st_delist_window.get() or 0))),
