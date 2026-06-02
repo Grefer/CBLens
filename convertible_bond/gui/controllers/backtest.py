@@ -258,7 +258,16 @@ class BacktestMixin:
 
         cache = getattr(self, "terms_cache", None)
         codes = list(cache.list_bonds()) if cache is not None else []
-        return self._dedupe_strategy_codes(codes), "本地条款库"
+        standard_codes = [
+            code for code in codes
+            if BOND_CODE_RE.match(str(code or "").strip().upper())
+            and str(code or "").strip().upper().endswith((".SH", ".SZ"))
+        ]
+        label = "本地条款库"
+        skipped = len(codes) - len(standard_codes)
+        if skipped > 0:
+            label += f" (已排除非沪深代码 {skipped} 个)"
+        return self._dedupe_strategy_codes(standard_codes), label
 
     @staticmethod
     def _dedupe_strategy_codes(codes) -> list[str]:

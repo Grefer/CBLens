@@ -327,6 +327,12 @@ def backtest_score_strategy(
                 stage_cb, "准入筛选", done, total, idx, total_periods),
             cancel_cb=cancel_cb,
         )
+        _raise_if_source_transport_outage(
+            excluded,
+            total_count=len(period_codes),
+            period_start=period_start,
+            phase="准入筛选",
+        )
         _emit_stage_progress(stage_cb, "价格预筛", 0, len(eligible), idx, total_periods)
         pricing_codes, prefilter_excluded = _pre_filter_codes_by_price(
             provider,
@@ -360,6 +366,11 @@ def backtest_score_strategy(
             progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
                 stage_cb, "定价", done, total, idx, total_periods),
             **pricer_overrides,
+        )
+        _raise_if_pricing_transport_outage(
+            priced_rows,
+            total_count=len(pricing_codes),
+            period_start=period_start,
         )
 
         # 转债成交价缓存: 策略持仓与基准共享, 避免同一调仓期重复拉历史。
@@ -848,6 +859,70 @@ def _emit_stage_progress(
 
 def _should_emit_code_progress(done: int, total: int) -> bool:
     return done <= 1 or done == total or done % 10 == 0
+
+
+def _looks_like_transport_failure(reason: Any) -> bool:
+    text = str(reason)
+    markers = (
+        "SkyClient request failed",
+        "ErrorCode=-40521007",
+        "SendMessage returned null response",
+        "GetConnectStatus: 0",
+        "Wind 连接失败",
+        "未安装 WindPy",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _raise_if_source_transport_outage(
+    excluded: list[tuple[str, str]],
+    *,
+    total_count: int,
+    period_start: date,
+    phase: str,
+) -> None:
+    if total_count <= 0:
+        return
+    failures = [
+        (code, reason)
+        for code, reason in excluded
+        if str(reason).startswith("条款获取失败") and _looks_like_transport_failure(reason)
+    ]
+    if len(failures) < 20 or len(failures) / total_count < 0.20:
+        return
+    sample = ", ".join(str(code) for code, _reason in failures[:5])
+    first_reason = failures[0][1]
+    raise RuntimeError(
+        f"{phase}在 {period_start} 出现大面积 Wind 条款获取失败 "
+        f"({len(failures)}/{total_count}); 样例 {sample}; 首个错误: {first_reason}. "
+        "已中止回测, 避免生成全现金无效结果。请确认 Wind API 已登录且连接稳定后重试, "
+        "或改用标准历史口径/小代码池。"
+    )
+
+
+def _raise_if_pricing_transport_outage(
+    rows: list[dict[str, Any]],
+    *,
+    total_count: int,
+    period_start: date,
+) -> None:
+    if total_count <= 0:
+        return
+    failures = [
+        row for row in rows
+        if row.get("status") != "ok" and _looks_like_transport_failure(
+            row.get("error") or row.get("message") or row)
+    ]
+    if len(failures) < 20 or len(failures) / total_count < 0.20:
+        return
+    sample = ", ".join(str(row.get("bond_code")) for row in failures[:5])
+    first_error = failures[0].get("error") or failures[0].get("message") or failures[0]
+    raise RuntimeError(
+        f"定价阶段在 {period_start} 出现大面积 Wind 数据失败 "
+        f"({len(failures)}/{total_count}); 样例 {sample}; 首个错误: {first_error}. "
+        "已中止回测, 避免生成全现金无效结果。请确认 Wind API 已登录且连接稳定后重试, "
+        "或改用标准历史口径/小代码池。"
+    )
 
 
 def _pre_filter_codes_by_price(

@@ -116,3 +116,26 @@ def test_wss_candidate_invalid_indicator_is_cached(monkeypatch):
     assert provider._wss_first_available("113002.SH", ("bad_field", "good_field"), date(2026, 5, 25)) == 42
 
     assert fake_wind.calls == ["bad_field", "good_field", "good_field"]
+
+
+def test_get_bond_terms_error_includes_wind_error_code(monkeypatch):
+    class Result:
+        ErrorCode = -40521007
+        Data = [["WSS: SkyClient request failed"]]
+
+    class FakeWind:
+        def wss(self, code, fields, options):
+            return Result()
+
+    provider = WindDataProvider()
+    monkeypatch.setattr(provider, "_ensure", lambda: FakeWind())
+
+    try:
+        provider.get_bond_terms("113001.SH", date(2026, 5, 25))
+    except RuntimeError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+    assert "ErrorCode=-40521007" in text
+    assert "SkyClient request failed" in text

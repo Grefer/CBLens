@@ -374,6 +374,37 @@ def test_score_strategy_reports_stage_progress_before_period_finish(monkeypatch)
     assert events[0] == ("准入筛选", 0, 2, 0, 1)
 
 
+def test_score_strategy_aborts_on_wind_terms_transport_outage():
+    class FailingTermsProvider(DataProvider):
+        name = "wind-outage"
+
+        def get_bond_terms(self, bond_code, valuation_date):
+            raise RuntimeError(
+                "Wind 取 113001.SH 条款失败: ErrorCode=-40521007, "
+                "Data=[['WSS: SkyClient request failed']]"
+            )
+
+        def get_stock_close(self, stock_code, on_date):
+            raise RuntimeError("unused")
+
+        def get_stock_history(self, stock_code, start, end):
+            raise RuntimeError("unused")
+
+        def get_bond_history(self, bond_code, start, end):
+            raise RuntimeError("unused")
+
+    codes = [f"113{i:03d}.SH" for i in range(30)]
+
+    with pytest.raises(RuntimeError, match="大面积 Wind 条款获取失败"):
+        backtest_score_strategy(
+            FailingTermsProvider(),
+            codes,
+            start_date=date(2025, 1, 2),
+            end_date=date(2025, 1, 31),
+            config=ScoreStrategyConfig(top_n=1, min_confidence=None),
+        )
+
+
 def _row(code, provider, market, deviation):
     return {
         "bond_code": code,
@@ -971,6 +1002,34 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
     assert "总览" in app._strategy_dirty_tabs
     assert "数据" in app._strategy_dirty_tabs
     assert len(app._strategy_compare_results) == 1
+
+
+def test_strategy_local_full_market_filters_non_standard_codes():
+    from convertible_bond.gui.controllers.backtest import BacktestMixin
+
+    class Var:
+        def get(self):
+            return "本地全市场"
+
+    class Cache:
+        def list_bonds(self):
+            return [
+                "113001.SH",
+                "128009.SZ",
+                "Q18082207.IME",
+                "404001.NQ",
+                "KZZ836523001.XEE",
+            ]
+
+    class DummyApp(BacktestMixin):
+        def __init__(self):
+            self.v_st_pool_mode = Var()
+            self.terms_cache = Cache()
+
+    codes, label = DummyApp()._strategy_codes_from_pool()
+
+    assert codes == ["113001.SH", "128009.SZ"]
+    assert "已排除非沪深代码 3 个" in label
 
 
 def test_strategy_result_tab_failure_keeps_dirty_for_retry():

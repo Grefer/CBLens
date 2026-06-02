@@ -34,6 +34,12 @@ from ._helpers import (
 logger = logging.getLogger(__name__)
 
 
+def _wind_error_text(res) -> str:
+    code = getattr(res, "ErrorCode", -1)
+    data = getattr(res, "Data", "")
+    return f"ErrorCode={code}, Data={data}"
+
+
 def _frozen_windpy_candidate_paths() -> list[Path]:
     """Return WindPy locations inside a PyInstaller bundle, in priority order."""
     if not getattr(sys, "frozen", False):
@@ -269,13 +275,13 @@ class WindDataProvider(DataProvider):
                     res = self._call_wss(bond_code, ",".join(fields), f"tradeDate={val_str}")
                     if res.ErrorCode != 0:
                         raise RuntimeError(
-                            f"Wind 取 {bond_code} 条款失败 (重试后仍报错): {res.Data}")
+                            f"Wind 取 {bond_code} 条款失败 (重试后仍报错): {_wind_error_text(res)}")
                 else:
                     raise RuntimeError(
-                        f"Wind 取 {bond_code} 条款失败: {res.Data} "
+                        f"Wind 取 {bond_code} 条款失败: {_wind_error_text(res)} "
                         f"(单字段探测未发现具体失效字段, 可能是 tradeDate / 权限问题)")
             else:
-                raise RuntimeError(f"Wind 取 {bond_code} 条款失败: {res.Data}")
+                raise RuntimeError(f"Wind 取 {bond_code} 条款失败: {_wind_error_text(res)}")
         d = {f.lower(): v[0] for f, v in zip(res.Fields, res.Data)}
 
         def _f(key):
@@ -482,13 +488,13 @@ class WindDataProvider(DataProvider):
         val_str = on_date.strftime("%Y%m%d")
         res = self._call_wss(stock_code, "close", f"tradeDate={val_str};priceAdj=U")
         if res.ErrorCode != 0:
-            raise RuntimeError(f"Wind 取正股 {stock_code} 现价失败: {res.Data}")
+            raise RuntimeError(f"Wind 取正股 {stock_code} 现价失败: {_wind_error_text(res)}")
         return float(res.Data[0][0])
 
     def get_stock_history(self, stock_code, start, end):
         res = self._call_wsd(stock_code, "close", start.isoformat(), end.isoformat(), "priceAdj=U")
         if res.ErrorCode != 0:
-            raise RuntimeError(f"Wind 取正股 {stock_code} 历史价失败: {res.Data}")
+            raise RuntimeError(f"Wind 取正股 {stock_code} 历史价失败: {_wind_error_text(res)}")
         return [
             (to_date(t), (float(v) if v is not None else None))
             for t, v in zip(res.Times, res.Data[0])
@@ -515,7 +521,7 @@ class WindDataProvider(DataProvider):
     def get_bond_history(self, bond_code, start, end):
         res = self._call_wsd(bond_code, "close", start.isoformat(), end.isoformat())
         if res.ErrorCode != 0:
-            raise RuntimeError(f"Wind 取 {bond_code} 历史价失败: {res.Data}")
+            raise RuntimeError(f"Wind 取 {bond_code} 历史价失败: {_wind_error_text(res)}")
         return [
             (to_date(t), (float(v) if v is not None else None))
             for t, v in zip(res.Times, res.Data[0])
@@ -590,7 +596,7 @@ class WindDataProvider(DataProvider):
             f"date={d};sectorid=a101020600000000;field=wind_code,sec_name",
         )
         if res.ErrorCode != 0:
-            raise RuntimeError(f"Wind wset 拉转债成分失败: {res.Data}")
+            raise RuntimeError(f"Wind wset 拉转债成分失败: {_wind_error_text(res)}")
         try:
             fields = [f.lower() for f in res.Fields]
             i_code = fields.index("wind_code")
