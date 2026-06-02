@@ -761,13 +761,18 @@ class BacktestMixin:
         raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
         mode = normalize_strategy_history_mode(raw_mode)
         if mode == "Wind高保真":
+            # 高保真 = 条款逐日从 Wind 历史 tradeDate 拉取; 但日级状态 (停牌/强赎/
+            # 摘牌/正股ST/评级/成交额) 不再逐日 wss/wsd 拉 (每债 ~29 次 Wind 调用),
+            # 而是 strip 掉 Wind 泄漏的当前状态、改由 cb_events 按 event_date 重建。
+            # 这些状态本就是离散公告事件 (cb_events 已覆盖 18 类), 事件重建既防未来
+            # 函数又把每债 Wind 调用压到 ~2 次 (条款批量 wss + close wsd)。
             return HistoricalBondDataProvider(
                 WindDataProvider(),
                 history_store=None,
                 patch_store=TermsPatchStore(project_terms_patches_path()),
                 event_store=CBEventStore(project_events_path()),
-                strip_fallback_status=False,
-                merge_admission_status=True,
+                strip_fallback_status=True,
+                merge_admission_status=False,
             )
 
         base_provider = build_batch_provider(

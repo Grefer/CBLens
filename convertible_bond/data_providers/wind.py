@@ -12,6 +12,7 @@ import sys
 import threading
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from .base import (
     BondTerms,
@@ -412,10 +413,75 @@ class WindDataProvider(DataProvider):
         return terms
 
     def _wss_candidates(self, code, candidates, valuation_date):
-        return {
-            key: self._wss_first_available(code, fields, valuation_date)
-            for key, fields in candidates.items()
-        }
+        """把所有候选字段合并成一次多字段 wss, 再按原顺序为每个 key 取第一个非空候选.
+
+        语义与逐字段 ``_wss_first_available`` 完全一致 (每个 key 取候选列表中第一个
+        非空值), 但单只代码只发 1 次 wss (失败时降级逐字段探测), 而不是十几次。
+        """
+        all_fields: list[str] = []
+        seen: set[str] = set()
+        for fields in candidates.values():
+            for field_name in fields:
+                if field_name not in seen:
+                    seen.add(field_name)
+                    all_fields.append(field_name)
+        values = self._wss_values_multi(code, all_fields, valuation_date)
+        result: dict[str, Any] = {}
+        for key, fields in candidates.items():
+            picked = None
+            for field_name in fields:
+                value = values.get(field_name.lower())
+                if value is not None:
+                    picked = value
+                    break
+            result[key] = picked
+        return result
+
+    def _wss_values_multi(self, code, field_names, valuation_date):
+        """一次 wss 拉多个字段, 返回 {field_lower: value}; 失败时降级探测并重试一次.
+
+        已知失效字段 (``_bad_wss_fields``) 直接跳过; 批量报 'invalid indicators'
+        时用 ``_probe_invalid_bond_fields`` 找出失效字段缓存后, 用剩余字段重试。
+        空值 ('' / '--') 归一化为 None。
+        """
+        fields = [f for f in field_names if f not in self._bad_wss_fields]
+        if not fields:
+            return {}
+        val_str = valuation_date.strftime("%Y%m%d")
+        try:
+            res = self._call_wss(code, ",".join(fields), f"tradeDate={val_str}")
+        except Exception:
+            return {}
+        if getattr(res, "ErrorCode", -1) != 0:
+            data_str = str(getattr(res, "Data", "") or "").lower()
+            if "invalid indicators" not in data_str:
+                return {}
+            newly_bad = self._probe_invalid_bond_fields(code, fields, val_str)
+            if not newly_bad:
+                return {}
+            self._bad_wss_fields.update(newly_bad)
+            logger.debug("Wind 候选状态字段无效, 后续跳过: %s", sorted(newly_bad))
+            fields = [f for f in fields if f not in newly_bad]
+            if not fields:
+                return {}
+            try:
+                res = self._call_wss(code, ",".join(fields), f"tradeDate={val_str}")
+            except Exception:
+                return {}
+            if getattr(res, "ErrorCode", -1) != 0:
+                return {}
+        out: dict[str, Any] = {}
+        res_fields = [str(f).lower() for f in (getattr(res, "Fields", None) or [])]
+        data = getattr(res, "Data", None) or []
+        for i, fname in enumerate(res_fields):
+            try:
+                value = data[i][0]
+            except Exception:
+                value = None
+            if value in ("", "--"):
+                value = None
+            out[fname] = value
+        return out
 
     def _wss_first_available(self, code, fields, valuation_date):
         for field_name in fields:
