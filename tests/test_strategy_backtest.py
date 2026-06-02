@@ -395,7 +395,8 @@ def test_score_strategy_aborts_on_wind_terms_transport_outage():
 
     codes = [f"113{i:03d}.SH" for i in range(30)]
 
-    with pytest.raises(RuntimeError, match="大面积 Wind 条款获取失败"):
+    # 30 只全部失败 (100%) = 系统性故障, 仍应中止。
+    with pytest.raises(RuntimeError, match="系统性 Wind 条款获取失败"):
         backtest_score_strategy(
             FailingTermsProvider(),
             codes,
@@ -403,6 +404,32 @@ def test_score_strategy_aborts_on_wind_terms_transport_outage():
             end_date=date(2025, 1, 31),
             config=ScoreStrategyConfig(top_n=1, min_confidence=None),
         )
+
+
+def test_source_outage_guard_skips_partial_failure_but_aborts_systemic():
+    """部分券瞬时失败 (限流) 应跳过继续; 仅系统性故障 (近全失败) 才中止。"""
+    from convertible_bond.strategy_backtest import _raise_if_source_transport_outage
+
+    def excluded(n_fail):
+        return [
+            (f"1232{i:02d}.SZ",
+             "条款获取失败: Wind 取 x 条款失败: ErrorCode=-40521007, "
+             "Data=[['WSS: SkyClient request failed']]")
+            for i in range(n_fail)
+        ]
+
+    # 28% 失败 (用户实测场景 137/490): 多数成功 → 不中止
+    _raise_if_source_transport_outage(
+        excluded(137), total_count=490, period_start=date(2025, 6, 30), phase="准入筛选")
+
+    # 少量失败 (<20 只): 不中止
+    _raise_if_source_transport_outage(
+        excluded(5), total_count=490, period_start=date(2025, 6, 30), phase="准入筛选")
+
+    # 96% 失败 (Wind 未登录/宕机): 中止
+    with pytest.raises(RuntimeError, match="系统性 Wind 条款获取失败"):
+        _raise_if_source_transport_outage(
+            excluded(470), total_count=490, period_start=date(2025, 6, 30), phase="准入筛选")
 
 
 def _row(code, provider, market, deviation):

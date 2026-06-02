@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import math
 from collections import Counter
 from dataclasses import dataclass
@@ -20,6 +21,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# 大面积取数失败的中止阈值: 仅当失败率高到代表系统性故障 (Wind 未登录/宕机,
+# 接近全部失败) 才中止回测; 部分券瞬时失败 (限流, 已在 provider 层退避重试)
+# 视为可跳过, 用成功券继续, 避免把"72% 成功 + 28% 失败"误判为整体不可用。
+_SOURCE_OUTAGE_FAIL_RATIO = 0.6
+_MIN_OUTAGE_FAILURES = 20
 
 from .batch_pricing import (
     AdmissionFilterConfig,
@@ -888,15 +897,25 @@ def _raise_if_source_transport_outage(
         for code, reason in excluded
         if str(reason).startswith("条款获取失败") and _looks_like_transport_failure(reason)
     ]
-    if len(failures) < 20 or len(failures) / total_count < 0.20:
+    if len(failures) < _MIN_OUTAGE_FAILURES:
+        return
+    fail_ratio = len(failures) / total_count
+    if fail_ratio < _SOURCE_OUTAGE_FAIL_RATIO:
+        # 部分券取数失败 (限流 / 个别券数据缺失), 但多数成功 → Wind 连接正常。
+        # 跳过失败券, 用成功券继续回测, 不中止。
+        logger.warning(
+            "%s在 %s 有 %d/%d 只债 Wind 取数失败 (已退避重试), 本期跳过这些债; "
+            "成功率 %.0f%%, 判定为部分失败而非系统性故障, 继续回测。",
+            phase, period_start, len(failures), total_count, (1 - fail_ratio) * 100,
+        )
         return
     sample = ", ".join(str(code) for code, _reason in failures[:5])
     first_reason = failures[0][1]
     raise RuntimeError(
-        f"{phase}在 {period_start} 出现大面积 Wind 条款获取失败 "
-        f"({len(failures)}/{total_count}); 样例 {sample}; 首个错误: {first_reason}. "
-        "已中止回测, 避免生成全现金无效结果。请确认 Wind API 已登录且连接稳定后重试, "
-        "或改用标准历史口径/小代码池。"
+        f"{phase}在 {period_start} 出现系统性 Wind 条款获取失败 "
+        f"({len(failures)}/{total_count}, 失败率 {fail_ratio*100:.0f}%); 样例 {sample}; "
+        f"首个错误: {first_reason}. 已中止回测, 避免生成全现金无效结果。"
+        "请确认 Wind API 已登录且连接稳定后重试, 或改用标准历史口径/小代码池。"
     )
 
 
@@ -913,15 +932,23 @@ def _raise_if_pricing_transport_outage(
         if row.get("status") != "ok" and _looks_like_transport_failure(
             row.get("error") or row.get("message") or row)
     ]
-    if len(failures) < 20 or len(failures) / total_count < 0.20:
+    if len(failures) < _MIN_OUTAGE_FAILURES:
+        return
+    fail_ratio = len(failures) / total_count
+    if fail_ratio < _SOURCE_OUTAGE_FAIL_RATIO:
+        logger.warning(
+            "定价阶段在 %s 有 %d/%d 只债 Wind 数据失败 (已退避重试), 本期跳过这些债; "
+            "成功率 %.0f%%, 判定为部分失败而非系统性故障, 继续回测。",
+            period_start, len(failures), total_count, (1 - fail_ratio) * 100,
+        )
         return
     sample = ", ".join(str(row.get("bond_code")) for row in failures[:5])
     first_error = failures[0].get("error") or failures[0].get("message") or failures[0]
     raise RuntimeError(
-        f"定价阶段在 {period_start} 出现大面积 Wind 数据失败 "
-        f"({len(failures)}/{total_count}); 样例 {sample}; 首个错误: {first_error}. "
-        "已中止回测, 避免生成全现金无效结果。请确认 Wind API 已登录且连接稳定后重试, "
-        "或改用标准历史口径/小代码池。"
+        f"定价阶段在 {period_start} 出现系统性 Wind 数据失败 "
+        f"({len(failures)}/{total_count}, 失败率 {fail_ratio*100:.0f}%); 样例 {sample}; "
+        f"首个错误: {first_error}. 已中止回测, 避免生成全现金无效结果。"
+        "请确认 Wind API 已登录且连接稳定后重试, 或改用标准历史口径/小代码池。"
     )
 
 

@@ -10,6 +10,7 @@ import os
 import site
 import sys
 import threading
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,28 @@ from ._helpers import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _is_transient_wind_result(res) -> bool:
+    """判断 Wind 返回是否为瞬时传输失败 (可重试).
+
+    针对 SkyClient 限流 / 连接抖动等瞬时错误 (高频串行请求下间歇出现,
+    退避重试通常即可成功)。invalid indicators (字段无效) 与空数据不算瞬时
+    错误, 不重试 —— 它们由各调用方按字段探测处理。
+    """
+    code = getattr(res, "ErrorCode", 0)
+    if code == 0:
+        return False
+    if code == -40521007:
+        return True
+    data_str = str(getattr(res, "Data", "") or "").lower()
+    return any(marker in data_str for marker in (
+        "skyclient request failed",
+        "request failed",
+        "timeout",
+        "time out",
+        "sendmessage returned null",
+    ))
 
 
 def _wind_error_text(res) -> str:
@@ -236,20 +259,58 @@ class WindDataProvider(DataProvider):
             self._w = w
             return w
 
+    _TRANSIENT_RETRIES = 4
+    _TRANSIENT_BACKOFF_SEC = 0.8
+
     def _call_wss(self, *args):
-        w = self._ensure()
-        with self._wind_lock:
-            return w.wss(*args)
+        return self._call_with_retry("wss", *args)
 
     def _call_wsd(self, *args):
-        w = self._ensure()
-        with self._wind_lock:
-            return w.wsd(*args)
+        return self._call_with_retry("wsd", *args)
 
     def _call_wset(self, *args):
-        w = self._ensure()
+        return self._call_with_retry("wset", *args)
+
+    def _call_with_retry(self, method: str, *args):
+        """调用 Wind 接口, 对 SkyClient/瞬时传输失败退避重试.
+
+        Wind SkyClient 在高频串行请求下会间歇性返回 'SkyClient request failed'
+        (ErrorCode=-40521007) 这类瞬时错误; 重建连接后退避重试通常即可恢复,
+        避免把限流 / stale SkyClient 误判为系统性故障而中止整段回测。
+        invalid indicators / 权限类持久错误不在此重试 (由各调用方按字段探测处理)。
+        """
+        res = None
+        for attempt in range(self._TRANSIENT_RETRIES + 1):
+            w = self._ensure()
+            fn = getattr(w, method)
+            with self._wind_lock:
+                res = fn(*args)
+            if not _is_transient_wind_result(res):
+                return res
+            if attempt < self._TRANSIENT_RETRIES:
+                logger.debug(
+                    "Wind %s 瞬时失败, 第 %d 次重连退避重试: ErrorCode=%s, Data=%s",
+                    method,
+                    attempt + 1,
+                    getattr(res, "ErrorCode", None),
+                    getattr(res, "Data", None),
+                )
+                self._reset_wind_connection()
+                time.sleep(self._TRANSIENT_BACKOFF_SEC * (attempt + 1))
+        return res
+
+    def _reset_wind_connection(self) -> None:
         with self._wind_lock:
-            return w.wset(*args)
+            w = self._w
+            self._w = None
+            if w is None:
+                return
+            stop = getattr(w, "stop", None)
+            if callable(stop):
+                try:
+                    stop()
+                except Exception as exc:
+                    logger.debug("Wind stop 失败, 将在下次调用重新 start: %s", exc)
 
     def get_bond_terms(self, bond_code, valuation_date):
         val_str = valuation_date.strftime("%Y%m%d")

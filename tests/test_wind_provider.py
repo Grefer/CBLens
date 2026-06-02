@@ -2,7 +2,11 @@ import sys
 from datetime import date
 
 import convertible_bond.data_providers.wind as wind_mod
-from convertible_bond.data_providers.wind import WindDataProvider, prepare_windpy_import_path
+from convertible_bond.data_providers.wind import (
+    WindDataProvider,
+    _is_transient_wind_result,
+    prepare_windpy_import_path,
+)
 
 
 def test_prepare_windpy_import_path_uses_env_dir(monkeypatch, tmp_path):
@@ -129,6 +133,7 @@ def test_get_bond_terms_error_includes_wind_error_code(monkeypatch):
 
     provider = WindDataProvider()
     monkeypatch.setattr(provider, "_ensure", lambda: FakeWind())
+    monkeypatch.setattr(wind_mod.time, "sleep", lambda _seconds: None)
 
     try:
         provider.get_bond_terms("113001.SH", date(2026, 5, 25))
@@ -139,3 +144,53 @@ def test_get_bond_terms_error_includes_wind_error_code(monkeypatch):
 
     assert "ErrorCode=-40521007" in text
     assert "SkyClient request failed" in text
+
+
+def test_transient_wind_result_detects_error_code_without_data():
+    class Result:
+        ErrorCode = -40521007
+        Data = []
+
+    assert _is_transient_wind_result(Result())
+
+
+def test_call_wss_retries_transient_error_with_connection_reset(monkeypatch):
+    class Result:
+        def __init__(self, error_code, data):
+            self.ErrorCode = error_code
+            self.Data = data
+
+    class FakeWind:
+        def __init__(self, result):
+            self.result = result
+            self.stopped = False
+            self.calls = 0
+
+        def wss(self, code, fields, options):
+            self.calls += 1
+            return self.result
+
+        def stop(self):
+            self.stopped = True
+
+    first = FakeWind(Result(-40521007, []))
+    second = FakeWind(Result(0, [["ok"]]))
+    winds = [first, second]
+    sleeps = []
+
+    provider = WindDataProvider()
+
+    def ensure():
+        provider._w = winds.pop(0)
+        return provider._w
+
+    monkeypatch.setattr(provider, "_ensure", ensure)
+    monkeypatch.setattr(wind_mod.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    res = provider._call_wss("113001.SH", "sec_name", "tradeDate=20260525")
+
+    assert res.ErrorCode == 0
+    assert first.calls == 1
+    assert second.calls == 1
+    assert first.stopped
+    assert sleeps == [provider._TRANSIENT_BACKOFF_SEC]
