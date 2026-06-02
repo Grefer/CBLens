@@ -480,24 +480,6 @@ def _batch_admission_config(app):
     )
 
 
-def _refresh_batch_pool_count(app, *_):
-    """公开交易池变化后即时预览主池规模; 定价进行中不覆盖状态."""
-    try:
-        if str(app.btn_batch_run.cget("state")) == "disabled":
-            return
-    except Exception:
-        pass
-    try:
-        codes, excluded = split_batch_codes_from_cache(
-            getattr(app, "terms_cache", None),
-            admission_config=_batch_admission_config(app),
-        )
-    except Exception:
-        return
-    suffix = _excluded_status_suffix(excluded)
-    app.v_batch_status.set(f"公开交易转债池 {len(codes)} 只{suffix} · 点「刷新重算」定价")
-
-
 def _canonical_view_name(label: str) -> str:
     """剥离视图标签里的 ' (24)' 计数后缀, 还原为 BATCH_REVIEW_VIEWS 里的标准名."""
     if not label:

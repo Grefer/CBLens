@@ -4,6 +4,7 @@
 对外接口不变 (tab UI 仍然通过 ``app._method_name`` 调用).
 """
 from .backtest import BacktestMixin
+from .strategy_backtest import StrategyBacktestMixin
 from .down_reset import DownResetMixin
 from .events import EventsMixin
 from .pricing import PricingMixin
@@ -13,6 +14,7 @@ from .wind_sync import WindSyncMixin
 
 __all__ = [
     "BacktestMixin",
+    "StrategyBacktestMixin",
     "DownResetMixin",
     "EventsMixin",
     "PricingMixin",

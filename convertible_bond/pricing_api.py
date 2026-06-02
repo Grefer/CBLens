@@ -26,6 +26,7 @@ from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
+from .dateutil import add_years as _add_years
 
 
 _finite_float = finite_float
@@ -88,13 +89,6 @@ def _rating_spread_floor(rating: Any) -> float | None:
         if raw == label or raw.startswith(label):
             return _RATING_SPREAD_FLOORS[label]
     return None
-
-
-def _add_years(dt_value: date, years: int) -> date:
-    try:
-        return dt_value.replace(year=dt_value.year + years)
-    except ValueError:
-        return dt_value.replace(month=2, day=28, year=dt_value.year + years)
 
 
 def _accrued_interest(

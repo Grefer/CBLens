@@ -12,6 +12,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from ...pricer import UniversalCBPricer
+from ...dateutil import add_years as _add_years
 from ...cb_events import is_down_reset_trigger_notice_title
 from ...down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
 from ...historical_terms import project_terms
@@ -1240,12 +1241,8 @@ class PricingMixin:
             return fallback
         return format(f, fmt)
 
-    @staticmethod
-    def _add_years_safe(d: date, years: int) -> date:
-        try:
-            return d.replace(year=d.year + years)
-        except ValueError:
-            return d.replace(year=d.year + years, month=2, day=28)
+    # 共用 convertible_bond.dateutil.add_years (保留方法名供既有调用)
+    _add_years_safe = staticmethod(_add_years)
 
     @staticmethod
     def _contains_any(value, needles: tuple[str, ...]) -> bool:

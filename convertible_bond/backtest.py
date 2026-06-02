@@ -301,7 +301,8 @@ def _terms_source_diagnostic(provider: DataProvider, bond_code: str, valuation_d
             if isinstance(diag, dict):
                 return diag
         except Exception:
-            pass
+            logger.debug("get_terms_source_diagnostics(%s) 失败, 回落默认诊断",
+                         bond_code, exc_info=True)
     return {
         "bond_code": bond_code,
         "valuation_date": valuation_date,

@@ -4,7 +4,6 @@
 import calendar
 from datetime import date, datetime
 import tkinter as tk
-import numpy as np
 import customtkinter as ctk
 
 from .theme import (
@@ -27,22 +26,6 @@ def _source_label_color(source: str):
 def _source_label_text(source: str) -> str:
     """字段级来源不显示在表单里, 保持输入区安静。"""
     return ""
-
-
-def _latest_finite_number(values):
-    """返回序列中最后一个可用有限数值，若无则返回 None。"""
-    if not values:
-        return None
-    for v in reversed(values):
-        if v is None:
-            continue
-        try:
-            fv = float(v)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(fv):
-            return fv
-    return None
 
 
 ENTRY_HEIGHT = 28

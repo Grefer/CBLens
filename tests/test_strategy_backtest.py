@@ -654,7 +654,7 @@ def test_skipped_position_counts_as_cash(monkeypatch):
 
 
 def test_strategy_snapshot_json_round_trips_dates_and_nonfinite_values():
-    from convertible_bond.gui.controllers.backtest import (
+    from convertible_bond.gui.controllers.strategy_backtest import (
         _strategy_snapshot_jsonable,
         _strategy_snapshot_object_hook,
     )
@@ -686,8 +686,8 @@ def test_strategy_snapshot_json_round_trips_dates_and_nonfinite_values():
 
 
 def test_strategy_snapshot_loader_includes_newer_legacy_file(tmp_path):
-    from convertible_bond.gui.controllers.backtest import (
-        BacktestMixin,
+    from convertible_bond.gui.controllers.strategy_backtest import (
+        StrategyBacktestMixin,
         _strategy_snapshot_jsonable,
     )
 
@@ -711,7 +711,7 @@ def test_strategy_snapshot_loader_includes_newer_legacy_file(tmp_path):
     write_snapshot(old_snapshot, 0.90)
     write_snapshot(legacy_snapshot, 1.35)
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self.records = []
             self.dirty = False
@@ -737,8 +737,8 @@ def test_strategy_snapshot_loader_includes_newer_legacy_file(tmp_path):
 
 
 def test_strategy_snapshot_loader_dedupes_latest_copy(tmp_path):
-    from convertible_bond.gui.controllers.backtest import (
-        BacktestMixin,
+    from convertible_bond.gui.controllers.strategy_backtest import (
+        StrategyBacktestMixin,
         _strategy_snapshot_jsonable,
     )
 
@@ -759,7 +759,7 @@ def test_strategy_snapshot_loader_dedupes_latest_copy(tmp_path):
     archived_snapshot.write_text(text, encoding="utf-8")
     legacy_snapshot.write_text(text, encoding="utf-8")
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self.records = []
             self.dirty = False
@@ -784,9 +784,9 @@ def test_strategy_snapshot_loader_dedupes_latest_copy(tmp_path):
 
 
 def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_path):
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self._last_strategy_bt_result = {
                 "start_date": date(2025, 5, 30),
@@ -833,7 +833,7 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
 
 
 def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp_path):
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Var:
         def __init__(self, value=None):
@@ -863,7 +863,7 @@ def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp
         def selection(self):
             return ("0",)
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self, archive_path, latest_path):
             result = {
                 "_snapshot_id": "snap-current",
@@ -917,7 +917,7 @@ def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp
 
 
 def test_strategy_result_tab_change_refreshes_selected_panel():
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Tabs:
         def __init__(self, selected):
@@ -926,7 +926,7 @@ def test_strategy_result_tab_change_refreshes_selected_panel():
         def get(self):
             return self.selected
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self._last_strategy_bt_result = {"summary": {}}
             self.strategy_result_tabs = Tabs("总览")
@@ -981,7 +981,7 @@ def test_strategy_result_tab_change_refreshes_selected_panel():
 
 
 def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Var:
         def __init__(self, value):
@@ -990,7 +990,7 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
         def get(self):
             return self.value
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self, path, snap_dir):
             self._path = path
             self._snap_dir = snap_dir
@@ -1032,7 +1032,7 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
 
 
 def test_strategy_local_full_market_filters_non_standard_codes():
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Var:
         def get(self):
@@ -1048,7 +1048,7 @@ def test_strategy_local_full_market_filters_non_standard_codes():
                 "KZZ836523001.XEE",
             ]
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self.v_st_pool_mode = Var()
             self.terms_cache = Cache()
@@ -1060,7 +1060,7 @@ def test_strategy_local_full_market_filters_non_standard_codes():
 
 
 def test_strategy_result_tab_failure_keeps_dirty_for_retry():
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Tabs:
         def __init__(self, selected):
@@ -1069,7 +1069,7 @@ def test_strategy_result_tab_failure_keeps_dirty_for_retry():
         def get(self):
             return self.selected
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self._last_strategy_bt_result = {"summary": {}}
             self.strategy_result_tabs = Tabs("总览")
@@ -1103,7 +1103,7 @@ def test_strategy_result_tab_failure_keeps_dirty_for_retry():
 
 
 def test_strategy_detail_period_filter_defaults_to_latest_and_aggregates_all():
-    from convertible_bond.gui.controllers.backtest import BacktestMixin
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Var:
         def __init__(self, value):
@@ -1115,7 +1115,7 @@ def test_strategy_detail_period_filter_defaults_to_latest_and_aggregates_all():
         def set(self, value):
             self.value = value
 
-    class DummyApp(BacktestMixin):
+    class DummyApp(StrategyBacktestMixin):
         def __init__(self):
             self.v_st_detail_period = Var("最近一期")
 

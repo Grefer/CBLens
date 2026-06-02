@@ -482,24 +482,6 @@ def build(app, tab):
         app.after_idle(lambda: app._load_strategy_backtest_snapshot(silent=True, render=False))
 
 
-def _label(parent, text):
-    ctk.CTkLabel(parent, text=text, text_color=TEXT_DIM,
-                 font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
-
-
-def _entry(parent, var, width):
-    return ctk.CTkEntry(parent, textvariable=var, width=width, font=(FONT_MONO, 13),
-                        fg_color=BG_INPUT, border_width=0, corner_radius=6,
-                        text_color=TEXT, height=30)
-
-
-def _optmenu(parent, var, values, width):
-    return ctk.CTkOptionMenu(
-        parent, variable=var, values=values, width=width,
-        font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
-        text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT)
-
-
 def _adv_card(parent, row, title, subtitle=None, *, col=0):
     """高级设置子卡: 放在统一底色卡片内, 和执行控制台信息卡保持一致."""
     padx = (0, 8) if col == 0 else (8, 0)

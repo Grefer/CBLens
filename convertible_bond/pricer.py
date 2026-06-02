@@ -10,6 +10,8 @@ from scipy.optimize import brentq
 from datetime import date, timedelta
 from typing import Literal, overload
 
+from convertible_bond.dateutil import add_years as _add_years_impl
+
 logger = logging.getLogger(__name__)
 
 # ── 默认常量 ─────────────────────────────────────────────
@@ -127,6 +129,41 @@ class UniversalCBPricer:
             if t_eff <= self.T:
                 self._scheduled_reset_t = t_eff
 
+    def _constructor_kwargs(self) -> dict:
+        """构造参数的单一事实源: Theta 重算等克隆场景复用, 避免漏同步新字段。
+
+        新增 ``__init__`` 参数时只需在此登记一处; 否则 Theta 会静默用旧默认值
+        重建明日 pricer, 导致唯独 Theta 偏差且极难定位。存储值均已规范化,
+        重新喂回构造器是幂等的。
+        """
+        return dict(
+            S0=self.S0,
+            K=self.K,
+            current_date=self.current_date,
+            maturity_date=self.maturity_date,
+            face_value=self.face_value,
+            redemption_price=self.redemption_price,
+            issue_date=self.issue_date,
+            conversion_start_date=self.conversion_start_date,
+            call_start_date=self.call_start_date,
+            coupon_rates=self.coupon_rates,
+            call_trigger_ratio=self.call_trigger_ratio,
+            call_no_redemption_until=self.call_no_redemption_until,
+            put_trigger_ratio=self.put_trigger_ratio,
+            put_active_years=self.put_active_years,
+            putback_start_date=self.putback_start_date,
+            putback_end_date=self.putback_end_date,
+            putback_price=self.putback_price,
+            down_reset_premium=self.down_reset_premium,
+            down_reset_trigger_ratio=self.down_reset_trigger_ratio,
+            down_reset_block_until=self.down_reset_block_until,
+            down_reset_floor=self.down_reset_floor,
+            call_notice_days=self.call_notice_days,
+            scheduled_reset_date=self.scheduled_reset_date,
+            scheduled_reset_prob=self.scheduled_reset_prob,
+            scheduled_reset_target_k=self.scheduled_reset_target_k,
+        )
+
     @staticmethod
     def _validate_inputs(S0, K, current_date, maturity_date, face_value):
         if not isinstance(S0, (int, float)) or (S0 != S0) or (S0 != 0 and abs(S0) == float("inf")):
@@ -142,15 +179,8 @@ class UniversalCBPricer:
         if maturity_date <= current_date:
             raise ValueError("maturity_date must be after current_date")
 
-    @staticmethod
-    def _add_years(dt_value: date, years: int) -> date:
-        new_year = dt_value.year + years
-        if new_year < 1:
-            raise ValueError(f"Cannot add {years} years to {dt_value}: resulting year {new_year} < 1")
-        try:
-            return dt_value.replace(year=new_year)
-        except ValueError:
-            return dt_value.replace(month=2, day=28, year=new_year)
+    # 共用 convertible_bond.dateutil.add_years (保留静态方法 API 供既有调用/测试)
+    _add_years = staticmethod(_add_years_impl)
 
     def _build_coupon_periods(self):
         periods = []
@@ -280,15 +310,36 @@ class UniversalCBPricer:
 
         V = np.maximum(self.redemption_price, S_grid * self.ratio)
 
+        # ── 循环不变量: 三对角系数与矩阵只依赖常量, 预计算一次 ──
+        # current_spreads/r_total 只随 S_grid (固定网格) 与 base_spread/distress_k 变化,
+        # 时间步之间恒定; 因此 alpha/beta/gamma 与系数矩阵 A 在整个回溯过程不变。
+        # 提到循环外避免每步重建 (N 步省 N-1 次构造), 数值结果逐位一致。
+        current_spreads = base_spread + distress_k * np.maximum(0, 1 - S_grid/self.K)
+        r_total = r + current_spreads
+        j = np.arange(1, M)
+        r_mid = r_total[1:M]
+
+        # 设计决策: alpha/gamma 的漂移项使用 r-q (含连续股息率的风险中性漂移),
+        # 而 beta 的折现项使用 r_total = r + credit_spread.
+        # 即: 信用利差仅影响折现 ("额外折现" 模型), 不影响标的的风险中性漂移率.
+        alpha = 0.25 * dt * (sigma**2 * j**2 - risk_neutral_drift * j)
+        beta  = -0.5 * dt * (sigma**2 * j**2 + r_mid)
+        gamma = 0.25 * dt * (sigma**2 * j**2 + risk_neutral_drift * j)
+        one_plus_beta = 1 + beta
+
+        A = np.zeros((3, M - 1))
+        A[0, 1:] = -gamma[:-1]
+        A[1, :] = 1 - beta
+        A[2, :-1] = -alpha[1:]
+
+        low_discount = r + base_spread + distress_k
+
         for n in range(N, 0, -1):
             t_now = n * dt
             t_prev = (n - 1) * dt
             # step_date 仅用于 bond_floor_value / accrued_interest 等按日历日计息的计算;
             # int() 保证日期单调非递减, 不会像 round() 在 dt*365<0.5 时出现多步同日的情况.
             step_date = self.current_date + timedelta(days=int(t_prev * _DAYS_PER_YEAR))
-
-            current_spreads = base_spread + distress_k * np.maximum(0, 1 - S_grid/self.K)
-            r_total = r + current_spreads
 
             # 离散票息: 在连续时间轴上判断 (t_prev, t_now] 内是否有付息事件,
             # 避免日期量化导致跨步漏判
@@ -299,32 +350,18 @@ class UniversalCBPricer:
             if coupon_cash:
                 V += coupon_cash
 
-            j = np.arange(1, M)
-            r_mid = r_total[1:M]
-
-            # 设计决策: alpha/gamma 的漂移项使用 r-q (含连续股息率的风险中性漂移),
-            # 而 beta 的折现项使用 r_total = r + credit_spread.
-            # 即: 信用利差仅影响折现 ("额外折现" 模型), 不影响标的的风险中性漂移率.
-            alpha = 0.25 * dt * (sigma**2 * j**2 - risk_neutral_drift * j)
-            beta  = -0.5 * dt * (sigma**2 * j**2 + r_mid)
-            gamma = 0.25 * dt * (sigma**2 * j**2 + risk_neutral_drift * j)
-
-            A = np.zeros((3, M - 1))
-            A[0, 1:] = -gamma[:-1]
-            A[1, :] = 1 - beta
-            A[2, :-1] = -alpha[1:]
-
             # RHS 用 V^n (当前步含票息), 再用 V^{n-1} 边界值做 += 修正
             V_now = V.copy()
-            low_discount = r + base_spread + distress_k
             V[0] = self.bond_floor_value(step_date, low_discount)
             V[-1] = max(S_grid[-1] * self.ratio, self.face_value + self.accrued_interest(step_date))
 
-            rhs = alpha * V_now[:-2] + (1 + beta) * V_now[1:-1] + gamma * V_now[2:]
+            rhs = alpha * V_now[:-2] + one_plus_beta * V_now[1:-1] + gamma * V_now[2:]
             rhs[0] += alpha[0] * V[0]
             rhs[-1] += gamma[-1] * V[-1]
 
-            V[1:M] = solve_banded((1, 1), A, rhs)
+            # check_finite=False: A 与 rhs 均由内部确定性构造, 跳过 scipy 的全数组
+            # asarray_chkfinite 扫描 (每步 2 次, 占用显著); 输入无 NaN/inf 风险.
+            V[1:M] = solve_banded((1, 1), A, rhs, check_finite=False)
 
             accrued = self.accrued_interest(step_date)
             call_price = self.face_value + accrued
@@ -482,30 +519,10 @@ class UniversalCBPricer:
         # Theta: current_date + 1 日 重算; 单位 "理论价 / 天"
         if (self.maturity_date - self.current_date).days > 1:
             tomorrow_pricer = UniversalCBPricer(
-                S0=self.S0, K=self.K,
-                current_date=self.current_date + timedelta(days=1),
-                maturity_date=self.maturity_date,
-                face_value=self.face_value,
-                redemption_price=self.redemption_price,
-                issue_date=self.issue_date,
-                conversion_start_date=self.conversion_start_date,
-                call_start_date=self.call_start_date,
-                coupon_rates=self.coupon_rates,
-                call_trigger_ratio=self.call_trigger_ratio,
-                call_no_redemption_until=self.call_no_redemption_until,
-                put_trigger_ratio=self.put_trigger_ratio,
-                put_active_years=self.put_active_years,
-                putback_start_date=self.putback_start_date,
-                putback_end_date=self.putback_end_date,
-                putback_price=self.putback_price,
-                down_reset_premium=self.down_reset_premium,
-                down_reset_trigger_ratio=self.down_reset_trigger_ratio,
-                down_reset_block_until=self.down_reset_block_until,
-                down_reset_floor=self.down_reset_floor,
-                call_notice_days=self.call_notice_days,
-                scheduled_reset_date=self.scheduled_reset_date,
-                scheduled_reset_prob=self.scheduled_reset_prob,
-                scheduled_reset_target_k=self.scheduled_reset_target_k,
+                **{
+                    **self._constructor_kwargs(),
+                    "current_date": self.current_date + timedelta(days=1),
+                }
             )
             S_grid_t, V_t = tomorrow_pricer._price_grid(
                 sigma, r, q, base_spread, p_down, distress_k, M, N)

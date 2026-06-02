@@ -1054,7 +1054,8 @@ def _terms_source_diagnostic(
             if isinstance(diag, dict):
                 return diag
         except Exception:
-            pass
+            logger.debug("get_terms_source_diagnostics(%s) 失败, 回落默认诊断",
+                         bond_code, exc_info=True)
     return {
         "bond_code": bond_code,
         "valuation_date": valuation_date,
@@ -1693,21 +1694,6 @@ def _max_position_date(positions: list[dict[str, Any]], key: str) -> date | None
     return max(vals) if vals else None
 
 
-def _period_end_price(
-    provider: DataProvider,
-    bond_code: str,
-    on_date: date,
-    lookback_days: int,
-    cache: dict[str, float | None] | None = None,
-) -> float | None:
-    if cache is not None and bond_code in cache:
-        return cache[bond_code]
-    price = _latest_bond_price(provider, bond_code, on_date, lookback_days)
-    if cache is not None:
-        cache[bond_code] = price
-    return price
-
-
 def _latest_bond_price(
     provider: DataProvider,
     bond_code: str,
@@ -2162,17 +2148,6 @@ def _equal_weight_turnover(previous_codes: list[str], current_codes: list[str]) 
     curr_weight = {code: 1.0 / len(current_codes) for code in current_codes}
     codes = set(prev_weight) | set(curr_weight)
     return 0.5 * sum(abs(curr_weight.get(code, 0.0) - prev_weight.get(code, 0.0)) for code in codes)
-
-
-def _max_drawdown(equities: list[float]) -> float:
-    peak = -math.inf
-    max_dd = 0.0
-    for equity in equities:
-        if equity > peak:
-            peak = equity
-        if peak > 0:
-            max_dd = max(max_dd, 1.0 - equity / peak)
-    return max_dd
 
 
 def _periods_per_year(freq: str) -> int:

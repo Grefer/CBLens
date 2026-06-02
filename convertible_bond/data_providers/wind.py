@@ -137,11 +137,11 @@ def _windpy_candidate_paths() -> list[Path]:
     try:
         candidates.append(Path(site.getusersitepackages()))
     except Exception:
-        pass
+        logger.debug("site.getusersitepackages() 不可用, 跳过该候选路径", exc_info=True)
     try:
         candidates.extend(Path(p) for p in site.getsitepackages())
     except Exception:
-        pass
+        logger.debug("site.getsitepackages() 不可用, 跳过该候选路径", exc_info=True)
 
     unique: list[Path] = []
     seen: set[str] = set()

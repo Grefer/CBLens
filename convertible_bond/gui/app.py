@@ -40,6 +40,7 @@ from .constants import (
 )
 from .controllers import (
     BacktestMixin,
+    StrategyBacktestMixin,
     DownResetMixin,
     EventsMixin,
     PricingMixin,
@@ -71,6 +72,7 @@ class CBPricerApp(
     ctk.CTk,
     PricingMixin,
     BacktestMixin,
+    StrategyBacktestMixin,
     SensitivityMixin,
     DownResetMixin,
     EventsMixin,
