@@ -1954,3 +1954,44 @@ class TestPDEStress:
                                 M=300, N=1000)
         assert p_high_q < p_no_q, \
             f"高股息率应降低 OTM 定价: q=0 → {p_no_q:.2f}, q=0.025 → {p_high_q:.2f}"
+
+
+def test_down_reset_uplift_coarse_grid_matches_fine_grid():
+    """下修贡献 (含/不含下修两价之差) 用粗网格估算时与细网格高度一致。
+
+    pricing_api.price_from_provider 把 no_down 价的求解降到 _uplift_grid 粗网格以省
+    算力 (Option B: headline 细网格 theo - 粗网格 no_down); 本测试守护该近似不影响
+    down_reset_uplift 诊断 (误差远小于 8% "下修贡献高" 阈值尺度)。
+    """
+    from convertible_bond.pricing_api import _uplift_grid
+
+    base = dict(
+        K=12.0, current_date=date(2026, 1, 1), maturity_date=date(2030, 1, 1),
+        issue_date=date(2024, 1, 1), conversion_start_date=date(2024, 7, 1),
+        down_reset_trigger_ratio=0.85,
+    )
+    common = dict(sigma=0.35, r=0.022, base_spread=0.03, distress_k=0.05)
+    Mf, Nf = 300, 1000
+    mu, nu = _uplift_grid(Mf, Nf)
+    assert (mu, nu) == (150, 400)
+
+    def theo(S0, p_down, M, N):
+        return UniversalCBPricer(S0=S0, **base).price(p_down=p_down, M=M, N=N, **common)
+
+    # OTM 标的: 下修贡献显著, 粗/细 uplift 必须贴合
+    theo_fine = theo(8.0, 0.3, Mf, Nf)
+    no_down_fine = theo(8.0, 0.0, Mf, Nf)
+    uplift_fine = theo_fine - no_down_fine
+    assert uplift_fine > 3.0, "测试标的下修贡献应显著, 否则测不出差异"
+
+    no_down_coarse = theo(8.0, 0.0, mu, nu)
+    uplift_mixed = theo_fine - no_down_coarse  # 与 price_from_provider 一致
+    assert abs(uplift_mixed - uplift_fine) < 0.15
+
+    # ITM 标的: 真实下修贡献很小, 粗网格不应凭空放大
+    itm_theo_fine = theo(15.0, 0.3, Mf, Nf)
+    itm_no_down_fine = theo(15.0, 0.0, Mf, Nf)
+    itm_uplift_fine = itm_theo_fine - itm_no_down_fine
+    itm_no_down_coarse = theo(15.0, 0.0, mu, nu)
+    itm_uplift_mixed = itm_theo_fine - itm_no_down_coarse
+    assert abs(itm_uplift_mixed - itm_uplift_fine) < 0.15

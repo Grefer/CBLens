@@ -220,6 +220,18 @@ def cb_data_provider_for_market(market_provider: DataProvider) -> DataProvider:
     )
 
 
+# down_reset_uplift 诊断 (含/不含下修两价之差) 专用的粗网格。
+# no_down 价是"普通无下修转债"价, 在该网格上已收敛 (与 M=300/N=1000 细网格相差 <0.03 元),
+# 远小于 8% "下修贡献高" 阈值的尺度; 用它替代第二次细网格求解, 批量约省 1/3 算力。
+_UPLIFT_GRID: tuple[int, int] = (150, 400)
+
+
+def _uplift_grid(M: int, N: int) -> tuple[int, int]:
+    """no_down 价求解用的粗网格, 但不超过调用方请求的精度 (M/N 已较小时不反向加密)。"""
+    mu, nu = _UPLIFT_GRID
+    return min(M, mu), min(N, nu)
+
+
 def price_from_provider(provider: DataProvider, bond_code,
                         r=0.022, base_spread=0.03,
                         distress_k=0.05, p_down=0.15,
@@ -421,10 +433,14 @@ def price_from_provider(provider: DataProvider, bond_code,
         no_down_kwargs.pop("scheduled_reset_target_k", None)
         no_down_kwargs["scheduled_reset_prob"] = 0.0
         no_down_pricer = UniversalCBPricer(**no_down_kwargs)  # type: ignore[arg-type]
+        # no_down_price 只用于 down_reset_uplift 诊断 (8% 阈值标签 + 展示列), 精度需求远低于
+        # headline 理论价。普通无下修转债价在粗网格上已收敛, 故第二次求解走 _uplift_grid,
+        # 把"每债两次细网格"降到"一次细 + 一次粗"。headline theo 仍走细网格 M/N, 不受影响。
+        mu, nu = _uplift_grid(M, N)
         no_down_price = no_down_pricer.price(
             sigma=sigma, r=r, base_spread=effective_base_spread,
             distress_k=distress_k, p_down=0.0,
-            M=M, N=N, q=effective_q,
+            M=mu, N=nu, q=effective_q,
         )
     else:
         no_down_price = theo
@@ -657,8 +673,7 @@ class _BatchStockCache(DataProvider):
     def hist_vol(self, stock_code, end_date, window_days):
         cache_key = (stock_code, end_date, window_days)
         inflight_key = ("vol", *cache_key)
-        _MAX_RETRIES = 2
-        for attempt in range(_MAX_RETRIES + 1):
+        for attempt in range(self._MAX_INFLIGHT_RETRIES + 1):
             is_owner, hit, value_or_ev = self._inflight_try_acquire(
                 inflight_key, self._vol_cache, cache_key)
             if hit:
@@ -689,7 +704,7 @@ class _BatchStockCache(DataProvider):
                         self._close_cache.setdefault((stock_code, end_date), latest_close)
                 return value
             except Exception:
-                if attempt == _MAX_RETRIES:
+                if attempt == self._MAX_INFLIGHT_RETRIES:
                     raise
             finally:
                 self._inflight_release(inflight_key)

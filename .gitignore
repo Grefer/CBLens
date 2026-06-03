@@ -28,3 +28,7 @@ data/announcement_pdfs/
 # GUI / CLI 运行态缓存和个人关注池, 公开发布不入版本库
 data/batch_pricing_cache.json
 data/watchlist.json
+
+# 策略回测结果快照 (GUI 运行态产物, 随回测增删/prune, 不入版本库)
+data/strategy_backtest_snapshot.json
+data/strategy_backtest_snapshots/

@@ -8,6 +8,7 @@ from convertible_bond.strategy_backtest import (
     ScoreStrategyConfig,
     backtest_score_strategy,
     build_rebalance_schedule,
+    write_strategy_backtest_csv,
 )
 
 
@@ -1153,3 +1154,62 @@ def _latest(history, on_date):
         if d <= on_date:
             return v
     raise RuntimeError("no close")
+
+
+def test_write_strategy_backtest_csv_emits_all_sections(tmp_path, monkeypatch):
+    """端到端冒烟: 回测结果导出 CSV 应包含各区块标题且可被 csv 解析。
+
+    该函数原先无测试覆盖; 拆成 _write_csv_* 区块辅助后用此守护输出结构 (区块齐全、
+    逐期行数 = 区间数、可解析)。
+    """
+    provider = StrategyFakeProvider()
+
+    def fake_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+        rows = []
+        for code in codes:
+            market = _latest(provider_arg.bond_history[code], valuation_date)
+            theo = market * 1.10  # 市价低于理论价 → 低估, 可进候选
+            rows.append({
+                "bond_code": code,
+                "bond_name": provider_arg.terms[code].sec_name,
+                "stock_code": provider_arg.terms[code].underlying_code,
+                "status": "ok",
+                "S0": market, "K": 100.0, "sigma": 0.30,
+                "theoretical_price": theo, "market_price": market,
+                "deviation": (market - theo) / theo,
+                "credit_rating": "AA+", "outstanding_balance": 10.0, "T": 3.0,
+            })
+        return rows
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        fake_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 3, 31),
+        config=ScoreStrategyConfig(top_n=2, rebalance_freq="M", compute_benchmark=True),
+    )
+
+    out = tmp_path / "bt.csv"
+    write_strategy_backtest_csv(out, result)
+    text = out.read_text(encoding="utf-8-sig")
+    for marker in (
+        "# config", "start_date", "# equity_curve", "# positions",
+        "# candidate_rows", "# summary", "# diagnostics",
+    ):
+        assert marker in text, f"缺少区块: {marker}"
+
+    import csv as _csv
+    parsed = list(_csv.reader(out.open(encoding="utf-8-sig")))
+    # 逐期摘要表头行后紧跟每个区间一行
+    header_idx = next(i for i, r in enumerate(parsed) if r[:1] == ["start_date"])
+    period_rows = []
+    for r in parsed[header_idx + 1:]:
+        if not r or (r[0].startswith("#")):
+            break
+        period_rows.append(r)
+    assert len(period_rows) == len(result["periods"]) == 3

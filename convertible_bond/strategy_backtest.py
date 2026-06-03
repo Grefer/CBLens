@@ -247,6 +247,286 @@ def build_rebalance_schedule(start_date: date, end_date: date, freq: str = "M") 
     return sorted(points)
 
 
+@dataclass
+class _RebalanceContext:
+    """单个调仓区间所需的不变上下文 (整个回测期共用一份)。
+
+    把 ``backtest_score_strategy`` 的众多入参收拢到这里, 让 ``_run_rebalance_period``
+    的签名保持简洁。``performance_stats`` 是 Counter, 区间内原地累加并在外层复用。
+    """
+    provider: DataProvider
+    bond_codes: list[str]
+    cfg: ScoreStrategyConfig
+    terms_cache: Any
+    admission_config: AdmissionFilterConfig | None
+    total_periods: int
+    performance_stats: Counter
+    pricing_snapshot_cache: dict[Any, list[dict[str, Any]]] | None
+    stage_cb: Any
+    cancel_cb: Any
+    r: float
+    base_spread: float
+    distress_k: float
+    p_down: float
+    vol_window_days: int
+    sigma: float | None
+    q: float | None
+    M: int
+    N: int
+    max_workers: int | None
+    pricer_overrides: dict[str, Any]
+
+
+@dataclass
+class _PeriodResult:
+    """``_run_rebalance_period`` 的产出, 由外层累积成净值曲线与逐期记录。"""
+    period: dict[str, Any]
+    snapshot: dict[str, Any]
+    equity: float
+    benchmark_equity: float
+    benchmark_point: dict[str, Any] | None
+    selected_codes: list[str]
+
+
+def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
+    """回测结果里回显的配置快照 (供 GUI/CSV 展示与复现)。"""
+    return {
+        "top_n": cfg.top_n,
+        "rebalance_freq": cfg.rebalance_freq,
+        "selection_view": cfg.selection_view,
+        "min_score": cfg.min_score,
+        "min_confidence": list(cfg.min_confidence) if cfg.min_confidence else None,
+        "exclude_risk_tags": list(cfg.exclude_risk_tags),
+        "min_market_price": cfg.min_market_price,
+        "max_market_price": cfg.max_market_price,
+        "min_conversion_premium": cfg.min_conversion_premium,
+        "max_conversion_premium": cfg.max_conversion_premium,
+        "min_deviation": cfg.min_deviation,
+        "max_deviation": cfg.max_deviation,
+        "min_sigma": cfg.min_sigma,
+        "max_sigma": cfg.max_sigma,
+        "price_lookback_days": cfg.price_lookback_days,
+        "max_price_staleness_days": cfg.max_price_staleness_days,
+        "execution_timing": _normalize_execution_timing(cfg.execution_timing),
+        "execution_lookahead_days": cfg.execution_lookahead_days,
+        "mark_to_market": cfg.mark_to_market,
+        "pre_filter_prices": cfg.pre_filter_prices,
+        "transaction_cost": cfg.transaction_cost,
+        "compute_benchmark": cfg.compute_benchmark,
+        "pool_mode": cfg.pool_mode,
+    }
+
+
+def _run_rebalance_period(
+    ctx: _RebalanceContext,
+    idx: int,
+    period_start: date,
+    period_end: date,
+    *,
+    previous_codes: list[str],
+    start_equity: float,
+    benchmark_equity: float,
+    equity_curve: list[dict[str, Any]],
+) -> _PeriodResult:
+    """跑单个调仓区间: 准入→价格预筛→定价→选债→持仓估值→净值/基准更新→区间摘要。
+
+    ``equity_curve`` 原地 upsert; equity / benchmark_equity / previous_codes 通过返回值
+    回传给外层累积。``ctx.performance_stats`` 原地累加。
+    """
+    cfg = ctx.cfg
+    provider = ctx.provider
+    total_periods = ctx.total_periods
+    stage_cb = ctx.stage_cb
+    cancel_cb = ctx.cancel_cb
+
+    _check_cancel(cancel_cb)
+    if cfg.pool_mode == "dynamic":
+        period_codes = _dynamic_pool_for_date(
+            provider, ctx.bond_codes, period_start, terms_cache=ctx.terms_cache)
+    else:
+        period_codes = ctx.bond_codes
+    _emit_stage_progress(stage_cb, "准入筛选", 0, len(period_codes), idx, total_periods)
+    eligible, excluded, source_diagnostics = _eligible_codes_for_date(
+        provider,
+        period_codes,
+        period_start,
+        terms_cache=ctx.terms_cache,
+        admission_config=ctx.admission_config,
+        progress_cb=lambda done, total: _emit_stage_progress(
+            stage_cb, "准入筛选", done, total, idx, total_periods),
+        cancel_cb=cancel_cb,
+    )
+    _raise_if_source_transport_outage(
+        excluded,
+        total_count=len(period_codes),
+        period_start=period_start,
+        phase="准入筛选",
+    )
+    _emit_stage_progress(stage_cb, "价格预筛", 0, len(eligible), idx, total_periods)
+    pricing_codes, prefilter_excluded = _pre_filter_codes_by_price(
+        provider,
+        eligible,
+        period_start,
+        cfg,
+        progress_cb=lambda done, total: _emit_stage_progress(
+            stage_cb, "价格预筛", done, total, idx, total_periods),
+        cancel_cb=cancel_cb,
+    )
+    if prefilter_excluded:
+        excluded.extend(prefilter_excluded)
+        ctx.performance_stats["price_prefilter_excluded"] += len(prefilter_excluded)
+    _emit_stage_progress(stage_cb, "定价", 0, len(pricing_codes), idx, total_periods)
+    priced_rows = _batch_price_with_snapshot_cache(
+        provider,
+        pricing_codes,
+        snapshot_cache=ctx.pricing_snapshot_cache,
+        stats=ctx.performance_stats,
+        r=ctx.r,
+        base_spread=ctx.base_spread,
+        distress_k=ctx.distress_k,
+        p_down=ctx.p_down,
+        valuation_date=period_start,
+        vol_window_days=ctx.vol_window_days,
+        sigma=ctx.sigma,
+        q=ctx.q,
+        M=ctx.M,
+        N=ctx.N,
+        max_workers=ctx.max_workers,
+        progress_cb=lambda done, total: _emit_stage_progress(
+            stage_cb, "定价", done, total, idx, total_periods),
+        **ctx.pricer_overrides,
+    )
+    _raise_if_pricing_transport_outage(
+        priced_rows,
+        total_count=len(pricing_codes),
+        period_start=period_start,
+    )
+
+    # 转债成交价缓存: 策略持仓与基准共享, 避免同一调仓期重复拉历史。
+    price_cache: dict[tuple, PricePoint | None] = {}
+    candidates = _select_candidate_rows(priced_rows, cfg)
+    selected = candidates[:cfg.top_n]
+    selected_codes = [str(row.get("bond_code")) for row in selected]
+    candidate_rows = _candidate_explanation_rows(candidates, selected_codes, cfg)
+    rejection_rows = _rejection_explanation_rows(
+        priced_rows,
+        excluded,
+        cfg,
+        candidate_codes={str(row.get("bond_code")) for row in candidates},
+    )
+    _emit_stage_progress(stage_cb, "持仓估值", 0, len(selected), idx, total_periods)
+    positions, skipped_positions = _position_returns(
+        provider,
+        selected,
+        period_start,
+        period_end,
+        lookback_days=cfg.price_lookback_days,
+        max_staleness_days=cfg.max_price_staleness_days,
+        execution_timing=cfg.execution_timing,
+        execution_lookahead_days=cfg.execution_lookahead_days,
+        price_cache=price_cache,
+    )
+    _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
+
+    turnover = _equal_weight_turnover(previous_codes, selected_codes)
+
+    # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母。
+    intended = len(selected)
+    if intended > 0:
+        for pos in positions:
+            pos["weight"] = 1.0 / intended
+            pos["return_contribution"] = float(pos["period_return"]) / intended
+        gross_return = float(sum(p["period_return"] for p in positions) / intended)
+        cash_weight = float(intended - len(positions)) / intended
+    else:
+        gross_return = 0.0
+        cash_weight = 1.0
+    period_start_equity = start_equity
+    cost = turnover * cfg.transaction_cost
+    period_return = gross_return - cost
+    equity = period_start_equity * (1.0 + period_return)
+    if cfg.mark_to_market:
+        curve_points = _portfolio_mark_to_market_curve(
+            provider,
+            positions,
+            start_equity=period_start_equity,
+            period_end=period_end,
+            cost=cost,
+            intended_count=intended,
+        )
+        _upsert_equity_points(equity_curve, curve_points)
+        if curve_points:
+            equity = float(curve_points[-1]["equity"])
+    else:
+        _upsert_equity_points(equity_curve, [{"date": period_end, "equity": equity}])
+
+    benchmark_return = None
+    benchmark_point = None
+    new_benchmark_equity = benchmark_equity
+    if cfg.compute_benchmark:
+        _emit_stage_progress(stage_cb, "基准估值", 0, len(priced_rows), idx, total_periods)
+        benchmark_return = _benchmark_period_return(
+            provider,
+            priced_rows,
+            period_start,
+            period_end,
+            lookback_days=cfg.price_lookback_days,
+            max_staleness_days=cfg.max_price_staleness_days,
+            execution_timing=cfg.execution_timing,
+            execution_lookahead_days=cfg.execution_lookahead_days,
+            price_cache=price_cache,
+        )
+        new_benchmark_equity = benchmark_equity * (1.0 + (benchmark_return or 0.0))
+        benchmark_point = {"date": period_end, "equity": new_benchmark_equity}
+        _emit_stage_progress(stage_cb, "基准估值", len(priced_rows), len(priced_rows), idx, total_periods)
+
+    scored = [finite_float(row.get("opportunity_score")) for row in selected]
+    finite_scores = [s for s in scored if s is not None]
+    snapshot = {
+        "date": period_start,
+        "eligible_count": len(eligible),
+        "excluded_count": len(excluded),
+        "pricing_count": len(pricing_codes),
+        "pre_filtered_count": len(prefilter_excluded),
+        "priced_count": sum(1 for row in priced_rows if row.get("status") == "ok"),
+        "failed_count": sum(1 for row in priced_rows if row.get("status") != "ok"),
+        "candidate_count": len(candidates),
+        "selected_count": len(selected),
+        "selected_codes": selected_codes,
+        "candidate_rows": candidate_rows,
+        "rejection_rows": rejection_rows,
+        "avg_score": (sum(finite_scores) / len(finite_scores)) if finite_scores else None,
+        "data_quality": _period_data_quality(source_diagnostics),
+    }
+    period = {
+        "start_date": period_start,
+        "end_date": period_end,
+        "period_return": period_return,
+        "gross_return": gross_return,
+        "cost": cost,
+        "cash_weight": cash_weight,
+        "benchmark_return": benchmark_return,
+        "equity": equity,
+        "benchmark_equity": new_benchmark_equity if cfg.compute_benchmark else None,
+        "turnover": turnover,
+        "execution_timing": _normalize_execution_timing(cfg.execution_timing),
+        "entry_date": _min_position_date(positions, "entry_date"),
+        "exit_date": _max_position_date(positions, "exit_date"),
+        "positions": positions,
+        "skipped_positions": skipped_positions,
+        "excluded_reasons": excluded,
+        **snapshot,
+    }
+    return _PeriodResult(
+        period=period,
+        snapshot=snapshot,
+        equity=equity,
+        benchmark_equity=new_benchmark_equity,
+        benchmark_point=benchmark_point,
+        selected_codes=selected_codes,
+    )
+
+
 def backtest_score_strategy(
     provider: DataProvider,
     bond_codes: list[str],
@@ -317,187 +597,49 @@ def backtest_score_strategy(
     total_periods = len(schedule) - 1
     performance_stats: Counter = Counter()
 
-    for idx, period_start in enumerate(schedule[:-1]):
-        _check_cancel(cancel_cb)
-        period_end = schedule[idx + 1]
-        if cfg.pool_mode == "dynamic":
-            period_codes = _dynamic_pool_for_date(
-                provider, bond_codes, period_start, terms_cache=terms_cache)
-        else:
-            period_codes = bond_codes
-        _emit_stage_progress(stage_cb, "准入筛选", 0, len(period_codes), idx, total_periods)
-        eligible, excluded, source_diagnostics = _eligible_codes_for_date(
-            provider,
-            period_codes,
-            period_start,
-            terms_cache=terms_cache,
-            admission_config=admission_config,
-            progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
-                stage_cb, "准入筛选", done, total, idx, total_periods),
-            cancel_cb=cancel_cb,
-        )
-        _raise_if_source_transport_outage(
-            excluded,
-            total_count=len(period_codes),
-            period_start=period_start,
-            phase="准入筛选",
-        )
-        _emit_stage_progress(stage_cb, "价格预筛", 0, len(eligible), idx, total_periods)
-        pricing_codes, prefilter_excluded = _pre_filter_codes_by_price(
-            provider,
-            eligible,
-            period_start,
-            cfg,
-            progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
-                stage_cb, "价格预筛", done, total, idx, total_periods),
-            cancel_cb=cancel_cb,
-        )
-        if prefilter_excluded:
-            excluded.extend(prefilter_excluded)
-            performance_stats["price_prefilter_excluded"] += len(prefilter_excluded)
-        _emit_stage_progress(stage_cb, "定价", 0, len(pricing_codes), idx, total_periods)
-        priced_rows = _batch_price_with_snapshot_cache(
-            provider,
-            pricing_codes,
-            snapshot_cache=pricing_snapshot_cache,
-            stats=performance_stats,
-            r=r,
-            base_spread=base_spread,
-            distress_k=distress_k,
-            p_down=p_down,
-            valuation_date=period_start,
-            vol_window_days=vol_window_days,
-            sigma=sigma,
-            q=q,
-            M=M,
-            N=N,
-            max_workers=max_workers,
-            progress_cb=lambda done, total, idx=idx: _emit_stage_progress(
-                stage_cb, "定价", done, total, idx, total_periods),
-            **pricer_overrides,
-        )
-        _raise_if_pricing_transport_outage(
-            priced_rows,
-            total_count=len(pricing_codes),
-            period_start=period_start,
-        )
+    ctx = _RebalanceContext(
+        provider=provider,
+        bond_codes=bond_codes,
+        cfg=cfg,
+        terms_cache=terms_cache,
+        admission_config=admission_config,
+        total_periods=total_periods,
+        performance_stats=performance_stats,
+        pricing_snapshot_cache=pricing_snapshot_cache,
+        stage_cb=stage_cb,
+        cancel_cb=cancel_cb,
+        r=r,
+        base_spread=base_spread,
+        distress_k=distress_k,
+        p_down=p_down,
+        vol_window_days=vol_window_days,
+        sigma=sigma,
+        q=q,
+        M=M,
+        N=N,
+        max_workers=max_workers,
+        pricer_overrides=pricer_overrides,
+    )
 
-        # 转债成交价缓存: 策略持仓与基准共享, 避免同一调仓期重复拉历史。
-        price_cache: dict[tuple, PricePoint | None] = {}
-        candidates = _select_candidate_rows(priced_rows, cfg)
-        selected = candidates[:cfg.top_n]
-        selected_codes = [str(row.get("bond_code")) for row in selected]
-        candidate_rows = _candidate_explanation_rows(candidates, selected_codes, cfg)
-        rejection_rows = _rejection_explanation_rows(
-            priced_rows,
-            excluded,
-            cfg,
-            candidate_codes={str(row.get("bond_code")) for row in candidates},
-        )
-        _emit_stage_progress(stage_cb, "持仓估值", 0, len(selected), idx, total_periods)
-        positions, skipped_positions = _position_returns(
-            provider,
-            selected,
+    for idx, period_start in enumerate(schedule[:-1]):
+        period_end = schedule[idx + 1]
+        res = _run_rebalance_period(
+            ctx,
+            idx,
             period_start,
             period_end,
-            lookback_days=cfg.price_lookback_days,
-            max_staleness_days=cfg.max_price_staleness_days,
-            execution_timing=cfg.execution_timing,
-            execution_lookahead_days=cfg.execution_lookahead_days,
-            price_cache=price_cache,
+            previous_codes=previous_codes,
+            start_equity=equity,
+            benchmark_equity=benchmark_equity,
+            equity_curve=equity_curve,
         )
-        _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
-
-        turnover = _equal_weight_turnover(previous_codes, selected_codes)
-        previous_codes = selected_codes
-
-        # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母。
-        intended = len(selected)
-        if intended > 0:
-            for pos in positions:
-                pos["weight"] = 1.0 / intended
-                pos["return_contribution"] = float(pos["period_return"]) / intended
-            gross_return = float(sum(p["period_return"] for p in positions) / intended)
-            cash_weight = float(intended - len(positions)) / intended
-        else:
-            gross_return = 0.0
-            cash_weight = 1.0
-        period_start_equity = equity
-        cost = turnover * cfg.transaction_cost
-        period_return = gross_return - cost
-        equity = period_start_equity * (1.0 + period_return)
-        if cfg.mark_to_market:
-            curve_points = _portfolio_mark_to_market_curve(
-                provider,
-                positions,
-                start_equity=period_start_equity,
-                period_end=period_end,
-                cost=cost,
-                intended_count=intended,
-            )
-            _upsert_equity_points(equity_curve, curve_points)
-            if curve_points:
-                equity = float(curve_points[-1]["equity"])
-        else:
-            _upsert_equity_points(equity_curve, [{"date": period_end, "equity": equity}])
-
-        benchmark_return = None
-        if cfg.compute_benchmark:
-            _emit_stage_progress(stage_cb, "基准估值", 0, len(priced_rows), idx, total_periods)
-            benchmark_return = _benchmark_period_return(
-                provider,
-                priced_rows,
-                period_start,
-                period_end,
-                lookback_days=cfg.price_lookback_days,
-                max_staleness_days=cfg.max_price_staleness_days,
-                execution_timing=cfg.execution_timing,
-                execution_lookahead_days=cfg.execution_lookahead_days,
-                price_cache=price_cache,
-            )
-            benchmark_equity *= 1.0 + (benchmark_return or 0.0)
-            benchmark_curve.append({"date": period_end, "equity": benchmark_equity})
-            _emit_stage_progress(stage_cb, "基准估值", len(priced_rows), len(priced_rows), idx, total_periods)
-
-        scored = [finite_float(row.get("opportunity_score")) for row in selected]
-        finite_scores = [s for s in scored if s is not None]
-        snapshot = {
-            "date": period_start,
-            "eligible_count": len(eligible),
-            "excluded_count": len(excluded),
-            "pricing_count": len(pricing_codes),
-            "pre_filtered_count": len(prefilter_excluded),
-            "priced_count": sum(1 for row in priced_rows if row.get("status") == "ok"),
-            "failed_count": sum(1 for row in priced_rows if row.get("status") != "ok"),
-            "candidate_count": len(candidates),
-            "selected_count": len(selected),
-            "selected_codes": selected_codes,
-            "candidate_rows": candidate_rows,
-            "rejection_rows": rejection_rows,
-            "avg_score": (sum(finite_scores) / len(finite_scores)) if finite_scores else None,
-            "data_quality": _period_data_quality(source_diagnostics),
-        }
-        snapshots.append(snapshot)
-        periods.append({
-            "start_date": period_start,
-            "end_date": period_end,
-            "period_return": period_return,
-            "gross_return": gross_return,
-            "cost": cost,
-            "cash_weight": cash_weight,
-            "benchmark_return": benchmark_return,
-            "equity": equity,
-            "benchmark_equity": benchmark_equity if cfg.compute_benchmark else None,
-            "turnover": turnover,
-            "execution_timing": _normalize_execution_timing(cfg.execution_timing),
-            "entry_date": _min_position_date(positions, "entry_date"),
-            "exit_date": _max_position_date(positions, "exit_date"),
-            "positions": positions,
-            "skipped_positions": skipped_positions,
-            "excluded_reasons": excluded,
-            **snapshot,
-        })
-
+        equity = res.equity
+        benchmark_equity = res.benchmark_equity
+        previous_codes = res.selected_codes
+        if res.benchmark_point is not None:
+            benchmark_curve.append(res.benchmark_point)
+        snapshots.append(res.snapshot)
+        periods.append(res.period)
         if progress_cb:
             progress_cb(idx + 1, total_periods)
 
@@ -525,31 +667,7 @@ def backtest_score_strategy(
     return {
         "start_date": schedule[0],
         "end_date": schedule[-1],
-        "config": {
-            "top_n": cfg.top_n,
-            "rebalance_freq": cfg.rebalance_freq,
-            "selection_view": cfg.selection_view,
-            "min_score": cfg.min_score,
-            "min_confidence": list(cfg.min_confidence) if cfg.min_confidence else None,
-            "exclude_risk_tags": list(cfg.exclude_risk_tags),
-            "min_market_price": cfg.min_market_price,
-            "max_market_price": cfg.max_market_price,
-            "min_conversion_premium": cfg.min_conversion_premium,
-            "max_conversion_premium": cfg.max_conversion_premium,
-            "min_deviation": cfg.min_deviation,
-            "max_deviation": cfg.max_deviation,
-            "min_sigma": cfg.min_sigma,
-            "max_sigma": cfg.max_sigma,
-            "price_lookback_days": cfg.price_lookback_days,
-            "max_price_staleness_days": cfg.max_price_staleness_days,
-            "execution_timing": _normalize_execution_timing(cfg.execution_timing),
-            "execution_lookahead_days": cfg.execution_lookahead_days,
-            "mark_to_market": cfg.mark_to_market,
-            "pre_filter_prices": cfg.pre_filter_prices,
-            "transaction_cost": cfg.transaction_cost,
-            "compute_benchmark": cfg.compute_benchmark,
-            "pool_mode": cfg.pool_mode,
-        },
+        "config": _strategy_config_summary(cfg),
         "equity_curve": equity_curve,
         "benchmark_curve": benchmark_curve,
         "periods": periods,
@@ -568,200 +686,237 @@ _SUMMARY_CSV_KEYS = (
 )
 
 
+_PERIOD_CSV_COLUMNS = [
+    "start_date", "end_date", "entry_date", "exit_date",
+    "period_return", "gross_return", "cost",
+    "benchmark_return", "equity", "benchmark_equity", "turnover", "cash_weight",
+    "eligible_count", "priced_count", "candidate_count", "selected_count",
+    "avg_score", "execution_timing", "selected_codes",
+]
+
+
+def _flatten_period_rows(periods: list[dict[str, Any]], key: str) -> list[tuple[dict, dict]]:
+    """把每个区间下 ``period[key]`` 的明细行摊平成 (period, row) 对, 供持仓/候选/拒绝区块复用."""
+    return [(period, row) for period in periods for row in period.get(key, [])]
+
+
+def _write_csv_config(writer, config: dict[str, Any]) -> None:
+    if not config:
+        return
+    writer.writerow(["# config"])
+    for key, value in config.items():
+        writer.writerow([key, _csv_value(value)])
+    writer.writerow([])
+
+
+def _write_csv_periods(writer, periods: list[dict[str, Any]]) -> None:
+    writer.writerow(_PERIOD_CSV_COLUMNS)
+    for row in periods:
+        writer.writerow([
+            _csv_value(row.get("start_date")),
+            _csv_value(row.get("end_date")),
+            _csv_value(row.get("entry_date")),
+            _csv_value(row.get("exit_date")),
+            _csv_value(row.get("period_return")),
+            _csv_value(row.get("gross_return")),
+            _csv_value(row.get("cost")),
+            _csv_value(row.get("benchmark_return")),
+            _csv_value(row.get("equity")),
+            _csv_value(row.get("benchmark_equity")),
+            _csv_value(row.get("turnover")),
+            _csv_value(row.get("cash_weight")),
+            row.get("eligible_count", ""),
+            row.get("priced_count", ""),
+            row.get("candidate_count", ""),
+            row.get("selected_count", ""),
+            _csv_value(row.get("avg_score")),
+            row.get("execution_timing", ""),
+            "|".join(str(code) for code in row.get("selected_codes") or []),
+        ])
+
+
+def _write_csv_equity_curve(writer, curve: list[dict[str, Any]]) -> None:
+    if not curve:
+        return
+    writer.writerow([])
+    writer.writerow(["# equity_curve"])
+    writer.writerow(["date", "equity"])
+    for row in curve:
+        writer.writerow([_csv_value(row.get("date")), _csv_value(row.get("equity"))])
+
+
+def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
+    positions = _flatten_period_rows(periods, "positions")
+    if not positions:
+        return
+    writer.writerow([])
+    writer.writerow(["# positions"])
+    writer.writerow([
+        "period_start", "period_end", "rank", "bond_code", "bond_name",
+        "entry_date", "exit_date", "start_price", "end_price",
+        "period_return", "score", "confidence", "risk_tags",
+    ])
+    for period, pos in positions:
+        writer.writerow([
+            _csv_value(period.get("start_date")),
+            _csv_value(period.get("end_date")),
+            pos.get("rank", ""),
+            pos.get("bond_code", ""),
+            pos.get("bond_name", ""),
+            _csv_value(pos.get("entry_date")),
+            _csv_value(pos.get("exit_date")),
+            _csv_value(pos.get("start_price")),
+            _csv_value(pos.get("end_price")),
+            _csv_value(pos.get("period_return")),
+            _csv_value(pos.get("score")),
+            pos.get("confidence", ""),
+            "|".join(str(tag) for tag in pos.get("risk_tags") or []),
+        ])
+
+
+def _write_csv_skipped_positions(writer, periods: list[dict[str, Any]]) -> None:
+    skipped = _flatten_period_rows(periods, "skipped_positions")
+    if not skipped:
+        return
+    writer.writerow([])
+    writer.writerow(["# skipped_positions"])
+    writer.writerow([
+        "period_start", "period_end", "bond_code", "bond_name",
+        "reason", "entry_date", "exit_date", "start_price", "end_price",
+    ])
+    for period, pos in skipped:
+        writer.writerow([
+            _csv_value(period.get("start_date")),
+            _csv_value(period.get("end_date")),
+            pos.get("bond_code", ""),
+            pos.get("bond_name", ""),
+            pos.get("reason", ""),
+            _csv_value(pos.get("entry_date")),
+            _csv_value(pos.get("exit_date")),
+            _csv_value(pos.get("start_price")),
+            _csv_value(pos.get("end_price")),
+        ])
+
+
+def _write_csv_candidate_rows(writer, periods: list[dict[str, Any]]) -> None:
+    candidate_rows = _flatten_period_rows(periods, "candidate_rows")
+    if not candidate_rows:
+        return
+    writer.writerow([])
+    writer.writerow(["# candidate_rows"])
+    writer.writerow([
+        "period_start", "period_end", "rank", "selected", "bond_code", "bond_name",
+        "selection_reason", "score", "market_price", "deviation",
+        "conversion_premium", "sigma", "confidence", "risk_tags",
+    ])
+    for period, row in candidate_rows:
+        writer.writerow([
+            _csv_value(period.get("start_date")),
+            _csv_value(period.get("end_date")),
+            row.get("rank", ""),
+            row.get("selected", ""),
+            row.get("bond_code", ""),
+            row.get("bond_name", ""),
+            row.get("selection_reason", ""),
+            _csv_value(row.get("score")),
+            _csv_value(row.get("market_price")),
+            _csv_value(row.get("deviation")),
+            _csv_value(row.get("conversion_premium")),
+            _csv_value(row.get("sigma")),
+            row.get("confidence", ""),
+            "|".join(str(tag) for tag in row.get("risk_tags") or []),
+        ])
+
+
+def _write_csv_rejection_rows(writer, periods: list[dict[str, Any]]) -> None:
+    rejection_rows = _flatten_period_rows(periods, "rejection_rows")
+    if not rejection_rows:
+        return
+    writer.writerow([])
+    writer.writerow(["# rejection_rows"])
+    writer.writerow([
+        "period_start", "period_end", "source", "bond_code", "bond_name",
+        "reason", "score", "market_price", "deviation",
+        "conversion_premium", "confidence", "risk_tags",
+    ])
+    for period, row in rejection_rows:
+        writer.writerow([
+            _csv_value(period.get("start_date")),
+            _csv_value(period.get("end_date")),
+            row.get("source", ""),
+            row.get("bond_code", ""),
+            row.get("bond_name", ""),
+            row.get("reason", ""),
+            _csv_value(row.get("score")),
+            _csv_value(row.get("market_price")),
+            _csv_value(row.get("deviation")),
+            _csv_value(row.get("conversion_premium")),
+            row.get("confidence", ""),
+            "|".join(str(tag) for tag in row.get("risk_tags") or []),
+        ])
+
+
+def _write_csv_summary(writer, summary: dict[str, Any]) -> None:
+    if not summary:
+        return
+    writer.writerow([])
+    writer.writerow(["# summary"])
+    for key in _SUMMARY_CSV_KEYS:
+        writer.writerow([key, _csv_value(summary.get(key))])
+
+
+def _write_csv_diagnostics(writer, diagnostics: dict[str, Any]) -> None:
+    if not diagnostics:
+        return
+    writer.writerow([])
+    writer.writerow(["# diagnostics"])
+    data_quality = diagnostics.get("data_quality") or {}
+    for key, value in data_quality.items():
+        writer.writerow([f"data_quality.{key}", _csv_value(value)])
+    attribution = diagnostics.get("attribution") or {}
+    for key in ("total_cost", "avg_cash_weight", "skipped_positions", "cost_drag"):
+        writer.writerow([f"attribution.{key}", _csv_value(attribution.get(key))])
+    warnings = diagnostics.get("warnings") or []
+    for idx, warning in enumerate(warnings, start=1):
+        writer.writerow([f"warning.{idx}", warning])
+    performance = diagnostics.get("performance") or {}
+    for key, value in performance.items():
+        writer.writerow([f"performance.{key}", _csv_value(value)])
+    for section, rows in (
+        ("top_contributors", attribution.get("top_contributors") or []),
+        ("top_detractors", attribution.get("top_detractors") or []),
+        ("yearly_returns", diagnostics.get("yearly_returns") or []),
+        ("monthly_returns", diagnostics.get("monthly_returns") or []),
+    ):
+        if not rows:
+            continue
+        writer.writerow([])
+        writer.writerow([f"# {section}"])
+        keys = list(rows[0].keys())
+        writer.writerow(keys)
+        for row in rows:
+            writer.writerow([_csv_value(row.get(key)) for key in keys])
+
+
 def write_strategy_backtest_csv(path: str | Path, result: dict[str, Any]) -> None:
-    """导出策略回测的逐期摘要、日频净值、持仓明细和汇总指标 CSV."""
-    columns = [
-        "start_date", "end_date", "entry_date", "exit_date",
-        "period_return", "gross_return", "cost",
-        "benchmark_return", "equity", "benchmark_equity", "turnover", "cash_weight",
-        "eligible_count", "priced_count", "candidate_count", "selected_count",
-        "avg_score", "execution_timing", "selected_codes",
-    ]
+    """导出策略回测的逐期摘要、日频净值、持仓明细和汇总指标 CSV.
+
+    各区块由独立的 ``_write_csv_*`` 辅助函数写出 (有数据才写空行+标题), 顺序:
+    config / 逐期摘要 / equity_curve / positions / skipped_positions /
+    candidate_rows / rejection_rows / summary / diagnostics。
+    """
+    periods = result.get("periods", [])
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        config = result.get("config") or {}
-        if config:
-            writer.writerow(["# config"])
-            for key, value in config.items():
-                writer.writerow([key, _csv_value(value)])
-            writer.writerow([])
-        writer.writerow(columns)
-        for row in result.get("periods", []):
-            writer.writerow([
-                _csv_value(row.get("start_date")),
-                _csv_value(row.get("end_date")),
-                _csv_value(row.get("entry_date")),
-                _csv_value(row.get("exit_date")),
-                _csv_value(row.get("period_return")),
-                _csv_value(row.get("gross_return")),
-                _csv_value(row.get("cost")),
-                _csv_value(row.get("benchmark_return")),
-                _csv_value(row.get("equity")),
-                _csv_value(row.get("benchmark_equity")),
-                _csv_value(row.get("turnover")),
-                _csv_value(row.get("cash_weight")),
-                row.get("eligible_count", ""),
-                row.get("priced_count", ""),
-                row.get("candidate_count", ""),
-                row.get("selected_count", ""),
-                _csv_value(row.get("avg_score")),
-                row.get("execution_timing", ""),
-                "|".join(str(code) for code in row.get("selected_codes") or []),
-            ])
-        curve = result.get("equity_curve") or []
-        if curve:
-            writer.writerow([])
-            writer.writerow(["# equity_curve"])
-            writer.writerow(["date", "equity"])
-            for row in curve:
-                writer.writerow([_csv_value(row.get("date")), _csv_value(row.get("equity"))])
-        positions = [
-            (period, pos)
-            for period in result.get("periods", [])
-            for pos in period.get("positions", [])
-        ]
-        if positions:
-            writer.writerow([])
-            writer.writerow(["# positions"])
-            writer.writerow([
-                "period_start", "period_end", "rank", "bond_code", "bond_name",
-                "entry_date", "exit_date", "start_price", "end_price",
-                "period_return", "score", "confidence", "risk_tags",
-            ])
-            for period, pos in positions:
-                writer.writerow([
-                    _csv_value(period.get("start_date")),
-                    _csv_value(period.get("end_date")),
-                    pos.get("rank", ""),
-                    pos.get("bond_code", ""),
-                    pos.get("bond_name", ""),
-                    _csv_value(pos.get("entry_date")),
-                    _csv_value(pos.get("exit_date")),
-                    _csv_value(pos.get("start_price")),
-                    _csv_value(pos.get("end_price")),
-                    _csv_value(pos.get("period_return")),
-                    _csv_value(pos.get("score")),
-                    pos.get("confidence", ""),
-                    "|".join(str(tag) for tag in pos.get("risk_tags") or []),
-                ])
-        skipped = [
-            (period, pos)
-            for period in result.get("periods", [])
-            for pos in period.get("skipped_positions", [])
-        ]
-        if skipped:
-            writer.writerow([])
-            writer.writerow(["# skipped_positions"])
-            writer.writerow([
-                "period_start", "period_end", "bond_code", "bond_name",
-                "reason", "entry_date", "exit_date", "start_price", "end_price",
-            ])
-            for period, pos in skipped:
-                writer.writerow([
-                    _csv_value(period.get("start_date")),
-                    _csv_value(period.get("end_date")),
-                    pos.get("bond_code", ""),
-                    pos.get("bond_name", ""),
-                    pos.get("reason", ""),
-                    _csv_value(pos.get("entry_date")),
-                    _csv_value(pos.get("exit_date")),
-                    _csv_value(pos.get("start_price")),
-                    _csv_value(pos.get("end_price")),
-                ])
-        candidate_rows = [
-            (period, row)
-            for period in result.get("periods", [])
-            for row in period.get("candidate_rows", [])
-        ]
-        if candidate_rows:
-            writer.writerow([])
-            writer.writerow(["# candidate_rows"])
-            writer.writerow([
-                "period_start", "period_end", "rank", "selected", "bond_code", "bond_name",
-                "selection_reason", "score", "market_price", "deviation",
-                "conversion_premium", "sigma", "confidence", "risk_tags",
-            ])
-            for period, row in candidate_rows:
-                writer.writerow([
-                    _csv_value(period.get("start_date")),
-                    _csv_value(period.get("end_date")),
-                    row.get("rank", ""),
-                    row.get("selected", ""),
-                    row.get("bond_code", ""),
-                    row.get("bond_name", ""),
-                    row.get("selection_reason", ""),
-                    _csv_value(row.get("score")),
-                    _csv_value(row.get("market_price")),
-                    _csv_value(row.get("deviation")),
-                    _csv_value(row.get("conversion_premium")),
-                    _csv_value(row.get("sigma")),
-                    row.get("confidence", ""),
-                    "|".join(str(tag) for tag in row.get("risk_tags") or []),
-                ])
-        rejection_rows = [
-            (period, row)
-            for period in result.get("periods", [])
-            for row in period.get("rejection_rows", [])
-        ]
-        if rejection_rows:
-            writer.writerow([])
-            writer.writerow(["# rejection_rows"])
-            writer.writerow([
-                "period_start", "period_end", "source", "bond_code", "bond_name",
-                "reason", "score", "market_price", "deviation",
-                "conversion_premium", "confidence", "risk_tags",
-            ])
-            for period, row in rejection_rows:
-                writer.writerow([
-                    _csv_value(period.get("start_date")),
-                    _csv_value(period.get("end_date")),
-                    row.get("source", ""),
-                    row.get("bond_code", ""),
-                    row.get("bond_name", ""),
-                    row.get("reason", ""),
-                    _csv_value(row.get("score")),
-                    _csv_value(row.get("market_price")),
-                    _csv_value(row.get("deviation")),
-                    _csv_value(row.get("conversion_premium")),
-                    row.get("confidence", ""),
-                    "|".join(str(tag) for tag in row.get("risk_tags") or []),
-                ])
-        summary = result.get("summary") or {}
-        if summary:
-            writer.writerow([])
-            writer.writerow(["# summary"])
-            for key in _SUMMARY_CSV_KEYS:
-                writer.writerow([key, _csv_value(summary.get(key))])
-        diagnostics = result.get("diagnostics") or {}
-        if diagnostics:
-            writer.writerow([])
-            writer.writerow(["# diagnostics"])
-            data_quality = diagnostics.get("data_quality") or {}
-            for key, value in data_quality.items():
-                writer.writerow([f"data_quality.{key}", _csv_value(value)])
-            attribution = diagnostics.get("attribution") or {}
-            for key in ("total_cost", "avg_cash_weight", "skipped_positions", "cost_drag"):
-                writer.writerow([f"attribution.{key}", _csv_value(attribution.get(key))])
-            warnings = diagnostics.get("warnings") or []
-            for idx, warning in enumerate(warnings, start=1):
-                writer.writerow([f"warning.{idx}", warning])
-            performance = diagnostics.get("performance") or {}
-            for key, value in performance.items():
-                writer.writerow([f"performance.{key}", _csv_value(value)])
-            for section, rows in (
-                ("top_contributors", attribution.get("top_contributors") or []),
-                ("top_detractors", attribution.get("top_detractors") or []),
-                ("yearly_returns", diagnostics.get("yearly_returns") or []),
-                ("monthly_returns", diagnostics.get("monthly_returns") or []),
-            ):
-                if not rows:
-                    continue
-                writer.writerow([])
-                writer.writerow([f"# {section}"])
-                keys = list(rows[0].keys())
-                writer.writerow(keys)
-                for row in rows:
-                    writer.writerow([_csv_value(row.get(key)) for key in keys])
+        _write_csv_config(writer, result.get("config") or {})
+        _write_csv_periods(writer, periods)
+        _write_csv_equity_curve(writer, result.get("equity_curve") or [])
+        _write_csv_positions(writer, periods)
+        _write_csv_skipped_positions(writer, periods)
+        _write_csv_candidate_rows(writer, periods)
+        _write_csv_rejection_rows(writer, periods)
+        _write_csv_summary(writer, result.get("summary") or {})
+        _write_csv_diagnostics(writer, result.get("diagnostics") or {})
 
 
 def _slice_history(history, start: date, end: date):
@@ -1126,7 +1281,7 @@ def _dynamic_pool_for_date(
                 for entry in tradable
             }
             return [code for code in base_codes if code in tradable_set]
-    except (NotImplementedError, Exception):
+    except Exception:  # provider 不支持 list_tradable_cbs 或调用失败 → 走下方 issue/maturity 兜底
         pass
     # Fallback: filter by issue_date/maturity_date
     filtered: list[str] = []
