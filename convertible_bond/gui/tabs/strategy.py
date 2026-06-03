@@ -129,7 +129,7 @@ def build(app, tab):
     # col 0: 策略方案/选债规则 → 72
     # col 1: 开始日期/Top N → 80
     # col 2: 结束日期/成本 (bps) → 80
-    # col 3: 频率/基准设置 → 32
+    # col 3: 频率/等权基准 → 80
 
     # 第一行: 策略方案, 开始日期, 结束日期, 频率
     _grid_cell(
@@ -145,7 +145,7 @@ def build(app, tab):
     _grid_cell(cc, "频率", app.v_st_freq, 0, 3, "optmenu", ["周", "月", "季"],
                "定期调仓的时间间隔", control_width=80, label_width=32)
 
-    # 第二行: 选债规则, Top N, 成本, 基准设置
+    # 第二行: 选债规则, Top N, 成本, 等权基准
     _grid_cell(
         cc, "选债规则", app.v_st_view, 1, 0, "optmenu", list(STRATEGY_SELECTION_VIEWS),
         lambda: STRATEGY_VIEW_DESCRIPTIONS.get(app.v_st_view.get(), ""),
@@ -155,8 +155,8 @@ def build(app, tab):
     _grid_cell(cc, "成本 (bps)", app.v_st_cost, 1, 2, "entry", None,
                "单边调仓交易成本\n单位 bps (万分之一)",
                control_width=120, label_width=80)
-    _grid_cell(cc, "基准设置", app.v_st_benchmark, 1, 3, "checkbox", None,
-               "等权买入全市场合格转债\n作为对比基准", label_width=32)
+    _grid_cell(cc, "基准对标", app.v_st_benchmark, 1, 3, "checkbox", None,
+               "等权买入全市场合格转债\n作为对比基准", label_width=80)
 
     # ── 核心参数联动逻辑 (手动修改时策略方案自动切“自定义”) ───────────────────────
     def _on_param_change(*_):
@@ -392,11 +392,12 @@ def build(app, tab):
         scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         scroll.grid_columnconfigure(0, weight=1)
         inner = ctk.CTkFrame(scroll, fg_color="transparent")
-        inner.pack(fill="x", expand=False)
+        inner.pack(fill="both", expand=True)
         inner.grid_columnconfigure(0, weight=1)
         return inner
 
     overview_inner = _scrollable_pane("总览")
+    overview_inner.grid_rowconfigure(2, weight=1)
 
     # ── 指标卡 Dashboard Tiles (移入总览页顶部) ───────────────────
     app._strategy_stat_vars = {}
@@ -452,16 +453,18 @@ def build(app, tab):
     app.strategy_bt_insight_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 0))
     app.strategy_bt_insight_frame.grid_columnconfigure(0, weight=1)
     app.strategy_bt_chart_frame = ctk.CTkFrame(overview_inner, fg_color="transparent")
-    app.strategy_bt_chart_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 8))
+    app.strategy_bt_chart_frame.grid(row=2, column=0, sticky="nsew", padx=8, pady=(4, 8))
     app.strategy_bt_chart_frame.grid_columnconfigure(0, weight=1)
+    app.strategy_bt_chart_frame.grid_rowconfigure(0, weight=1)
 
     # 明细 tab
     detail_inner = _scrollable_pane("明细")
+    detail_inner.grid_rowconfigure(1, weight=1)
     app.strategy_bt_selection_frame = ctk.CTkFrame(detail_inner, fg_color="transparent")
     app.strategy_bt_selection_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 2))
     app.strategy_bt_selection_frame.grid_columnconfigure(0, weight=1)
     app.strategy_bt_table_frame = ctk.CTkFrame(detail_inner, fg_color="transparent")
-    app.strategy_bt_table_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 8))
+    app.strategy_bt_table_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=(2, 8))
     app.strategy_bt_table_frame.grid_columnconfigure(0, weight=1)
 
     # 归因 / 风险 / 数据 / 对比

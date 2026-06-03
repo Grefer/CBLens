@@ -209,6 +209,79 @@ def test_score_strategy_can_hold_cash_when_score_filter_rejects_all(monkeypatch)
     assert result["summary"]["final_equity"] == 1.0
 
 
+def test_score_strategy_default_rejects_negative_opportunity_scores(monkeypatch):
+    provider = StrategyFakeProvider()
+
+    def fake_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+        rows = []
+        for code in codes:
+            market = _latest(provider_arg.bond_history[code], valuation_date)
+            sigma = 1.0 if code == "113002.SH" else 0.30
+            theo = market if code == "113002.SH" else market * 1.10
+            rows.append({
+                "bond_code": code,
+                "bond_name": provider_arg.terms[code].sec_name,
+                "stock_code": provider_arg.terms[code].underlying_code,
+                "status": "ok",
+                "S0": market,
+                "K": 100.0,
+                "sigma": sigma,
+                "theoretical_price": theo,
+                "market_price": market,
+                "deviation": (market - theo) / theo,
+                "credit_rating": "AA+",
+                "outstanding_balance": 10.0,
+                "T": 3.0,
+            })
+        return rows
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        fake_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(top_n=2, min_confidence=None, exclude_risk_tags=()),
+    )
+
+    period = result["periods"][0]
+    assert period["selected_codes"] == ["113001.SH"]
+    assert period["cash_weight"] == pytest.approx(0.5)
+    assert period["weight_denominator"] == 2
+    assert period["turnover"] == pytest.approx(0.5)
+    assert period["positions"][0]["weight"] == pytest.approx(0.5)
+    assert period["period_return"] == pytest.approx(0.05)
+    assert any(
+        row["bond_code"] == "113002.SH" and "最低分 0.0" in row["reason"]
+        for row in period["rejection_rows"]
+    )
+
+    full_invest = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=2,
+            top_n_shortfall_policy="renormalize",
+            min_confidence=None,
+            exclude_risk_tags=(),
+        ),
+    )
+
+    full_period = full_invest["periods"][0]
+    assert full_period["selected_codes"] == ["113001.SH"]
+    assert full_period["cash_weight"] == pytest.approx(0.0)
+    assert full_period["weight_denominator"] == 1
+    assert full_period["turnover"] == pytest.approx(1.0)
+    assert full_period["positions"][0]["weight"] == pytest.approx(1.0)
+    assert full_period["period_return"] == pytest.approx(0.10)
+
+
 def test_score_strategy_applies_price_premium_and_sigma_filters(monkeypatch):
     provider = StrategyFakeProvider()
 
@@ -796,6 +869,8 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                     "selection_view": "综合机会",
                     "rebalance_freq": "M",
                     "top_n": 10,
+                    "top_n_shortfall_policy": "cash",
+                    "history_mode": "Wind高保真",
                 },
                 "summary": {
                     "final_equity": 1.35,
@@ -803,6 +878,33 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                     "max_drawdown": 0.07,
                     "sharpe": 1.8,
                     "calmar": 5.1,
+                },
+                "run_settings": {
+                    "data_source": "Wind",
+                    "history_mode": "Wind高保真",
+                    "pool": {
+                        "gui_mode": "自选代码",
+                        "engine_mode": "static",
+                        "code_count": 2,
+                        "bond_codes": ["113001.SH", "113002.SH"],
+                    },
+                    "strategy": {
+                        "top_n": 10,
+                        "top_n_shortfall_policy": "cash",
+                    },
+                    "admission_filter": {
+                        "min_outstanding_balance": 0.5,
+                        "min_credit_rating": "A+",
+                    },
+                    "pricing": {
+                        "r": 0.022,
+                        "base_spread": 0.03,
+                        "p_down": 0.25,
+                        "distress_k": 0.05,
+                        "M": 120,
+                        "N": 400,
+                        "vol_window_days": 21,
+                    },
                 },
                 "periods": [{"start_date": date(2025, 5, 30)}],
                 "equity_curve": [{"date": date(2025, 5, 30), "equity": 1.0}],
@@ -829,6 +931,15 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
     assert archive_payload["schema_version"] == 2
     assert archive_payload["snapshot_id"] == info["snapshot_id"]
     assert archive_payload["meta"]["config"]["selection_view"] == "综合机会"
+    assert archive_payload["meta"]["config"]["top_n_shortfall_policy"] == "cash"
+    assert archive_payload["meta"]["config"]["history_mode"] == "Wind高保真"
+    assert archive_payload["result"]["config"]["history_mode"] == "Wind高保真"
+    assert archive_payload["meta"]["run_settings"]["data_source"] == "Wind"
+    assert archive_payload["meta"]["run_settings"]["pool"]["bond_codes"] == [
+        "113001.SH", "113002.SH",
+    ]
+    assert archive_payload["meta"]["run_settings"]["pricing"]["M"] == 120
+    assert archive_payload["result"]["run_settings"]["admission_filter"]["min_credit_rating"] == "A+"
     assert archive_payload["meta"]["period_count"] == 1
     assert "_snapshot_path" not in archive_payload["result"]
 

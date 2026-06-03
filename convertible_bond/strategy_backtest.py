@@ -47,9 +47,10 @@ class ScoreStrategyConfig:
     """机会分选债策略参数."""
 
     top_n: int = 10
+    top_n_shortfall_policy: str = "cash"
     rebalance_freq: str = "M"
     selection_view: str = "综合机会"
-    min_score: float | None = None
+    min_score: float | None = 0.0
     min_confidence: tuple[str, ...] | None = ("高", "中")
     exclude_risk_tags: tuple[str, ...] = tuple(sorted(HARD_REVIEW_TAGS))
     min_market_price: float | None = None
@@ -292,6 +293,8 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
     """回测结果里回显的配置快照 (供 GUI/CSV 展示与复现)。"""
     return {
         "top_n": cfg.top_n,
+        "top_n_shortfall_policy": _normalize_top_n_shortfall_policy(
+            cfg.top_n_shortfall_policy),
         "rebalance_freq": cfg.rebalance_freq,
         "selection_view": cfg.selection_view,
         "min_score": cfg.min_score,
@@ -428,10 +431,18 @@ def _run_rebalance_period(
     )
     _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
 
-    turnover = _equal_weight_turnover(previous_codes, selected_codes)
+    shortfall_policy = _normalize_top_n_shortfall_policy(cfg.top_n_shortfall_policy)
+    intended = _position_weight_denominator(shortfall_policy, cfg.top_n, len(selected))
+    previous_intended = _position_weight_denominator(
+        shortfall_policy, cfg.top_n, len(previous_codes))
+    turnover = _equal_weight_turnover(
+        previous_codes,
+        selected_codes,
+        previous_denominator=previous_intended,
+        current_denominator=intended,
+    )
 
     # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母。
-    intended = len(selected)
     if intended > 0:
         for pos in positions:
             pos["weight"] = 1.0 / intended
@@ -505,6 +516,9 @@ def _run_rebalance_period(
         "gross_return": gross_return,
         "cost": cost,
         "cash_weight": cash_weight,
+        "top_n_shortfall_policy": shortfall_policy,
+        "target_count": cfg.top_n,
+        "weight_denominator": intended,
         "benchmark_return": benchmark_return,
         "equity": equity,
         "benchmark_equity": new_benchmark_equity if cfg.compute_benchmark else None,
@@ -563,8 +577,8 @@ def backtest_score_strategy(
       - ``summary``: 总收益、年化、回撤、波动率、胜率、Sharpe、超额等指标
 
     净值口径:
-      - 等权持有 ``top_n`` 选中标的; 缺期初/期末收盘价无法建仓的标的按现金(0 收益)
-        计入分母, 避免少数可成交标的把组合静默放大成高集中度。
+      - 默认按 ``top_n`` 固定仓位分母等权; 未满 Top N 和缺期初/期末成交价的
+        仓位按现金(0 收益)计入, 避免少数可成交标的把组合静默放大成高集中度。
       - 区间净收益 = 毛收益 - ``turnover * transaction_cost`` (单边换手 × 成本率)。
       - 基准为每个调仓日"全部通过准入且已定价"标的的等权收益, 表示买下整个筛选池
         的参照线; 用于衡量机会分排序带来的超额。
@@ -2294,13 +2308,57 @@ def _drawdown_stats(equity_curve: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _equal_weight_turnover(previous_codes: list[str], current_codes: list[str]) -> float:
-    if not previous_codes and not current_codes:
-        return 0.0
-    if not previous_codes or not current_codes:
-        return 1.0
-    prev_weight = {code: 1.0 / len(previous_codes) for code in previous_codes}
-    curr_weight = {code: 1.0 / len(current_codes) for code in current_codes}
+def _normalize_top_n_shortfall_policy(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "": "cash",
+        "cash": "cash",
+        "hold_cash": "cash",
+        "leave_cash": "cash",
+        "留现金": "cash",
+        "缺口留现金": "cash",
+        "未满留现金": "cash",
+        "renormalize": "renormalize",
+        "rebalance": "renormalize",
+        "full_invest": "renormalize",
+        "full_investment": "renormalize",
+        "剩余等权": "renormalize",
+        "剩余标的等权": "renormalize",
+        "满仓等权": "renormalize",
+    }
+    if raw not in aliases:
+        raise ValueError(f"未知 Top N 缺口处理方式: {value}")
+    return aliases[raw]
+
+
+def _position_weight_denominator(policy: str, top_n: int, selected_count: int) -> int:
+    if _normalize_top_n_shortfall_policy(policy) == "cash":
+        return max(1, int(top_n))
+    return max(0, int(selected_count))
+
+
+def _equal_weight_portfolio_weights(codes: list[str], denominator: int | None = None) -> dict[str, float]:
+    if denominator is None:
+        denominator = len(codes)
+    denominator = max(0, int(denominator))
+    if denominator <= 0:
+        return {"__cash__": 1.0}
+    weights = {code: 1.0 / denominator for code in codes}
+    cash_weight = max(0.0, (denominator - len(codes)) / denominator)
+    if cash_weight > 0:
+        weights["__cash__"] = cash_weight
+    return weights
+
+
+def _equal_weight_turnover(
+    previous_codes: list[str],
+    current_codes: list[str],
+    *,
+    previous_denominator: int | None = None,
+    current_denominator: int | None = None,
+) -> float:
+    prev_weight = _equal_weight_portfolio_weights(previous_codes, previous_denominator)
+    curr_weight = _equal_weight_portfolio_weights(current_codes, current_denominator)
     codes = set(prev_weight) | set(curr_weight)
     return 0.5 * sum(abs(curr_weight.get(code, 0.0) - prev_weight.get(code, 0.0)) for code in codes)
 

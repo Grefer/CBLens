@@ -267,6 +267,7 @@ class HistoricalBondDataProvider(DataProvider):
         event_store: CBEventStore | None = None,
         strip_fallback_status: bool = True,
         merge_admission_status: bool = False,
+        provider_history_terms: bool = False,
     ):
         self.inner = inner
         self.history_store = history_store
@@ -274,6 +275,7 @@ class HistoricalBondDataProvider(DataProvider):
         self.event_store = event_store or CBEventStore(project_events_path())
         self.strip_fallback_status = strip_fallback_status
         self.merge_admission_status = merge_admission_status
+        self.provider_history_terms = provider_history_terms
         self.name = f"{inner.name}+history"
 
     def get_bond_terms(self, bond_code: str, valuation_date: date) -> BondTerms:
@@ -318,7 +320,9 @@ class HistoricalBondDataProvider(DataProvider):
         if has_snapshot_terms:
             terms_source = "history_snapshot"
             uses_fallback = False
-        elif self.merge_admission_status and not self.strip_fallback_status:
+        elif self.provider_history_terms or (
+            self.merge_admission_status and not self.strip_fallback_status
+        ):
             terms_source = "provider_history"
             uses_fallback = False
         else:

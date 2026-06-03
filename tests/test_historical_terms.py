@@ -282,6 +282,27 @@ def test_historical_provider_can_merge_wind_admission_status(tmp_path):
     assert diag["merge_admission_status"] is True
 
 
+def test_historical_provider_reports_explicit_provider_history_terms(tmp_path):
+    provider = HistoricalBondDataProvider(
+        FakeHistoricalProvider(),
+        patch_store=TermsPatchStore(tmp_path / "missing_patches.json"),
+        event_store=CBEventStore(tmp_path / "events.json"),
+        strip_fallback_status=True,
+        merge_admission_status=False,
+        provider_history_terms=True,
+    )
+
+    terms = provider.get_bond_terms("113001.SH", date(2025, 2, 20))
+    diag = provider.get_terms_source_diagnostics("113001.SH", date(2025, 2, 20))
+
+    assert terms.conversion_price == 8.0
+    assert terms.call_status is None
+    assert terms.delisting_date is None
+    assert diag["terms_source"] == "provider_history"
+    assert diag["uses_current_fallback"] is False
+    assert diag["merge_admission_status"] is False
+
+
 def test_historical_provider_strips_unannounced_future_wind_status(tmp_path):
     provider = HistoricalBondDataProvider(
         FakeFutureEventWindProvider(),
