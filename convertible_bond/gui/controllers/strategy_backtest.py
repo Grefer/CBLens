@@ -1812,9 +1812,9 @@ class StrategyBacktestMixin:
             stretch_weights={"名称": 1.7, "贡献(%)": 0.7, "期数": 0.4},
         )
 
-        # 贡献瀑布图 + 月度收益热力图
-        self._strategy_section_title(frame, "年度收益 / 个券贡献", 3, 0)
-        self._strategy_section_title(frame, "月度收益分布", 3, 1)
+        # 个券贡献瀑布图 + 月度/全年收益热力图 (年度收益已并入热力图右端「全年」列)
+        self._strategy_section_title(frame, "个券贡献", 3, 0)
+        self._strategy_section_title(frame, "月度 / 全年收益", 3, 1)
         self._render_attribution_charts(
             frame, 4,
             top_contribs, top_detractors,
@@ -1825,7 +1825,7 @@ class StrategyBacktestMixin:
     def _render_attribution_charts(self, frame, row,
                                    top_contribs, top_detractors,
                                    yearly_returns, monthly_returns):
-        """左: 年度收益表 + 贡献瀑布; 右: 月度收益热力图."""
+        """左: 个券贡献瀑布图(独占整列); 右: 月度收益热力图 + 全年列(紧凑置顶)."""
         bg_card_color = get_color(BG_CARD)
         bg_input_color = get_color(BG_INPUT)
         text_dim_color = get_color(TEXT_DIM)
@@ -1833,32 +1833,18 @@ class StrategyBacktestMixin:
         border_color = get_color(BORDER)
         green_color = get_color(GREEN)
         red_color = get_color(RED)
-        accent_color = get_color(ACCENT)
 
         chart_shell = ctk.CTkFrame(frame, fg_color="transparent")
         chart_shell.grid(row=row, column=0, columnspan=2, sticky="nsew", padx=4, pady=(0, 8))
-        chart_shell.grid_columnconfigure(0, weight=5, minsize=760)
-        chart_shell.grid_columnconfigure(1, weight=4, minsize=600)
+        chart_shell.grid_columnconfigure(0, weight=1, uniform="attr_chart")
+        chart_shell.grid_columnconfigure(1, weight=1, uniform="attr_chart")
         chart_shell.grid_rowconfigure(0, weight=1)
 
-        # 左列: 年度收益表 + 贡献瀑布图
+        # ── 左列: 个券贡献瀑布图 (年度表已并入右侧「全年」列, 此处独占整列加宽) ──
         left = ctk.CTkFrame(chart_shell, fg_color="transparent")
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=0)
         left.grid_columnconfigure(0, weight=1)
-        left.grid_rowconfigure(0, weight=0)
-        left.grid_rowconfigure(1, weight=1)
-
-        yearly_table_height = min(4, max(2, len(yearly_returns) or 1))
-        self._render_strategy_small_tree(
-            left, 0, 0,
-            ["period", "return"],
-            ["年份", "收益(%)"],
-            [90, 90],
-            [[row_d.get("period", ""), self._fmt_strategy_pct(row_d.get("return"), sign=True)]
-             for row_d in yearly_returns],
-            max_height=yearly_table_height,
-            yscroll=len(yearly_returns) > yearly_table_height,
-        )
+        left.grid_rowconfigure(0, weight=1)
 
         waterfall_items = (
             [(r.get("bond_name") or r.get("bond_code", "")[:6],
@@ -1870,15 +1856,16 @@ class StrategyBacktestMixin:
         waterfall_items.sort(key=lambda x: x[1], reverse=True)
         if waterfall_items:
             wf_frame = ctk.CTkFrame(left, fg_color="transparent")
-            wf_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+            wf_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
             wf_frame.grid_columnconfigure(0, weight=1)
             wf_frame.grid_rowconfigure(0, weight=1)
-            fig_wf = Figure(figsize=(7.0, 3.7), dpi=100, facecolor=bg_card_color)
+            wf_h = max(2.8, 0.34 * len(waterfall_items) + 1.1)
+            fig_wf = Figure(figsize=(7.2, wf_h), dpi=100, facecolor=bg_card_color)
             ax_wf = fig_wf.add_subplot(111, facecolor=bg_input_color)
             names = [n[:6] for n, _ in waterfall_items]
             vals = [v * 100 for _, v in waterfall_items]
             wf_colors = [green_color if v >= 0 else red_color for v in vals]
-            ax_wf.barh(range(len(names)), vals, color=wf_colors, alpha=0.8, height=0.65)
+            ax_wf.barh(range(len(names)), vals, color=wf_colors, alpha=0.85, height=0.66)
             ax_wf.set_yticks(range(len(names)))
             ax_wf.set_yticklabels(names, fontsize=8, color=text_color)
             ax_wf.set_xlabel("贡献 (%)", color=text_dim_color, fontsize=9)
@@ -1888,7 +1875,15 @@ class StrategyBacktestMixin:
             for spine in ax_wf.spines.values():
                 spine.set_color(border_color)
             ax_wf.invert_yaxis()
-            fig_wf.subplots_adjust(left=0.24, right=0.98, bottom=0.16, top=0.96)
+            # 数值标签直接标在条端, 省去对照刻度
+            span = (max(vals) - min(vals)) or 1.0
+            pad = 0.012 * span
+            for yi, v in enumerate(vals):
+                ax_wf.text(v + (pad if v >= 0 else -pad), yi, f"{v:+.1f}",
+                           va="center", ha="left" if v >= 0 else "right",
+                           fontsize=7.5, color=text_dim_color)
+            ax_wf.margins(x=0.12)
+            fig_wf.subplots_adjust(left=0.20, right=0.97, bottom=0.16, top=0.97)
             canvas_wf = FigureCanvasTkAgg(fig_wf, master=wf_frame)
             canvas_wf.draw()
             canvas_wf.get_tk_widget().grid(row=0, column=0, sticky="nsew")
@@ -1897,17 +1892,19 @@ class StrategyBacktestMixin:
             ctk.CTkLabel(
                 left, text="暂无贡献数据", text_color=TEXT_DIM,
                 font=(FONT_FAMILY, 12),
-            ).grid(row=1, column=0, sticky="nsew", padx=12, pady=12)
+            ).grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
 
-        # 右列: 月度收益热力图
+        # ── 右列: 月度收益热力图 + 全年列 (紧凑置顶, 不随行高拉伸) ──
         right = ctk.CTkFrame(chart_shell, fg_color="transparent")
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=0)
         right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=0)   # 热力图按内容高度
+        right.grid_rowconfigure(1, weight=1)   # 占位行吸收多余高度, 避免色块被纵向拉伸
 
         if not monthly_returns:
             ctk.CTkLabel(right, text="暂无月度数据", text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 12)).grid(row=0, column=0, padx=12, pady=12)
+                         font=(FONT_FAMILY, 12)).grid(row=0, column=0, sticky="new",
+                                                      padx=12, pady=12)
             return
 
         year_month_map: dict[int, dict[int, float]] = {}
@@ -1925,7 +1922,8 @@ class StrategyBacktestMixin:
 
         if not year_month_map:
             ctk.CTkLabel(right, text="月度数据解析为空", text_color=TEXT_DIM,
-                         font=(FONT_FAMILY, 12)).grid(row=0, column=0, padx=12, pady=12)
+                         font=(FONT_FAMILY, 12)).grid(row=0, column=0, sticky="new",
+                                                      padx=12, pady=12)
             return
 
         years = sorted(year_month_map.keys())
@@ -1935,15 +1933,47 @@ class StrategyBacktestMixin:
                 if 1 <= m <= 12:
                     data[yi, m - 1] = v * 100
 
-        fig_hm = Figure(figsize=(6.4, max(3.0, 0.75 * len(years) + 1.5)), dpi=100,
-                        facecolor=bg_card_color)
-        ax_hm = fig_hm.add_subplot(111, facecolor=bg_input_color)
-        vmax = max(3.0, float(np.nanmax(np.abs(data)))) if np.any(np.isfinite(data)) else 5.0
+        # 全年收益: 优先取 yearly_returns, 缺失年份用当年月度复利兜底
+        annual_map: dict[int, float] = {}
+        for row_d in yearly_returns or []:
+            try:
+                y = int(str(row_d.get("period", "")).split("-")[0])
+            except (ValueError, IndexError):
+                continue
+            rv = row_d.get("return")
+            if rv is None:
+                continue
+            try:
+                annual_map[y] = float(rv) * 100
+            except (TypeError, ValueError):
+                continue
+        annual = np.full((len(years), 1), np.nan)
+        for yi, y in enumerate(years):
+            if y in annual_map:
+                annual[yi, 0] = annual_map[y]
+            elif year_month_map[y]:
+                comp = 1.0
+                for v in year_month_map[y].values():
+                    comp *= (1.0 + v)
+                annual[yi, 0] = (comp - 1.0) * 100
+
+        n_years = len(years)
+        fig_h = 1.25 + 0.6 * n_years
+        fig_hm = Figure(figsize=(6.6, fig_h), dpi=100, facecolor=bg_card_color)
+        gs = fig_hm.add_gridspec(
+            1, 2, width_ratios=[12, 1.5], wspace=0.08,
+            left=0.085, right=0.9, bottom=0.42 / fig_h, top=1 - 0.26 / fig_h)
+        ax_hm = fig_hm.add_subplot(gs[0, 0], facecolor=bg_input_color)
+        ax_yr = fig_hm.add_subplot(gs[0, 1], facecolor=bg_input_color, sharey=ax_hm)
         cmap = LinearSegmentedColormap.from_list("rg", [red_color, bg_input_color, green_color])
+
+        # 月度色块 (独立标尺, 不被全年大幅收益拉爆色阶)
+        vmax = max(3.0, float(np.nanmax(np.abs(data)))) if np.any(np.isfinite(data)) else 5.0
         im = ax_hm.imshow(data, aspect="auto", cmap=cmap, vmin=-vmax, vmax=vmax,
                           interpolation="nearest")
         ax_hm.set_xticks(range(12))
-        ax_hm.set_xticklabels([f"{m+1}月" for m in range(12)], fontsize=7, color=text_dim_color)
+        ax_hm.set_xticklabels([f"{m+1}月" for m in range(12)], fontsize=7,
+                              color=text_dim_color)
         ax_hm.set_yticks(range(len(years)))
         ax_hm.set_yticklabels([str(y) for y in years], fontsize=8, color=text_color)
         ax_hm.tick_params(length=0)
@@ -1954,15 +1984,33 @@ class StrategyBacktestMixin:
                 val = data[yi, mi]
                 if np.isfinite(val):
                     ax_hm.text(mi, yi, f"{val:+.1f}", ha="center", va="center",
-                               fontsize=7, color=text_color,
+                               fontsize=6.5, color=text_color,
                                fontweight="bold" if abs(val) >= vmax * 0.5 else "normal")
-        cb = fig_hm.colorbar(im, ax=ax_hm, fraction=0.03, pad=0.04)
+
+        # 全年色块 (独立标尺 + 边框分隔, 视觉上与月度区分)
+        a_vmax = (max(5.0, float(np.nanmax(np.abs(annual))))
+                  if np.any(np.isfinite(annual)) else 10.0)
+        ax_yr.imshow(annual, aspect="auto", cmap=cmap, vmin=-a_vmax, vmax=a_vmax,
+                     interpolation="nearest")
+        ax_yr.set_xticks([0])
+        ax_yr.set_xticklabels(["全年"], fontsize=7.5, color=text_color)
+        ax_yr.tick_params(length=0, labelleft=False)
+        for spine in ax_yr.spines.values():
+            spine.set_visible(True)
+            spine.set_color(border_color)
+            spine.set_linewidth(0.8)
+        for yi in range(len(years)):
+            val = annual[yi, 0]
+            if np.isfinite(val):
+                ax_yr.text(0, yi, f"{val:+.1f}", ha="center", va="center",
+                           fontsize=8, color=text_color, fontweight="bold")
+
+        cb = fig_hm.colorbar(im, ax=[ax_hm, ax_yr], fraction=0.045, pad=0.04)
         cb.ax.tick_params(colors=text_dim_color, labelsize=7)
-        cb.set_label("%", color=text_dim_color, fontsize=8)
-        fig_hm.subplots_adjust(left=0.08, right=0.90, bottom=0.13, top=0.96)
+        cb.set_label("月度 %", color=text_dim_color, fontsize=8)
         canvas_hm = FigureCanvasTkAgg(fig_hm, master=right)
         canvas_hm.draw()
-        canvas_hm.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        canvas_hm.get_tk_widget().grid(row=0, column=0, sticky="new")
         self._strategy_bt_heatmap_fig = fig_hm
 
     def _render_strategy_risk_panel(self, result):
@@ -1982,9 +2030,13 @@ class StrategyBacktestMixin:
         frame.grid_rowconfigure(4, minsize=300)
 
         # ── Row 0: 稳健性指标条 ──────────────────────────────────
+        # 按时间口径的统计(胜率/最好最差单期/收益分布/滚动风险)剔除首尾残桩区间,
+        # 避免不足整周期的几天与整月等权混算; 残桩盈亏仍计入净值/总收益。
+        stat_periods = self._strategy_full_periods(periods)
+        dropped_stub_periods = len(periods) - len(stat_periods)
         returns = [
             float(p.get("period_return"))
-            for p in periods
+            for p in stat_periods
             if p.get("period_return") is not None and np.isfinite(p.get("period_return"))
         ]
         win_rate = (sum(1 for r in returns if r > 0) / len(returns)) if returns else None
@@ -2040,6 +2092,15 @@ class StrategyBacktestMixin:
         else:
             ctk.CTkLabel(left, text="🟢 暂无明显风险提示", text_color=TEXT_DIM,
                          font=(FONT_FAMILY, 11)).pack(anchor="w", pady=(3, 0))
+
+        if dropped_stub_periods > 0:
+            ctk.CTkLabel(
+                left,
+                text=(f"ℹ️ 回测首尾不足整周期的 {dropped_stub_periods} 个残桩区间已从"
+                      "按期统计(胜率/单期/分布/滚动)中剔除, 其盈亏仍计入总收益"),
+                text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+                justify="left", wraplength=460,
+            ).pack(anchor="w", pady=(3, 0))
 
         dd_items = [
             ("回撤区间", f"{summary.get('max_drawdown_start') or '—'} → {summary.get('max_drawdown_end') or '—'}"),
@@ -2128,7 +2189,7 @@ class StrategyBacktestMixin:
             self._strategy_bt_dist_fig = fig_dist
 
         worst_rows = []
-        for period in sorted(periods, key=lambda p: float(p.get("period_return") or 0.0))[:8]:
+        for period in sorted(stat_periods, key=lambda p: float(p.get("period_return") or 0.0))[:8]:
             period_return = period.get("period_return")
             benchmark = period.get("benchmark_return")
             excess = (
@@ -2153,8 +2214,49 @@ class StrategyBacktestMixin:
             stretch_weights={"持仓": 6.0, "区间": 1.2, "收益": 0.3, "超额": 0.3, "换手": 0.3},
         )
 
+    @staticmethod
+    def _strategy_period_days(period) -> int | None:
+        """区间跨度天数; start/end 为 date 对象(实时结果)或 ISO 字符串(快照)."""
+        sd = period.get("start_date")
+        ed = period.get("end_date")
+        if isinstance(sd, date) and isinstance(ed, date):
+            return (ed - sd).days
+        try:
+            return (date.fromisoformat(str(ed)) - date.fromisoformat(str(sd))).days
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def _strategy_full_periods(cls, periods, *, stub_ratio: float = 0.5):
+        """剔除回测首尾"残桩"区间后的列表, 仅用于按期收益分布口径.
+
+        ``build_rebalance_schedule`` 强制把 start/end 日纳入调仓边界, 当结束(或起始)
+        日紧邻上一个边界时会产生几天的残桩区间。它与整周期等权进入按期收益统计
+        (滚动波动率/Sharpe/胜率/收益分布)会造成末端跳变, 故在这些"按时间口径"
+        的统计中剔除。
+
+        注意: 仅剔除"基于区间收益、隐含等长假设"的统计; 净值/总收益/年化波动
+        (日频 MTM) 以及按事件计的换手/现金权重均不受影响 —— 残桩的盈亏与那次
+        真实调仓仍如实计入。中间区间按构造必为完整周期, 故只检查首尾两期。
+        """
+        if len(periods) <= 2:
+            return list(periods)
+        lengths = [cls._strategy_period_days(p) for p in periods]
+        valid = [d for d in lengths if d is not None and d > 0]
+        if not valid:
+            return list(periods)
+        threshold = float(np.median(valid)) * stub_ratio
+        start, end = 0, len(periods)
+        if lengths[0] is not None and lengths[0] < threshold:
+            start = 1
+        if lengths[-1] is not None and lengths[-1] < threshold and (end - 1) > start:
+            end -= 1
+        return list(periods[start:end])
+
     def _render_rolling_risk_chart(self, frame, grid_row, periods, equity_curve):
         """滚动波动率 + 滚动 Sharpe 折线图."""
+        # 与风险面板口径一致: 剔除首尾残桩区间, 避免等权滚动统计在末端跳变
+        periods = self._strategy_full_periods(periods)
         returns = [float(p.get("period_return") or 0.0) for p in periods]
         if len(returns) < 4:
             ctk.CTkLabel(frame, text="区间不足 4 期, 无法计算滚动风险",
