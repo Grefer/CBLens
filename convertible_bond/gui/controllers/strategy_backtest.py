@@ -2030,13 +2030,9 @@ class StrategyBacktestMixin:
         frame.grid_rowconfigure(4, minsize=300)
 
         # ── Row 0: 稳健性指标条 ──────────────────────────────────
-        # 按时间口径的统计(胜率/最好最差单期/收益分布/滚动风险)剔除首尾残桩区间,
-        # 避免不足整周期的几天与整月等权混算; 残桩盈亏仍计入净值/总收益。
-        stat_periods = self._strategy_full_periods(periods)
-        dropped_stub_periods = len(periods) - len(stat_periods)
         returns = [
             float(p.get("period_return"))
-            for p in stat_periods
+            for p in periods
             if p.get("period_return") is not None and np.isfinite(p.get("period_return"))
         ]
         win_rate = (sum(1 for r in returns if r > 0) / len(returns)) if returns else None
@@ -2092,15 +2088,6 @@ class StrategyBacktestMixin:
         else:
             ctk.CTkLabel(left, text="🟢 暂无明显风险提示", text_color=TEXT_DIM,
                          font=(FONT_FAMILY, 11)).pack(anchor="w", pady=(3, 0))
-
-        if dropped_stub_periods > 0:
-            ctk.CTkLabel(
-                left,
-                text=(f"ℹ️ 回测首尾不足整周期的 {dropped_stub_periods} 个残桩区间已从"
-                      "按期统计(胜率/单期/分布/滚动)中剔除, 其盈亏仍计入总收益"),
-                text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
-                justify="left", wraplength=460,
-            ).pack(anchor="w", pady=(3, 0))
 
         dd_items = [
             ("回撤区间", f"{summary.get('max_drawdown_start') or '—'} → {summary.get('max_drawdown_end') or '—'}"),
@@ -2189,7 +2176,7 @@ class StrategyBacktestMixin:
             self._strategy_bt_dist_fig = fig_dist
 
         worst_rows = []
-        for period in sorted(stat_periods, key=lambda p: float(p.get("period_return") or 0.0))[:8]:
+        for period in sorted(periods, key=lambda p: float(p.get("period_return") or 0.0))[:8]:
             period_return = period.get("period_return")
             benchmark = period.get("benchmark_return")
             excess = (
@@ -2215,51 +2202,50 @@ class StrategyBacktestMixin:
         )
 
     @staticmethod
-    def _strategy_period_days(period) -> int | None:
-        """区间跨度天数; start/end 为 date 对象(实时结果)或 ISO 字符串(快照)."""
-        sd = period.get("start_date")
-        ed = period.get("end_date")
-        if isinstance(sd, date) and isinstance(ed, date):
-            return (ed - sd).days
-        try:
-            return (date.fromisoformat(str(ed)) - date.fromisoformat(str(sd))).days
-        except (ValueError, TypeError):
-            return None
+    def _daily_curve_returns(equity_curve):
+        """从日频净值曲线提取 (日期, 日收益) 序列.
 
-    @classmethod
-    def _strategy_full_periods(cls, periods, *, stub_ratio: float = 0.5):
-        """剔除回测首尾"残桩"区间后的列表, 仅用于按期收益分布口径.
-
-        ``build_rebalance_schedule`` 强制把 start/end 日纳入调仓边界, 当结束(或起始)
-        日紧邻上一个边界时会产生几天的残桩区间。它与整周期等权进入按期收益统计
-        (滚动波动率/Sharpe/胜率/收益分布)会造成末端跳变, 故在这些"按时间口径"
-        的统计中剔除。
-
-        注意: 仅剔除"基于区间收益、隐含等长假设"的统计; 净值/总收益/年化波动
-        (日频 MTM) 以及按事件计的换手/现金权重均不受影响 —— 残桩的盈亏与那次
-        真实调仓仍如实计入。中间区间按构造必为完整周期, 故只检查首尾两期。
+        与总览净值曲线、核心 ``daily_mtm`` 波动率口径同源。逐日 MTM 步长均匀,
+        天然不受回测末尾"残桩区间"(不足整周期的几天)影响, 故按时间口径的滚动
+        风险走势基于此, 而非等权的调仓区间收益。
         """
-        if len(periods) <= 2:
-            return list(periods)
-        lengths = [cls._strategy_period_days(p) for p in periods]
-        valid = [d for d in lengths if d is not None and d > 0]
-        if not valid:
-            return list(periods)
-        threshold = float(np.median(valid)) * stub_ratio
-        start, end = 0, len(periods)
-        if lengths[0] is not None and lengths[0] < threshold:
-            start = 1
-        if lengths[-1] is not None and lengths[-1] < threshold and (end - 1) > start:
-            end -= 1
-        return list(periods[start:end])
+        dates, eqs = [], []
+        for row in equity_curve or []:
+            d = row.get("date")
+            e = row.get("equity")
+            if d is None or e is None:
+                continue
+            try:
+                e = float(e)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(e) or e <= 0:
+                continue
+            dates.append(d)
+            eqs.append(e)
+        r_dates, rets = [], []
+        for i in range(1, len(eqs)):
+            if eqs[i - 1] > 0:
+                r_dates.append(dates[i])
+                rets.append(eqs[i] / eqs[i - 1] - 1.0)
+        return r_dates, rets
 
     def _render_rolling_risk_chart(self, frame, grid_row, periods, equity_curve):
-        """滚动波动率 + 滚动 Sharpe 折线图."""
-        # 与风险面板口径一致: 剔除首尾残桩区间, 避免等权滚动统计在末端跳变
-        periods = self._strategy_full_periods(periods)
-        returns = [float(p.get("period_return") or 0.0) for p in periods]
-        if len(returns) < 4:
-            ctk.CTkLabel(frame, text="区间不足 4 期, 无法计算滚动风险",
+        """滚动年化波动率 + 滚动 Sharpe 走势.
+
+        基于日频净值曲线 (与总览净值图、年化波动/Sharpe 指标同口径), 而非等权的
+        调仓区间收益 —— 这样步长均匀, 不会因末尾不足整周期的残桩区间在末端跳变。
+        """
+        dates, dret = self._daily_curve_returns(equity_curve)
+        # 滚动窗口按"月"定义: 默认近 3 个月 (≈63 个交易日); 样本不足时按月收窄
+        days_per_month = 21
+        months = 3
+        window = months * days_per_month
+        while months > 1 and len(dret) < window + 1:
+            months -= 1
+            window = months * days_per_month
+        if len(dret) < max(window + 1, 25):
+            ctk.CTkLabel(frame, text="日频样本不足, 无法计算滚动风险",
                          text_color=TEXT_DIM, font=(FONT_FAMILY, 12)).grid(
                              row=grid_row, column=0, columnspan=2, sticky="w", padx=12, pady=6)
             return
@@ -2270,23 +2256,16 @@ class StrategyBacktestMixin:
         border_color = get_color(BORDER)
         accent_color = get_color(ACCENT)
         orange_color = get_color(ORANGE)
-        text_color = get_color(TEXT)
 
-        ret_arr = np.array(returns)
-        ret_dates = [p["end_date"] for p in periods]
-        window = min(6, len(returns) - 1)
-        rolling_vol = []
-        rolling_sharpe = []
-        for i in range(len(returns)):
-            if i < window - 1:
-                rolling_vol.append(np.nan)
-                rolling_sharpe.append(np.nan)
-            else:
-                chunk = ret_arr[i - window + 1: i + 1]
-                vol = float(np.std(chunk, ddof=1))
-                rolling_vol.append(vol * 100)
-                mean_r = float(np.mean(chunk))
-                rolling_sharpe.append(mean_r / vol if vol > 1e-10 else 0.0)
+        arr = np.asarray(dret, dtype=float)
+        ann = float(np.sqrt(252.0))
+        roll_dates, roll_vol, roll_sharpe = [], [], []
+        for i in range(window - 1, len(arr)):
+            chunk = arr[i - window + 1: i + 1]
+            sd = float(np.std(chunk, ddof=1))
+            roll_vol.append(sd * ann * 100.0)
+            roll_sharpe.append(float(np.mean(chunk)) / sd * ann if sd > 1e-12 else 0.0)
+            roll_dates.append(dates[i])
 
         chart_frame = ctk.CTkFrame(
             frame, fg_color="transparent", height=STRATEGY_RISK_CHART_HEIGHT)
@@ -2299,10 +2278,9 @@ class StrategyBacktestMixin:
         ax1 = fig.add_subplot(121, facecolor=bg_input_color)
         ax2 = fig.add_subplot(122, facecolor=bg_input_color)
 
-        ax1.plot(ret_dates, rolling_vol, color=orange_color, linewidth=1.5,
-                 marker="o", markersize=3)
-        ax1.set_ylabel("波动率 (%)", color=text_dim_color, fontsize=9)
-        ax1.set_title(f"近 {window} 期波动率走势", color=text_dim_color, fontsize=9)
+        ax1.plot(roll_dates, roll_vol, color=orange_color, linewidth=1.5)
+        ax1.set_ylabel("年化波动率 (%)", color=text_dim_color, fontsize=9)
+        ax1.set_title(f"滚动年化波动率 (近 {months} 个月)", color=text_dim_color, fontsize=9)
         ax1.tick_params(colors=text_dim_color, labelsize=7)
         ax1.grid(True, color=border_color, linestyle="--", alpha=0.3)
         for spine in ax1.spines.values():
@@ -2311,14 +2289,13 @@ class StrategyBacktestMixin:
             lbl.set_rotation(20)
             lbl.set_horizontalalignment("right")
 
-        ax2.plot(ret_dates, rolling_sharpe, color=accent_color, linewidth=1.5,
-                 marker="s", markersize=3)
+        ax2.plot(roll_dates, roll_sharpe, color=accent_color, linewidth=1.5)
         ax2.axhline(0, color=border_color, linewidth=0.8)
-        ax2.set_ylabel("风险收益比", color=text_dim_color, fontsize=9)
-        ax2.set_title(f"近 {window} 期风险收益比 (Sharpe)", color=text_dim_color, fontsize=9)
+        ax2.set_ylabel("Sharpe (年化)", color=text_dim_color, fontsize=9)
+        ax2.set_title(f"滚动 Sharpe (近 {months} 个月)", color=text_dim_color, fontsize=9)
         ax2.tick_params(colors=text_dim_color, labelsize=7)
         ax2.grid(True, color=border_color, linestyle="--", alpha=0.3)
-        finite_sharpe = [v for v in rolling_sharpe if np.isfinite(v)]
+        finite_sharpe = [v for v in roll_sharpe if np.isfinite(v)]
         if finite_sharpe:
             s_min, s_max = min(finite_sharpe), max(finite_sharpe)
             pad = max(0.3, (s_max - s_min) * 0.15)
