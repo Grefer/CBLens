@@ -997,10 +997,15 @@ def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp
             self.strategy_bt_compare_frame = object()
             self.rendered_compare = 0
             self.cleared_panels = 0
+            self.confirm_count = None
             self._latest_path = latest_path
 
         def _strategy_snapshot_path(self):
             return self._latest_path
+
+        def _confirm_delete_selected_comparison(self, count):
+            self.confirm_count = count
+            return True
 
         def _render_strategy_comparison(self):
             self.rendered_compare += 1
@@ -1017,6 +1022,7 @@ def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp
     app = DummyApp(archive_path, latest_path)
     app._delete_selected_comparison()
 
+    assert app.confirm_count == 1
     assert app._strategy_compare_results == []
     assert app._last_strategy_bt_result is None
     assert app.strategy_bt_progress.get() == 0
@@ -1026,6 +1032,53 @@ def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp
     assert app.rendered_compare == 1
     assert not archive_path.exists()
     assert not latest_path.exists()
+
+
+def test_delete_selected_comparison_cancel_keeps_records_and_snapshots(tmp_path):
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    class Tree:
+        def selection(self):
+            return ("0",)
+
+    class DummyApp(StrategyBacktestMixin):
+        def __init__(self, archive_path, latest_path):
+            result = {
+                "_snapshot_id": "snap-current",
+                "_snapshot_path": str(archive_path),
+                "summary": {"final_equity": 1.2},
+            }
+            self._last_strategy_bt_result = result
+            self._strategy_compare_results = [{
+                "snapshot_id": "snap-current",
+                "result": result,
+                "snapshot_path": str(archive_path),
+            }]
+            self._strategy_compare_tree = Tree()
+            self.confirm_count = None
+            self._latest_path = latest_path
+
+        def _strategy_snapshot_path(self):
+            return self._latest_path
+
+        def _confirm_delete_selected_comparison(self, count):
+            self.confirm_count = count
+            return False
+
+    archive_path = tmp_path / "strategy_backtest_snapshots" / "strategy_backtest_current.json"
+    archive_path.parent.mkdir()
+    archive_path.write_text('{"snapshot_id":"snap-current","result":{"summary":{}}}', encoding="utf-8")
+    latest_path = tmp_path / "strategy_backtest_snapshot.json"
+    latest_path.write_text('{"snapshot_id":"snap-current","result":{"summary":{}}}', encoding="utf-8")
+
+    app = DummyApp(archive_path, latest_path)
+    app._delete_selected_comparison()
+
+    assert app.confirm_count == 1
+    assert len(app._strategy_compare_results) == 1
+    assert app._last_strategy_bt_result is app._strategy_compare_results[0]["result"]
+    assert archive_path.exists()
+    assert latest_path.exists()
 
 
 def test_strategy_result_tab_change_refreshes_selected_panel():

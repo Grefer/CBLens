@@ -78,19 +78,19 @@ def build(app, tab):
         """Inline label cell: label 左(定宽) + control 右, 同列控件左边缘对齐."""
         cell = ctk.CTkFrame(parent, fg_color="transparent")
         cell.grid(row=row, column=col, sticky="ew", padx=8, pady=cell_pady)
+        cell.grid_columnconfigure(0, minsize=label_width)
+        cell.grid_columnconfigure(1, weight=0)
 
         if widget_type == "checkbox":
-            # 占位 frame, 让 checkbox 左边缘对齐其他行的控件左边缘 (label_width + 8 gap)
-            spacer = ctk.CTkFrame(cell, width=label_width + 8, height=1,
-                                  fg_color="transparent")
-            spacer.pack(side="left")
-            spacer.pack_propagate(False)
+            ctk.CTkLabel(cell, text=label, text_color=TEXT_DIM,
+                         font=(FONT_FAMILY, 13), width=label_width,
+                         anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 8))
             w = ctk.CTkCheckBox(
                 cell, text="等权基准对标", variable=var, height=26,
                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM, fg_color=ACCENT,
                 hover_color=ACCENT_HOVER, border_color=BORDER,
                 checkbox_width=16, checkbox_height=16, border_width=1, corner_radius=3)
-            w.pack(side="left", anchor="w")
+            w.grid(row=0, column=1, sticky="w")
             if tooltip:
                 Tooltip(w, tooltip)
             return w
@@ -98,17 +98,17 @@ def build(app, tab):
         lbl = ctk.CTkLabel(cell, text=label, text_color=TEXT_DIM,
                            font=(FONT_FAMILY, 13),
                            width=label_width, anchor="w")
-        lbl.pack(side="left", padx=(0, 8))
+        lbl.grid(row=0, column=0, sticky="w", padx=(0, 8))
 
         if widget_type == "entry":
             w = ctk.CTkEntry(cell, textvariable=var, font=(FONT_MONO, 13),
                              fg_color=BG_INPUT, border_width=0,
                              corner_radius=6, text_color=TEXT, height=26,
                              width=control_width)
-            w.pack(side="left")
+            w.grid(row=0, column=1, sticky="w")
         elif widget_type == "date":
             w = make_date_picker(cell, var, entry_width=control_width)
-            w.pack(side="left")
+            w.grid(row=0, column=1, sticky="w")
         elif widget_type == "optmenu":
             menu_kwargs = {"width": control_width}
             if command is not None:
@@ -118,7 +118,7 @@ def build(app, tab):
                 font=(FONT_FAMILY, 12), fg_color=BORDER, button_color=BTN_HOVER,
                 text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
                 **menu_kwargs)
-            w.pack(side="left")
+            w.grid(row=0, column=1, sticky="w")
 
         if tooltip:
             Tooltip(lbl, tooltip)
@@ -155,8 +155,8 @@ def build(app, tab):
     _grid_cell(cc, "成本 (bps)", app.v_st_cost, 1, 2, "entry", None,
                "单边调仓交易成本\n单位 bps (万分之一)",
                control_width=120, label_width=80)
-    _grid_cell(cc, "基准对标", app.v_st_benchmark, 1, 3, "checkbox", None,
-               "等权买入全市场合格转债\n作为对比基准", label_width=80)
+    _grid_cell(cc, "基准", app.v_st_benchmark, 1, 3, "checkbox", None,
+               "等权买入全市场合格转债\n作为对比基准", label_width=32)
 
     # ── 核心参数联动逻辑 (手动修改时策略方案自动切“自定义”) ───────────────────────
     def _on_param_change(*_):

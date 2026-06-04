@@ -2280,7 +2280,7 @@ class StrategyBacktestMixin:
 
         ax1.plot(roll_dates, roll_vol, color=orange_color, linewidth=1.5)
         ax1.set_ylabel("年化波动率 (%)", color=text_dim_color, fontsize=9)
-        ax1.set_title(f"滚动年化波动率 (近 {months} 个月)", color=text_dim_color, fontsize=9)
+        ax1.set_title(f"滚动年化波动率 ({months} 个月)", color=text_dim_color, fontsize=9)
         ax1.tick_params(colors=text_dim_color, labelsize=7)
         ax1.grid(True, color=border_color, linestyle="--", alpha=0.3)
         for spine in ax1.spines.values():
@@ -2292,7 +2292,7 @@ class StrategyBacktestMixin:
         ax2.plot(roll_dates, roll_sharpe, color=accent_color, linewidth=1.5)
         ax2.axhline(0, color=border_color, linewidth=0.8)
         ax2.set_ylabel("Sharpe (年化)", color=text_dim_color, fontsize=9)
-        ax2.set_title(f"滚动 Sharpe (近 {months} 个月)", color=text_dim_color, fontsize=9)
+        ax2.set_title(f"滚动 Sharpe ({months} 个月)", color=text_dim_color, fontsize=9)
         ax2.tick_params(colors=text_dim_color, labelsize=7)
         ax2.grid(True, color=border_color, linestyle="--", alpha=0.3)
         finite_sharpe = [v for v in roll_sharpe if np.isfinite(v)]
@@ -2588,25 +2588,33 @@ class StrategyBacktestMixin:
             return
 
         frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=0)
         frame.grid_rowconfigure(1, weight=0)
-        frame.grid_rowconfigure(2, weight=0)
-        frame.grid_rowconfigure(3, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
 
-        # 多策略净值叠加图
-        self._render_comparison_overlay_chart(frame, 0, records)
-
-        self._strategy_section_title(frame, "最近策略对比", 1, 0)
-
-        # 删除单条按钮
-        del_bar = ctk.CTkFrame(frame, fg_color="transparent")
-        del_bar.grid(row=2, column=0, sticky="e", padx=12, pady=(0, 4))
-        ctk.CTkButton(
-            del_bar, text="删除选中",
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            header, text="最近策略对比", text_color=TEXT,
+            font=(FONT_FAMILY, 14, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self._strategy_compare_selection_text = ctk.StringVar(value="")
+        ctk.CTkLabel(
+            header, textvariable=self._strategy_compare_selection_text,
+            text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+        ).grid(row=0, column=1, sticky="e", padx=(8, 10))
+        delete_btn = ctk.CTkButton(
+            header, text="删除选中",
             command=lambda: self._delete_selected_comparison(),
             fg_color="transparent", hover_color=get_color(BG_INPUT),
-            text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
-            width=72, height=24, corner_radius=6,
-        ).pack(side="right")
+            border_width=1, border_color=RED,
+            text_color=RED, font=(FONT_FAMILY, 11, "bold"),
+            width=88, height=26, corner_radius=6,
+        )
+        delete_btn.grid(row=0, column=2, sticky="e")
+        self.btn_strategy_compare_delete = delete_btn
+        Tooltip(delete_btn, "删除下方表格中选中的对比记录\n支持 Shift / Command 多选")
 
         rows = []
         best_idx = self._best_strategy_record_index(records)
@@ -2641,7 +2649,7 @@ class StrategyBacktestMixin:
             ])
 
         tree = self._render_strategy_small_tree(
-            frame, 3, 0,
+            frame, 2, 0,
             ["best", "label", "period", "ann", "ret", "excess", "dd", "sharpe",
              "calmar", "turnover", "cost", "fallback"],
             ["", "策略", "区间", "年化", "总收益", "超额", "回撤", "Sharpe",
@@ -2650,6 +2658,7 @@ class StrategyBacktestMixin:
             rows,
             xscroll=True,
             max_height=STRATEGY_MEDIUM_TABLE_HEIGHT,
+            selectmode="extended",
         )
         self._strategy_compare_tree = tree
 
@@ -2663,13 +2672,104 @@ class StrategyBacktestMixin:
                 except Exception:
                     pass
 
-        # 双击加载 + 右键菜单
         if tree:
+            selected_iids = self._initial_strategy_compare_selection(tree, records)
+            selected_records = self._strategy_compare_records_by_iids(records, selected_iids)
+            self._update_strategy_compare_selection_text(len(selected_records), len(records))
+            self._render_comparison_overlay_chart(frame, 1, selected_records)
+
+            # 单击选择控制上方图表; 双击加载结果; 右键显示上下文菜单。
+            tree.bind("<<TreeviewSelect>>", lambda e: self._on_strategy_compare_selection_change())
             tree.bind("<Double-1>", lambda e: self._load_comparison_record())
             tree.bind("<Button-2>", lambda e: self._show_comparison_context_menu(e))
             # macOS 右键也可能是 <Button-3> 或 <Control-Button-1>
             tree.bind("<Button-3>", lambda e: self._show_comparison_context_menu(e))
             tree.bind("<Control-Button-1>", lambda e: self._show_comparison_context_menu(e))
+
+    @staticmethod
+    def _strategy_compare_record_key(record) -> str:
+        snapshot_id = record.get("snapshot_id")
+        if snapshot_id:
+            return f"snapshot:{snapshot_id}"
+        key = record.get("key")
+        if key is not None:
+            return f"key:{key!r}"
+        result = record.get("result") or {}
+        return (
+            f"result:{result.get('start_date')}:{result.get('end_date')}:"
+            f"{(result.get('summary') or {}).get('final_equity')}"
+        )
+
+    def _initial_strategy_compare_selection(self, tree, records):
+        saved_keys = set(getattr(self, "_strategy_compare_selected_keys", set()) or set())
+        selected_iids = [
+            str(idx) for idx, record in enumerate(records)
+            if self._strategy_compare_record_key(record) in saved_keys
+        ]
+        if not selected_iids:
+            default_count = min(2, len(records))
+            selected_iids = [str(idx) for idx in range(len(records) - default_count, len(records))]
+        if selected_iids:
+            tree.selection_set(selected_iids)
+            self._strategy_compare_selected_keys = {
+                self._strategy_compare_record_key(records[int(iid)])
+                for iid in selected_iids
+                if iid.isdigit() and int(iid) < len(records)
+            }
+        return selected_iids
+
+    @staticmethod
+    def _strategy_compare_records_by_iids(records, iids):
+        selected = []
+        seen = set()
+        for iid in iids or []:
+            try:
+                idx = int(iid)
+            except (TypeError, ValueError):
+                continue
+            if idx in seen or not (0 <= idx < len(records)):
+                continue
+            seen.add(idx)
+            selected.append(records[idx])
+        return selected
+
+    def _strategy_compare_selected_iids(self):
+        tree = getattr(self, "_strategy_compare_tree", None)
+        if tree is None:
+            return []
+        try:
+            return list(tree.selection())
+        except Exception:
+            return []
+
+    def _update_strategy_compare_selection_text(self, selected_count: int, total_count: int) -> None:
+        var = getattr(self, "_strategy_compare_selection_text", None)
+        if var is not None:
+            try:
+                var.set(f"已选择 {selected_count} / {total_count}")
+            except Exception:
+                pass
+        btn = getattr(self, "btn_strategy_compare_delete", None)
+        if btn is not None:
+            try:
+                if selected_count:
+                    btn.configure(state="normal", text_color=RED, border_color=RED)
+                else:
+                    btn.configure(state="disabled", text_color=TEXT_DIM, border_color=BORDER)
+            except Exception:
+                pass
+
+    def _on_strategy_compare_selection_change(self):
+        records = list(getattr(self, "_strategy_compare_results", []) or [])
+        iids = self._strategy_compare_selected_iids()
+        selected_records = self._strategy_compare_records_by_iids(records, iids)
+        self._strategy_compare_selected_keys = {
+            self._strategy_compare_record_key(record) for record in selected_records
+        }
+        self._update_strategy_compare_selection_text(len(selected_records), len(records))
+        frame = getattr(self, "strategy_bt_compare_frame", None)
+        if frame is not None:
+            self._render_comparison_overlay_chart(frame, 1, selected_records)
 
     def _delete_selected_comparison(self):
         tree = getattr(self, "_strategy_compare_tree", None)
@@ -2678,25 +2778,53 @@ class StrategyBacktestMixin:
         sel = tree.selection()
         if not sel:
             return
-        try:
-            idx = int(sel[0])
-        except (ValueError, IndexError):
-            return
         records = list(getattr(self, "_strategy_compare_results", []) or [])
-        if 0 <= idx < len(records):
+        indices = []
+        for iid in sel:
+            try:
+                idx = int(iid)
+            except (ValueError, TypeError):
+                continue
+            if 0 <= idx < len(records):
+                indices.append(idx)
+        indices = sorted(set(indices), reverse=True)
+        if not indices:
+            return
+        if not self._confirm_delete_selected_comparison(len(indices)):
+            return
+        deleted_records = []
+        for idx in indices:
             record = records.pop(idx)
-            deleted_current = self._strategy_record_matches_current_result(record)
+            deleted_records.append(record)
             # 同时删除磁盘快照文件和可能指向同一结果的 latest 文件。
             self._delete_strategy_snapshot_for_record(record)
             self._delete_latest_strategy_snapshot_if_matches(record.get("snapshot_id"))
-            self._strategy_compare_results = records
-            if deleted_current or not records:
-                self._clear_active_strategy_backtest_result(
-                    status=f"已删除当前回测结果 · 剩余 {len(records)} 条对比记录")
-            else:
-                self._mark_strategy_tabs_dirty("对比")
-                self._render_strategy_comparison()
-                self.v_st_status.set(f"已删除 · 剩余 {len(records)} 条对比记录")
+        deleted_keys = {self._strategy_compare_record_key(record) for record in deleted_records}
+        self._strategy_compare_selected_keys = (
+            set(getattr(self, "_strategy_compare_selected_keys", set()) or set()) - deleted_keys
+        )
+        self._strategy_compare_results = records
+        deleted_current = any(
+            self._strategy_record_matches_current_result(record) for record in deleted_records
+        )
+        if deleted_current or not records:
+            self._clear_active_strategy_backtest_result(
+                status=(
+                    f"已删除当前回测结果 · 删除 {len(deleted_records)} 条对比记录 · "
+                    f"剩余 {len(records)} 条"
+                ))
+        else:
+            self._mark_strategy_tabs_dirty("对比")
+            self._render_strategy_comparison()
+            self.v_st_status.set(f"已删除 {len(deleted_records)} 条 · 剩余 {len(records)} 条对比记录")
+
+    @staticmethod
+    def _confirm_delete_selected_comparison(count: int) -> bool:
+        return messagebox.askyesno(
+            "确认删除",
+            f"确定删除选中的 {count} 条策略对比记录吗?\n"
+            "此操作会同时删除对应磁盘快照, 无法撤销。",
+        )
 
     def _strategy_record_matches_current_result(self, record) -> bool:
         current = getattr(self, "_last_strategy_bt_result", None)
@@ -2789,6 +2917,18 @@ class StrategyBacktestMixin:
 
     def _render_comparison_overlay_chart(self, frame, grid_row, records):
         """多策略净值叠加折线图."""
+        old_fig = getattr(self, "_strategy_bt_compare_fig", None)
+        if old_fig is not None:
+            old_fig.clf()
+            plt.close(old_fig)
+            self._strategy_bt_compare_fig = None
+        old_frame = getattr(self, "_strategy_compare_chart_frame", None)
+        if old_frame is not None:
+            try:
+                old_frame.destroy()
+            except Exception:
+                pass
+
         bg_card_color = get_color(BG_CARD)
         bg_input_color = get_color(BG_INPUT)
         text_dim_color = get_color(TEXT_DIM)
@@ -2804,6 +2944,16 @@ class StrategyBacktestMixin:
         chart_frame.grid_columnconfigure(0, weight=1)
         chart_frame.grid_rowconfigure(0, weight=1)
         chart_frame.grid_propagate(False)
+        self._strategy_compare_chart_frame = chart_frame
+
+        if not records:
+            ctk.CTkLabel(
+                chart_frame,
+                text="在下方表格选择一条或多条回测记录后显示净值对比",
+                text_color=TEXT_DIM,
+                font=(FONT_FAMILY, 13),
+            ).grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+            return
 
         fig = Figure(figsize=(10, 2.8), dpi=100, facecolor=bg_card_color)
         ax = fig.add_subplot(111, facecolor=bg_input_color)
@@ -2890,6 +3040,7 @@ class StrategyBacktestMixin:
         yscroll=True,
         max_height=None,
         stretch_weights=None,
+        selectmode="browse",
     ):
         _configure_tree_style()
         container = ctk.CTkFrame(parent, fg_color="transparent")
@@ -2901,7 +3052,7 @@ class StrategyBacktestMixin:
         if max_height is not None:
             tree_kwargs["height"] = max_height
         tree = ttk.Treeview(container, columns=columns, show="headings",
-                            selectmode="browse", **tree_kwargs)
+                            selectmode=selectmode, **tree_kwargs)
         if yscroll:
             y_scroll = ctk.CTkScrollbar(
                 container, orientation="vertical", command=tree.yview,

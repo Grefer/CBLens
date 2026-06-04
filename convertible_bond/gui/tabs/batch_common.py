@@ -14,6 +14,7 @@ from ..theme import (
     BG_CARD, BG_INPUT, BORDER,
     FONT_FAMILY, FONT_MONO,
     GREEN, MAUVE, ORANGE, RED, TEXT, TEXT_DIM,
+    TABLE_SELECTED_BG, TABLE_SELECTED_TEXT,
     TABLE_FONT_SIZE, TABLE_ROW_HEIGHT,
     get_color,
 )
@@ -165,8 +166,8 @@ def _configure_tree_style() -> None:
     )
     style.map(
         "Treeview",
-        background=[("selected", get_color(BG_INPUT))],
-        foreground=[("selected", get_color(TEXT))],
+        background=[("selected", get_color(TABLE_SELECTED_BG))],
+        foreground=[("selected", get_color(TABLE_SELECTED_TEXT))],
     )
 
 
