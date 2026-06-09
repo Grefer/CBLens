@@ -130,10 +130,15 @@ def build(app, tab):
 
     ch = ctk.CTkFrame(ctrl, fg_color="transparent")
     ch.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
-    ctk.CTkLabel(ch, text="📦 批量定价 / 转债池筛选",
-                 font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
-    ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按机会分筛选复核",
+    lbl_batch_title = ctk.CTkLabel(ch, text="📦 批量定价 / 转债池筛选",
+                                   font=(FONT_FAMILY, 16, "bold"), text_color=TEXT)
+    lbl_batch_title.pack(side="left")
+    ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按机会分复核排序 (复核标记, 非收益预测)",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
+    Tooltip(lbl_batch_title,
+            "机会分 = 模型低估程度的复核排序信号, 用于筛出'值得人工复核'的标的。\n"
+            "⚠️ 经全市场池回测, 机会分对未来收益的横截面预测力≈0 (Rank-IC≈-0.05),\n"
+            "不是选股/买入排名; 请结合公告、流动性与组合风险人工判断。")
 
     # 右侧: 转债大类估值/择时信号 (全市场中位偏差 → 贵/便宜), 随结果刷新
     app.v_batch_valuation = ctk.StringVar(value="")

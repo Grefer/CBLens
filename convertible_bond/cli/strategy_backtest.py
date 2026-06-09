@@ -87,7 +87,17 @@ def main() -> int:
     parser.add_argument("--mode", default="standard", choices=["fast", "standard", "precise"],
                         help="定价速度/精度: fast=快速预览, standard=标准, precise=精确 (默认 standard)")
     parser.add_argument("--top-n", type=int, default=10,
-                        help="每次调仓选债数量 (默认 10)")
+                        help="每次调仓选债数量 (仅 top_score 模式; 默认 10)")
+    parser.add_argument("--holding-mode", default="top_score",
+                        choices=["top_score", "pool"],
+                        help="B持仓层: top_score=按机会分取Top N; "
+                             "pool=等权持有整个候选池(推荐, 跨周期IC证据见 README)")
+    parser.add_argument("--max-holdings", type=int, default=None,
+                        help="pool 模式持仓上限 (默认不限, 持全部候选)")
+    parser.add_argument("--funding-mode", default="reserve_cash",
+                        choices=["reserve_cash", "full_invest"],
+                        help="C资金层: reserve_cash=未建仓/缺价槽位留现金; "
+                             "full_invest=满仓等权(缺口/缺价摊回)")
     parser.add_argument("--selection-view", default="综合机会", choices=BATCH_REVIEW_VIEWS,
                         help="复用批量页视图过滤候选 (默认 综合机会)")
     parser.add_argument("--min-score", type=float, default=None,
@@ -213,6 +223,9 @@ def main() -> int:
         transaction_cost=max(0.0, args.cost_bps) / 10000.0,
         compute_benchmark=not args.no_benchmark,
         pool_mode=args.pool_mode,
+        holding_mode=args.holding_mode,
+        max_holdings=args.max_holdings,
+        funding_mode=args.funding_mode,
     )
     if args.M is not None or args.N is not None:
         grid_M = args.M or 300

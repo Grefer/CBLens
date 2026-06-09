@@ -270,6 +270,8 @@ class CBPricerApp(
         self.v_st_top_n = ctk.StringVar(value="10")
         self.v_st_template = ctk.StringVar(value="自定义")
         self.v_st_view = ctk.StringVar(value="综合机会")
+        # 选券权重: 默认推荐"等权全池"(跨周期 Rank-IC≈0, 机会分精排无 alpha); "机会分排序"为研究用
+        self.v_st_weighting = ctk.StringVar(value="等权全池")
         self.v_st_pool_mode = ctk.StringVar(value="本地全市场")
         self.v_st_history_mode = ctk.StringVar(value="标准")
         self.v_st_min_price = ctk.StringVar(value="")

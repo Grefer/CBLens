@@ -52,8 +52,13 @@ def build(app, tab):
     title_box.grid(row=0, column=0, sticky="w")
     ctk.CTkLabel(title_box, text=E("🎯 策略"),
                  font=(FONT_FAMILY, 15, "bold"), text_color=TEXT).pack(side="left")
-    ctk.CTkLabel(title_box, text="选择方案和规则, 定频调仓回测",
-                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
+    lbl_strategy_sub = ctk.CTkLabel(title_box, text="选择方案和规则, 定频调仓回测",
+                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
+    lbl_strategy_sub.pack(side="left", padx=(12, 0))
+    Tooltip(lbl_strategy_sub,
+            "研究诊断工具: 回放'按机会分选 Top N'的历史表现, 并与等权基准对标。\n"
+            "⚠️ 机会分的横截面排序对未来收益预测力≈0 (Rank-IC≈-0.05, 单一牛市样本),\n"
+            "结果请对照'等权基准'解读, 勿当作可直接照搬的选股策略。")
 
     # 右上角: PRO 徽标 (轻量描边款, 不抢主标题视觉)
     pro_box = ctk.CTkFrame(
@@ -151,12 +156,21 @@ def build(app, tab):
         lambda: STRATEGY_VIEW_DESCRIPTIONS.get(app.v_st_view.get(), ""),
         command=app._describe_strategy_view, control_width=130, label_width=72)
     _grid_cell(cc, "Top N", app.v_st_top_n, 1, 1, "entry", None,
-               "每期最大持仓转债数量", control_width=120, label_width=80)
+               "每期最大持仓转债数量\n(仅'机会分排序'权重下生效)", control_width=120, label_width=80)
     _grid_cell(cc, "成本 (bps)", app.v_st_cost, 1, 2, "entry", None,
                "单边调仓交易成本\n单位 bps (万分之一)",
                control_width=120, label_width=80)
     _grid_cell(cc, "基准", app.v_st_benchmark, 1, 3, "checkbox", None,
                "等权买入全市场合格转债\n作为对比基准", label_width=32)
+
+    # 第三行: 选券权重 (默认推荐等权全池)
+    _grid_cell(
+        cc, "选券权重", app.v_st_weighting, 2, 0, "optmenu", ["等权全池", "机会分排序"],
+        "等权全池(推荐): 等权持有整个筛选后候选池, 不按机会分精排\n"
+        "  · 全市场池跨周期(2022-2026)横截面 Rank-IC≈0, 精排无稳健 alpha\n"
+        "  · 满仓等权, 缺成交价的标的权重自动摊回, 减少现金拖累\n"
+        "机会分排序: 按机会分取 Top N 等权 (研究/对比用)",
+        control_width=130, label_width=72)
 
     # ── 核心参数联动逻辑 (手动修改时策略方案自动切“自定义”) ───────────────────────
     def _on_param_change(*_):
@@ -165,7 +179,7 @@ def build(app, tab):
 
     for var in (app.v_st_start, app.v_st_end, app.v_st_freq,
                 app.v_st_view, app.v_st_top_n, app.v_st_cost,
-                app.v_st_benchmark):
+                app.v_st_benchmark, app.v_st_weighting):
         var.trace_add("write", _on_param_change)
 
     # 回测范围/历史口径 状态变量 (UI 在高级设置卡内; 这两个 StringVar 由

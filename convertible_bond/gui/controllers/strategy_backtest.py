@@ -35,6 +35,8 @@ from ...historical_terms import (
 )
 from ...strategy_backtest import (
     ScoreStrategyConfig,
+    _funding_legacy_alias,
+    _normalize_holding_mode,
     backtest_score_strategy,
     build_rebalance_schedule,
     write_strategy_backtest_csv,
@@ -496,9 +498,15 @@ class StrategyBacktestMixin:
         gui_pool_mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
         engine_pool_mode = "dynamic" if gui_pool_mode == "本地全市场" else "static"
         try:
+            holding_mode = _normalize_holding_mode(
+                getattr(self, "v_st_weighting", None).get()
+                if getattr(self, "v_st_weighting", None) is not None else "pool")
+            # pool→满仓等权(缺价摊回); top_score→缺口留现金 (沿用旧 score_rank 行为)
+            funding_mode = "full_invest" if holding_mode == "pool" else "reserve_cash"
             config = ScoreStrategyConfig(
                 top_n=max(1, int(float(self.v_st_top_n.get()))),
-                top_n_shortfall_policy="cash",
+                holding_mode=holding_mode,
+                funding_mode=funding_mode,
                 rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
                 selection_view=view,
                 min_confidence=policy["min_confidence"],
@@ -817,7 +825,10 @@ class StrategyBacktestMixin:
                 "selection_view": config.selection_view,
                 "rebalance_freq": config.rebalance_freq,
                 "top_n": config.top_n,
-                "top_n_shortfall_policy": config.top_n_shortfall_policy,
+                "holding_mode": config.holding_mode,
+                "max_holdings": config.max_holdings,
+                "funding_mode": config.funding_mode,
+                "top_n_shortfall_policy": _funding_legacy_alias(config.funding_mode),
                 "min_score": config.min_score,
                 "min_confidence": list(config.min_confidence) if config.min_confidence else None,
                 "exclude_risk_tags": list(config.exclude_risk_tags),
@@ -908,7 +919,10 @@ class StrategyBacktestMixin:
             "config": {
                 "rebalance_freq": config.get("rebalance_freq"),
                 "top_n": config.get("top_n"),
-                "top_n_shortfall_policy": config.get("top_n_shortfall_policy"),
+                "holding_mode": config.get("holding_mode"),
+                "funding_mode": config.get("funding_mode"),
+                "max_holdings": config.get("max_holdings"),
+                "top_n_shortfall_policy": config.get("top_n_shortfall_policy"),  # 兼容旧快照
                 "selection_view": config.get("selection_view"),
                 "history_mode": config.get("history_mode"),
             },
@@ -2473,11 +2487,18 @@ class StrategyBacktestMixin:
         freq_value = config.get("rebalance_freq")
         freq_text = freq_map.get(str(freq_value), str(freq_value or "—"))
         top_n = config.get("top_n")
+        holding_mode = config.get("holding_mode")
+        funding_mode = config.get("funding_mode")
+        if not funding_mode:   # 兼容旧快照: 由 top_n_shortfall_policy 推断
+            legacy = str(config.get("top_n_shortfall_policy") or "cash")
+            funding_mode = "full_invest" if legacy in ("renormalize", "full_invest") else "reserve_cash"
         strategy_text = f"{config.get('selection_view') or '—'} · {freq_text}"
-        if top_n is not None:
-            strategy_text += f" · Top{top_n}"
-        shortfall_policy = str(config.get("top_n_shortfall_policy") or "cash")
-        shortfall_text = "缺口留现金" if shortfall_policy == "cash" else "剩余等权"
+        if holding_mode == "pool":
+            cap = config.get("max_holdings")
+            strategy_text += " · 等权全池" + (f"(≤{int(cap)})" if cap else "")
+        elif top_n is not None:   # top_score 或旧快照
+            strategy_text += f" · 机会分Top{top_n}"
+        shortfall_text = "满仓等权" if funding_mode == "full_invest" else "缺口留现金"
         cost = config.get("transaction_cost")
         try:
             cost_text = f"{float(cost) * 10000:.0f} bps"

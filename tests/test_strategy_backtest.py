@@ -170,6 +170,123 @@ def test_score_strategy_selects_top_score_and_compounds_returns(monkeypatch):
     assert result["summary"]["total_return"] == pytest.approx(0.09725)
 
 
+def _positive_bonus_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+    """所有传入券都判低估 (deviation<0 → 正机会分), 便于测选券/权重。"""
+    rows = []
+    for code in codes:
+        hist = provider_arg.bond_history.get(code, [])
+        market = next((v for d, v in reversed(hist) if d <= valuation_date), None)
+        if market is None:
+            rows.append({"bond_code": code, "status": "无市价",
+                         "bond_name": provider_arg.terms[code].sec_name})
+            continue
+        theo = market * 1.08
+        rows.append({
+            "bond_code": code, "bond_name": provider_arg.terms[code].sec_name,
+            "stock_code": provider_arg.terms[code].underlying_code, "status": "ok",
+            "S0": market, "K": 100.0, "sigma": 0.28, "theoretical_price": theo,
+            "market_price": market, "deviation": (market - theo) / theo,
+            "credit_rating": "AA+", "outstanding_balance": 10.0, "T": 3.0,
+        })
+    return rows
+
+
+def test_equal_pool_holds_whole_filtered_pool_equally(monkeypatch):
+    """equal_pool: 等权持有整个候选池, 不按机会分取 Top N。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=1, rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
+    )
+    period = result["periods"][0]
+    assert set(period["selected_codes"]) == {"113001.SH", "113002.SH", "113003.SH"}
+    assert period["weight_denominator"] == 3        # 全池, 非 top_n=1
+    assert period["cash_weight"] == pytest.approx(0.0)
+    assert all(p["weight"] == pytest.approx(1 / 3) for p in period["positions"])
+    # gross = 等权 (113001 +10%, 其余 0) = 3.33%
+    assert period["gross_return"] == pytest.approx((0.10 + 0.0 + 0.0) / 3)
+
+
+def test_equal_pool_redistributes_missing_price_positions(monkeypatch):
+    """data-gap: 选中但缺成交价的标的权重摊回已持仓, 不留现金。"""
+    provider = StrategyFakeProvider()
+    # 113003 仅有期初价、无期末价 (staleness 超限) → 无法建仓 → 应被摊回
+    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=3, rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
+    )
+    period = result["periods"][0]
+    assert len(period["positions"]) == 2            # 仅 113001/113002 建仓
+    assert period["weight_denominator"] == 2        # 缺价者摊回, 非留现金 (否则=3)
+    assert period["cash_weight"] == pytest.approx(0.0)
+    assert period["gross_return"] == pytest.approx((0.10 + 0.0) / 2)  # 5%
+    assert any(s["bond_code"] == "113003.SH" for s in period["skipped_positions"])
+
+
+def test_pool_with_reserve_cash_leaves_gap_as_cash(monkeypatch):
+    """三层矩阵: pool + reserve_cash → 持全池但缺价槽位留现金 (与 full_invest 摊回对照)。"""
+    provider = StrategyFakeProvider()
+    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]   # 无期末价 → 缺价
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=3, rebalance_freq="M", holding_mode="pool", funding_mode="reserve_cash",
+            min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
+    )
+    period = result["periods"][0]
+    assert len(period["positions"]) == 2
+    assert period["weight_denominator"] == 3        # 分母=候选数, 缺价槽位留现金
+    assert period["cash_weight"] == pytest.approx(1 / 3)
+    assert period["gross_return"] == pytest.approx((0.10 + 0.0) / 3)
+
+
+def test_turnover_cost_uses_actual_holdings_not_phantom_selected(monkeypatch):
+    """换手/成本必须基于实际持仓码, 不能把'选中但缺成交价'的票当真实持仓。
+
+    P1 持 {A,B,C}(各1/3); P2 中 C 缺期末价被剔除 → 实际持 {A,B}(各1/2)。
+    正确单边换手 = 卖出 C(1/3) = 1/3; 旧实现用 selected_codes(含C) + 分母=held,
+    权重和>1, 会算出错误换手 (0.25)。
+    """
+    provider = StrategyFakeProvider()
+    # C 只到 01-31: P1 可建仓 (entry 01-02/exit 01-31), P2 期末(02-28)无价且 01-31 过旧 → 缺价
+    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0), (date(2025, 1, 31), 95.0)]
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 2, 28),
+        config=ScoreStrategyConfig(
+            rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            transaction_cost=0.01, min_confidence=None, exclude_risk_tags=(),
+            compute_benchmark=False),
+    )
+    p1, p2 = result["periods"][0], result["periods"][1]
+    assert len(p1["positions"]) == 3 and p1["weight_denominator"] == 3   # P1 满仓持 3 只
+    assert len(p2["positions"]) == 2 and p2["weight_denominator"] == 2   # P2 仅持 A,B
+    # 正确单边换手 = 卖出 C(权重 1/3) = 1/3; 任何长仓等权换手都不应 >1
+    assert p2["turnover"] == pytest.approx(1 / 3)
+    assert p2["turnover"] <= 1.0 + 1e-9
+    assert p2["cost"] == pytest.approx(p2["turnover"] * 0.01)
+
+
 def test_score_strategy_can_hold_cash_when_score_filter_rejects_all(monkeypatch):
     provider = StrategyFakeProvider()
 
@@ -267,7 +384,7 @@ def test_score_strategy_default_rejects_negative_opportunity_scores(monkeypatch)
         end_date=date(2025, 1, 31),
         config=ScoreStrategyConfig(
             top_n=2,
-            top_n_shortfall_policy="renormalize",
+            funding_mode="full_invest",
             min_confidence=None,
             exclude_risk_tags=(),
         ),
@@ -869,7 +986,10 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                     "selection_view": "综合机会",
                     "rebalance_freq": "M",
                     "top_n": 10,
-                    "top_n_shortfall_policy": "cash",
+                    "holding_mode": "pool",
+                    "funding_mode": "full_invest",
+                    "max_holdings": None,
+                    "top_n_shortfall_policy": "renormalize",
                     "history_mode": "Wind高保真",
                 },
                 "summary": {
@@ -931,7 +1051,10 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
     assert archive_payload["schema_version"] == 2
     assert archive_payload["snapshot_id"] == info["snapshot_id"]
     assert archive_payload["meta"]["config"]["selection_view"] == "综合机会"
-    assert archive_payload["meta"]["config"]["top_n_shortfall_policy"] == "cash"
+    # 三层字段进入快照 meta (P3a)
+    assert archive_payload["meta"]["config"]["holding_mode"] == "pool"
+    assert archive_payload["meta"]["config"]["funding_mode"] == "full_invest"
+    assert archive_payload["meta"]["config"]["top_n_shortfall_policy"] == "renormalize"  # 兼容镜像
     assert archive_payload["meta"]["config"]["history_mode"] == "Wind高保真"
     assert archive_payload["result"]["config"]["history_mode"] == "Wind高保真"
     assert archive_payload["meta"]["run_settings"]["data_source"] == "Wind"

@@ -44,10 +44,34 @@ from .pricing_api import batch_price_from_provider_threaded
 
 @dataclass(frozen=True)
 class ScoreStrategyConfig:
-    """机会分选债策略参数."""
+    """机会分选债策略参数 (三层解耦: A 过滤 / B 持仓 / C 资金)。
+
+    A 过滤层(选什么): selection_view + min_score/min_confidence/exclude_risk_tags +
+        价格/溢价/偏差/波动率区间 → 候选池; **机会分在此仅作过滤, 不再做权重排序**。
+    B 持仓层(持哪些/多少): holding_mode + top_n / max_holdings; 一律等权持有。
+    C 资金层(缺口/缺价怎么办): funding_mode。
+    三层互不耦合: 任意 holding_mode 都可搭配任意 funding_mode。
+
+    持仓数 (held) = 候选中实际有成交价可建仓者。等权份数分母 intended 与现金:
+
+        holding_mode \\ funding_mode │ reserve_cash(留现金)      │ full_invest(满仓摊回)
+        ─────────────────────────────┼───────────────────────────┼──────────────────────
+        top_score (取前 top_n)        │ 分母=top_n, 缺口/缺价→现金 │ 分母=held, 缺价摊回
+        pool (整个候选池)             │ 分母=候选数, 缺价→现金     │ 分母=held, 缺价摊回
+
+    (默认 top_score + reserve_cash = 旧 score_rank + cash; GUI 默认 pool + full_invest。)
+
+    ⚠️ 破坏性变更 (v?.?): 旧字段已移除, 请迁移——
+        top_n_shortfall_policy="renormalize" → funding_mode="full_invest"
+        top_n_shortfall_policy="cash"         → funding_mode="reserve_cash" (默认)
+        selection_weighting="equal_pool"      → holding_mode="pool"
+        selection_weighting="score_rank"      → holding_mode="top_score" (默认)
+        max_pool_size=N                        → max_holdings=N
+    旧值字符串仍被 holding/funding 的 _normalize_* 接受 (传入对应字段即可); 但旧
+    **关键字参数名**不再兼容, 会触发 TypeError。输出/快照保留 top_n_shortfall_policy 镜像。
+    """
 
     top_n: int = 10
-    top_n_shortfall_policy: str = "cash"
     rebalance_freq: str = "M"
     selection_view: str = "综合机会"
     min_score: float | None = 0.0
@@ -70,6 +94,17 @@ class ScoreStrategyConfig:
     transaction_cost: float = 0.0
     compute_benchmark: bool = True
     pool_mode: str = "static"  # "static" | "dynamic"
+    # ── B 持仓层: 怎么从候选池构成持仓 (一律等权) ──
+    #   "top_score": 按机会分取前 top_n 只 (研究/对比用)。
+    #   "pool"     : 等权持有整个候选池, 不按机会分精排 (推荐)。
+    # 依据: 全市场池跨周期(2022-2026)横截面 Rank-IC≈0 (2025 牛市 -0.26), 机会分排序无
+    # 稳健 alpha; 等权全池避免虚假精度与高集中度。
+    holding_mode: str = "top_score"
+    max_holdings: int | None = None    # pool 模式持仓上限 (None=全池; 设值时取分数最高的若干只)
+    # ── C 资金层: 未建仓/缺成交价的槽位怎么办 ──
+    #   "reserve_cash": 留现金 (分母=目标槽位数; top_score 下=top_n, pool 下=候选数)。
+    #   "full_invest" : 满仓等权, 缺口/缺价权重摊回已持仓 (分母=实际持仓数)。
+    funding_mode: str = "reserve_cash"
 
 
 @dataclass(frozen=True)
@@ -287,14 +322,21 @@ class _PeriodResult:
     benchmark_equity: float
     benchmark_point: dict[str, Any] | None
     selected_codes: list[str]
+    held_codes: list[str]        # 实际建仓的标的码 (供下期换手计算, 不含缺价票)
+    weight_denominator: int      # 本期等权份数分母 (intended), 供下期换手计算
 
 
 def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
     """回测结果里回显的配置快照 (供 GUI/CSV 展示与复现)。"""
+    holding_mode = _normalize_holding_mode(cfg.holding_mode)
+    funding_mode = _normalize_funding_mode(cfg.funding_mode)
     return {
         "top_n": cfg.top_n,
-        "top_n_shortfall_policy": _normalize_top_n_shortfall_policy(
-            cfg.top_n_shortfall_policy),
+        "holding_mode": holding_mode,
+        "max_holdings": cfg.max_holdings,
+        "funding_mode": funding_mode,
+        # 兼容旧快照/GUI 的派生镜像 (新接口请读 holding_mode/funding_mode)
+        "top_n_shortfall_policy": _funding_legacy_alias(funding_mode),
         "rebalance_freq": cfg.rebalance_freq,
         "selection_view": cfg.selection_view,
         "min_score": cfg.min_score,
@@ -326,7 +368,8 @@ def _run_rebalance_period(
     period_start: date,
     period_end: date,
     *,
-    previous_codes: list[str],
+    previous_held_codes: list[str],
+    previous_intended: int,
     start_equity: float,
     benchmark_equity: float,
     equity_curve: list[dict[str, Any]],
@@ -408,7 +451,14 @@ def _run_rebalance_period(
     # 转债成交价缓存: 策略持仓与基准共享, 避免同一调仓期重复拉历史。
     price_cache: dict[tuple, PricePoint | None] = {}
     candidates = _select_candidate_rows(priced_rows, cfg)
-    selected = candidates[:cfg.top_n]
+    # B 持仓层: 从候选池构成持仓
+    holding_mode = _normalize_holding_mode(cfg.holding_mode)
+    if holding_mode == "pool":
+        # 等权持有整个候选池 (不按机会分精排); max_holdings 为可选上限。
+        cap = cfg.max_holdings if cfg.max_holdings else len(candidates)
+        selected = candidates[:max(0, int(cap))]
+    else:  # top_score: 按机会分取前 top_n
+        selected = candidates[:cfg.top_n]
     selected_codes = [str(row.get("bond_code")) for row in selected]
     candidate_rows = _candidate_explanation_rows(candidates, selected_codes, cfg)
     rejection_rows = _rejection_explanation_rows(
@@ -431,13 +481,22 @@ def _run_rebalance_period(
     )
     _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
 
-    shortfall_policy = _normalize_top_n_shortfall_policy(cfg.top_n_shortfall_policy)
-    intended = _position_weight_denominator(shortfall_policy, cfg.top_n, len(selected))
-    previous_intended = _position_weight_denominator(
-        shortfall_policy, cfg.top_n, len(previous_codes))
+    # C 资金层: 等权份数分母 (intended)
+    funding_mode = _normalize_funding_mode(cfg.funding_mode)
+    held = len(positions)            # 实际有成交价、能建仓的标的数
+    held_codes = [str(pos.get("bond_code")) for pos in positions]
+    if funding_mode == "full_invest":
+        # 满仓等权: 分母=实际持仓; 未建仓/缺价权重摊回已持仓 (不留现金)。
+        intended = held
+    else:
+        # reserve_cash: 分母=目标槽位 (top_score→top_n, pool→候选数); 未建仓/缺价槽位留现金。
+        target = cfg.top_n if holding_mode == "top_score" else len(selected)
+        intended = max(0, int(target))
+    # 换手/成本基于**实际持仓码** (非含缺价的 selected); 上期持仓码与分母由编排层顺延,
+    # 不再近似重算。reserve_cash 下分母>持仓数, 缺口/缺价自然计入现金、不算换手。
     turnover = _equal_weight_turnover(
-        previous_codes,
-        selected_codes,
+        previous_held_codes,
+        held_codes,
         previous_denominator=previous_intended,
         current_denominator=intended,
     )
@@ -516,8 +575,10 @@ def _run_rebalance_period(
         "gross_return": gross_return,
         "cost": cost,
         "cash_weight": cash_weight,
-        "top_n_shortfall_policy": shortfall_policy,
-        "target_count": cfg.top_n,
+        "holding_mode": holding_mode,
+        "funding_mode": funding_mode,
+        "top_n_shortfall_policy": _funding_legacy_alias(funding_mode),  # 兼容旧快照/GUI
+        "target_count": cfg.top_n if holding_mode == "top_score" else len(selected),
         "weight_denominator": intended,
         "benchmark_return": benchmark_return,
         "equity": equity,
@@ -538,6 +599,8 @@ def _run_rebalance_period(
         benchmark_equity=new_benchmark_equity,
         benchmark_point=benchmark_point,
         selected_codes=selected_codes,
+        held_codes=held_codes,
+        weight_denominator=intended,
     )
 
 
@@ -607,7 +670,8 @@ def backtest_score_strategy(
     benchmark_curve = [{"date": schedule[0], "equity": 1.0}] if cfg.compute_benchmark else []
     equity = 1.0
     benchmark_equity = 1.0
-    previous_codes: list[str] = []
+    previous_held_codes: list[str] = []
+    previous_intended = 0
     total_periods = len(schedule) - 1
     performance_stats: Counter = Counter()
 
@@ -642,14 +706,16 @@ def backtest_score_strategy(
             idx,
             period_start,
             period_end,
-            previous_codes=previous_codes,
+            previous_held_codes=previous_held_codes,
+            previous_intended=previous_intended,
             start_equity=equity,
             benchmark_equity=benchmark_equity,
             equity_curve=equity_curve,
         )
         equity = res.equity
         benchmark_equity = res.benchmark_equity
-        previous_codes = res.selected_codes
+        previous_held_codes = res.held_codes
+        previous_intended = res.weight_denominator
         if res.benchmark_point is not None:
             benchmark_curve.append(res.benchmark_point)
         snapshots.append(res.snapshot)
@@ -2308,33 +2374,41 @@ def _drawdown_stats(equity_curve: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _normalize_top_n_shortfall_policy(value: str | None) -> str:
+def _normalize_holding_mode(value: str | None) -> str:
+    """B 持仓层: top_score(按机会分取前 N) | pool(等权全池)。兼容旧 selection_weighting 别名。"""
     raw = str(value or "").strip().lower()
     aliases = {
-        "": "cash",
-        "cash": "cash",
-        "hold_cash": "cash",
-        "leave_cash": "cash",
-        "留现金": "cash",
-        "缺口留现金": "cash",
-        "未满留现金": "cash",
-        "renormalize": "renormalize",
-        "rebalance": "renormalize",
-        "full_invest": "renormalize",
-        "full_investment": "renormalize",
-        "剩余等权": "renormalize",
-        "剩余标的等权": "renormalize",
-        "满仓等权": "renormalize",
+        "": "top_score",
+        "top_score": "top_score", "score_rank": "top_score", "score": "top_score",
+        "rank": "top_score", "top_n": "top_score", "机会分排序": "top_score", "按分topn": "top_score",
+        "pool": "pool", "equal_pool": "pool", "equal": "pool",
+        "等权": "pool", "等权全池": "pool", "等权候选池": "pool",
     }
     if raw not in aliases:
-        raise ValueError(f"未知 Top N 缺口处理方式: {value}")
+        raise ValueError(f"未知持仓模式 holding_mode: {value}")
     return aliases[raw]
 
 
-def _position_weight_denominator(policy: str, top_n: int, selected_count: int) -> int:
-    if _normalize_top_n_shortfall_policy(policy) == "cash":
-        return max(1, int(top_n))
-    return max(0, int(selected_count))
+def _normalize_funding_mode(value: str | None) -> str:
+    """C 资金层: reserve_cash(缺口留现金) | full_invest(满仓摊回)。兼容旧 shortfall_policy 别名。"""
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "": "reserve_cash",
+        "reserve_cash": "reserve_cash", "cash": "reserve_cash", "hold_cash": "reserve_cash",
+        "leave_cash": "reserve_cash", "留现金": "reserve_cash", "缺口留现金": "reserve_cash",
+        "未满留现金": "reserve_cash",
+        "full_invest": "full_invest", "full_investment": "full_invest",
+        "renormalize": "full_invest", "rebalance": "full_invest",
+        "剩余等权": "full_invest", "剩余标的等权": "full_invest", "满仓等权": "full_invest",
+    }
+    if raw not in aliases:
+        raise ValueError(f"未知资金模式 funding_mode: {value}")
+    return aliases[raw]
+
+
+def _funding_legacy_alias(funding_mode: str) -> str:
+    """新 funding_mode → 旧 top_n_shortfall_policy 取值 (快照/GUI 兼容镜像)。"""
+    return "renormalize" if _normalize_funding_mode(funding_mode) == "full_invest" else "cash"
 
 
 def _equal_weight_portfolio_weights(codes: list[str], denominator: int | None = None) -> dict[str, float]:

@@ -821,6 +821,9 @@ def annotate_batch_result(row: dict) -> dict:
 
     out["risk_tags"] = _dedupe_tags(risk_tags)
     out["confidence"] = confidence
+    # opportunity_score 是"模型低估程度"的复核排序信号, 用于筛选值得人工复核的标的;
+    # 经全市场池回测其横截面排序对未来收益预测力≈0 (Rank-IC≈-0.05), 不是收益预测/买入
+    # 排名。可用 convertible_bond.signal_eval 复验。NaN 表示无市价/理论价异常 (上层已处理)。
     out["opportunity_score"] = score
     if set(out["risk_tags"]) & HARD_REVIEW_TAGS or confidence == "低":
         out["model_signal_status"] = "不适合作为买入信号"
