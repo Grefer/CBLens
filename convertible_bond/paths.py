@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 APP_NAME = "CBLens"
-_SEEDED_DATA_FILES = {"cb_data.json", "cb_events.json", "down_reset_overrides.json", "batch_pricing_cache.json"}
+_SEEDED_DATA_FILES = {"cb_data.json", "cb_events.json", "down_reset_overrides.json", "batch_pricing_cache.json", "cb_valuation_history.json"}
 _BUNDLED_DATA_ALIASES = {
     # 运行态批量缓存仍写入/读取 batch_pricing_cache.json；Release 构建则可携带
     # 一个只读种子文件，避免 CI 没有本机运行态缓存时桌面包首启空表。

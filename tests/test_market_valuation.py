@@ -11,6 +11,7 @@ from convertible_bond.market_valuation import (
     load_history,
     percentile_rank,
     save_history,
+    valuation_banner,
 )
 
 
@@ -112,3 +113,23 @@ def test_append_history_overwrites_same_date(tmp_path):
 
 def test_load_history_missing_returns_empty(tmp_path):
     assert load_history(tmp_path / "nope.json") == []
+
+
+# ---------------- valuation_banner (GUI 横幅) ----------------
+
+def test_valuation_banner_rich():
+    hist = [i / 100 for i in range(0, 21)]          # 0%..20%
+    rows = _rows([0.18, 0.20, 0.22, 0.25, 0.19])    # 中位 +20% -> 极贵
+    banner, detail = valuation_banner(rows, hist)
+    assert "市场估值" in banner and ("偏贵" in banner or "极贵" in banner)
+    assert "中位偏差" in banner
+    assert detail                                    # 详情非空
+
+
+def test_valuation_banner_empty_rows():
+    assert valuation_banner([], [0.1, 0.2]) == ("", "")
+
+
+def test_valuation_banner_insufficient_history():
+    banner, _ = valuation_banner(_rows([0.1, 0.2, 0.3]), [0.1, 0.2])  # 历史<8
+    assert "历史不足" in banner

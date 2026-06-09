@@ -44,6 +44,8 @@ STATIC_DATA_FILES = (
     "cb_data.json",
     "cb_events.json",
     "down_reset_overrides.json",
+    # 转债大类估值/择时历史基线 (cb-valuation / 批量页估值横幅的历史分位来源)
+    "cb_valuation_history.json",
     # Tracked release seed. Runtime cache data/batch_pricing_cache.json is
     # intentionally ignored, but local builds may still bundle it when usable.
     "desktop_batch_pricing_cache.json",

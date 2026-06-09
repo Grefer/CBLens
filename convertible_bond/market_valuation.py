@@ -162,6 +162,36 @@ def classify(median_deviation: float, history_medians: Sequence[float]) -> Valua
 
 # ---------------- 历史基线读写 (原子写, 与项目其它 JSON 一致) ----------------
 
+_LABEL_ICON = {
+    "极便宜": "🟢", "便宜": "🟢", "中性": "⚪",
+    "偏贵": "🔴", "极贵": "🔴", "历史不足": "⚪",
+}
+
+
+def valuation_banner(
+    rows: Sequence[dict[str, Any]],
+    history_medians: Sequence[float],
+    **snapshot_kwargs: Any,
+) -> tuple[str, str]:
+    """供 GUI 用: 由已定价结果 + 历史中位偏差序列, 返回 (单行横幅, 悬浮详情)。
+
+    无可用数据时返回 ("", "")。横幅形如
+    ``🔴 市场估值 偏贵 · 中位偏差 +13.8% · 历史分位 78%``。
+    """
+    try:
+        snap = compute_snapshot(rows, **snapshot_kwargs)
+    except ValueError:
+        return "", ""
+    sig = classify(snap.median_deviation, history_medians)
+    icon = _LABEL_ICON.get(sig.label, "⚪")
+    pct = "" if not np.isfinite(sig.percentile) else f" · 历史分位 {sig.percentile:.0f}%"
+    banner = (f"{icon} 市场估值 {sig.label} · 中位偏差 "
+              f"{snap.median_deviation*100:+.1f}%{pct}")
+    detail = (f"全市场中位偏差 {snap.median_deviation*100:+.1f}% "
+              f"(判高估 {snap.pct_overvalued*100:.0f}%, 样本 {snap.n} 只)\n{sig}")
+    return banner, detail
+
+
 def load_history(path: Path) -> list[ValuationSnapshot]:
     """读历史基线 (按日期升序)。文件不存在返回空。"""
     if not Path(path).exists():

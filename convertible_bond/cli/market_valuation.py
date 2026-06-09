@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -26,12 +27,15 @@ from ..market_valuation import (
 from ..paths import data_path
 
 
-def _load_results(cache_path: Path) -> list[dict]:
+def _load_results(cache_path: Path, *, include_watchlist: bool = False) -> list[dict]:
+    """读批量定价结果。默认只取主全市场池 ``results``; ``upcoming_results`` 是关注池
+    额外定价 (新债/在途), 不属于全市场口径, 仅在显式要求时并入。"""
     with open(cache_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
     if isinstance(payload, dict):
         results = list(payload.get("results") or [])
-        results += list(payload.get("upcoming_results") or [])
+        if include_watchlist:
+            results += list(payload.get("upcoming_results") or [])
         return results
     return list(payload)
 
@@ -48,18 +52,21 @@ def main(argv: list[str] | None = None) -> int:
                         help="历史基线路径 (默认 data/cb_valuation_history.json)")
     parser.add_argument("--record", action="store_true",
                         help="把本次中位偏差并入历史基线 (同估值日覆盖)")
+    parser.add_argument("--include-watchlist", action="store_true",
+                        help="把关注池 upcoming_results 也并入估值 (默认只用主全市场池)")
     parser.add_argument("--json", action="store_true", help="机器可读 JSON 输出")
     args = parser.parse_args(argv)
 
     cache_path = Path(args.cache) if args.cache else data_path("batch_pricing_cache.json")
-    history_path = Path(args.history) if args.history else data_path("cb_valuation_history.json")
+    history_path = (Path(args.history) if args.history
+                    else data_path("cb_valuation_history.json", seed=True))
 
     if not cache_path.exists():
         print(f"找不到批量定价缓存: {cache_path}\n请先在 GUI 批量页或 cb-screen-pool 生成定价结果。",
               file=sys.stderr)
         return 2
     try:
-        results = _load_results(cache_path)
+        results = _load_results(cache_path, include_watchlist=args.include_watchlist)
         snapshot = compute_snapshot(results)
     except (ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"读取/聚合定价结果失败: {exc}", file=sys.stderr)
@@ -73,12 +80,13 @@ def main(argv: list[str] | None = None) -> int:
         append_history(history_path, snapshot)
 
     if args.json:
+        pct = None if math.isnan(signal.percentile) else signal.percentile
         print(json.dumps({
             "snapshot": snapshot.to_record(),
-            "signal": {"label": signal.label, "percentile": signal.percentile,
+            "signal": {"label": signal.label, "percentile": pct,
                        "n_history": signal.n_history},
             "recorded": bool(args.record),
-        }, ensure_ascii=False, indent=2))
+        }, ensure_ascii=False, indent=2, allow_nan=False))
         return 0
 
     print(f"批量定价缓存: {cache_path}")

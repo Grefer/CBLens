@@ -32,6 +32,8 @@ from ...batch_pricing import (
     write_batch_results_csv,
 )
 from ...pricing_api import batch_price_from_provider_threaded
+from ...market_valuation import load_history, valuation_banner
+from ...paths import data_path
 from ...watchlist import load_watchlist
 from ..widgets import Tooltip
 from .batch_common import (
@@ -132,6 +134,17 @@ def build(app, tab):
                  font=(FONT_FAMILY, 16, "bold"), text_color=TEXT).pack(side="left")
     ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按机会分筛选复核",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
+
+    # 右侧: 转债大类估值/择时信号 (全市场中位偏差 → 贵/便宜), 随结果刷新
+    app.v_batch_valuation = ctk.StringVar(value="")
+    app._batch_valuation_detail = ""
+    lbl_val = ctk.CTkLabel(ch, textvariable=app.v_batch_valuation,
+                           font=(FONT_FAMILY, 13, "bold"), text_color=TEXT)
+    lbl_val.pack(side="right")
+    Tooltip(lbl_val, lambda: app._batch_valuation_detail
+            or "转债大类估值/择时指标: 全市场理论价 vs 市价的中位偏差。\n"
+               "中位偏差高=市场贵, 低=便宜 (历史与中证转债指数下一季收益负相关≈-0.52)。\n"
+               "属大类配置参考, 非个券买入信号。")
 
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
     cc.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
@@ -504,9 +517,24 @@ def _render_batch_views(
     display_results = filter_batch_results_by_view(base_results, view)
     app._batch_results = display_results
     _refresh_view_menu_labels(app, base_results)
+    _update_valuation_banner(app, base_results)
     _render_table(app, display_results, total_results=len(base_results), view=view, cache_path=cache_path,
                   cache_meta=cache_meta, excluded_count=excluded_count)
     _render_watchlist_table(app)
+
+
+def _update_valuation_banner(app, base_results) -> None:
+    """用全量定价池更新标题栏的转债大类估值/择时信号 (静默失败不影响主流程)。"""
+    if not hasattr(app, "v_batch_valuation"):
+        return
+    try:
+        history = load_history(data_path("cb_valuation_history.json", seed=True))
+        medians = [s.median_deviation for s in history]
+        banner, detail = valuation_banner(base_results or [], medians)
+    except Exception:
+        banner, detail = "", ""
+    app._batch_valuation_detail = detail
+    app.v_batch_valuation.set(banner)
 
 
 def _refresh_view_menu_labels(app, base_results):

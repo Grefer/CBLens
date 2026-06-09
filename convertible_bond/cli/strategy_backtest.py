@@ -19,6 +19,7 @@ from ..batch_pricing import (
     build_batch_provider,
     parse_bond_codes,
 )
+from ..backtest_disk_cache import DiskCacheProvider
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
 from ..historical_terms import (
@@ -70,6 +71,9 @@ def main() -> int:
                         help="条款变更 patch JSON 路径 (默认 <data>/cb_terms_patches.json)")
     parser.add_argument("--events", default="",
                         help="事件表路径 (默认 <data>/cb_events.json)")
+    parser.add_argument("--cache-dir", default="",
+                        help="跨运行磁盘缓存目录 (缓存 point-in-time 条款/历史价, "
+                             "多周期复跑大幅提速; 默认关闭)")
     parser.add_argument("--codes", default="",
                         help="只回测指定转债代码, 支持逗号/空格/换行分隔; 默认使用 bundle 主池")
     parser.add_argument("--start", required=True, type=_parse_date,
@@ -176,6 +180,10 @@ def main() -> int:
         patch_store=patch_store,
         event_store=event_store,
     )
+    disk_cache = None
+    if args.cache_dir:
+        disk_cache = DiskCacheProvider(provider, args.cache_dir)
+        provider = disk_cache
     admission_config = AdmissionFilterConfig(
         delist_window_days=max(0, args.delist_window),
         min_outstanding_balance=None if args.min_balance < 0 else args.min_balance,
@@ -216,23 +224,28 @@ def main() -> int:
     else:
         grid_M, grid_N = 220, 700
 
-    result = backtest_score_strategy(
-        provider,
-        codes,
-        start_date=args.start,
-        end_date=args.end,
-        config=strategy_config,
-        terms_cache=None,
-        admission_config=admission_config,
-        r=args.r,
-        base_spread=args.base_spread,
-        distress_k=args.distress_k,
-        p_down=args.p_down,
-        vol_window_days=args.vol_window,
-        M=grid_M,
-        N=grid_N,
-        max_workers=args.max_workers,
-    )
+    try:
+        result = backtest_score_strategy(
+            provider,
+            codes,
+            start_date=args.start,
+            end_date=args.end,
+            config=strategy_config,
+            terms_cache=None,
+            admission_config=admission_config,
+            r=args.r,
+            base_spread=args.base_spread,
+            distress_k=args.distress_k,
+            p_down=args.p_down,
+            vol_window_days=args.vol_window,
+            M=grid_M,
+            N=grid_N,
+            max_workers=args.max_workers,
+        )
+    finally:
+        # 中途异常/中断也要落盘已拉取的昂贵缓存
+        if disk_cache is not None:
+            disk_cache.flush()
     summary = result["summary"]
     print(f"区间: {result['start_date']} ~ {result['end_date']}")
     print(f"样本池: {len(codes)} | top_n: {summary['top_n']} | 调仓: {summary['rebalance_freq']}")
