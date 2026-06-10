@@ -59,7 +59,7 @@ class ScoreStrategyConfig:
         top_score (取前 top_n)        │ 分母=top_n, 缺口/缺价→现金 │ 分母=held, 缺价摊回
         pool (整个候选池)             │ 分母=候选数, 缺价→现金     │ 分母=held, 缺价摊回
 
-    (默认 top_score + reserve_cash = 旧 score_rank + cash; GUI 默认 pool + full_invest。)
+    (引擎与 GUI 默认均为 top_score + reserve_cash = 旧 score_rank + cash 行为。)
 
     ⚠️ 破坏性变更 (v?.?): 旧字段已移除, 请迁移——
         top_n_shortfall_policy="renormalize" → funding_mode="full_invest"
@@ -95,10 +95,12 @@ class ScoreStrategyConfig:
     compute_benchmark: bool = True
     pool_mode: str = "static"  # "static" | "dynamic"
     # ── B 持仓层: 怎么从候选池构成持仓 (一律等权) ──
-    #   "top_score": 按机会分取前 top_n 只 (研究/对比用)。
-    #   "pool"     : 等权持有整个候选池, 不按机会分精排 (推荐)。
-    # 依据: 全市场池跨周期(2022-2026)横截面 Rank-IC≈0 (2025 牛市 -0.26), 机会分排序无
-    # 稳健 alpha; 等权全池避免虚假精度与高集中度。
+    #   "top_score": 按机会分取前 top_n 只。
+    #   "pool"     : 等权持有整个候选池, 不按机会分精排。
+    # 证据现状 (两种均为研究配置, 无推荐): 跨周期(2022-2026)横截面 Rank-IC≈0,
+    # 机会分排序无稳健选股 alpha; top_score 在 4 年季频对比中风险调整更优
+    # (Sharpe 0.60 vs 0.40), 但源于"候选不足→留现金"的隐性缓冲与极端偏差尾部集中,
+    # 月频 2025-26 反向 (现金拖累跑输基准), 不跨频率稳健。
     holding_mode: str = "top_score"
     max_holdings: int | None = None    # pool 模式持仓上限 (None=全池; 设值时取分数最高的若干只)
     # ── C 资金层: 未建仓/缺成交价的槽位怎么办 ──
@@ -137,7 +139,10 @@ class _BacktestCacheProvider(DataProvider):
         self.name = f"{inner.name}+btcache"
         lookback = max(price_lookback_days, vol_window_days * 3 + 30)
         self._history_start = start_date - timedelta(days=lookback + 15)
-        self._history_end = end_date + timedelta(days=max(1, execution_lookahead_days) + 15)
+        # 批量历史区间不越过昨天: 未来日期本就无数据, 且越过今天会让 DiskCacheProvider 的
+        # "只缓存严格过去"守卫拒绝落盘, 导致跨运行复跑重复拉取全部历史 (实测 6 小时级)。
+        padded_end = end_date + timedelta(days=max(1, execution_lookahead_days) + 15)
+        self._history_end = min(padded_end, date.today() - timedelta(days=1))
         self._bond_history: dict[str, list[tuple[date, float | None]]] = {}
         self._stock_history: dict[str, list[tuple[date, float | None]]] = {}
         self._bond_history_exact: dict[tuple, list[tuple[date, float | None]]] = {}

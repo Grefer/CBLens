@@ -257,6 +257,21 @@ def test_pool_with_reserve_cash_leaves_gap_as_cash(monkeypatch):
     assert period["gross_return"] == pytest.approx((0.10 + 0.0) / 3)
 
 
+def test_backtest_cache_history_end_never_extends_into_future():
+    """批量历史区间 clamp 到昨天: 否则磁盘缓存的'只缓存过去'守卫拒绝落盘, 复跑退化为全量重拉。"""
+    from convertible_bond.strategy_backtest import _BacktestCacheProvider
+    provider = StrategyFakeProvider()
+    near_today = _BacktestCacheProvider(
+        provider, start_date=date.today() - timedelta(days=90), end_date=date.today(),
+        price_lookback_days=31, execution_lookahead_days=10, vol_window_days=21)
+    assert near_today._history_end <= date.today() - timedelta(days=1)
+    # 区间完全在过去时不受 clamp 影响 (保持原 padding 语义)
+    past = _BacktestCacheProvider(
+        provider, start_date=date(2024, 1, 2), end_date=date(2024, 6, 28),
+        price_lookback_days=31, execution_lookahead_days=10, vol_window_days=21)
+    assert past._history_end == date(2024, 6, 28) + timedelta(days=25)
+
+
 def test_turnover_cost_uses_actual_holdings_not_phantom_selected(monkeypatch):
     """换手/成本必须基于实际持仓码, 不能把'选中但缺成交价'的票当真实持仓。
 

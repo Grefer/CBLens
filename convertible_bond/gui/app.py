@@ -270,8 +270,10 @@ class CBPricerApp(
         self.v_st_top_n = ctk.StringVar(value="10")
         self.v_st_template = ctk.StringVar(value="自定义")
         self.v_st_view = ctk.StringVar(value="综合机会")
-        # 选券权重: 默认推荐"等权全池"(跨周期 Rank-IC≈0, 机会分精排无 alpha); "机会分排序"为研究用
-        self.v_st_weighting = ctk.StringVar(value="等权全池")
+        # 选券权重: 默认"机会分排序"(top_score, 原始行为)。"等权全池"为研究配置。
+        # 两者均无稳健选股 alpha (跨周期横截面 Rank-IC≈0); top_score 在 4 年季频对比中
+        # 风险调整更优, 但源于"候选不足留现金"的隐性缓冲, 不跨频率稳健 — 不构成推荐依据。
+        self.v_st_weighting = ctk.StringVar(value="机会分排序")
         self.v_st_pool_mode = ctk.StringVar(value="本地全市场")
         self.v_st_history_mode = ctk.StringVar(value="标准")
         self.v_st_min_price = ctk.StringVar(value="")

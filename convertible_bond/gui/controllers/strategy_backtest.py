@@ -500,7 +500,7 @@ class StrategyBacktestMixin:
         try:
             holding_mode = _normalize_holding_mode(
                 getattr(self, "v_st_weighting", None).get()
-                if getattr(self, "v_st_weighting", None) is not None else "pool")
+                if getattr(self, "v_st_weighting", None) is not None else "top_score")
             # pool→满仓等权(缺价摊回); top_score→缺口留现金 (沿用旧 score_rank 行为)
             funding_mode = "full_invest" if holding_mode == "pool" else "reserve_cash"
             config = ScoreStrategyConfig(

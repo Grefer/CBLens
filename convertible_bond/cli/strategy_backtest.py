@@ -90,8 +90,8 @@ def main() -> int:
                         help="每次调仓选债数量 (仅 top_score 模式; 默认 10)")
     parser.add_argument("--holding-mode", default="top_score",
                         choices=["top_score", "pool"],
-                        help="B持仓层: top_score=按机会分取Top N; "
-                             "pool=等权持有整个候选池(推荐, 跨周期IC证据见 README)")
+                        help="B持仓层: top_score=按机会分取Top N; pool=等权持有整个候选池。"
+                             "两者均无稳健选股 alpha, 各有取舍 (见 README 模型边界)")
     parser.add_argument("--max-holdings", type=int, default=None,
                         help="pool 模式持仓上限 (默认不限, 持全部候选)")
     parser.add_argument("--funding-mode", default="reserve_cash",
