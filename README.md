@@ -292,6 +292,7 @@ CBLens/
 | 🎨 [品牌说明](docs/BRAND.md) | 项目名称由来、图标含义、调色板与使用建议 |
 | 📦 [数据说明](data/README.md) | `cb_data.json`、`cb_events.json` 字段定义与刷新节奏 |
 | 🔧 [维护约定](AGENTS.md) | 给 agent 和维护者看的项目级上下文与编码规范 |
+| 🔬 [研究笔记](docs/research/2026-06-score-ic-and-valuation-timing.md) | 机会分 IC 检验、时变估值溢价、择时信号与组合层对比的完整复盘 (模型边界的依据) |
 
 ---
 
