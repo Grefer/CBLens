@@ -198,10 +198,19 @@ def build(app, tab):
                 app.v_st_benchmark, app.v_st_weighting, app.v_st_cash_yield):
         var.trace_add("write", _on_param_change)
 
-    # 选券权重 ↔ TopN 联动: '等权全池'下模型完全忽略 top_n, 输入框置灰防误导
+    # 选券权重 ↔ TopN 联动: '等权全池'下模型完全忽略 top_n, 输入框置灰防误导。
+    # CTkEntry 的 state="disabled" 几乎不改外观, 需显式降级视觉:
+    # 禁用 = 透明底 + 描边轮廓 + 暗色文字 ("幽灵框"), 启用 = 实底还原。
     def _sync_selection_logic(*_):
         is_pool = app.v_st_weighting.get() == "等权全池"
-        top_n_entry.configure(state="disabled" if is_pool else "normal")
+        if is_pool:
+            top_n_entry.configure(
+                state="disabled", fg_color="transparent",
+                border_width=1, border_color=BORDER, text_color=TEXT_DIM)
+        else:
+            top_n_entry.configure(
+                state="normal", fg_color=BG_INPUT,
+                border_width=0, text_color=TEXT)
         app.v_st_logic_summary.set(app._strategy_logic_summary_text())
 
     for var in (app.v_st_view, app.v_st_weighting, app.v_st_top_n, app.v_st_cash_yield):
