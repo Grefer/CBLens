@@ -10,31 +10,42 @@ A 股可转债理论定价系统，完整链路：数据同步 → 准入筛选 
 
 参考 @README.md 了解完整特性与使用方法。
 
-### 目录结构 (9200+ 行)
+### 目录结构 (26000+ 行)
 
 ```
 CBLens/
 ├── convertible_bond/           # 主包
 │   ├── pricer.py               # PDE 定价引擎 (UniversalCBPricer)
-│   ├── pricing_api.py          # price_from_provider / batch_price 高级 API
-│   ├── data_providers.py       # DataProvider ABC + Wind/Akshare/CSV 实现
+│   ├── pricing_api.py          # price_from_provider / batch_price 高级 API + _BatchStockCache
+│   ├── data_providers/         # DataProvider 包 (base ABC, wind, akshare, csv_provider, auto)
 │   ├── cninfo_provider.py      # 巨潮资讯网公告 Provider
 │   ├── cache.py                # TermsBundle/TermsCache + CachedBondDataProvider
 │   ├── batch_pricing.py        # 准入筛选 + 研究打分 + 结果缓存
-│   ├── backtest.py             # 历史回测
+│   ├── backtest.py             # 单债历史回测 (模型 vs 市场偏差)
+│   ├── strategy_backtest.py    # 选债策略回测核心 (调仓/持仓/基准/归因, 2600 行)
+│   ├── backtest_disk_cache.py  # DiskCacheProvider: 回测取数跨运行磁盘缓存
+│   ├── historical_terms.py     # 历史条款投影 (TermsPatchStore + 事件重建, 防未来信息)
+│   ├── market_valuation.py     # 转债大类估值/择时信号 (中位偏差 + 历史分位)
+│   ├── signal_eval.py          # 信号检验 (Rank-IC / 分位收益 / 截面 zscore)
 │   ├── cb_events.py            # 事件模型与解析
 │   ├── cb_event_sync.py        # 公告 → 事件同步
 │   ├── cb_data_sync.py         # Wind → cb_data.json 同步
 │   ├── admission_status.py     # 停牌/强赎/ST 状态刷新
-│   ├── down_reset_overrides.py # 下修覆盖
+│   ├── down_reset_overrides.py # 下修覆盖 + 三 regime 强度解析
 │   ├── watchlist.py            # 关注池管理
-│   ├── gui/                    # CustomTkinter GUI (app.py, theme.py, widgets.py, tabs/)
-│   └── cli/                    # CLI 工具 (screen_pool, sync_*)
+│   ├── gui/                    # CustomTkinter GUI
+│   │   ├── app.py              # CBPricerApp: 多 mixin 组装
+│   │   ├── controllers/        # 业务域 mixin; 策略回测已按职责拆为
+│   │   │                       #   strategy_{setup,run,snapshots,render,
+│   │   │                       #   render_analysis,compare,common} 7 模块,
+│   │   │                       #   strategy_backtest.py 仅为聚合入口
+│   │   └── tabs/               # 各页 UI 构建 (batch/pricing/backtest/strategy/...)
+│   └── cli/                    # CLI 工具 (screen_pool, sync_*, valuation, strategy_backtest)
 ├── data/                       # 持久化数据 (cb_data.json, cb_events.json, ...)
-├── tests/                      # pytest 测试
+├── tests/                      # pytest 测试 (380+)
 ├── CB.py                       # CLI 兼容入口
 ├── gui.py                      # GUI 兼容入口
-└── pyproject.toml              # 包定义
+└── pyproject.toml              # 包定义 + ruff 配置 (E9+F, CI 阻塞)
 ```
 
 ### 五层架构
@@ -96,33 +107,45 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 - 强赎宽限期: `cap = max(call_price, parity · (1 + σ√t_grace))`
 - 默认网格: M=500, N=2000 (单只); M=300, N=1000 (批量)
 
-## 测试
+## 测试与静态检查
 
 ```bash
-pytest                    # 全部测试
-pytest -v                 # 详细
+pytest                    # 全部测试 (380+, ~5s)
 pytest -x -q              # 快速失败
 pytest -k "down_reset"    # 按关键词
+ruff check convertible_bond tests CB.py gui.py scripts  # lint (E9+F, CI 阻塞)
 ```
 
 修改 pricer.py / pricing_api.py / batch_pricing.py 后必须运行 `pytest -x` 确认无回归。
+ruff 只启用正确性规则 (语法错误/未定义名/未用导入); F821 是 GUI 代码的静态防线 —
+CustomTkinter 在测试环境跑不起来, 运行期 NameError 靠它兜底, 不要绕过。
+
+GUI controller 大改后跑 `pytest -k composition` (组成性守护: mixin 无命名冲突 +
+UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆盖不到真实渲染路径。
 
 ## 数据文件
 
-- `data/cb_data.json` — 全部转债静态条款 (~257KB)，不要手动编辑
+- `data/cb_data.json` — 全部转债静态条款，不要手动编辑
+- `data/cb_data_history/` — 按日期归档的条款快照 (历史回测取数)
 - `data/cb_events.json` — 结构化事件表
+- `data/cb_terms_patches.json` — 历史条款 patch (回测防未来信息)
+- `data/cb_valuation_history.json` — 大类估值历史基线 (批量重算自动追加, 入版本库)
 - `data/down_reset_overrides.json` — 人工下修覆盖 (可手动编辑)
-- `data/batch_pricing_cache.json` — 批量定价缓存 (~440KB)
-- `data/watchlist.json` — 关注池
+- `data/batch_pricing_cache.json` — 批量定价缓存 (运行态, gitignored)
+- `data/watchlist.json` — 关注池 (运行态, gitignored)
+- `data/strategy_backtest_snapshots/`, `data/strategy_backtest_cache/` — 策略回测
+  快照与跨运行磁盘缓存 (运行态, gitignored)
 
 ## CLI 入口
 
 ```bash
 cb-gui                                      # GUI
 cb-screen-pool --min-rating AA-             # 准入筛选报告
+cb-sync-tradable                            # 全量同步基础条款
 cb-sync-admission-status --limit 50         # 刷新状态
-python -m convertible_bond.cli.sync_events  # 同步事件
-python -m convertible_bond.cli.sync_tradable # 同步可交易列表
+cb-sync-events --apply                      # 同步公告事件并应用回 cb_data
+cb-valuation                                # 大类估值/择时信号 (--record 入基线)
+cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M  # 策略回测 (--cache-dir 复跑提速)
 cb-calibrate-down-reset                     # 从 cb_events 校准下修博弈常量
 python CB.py 128009.SZ                      # 单只定价
 ```
