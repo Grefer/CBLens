@@ -1807,3 +1807,40 @@ def test_score_strategy_flushes_provider_disk_cache_each_period(monkeypatch):
 
     # 2025-01-02 → 2025-03-31 月频共 3 个调仓期, 每期 flush 一次
     assert provider.flush_calls == 3
+
+
+def test_strategy_backtest_mixin_composition_integrity():
+    """拆分守护: 子 mixin 间无方法名冲突, 聚合类暴露 UI 引用的全部入口。
+
+    StrategyBacktestMixin 已按职责拆为 6 个子 mixin (setup/run/snapshots/
+    render/render_analysis/compare)。GUI 无法在测试环境启动, 此组成性检查是
+    "搬丢方法/命名冲突"这类拆分事故的静态防线; UI 入口清单来自 app.py 与
+    tabs/ 对 app._xxx 的实际引用。
+    """
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    bases = StrategyBacktestMixin.__bases__
+    assert len(bases) >= 6, "聚合类应由职责子 mixin 组成"
+    owner: dict[str, str] = {}
+    for base in bases:
+        for name in vars(base):
+            if name.startswith("__"):
+                continue
+            assert name not in owner, (
+                f"mixin 方法名冲突: {name} 同时定义于 {owner[name]} 与 {base.__name__}")
+            owner[name] = base.__name__
+
+    ui_entry_points = (
+        "_apply_strategy_template", "_describe_strategy_view",
+        "_clear_strategy_codes", "_import_strategy_codes_file",
+        "_refresh_strategy_setup_summary", "_precheck_strategy_backtest",
+        "_run_strategy_backtest", "_cancel_strategy_backtest",
+        "_save_strategy_backtest_snapshot", "_load_strategy_backtest_snapshot",
+        "_export_strategy_backtest_csv", "_on_strategy_result_tab_change",
+        "_render_strategy_backtest_result", "_render_current_strategy_tab",
+        "_update_strategy_result_summary", "_clear_strategy_comparison",
+        "_delete_selected_comparison",
+    )
+    for entry in ui_entry_points:
+        assert callable(getattr(StrategyBacktestMixin, entry, None)), (
+            f"聚合类缺少 UI 入口: {entry}")
