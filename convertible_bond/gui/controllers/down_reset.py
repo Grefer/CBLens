@@ -13,11 +13,7 @@ from ...down_reset_overrides import (
     reload_default_overrides,
     resolve_down_reset,
 )
-from ..theme import (
-    BTN_CTRL, BTN_HOVER,
-    FONT_FAMILY,
-    ORANGE, TEXT, TEXT_DIM,
-)
+from ..theme import BTN_CTRL, BTN_HOVER, FONT_FAMILY, ORANGE, TEXT_DIM
 from ..widgets import _form_row, create_card
 
 

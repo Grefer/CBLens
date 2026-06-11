@@ -24,11 +24,7 @@ from ...pricing_api import (
     _rating_spread_floor,
     _risk_warnings,
 )
-from ..constants import (
-    DEFAULT_P_DOWN_PCT,
-    P_DOWN_AUTO_SOURCE_LABELS,
-    default_p_down_pct_for_state,
-)
+from ..constants import P_DOWN_AUTO_SOURCE_LABELS, default_p_down_pct_for_state
 from ..theme import (
     ACCENT, BG_APP, BG_CARD, BG_INPUT, BORDER,
     FONT_FAMILY, FONT_MONO,

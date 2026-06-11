@@ -36,5 +36,8 @@ jobs:
       - name: Compile check
         run: python -m compileall -q convertible_bond CB.py gui.py scripts
 
+      - name: Lint (ruff E9+F)
+        run: ruff check convertible_bond tests CB.py gui.py scripts
+
       - name: Test
         run: pytest -q

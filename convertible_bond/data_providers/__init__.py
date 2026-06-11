@@ -39,20 +39,7 @@ from .base import (
     to_date,
     _add_months,
 )
-from ._helpers import (
-    _announcement_row_from_wind,
-    _date_or_none,
-    _float_or_none,
-    _latest_finite,
-    _retry,
-    _row_value,
-    _stock_history_from_df,
-    _string_or_none,
-    _wind_table_rows,
-    _wind_to_ak_bond,
-    _wind_to_ak_stock,
-    _wind_to_ak_stock_prefixed,
-)
+from ._helpers import _retry
 from .wind import WindDataProvider
 from .akshare import AkshareDataProvider
 from .csv_provider import CSVDataProvider
@@ -76,4 +63,7 @@ __all__ = [
     "parse_coupon_chinese_text",
     "parse_coupon_string",
     "to_date",
+    # 包内跨模块助手 (cb_events/down_reset_overrides/cninfo 经此 facade 导入)
+    "_add_months",
+    "_retry",
 ]

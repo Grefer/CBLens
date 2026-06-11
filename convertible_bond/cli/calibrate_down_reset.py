@@ -22,7 +22,6 @@ import argparse
 import json
 import statistics
 from collections import Counter, defaultdict
-from datetime import date
 
 from ..cb_events import CBEvent, CBEventStore, project_events_path
 

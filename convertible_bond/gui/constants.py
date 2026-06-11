@@ -4,7 +4,8 @@
 """
 import re
 
-from ..model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT
+# 显式 re-export: app.py / controllers.wind_sync 经本模块导入模型默认值
+from ..model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT as DEFAULT_DOWN_RESET_TRIGGER_PCT
 
 
 BOND_CODE_RE = re.compile(r"^\d{6}\.[A-Z]{2}$")

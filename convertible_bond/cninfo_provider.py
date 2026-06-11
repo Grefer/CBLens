@@ -23,11 +23,10 @@ import logging
 import re
 import time
 from datetime import date, datetime
-from typing import Any
 
 import requests
 
-from .data_providers import DataProvider, BondTerms, to_date, _retry
+from .data_providers import DataProvider, BondTerms, _retry
 
 logger = logging.getLogger(__name__)
 

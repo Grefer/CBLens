@@ -1,6 +1,6 @@
 """CninfoAnnouncementProvider 与 cb_event_sync PDF 注入测试."""
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from convertible_bond.cb_event_sync import (
     _needs_body,
@@ -8,17 +8,15 @@ from convertible_bond.cb_event_sync import (
     parse_credit_rating_terms,
     parse_conversion_price_adjustment,
     parse_outstanding_balance_change,
-    _try_download_body,
     sync_cb_events,
 )
-from convertible_bond.cb_events import CBEventStore, classify_announcement_title
+from convertible_bond.cb_events import CBEventStore
 from convertible_bond.historical_terms import TermsPatchStore
 from convertible_bond.cninfo_provider import (
     CninfoAnnouncementProvider,
     _parse_announcement_item,
     _wind_code_to_plain,
     _infer_column,
-    extract_text_from_pdf_bytes,
 )
 
 

@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -35,7 +35,6 @@ from .constants import (
     DEFAULT_DOWN_RESET_TRIGGER_PCT,
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
-    EVENT_SYNC_STALE_HOURS,    # noqa: F401  (re-export for legacy callers)
     normalize_strategy_history_mode,
 )
 from .controllers import (

@@ -2,7 +2,6 @@
 from collections import Counter
 from datetime import date
 
-import pytest
 
 from convertible_bond.backtest_disk_cache import DiskCacheProvider
 from convertible_bond.data_providers import BondTerms, DataProvider

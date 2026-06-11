@@ -4,9 +4,19 @@ import tkinter as tk
 import customtkinter as ctk
 
 from ..theme import (
-    BG_APP, BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM,
-    ACCENT, ACCENT_HOVER, BTN_CTRL, BTN_HOVER, ORANGE,
-    FONT_FAMILY, FONT_MONO, get_color,
+    BG_APP,
+    BG_CARD,
+    BG_INPUT,
+    BORDER,
+    TEXT,
+    TEXT_DIM,
+    ACCENT,
+    BTN_CTRL,
+    BTN_HOVER,
+    ORANGE,
+    FONT_FAMILY,
+    FONT_MONO,
+    get_color,
     VOL_WINDOW_MAP,
 )
 from ..widgets import (

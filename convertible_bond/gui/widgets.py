@@ -7,8 +7,18 @@ import tkinter as tk
 import customtkinter as ctk
 
 from .theme import (
-    BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM, ORANGE, ACCENT, ACCENT_HOVER, GREEN,
-    BTN_HOVER, FONT_FAMILY, FONT_MONO, get_color,
+    BG_CARD,
+    BG_INPUT,
+    BORDER,
+    TEXT,
+    TEXT_DIM,
+    ORANGE,
+    ACCENT,
+    GREEN,
+    BTN_HOVER,
+    FONT_FAMILY,
+    FONT_MONO,
+    get_color,
 )
 
 

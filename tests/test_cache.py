@@ -7,7 +7,6 @@
 from datetime import date, datetime
 from dataclasses import fields
 
-import pytest
 
 from convertible_bond.cache import (
     TermsBundle,

@@ -44,6 +44,21 @@ cb-sync-terms = "convertible_bond.cli.sync_terms:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.ruff]
+# 起步只选高价值正确性规则: E9 (语法/IO 错误) + F (pyflakes: 未定义名/未用导入/重复定义)。
+# F821 (未定义名) 是 GUI 代码静态防线 — 运行期 NameError 在测试环境无法触达, 靠它兜底。
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F"]
+# F841 (未用局部变量) 噪音大且无运行期风险, 暂不启用
+ignore = ["F841"]
+
+[tool.ruff.lint.per-file-ignores]
+# 历史 star import, 重构另行处理; F405 为 star import 的连带误报
+"convertible_bond/gui/tabs/batch.py" = ["F403", "F405"]
+"convertible_bond/gui/tabs/batch_watchlist.py" = ["F403", "F405"]
+
 [build-system]
 requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"

@@ -4,7 +4,6 @@
 """
 import math
 
-import numpy as np
 import pytest
 
 from convertible_bond.signal_eval import (

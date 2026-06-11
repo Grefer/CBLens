@@ -8,36 +8,15 @@ from __future__ import annotations
 import csv
 import threading
 from datetime import date
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.colors import LinearSegmentedColormap
 
 from ...backtest import backtest_theoretical_price
-from ...batch_pricing import (
-    AdmissionFilterConfig,
-    DEFAULT_MIN_CREDIT_RATING,
-    DEFAULT_MIN_OUTSTANDING_BALANCE,
-    build_batch_provider,
-    parse_bond_codes,
-)
-from ...cb_events import CBEventStore, project_events_path
-from ...data_providers import WindDataProvider
-from ...historical_terms import (
-    HistoricalBondDataProvider,
-    TermsPatchStore,
-    project_terms_patches_path,
-)
-from ...strategy_backtest import (
-    ScoreStrategyConfig,
-    backtest_score_strategy,
-    build_rebalance_schedule,
-    write_strategy_backtest_csv,
-)
 from ..theme import (
     ACCENT, BG_CARD, BG_INPUT, BORDER,
     GREEN, ORANGE, RED,
@@ -46,19 +25,6 @@ from ..theme import (
     VOL_WINDOW_MAP,
     get_color,
 )
-from ..constants import (
-    BOND_CODE_RE,
-    STRATEGY_TEMPLATE_DESCRIPTIONS,
-    STRATEGY_VIEW_DESCRIPTIONS,
-    normalize_strategy_history_mode,
-)
-from ..tabs.batch_common import (
-    _TREE_ATTRS,
-    _attach_column_sort,
-    _configure_responsive_columns,
-    _configure_tree_style,
-)
-from ..widgets import Tooltip
 
 
 class BacktestMixin:
