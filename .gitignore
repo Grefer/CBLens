@@ -29,6 +29,8 @@ data/announcement_pdfs/
 data/batch_pricing_cache.json
 data/watchlist.json
 
-# 策略回测结果快照 (GUI 运行态产物, 随回测增删/prune, 不入版本库)
+# 策略回测运行态产物 (结果快照 + 跨运行磁盘缓存), 随回测增删/prune, 不入版本库
 data/strategy_backtest_snapshot.json
+data/strategy_backtest_snapshot.bak.json
 data/strategy_backtest_snapshots/
+data/strategy_backtest_cache/

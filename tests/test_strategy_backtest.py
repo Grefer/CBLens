@@ -1761,3 +1761,49 @@ def test_write_strategy_backtest_csv_emits_all_sections(tmp_path, monkeypatch):
             break
         period_rows.append(r)
     assert len(period_rows) == len(result["periods"]) == 3
+
+
+def test_score_strategy_flushes_provider_disk_cache_each_period(monkeypatch):
+    """逐期 flush: provider 链上有 flush 能力 (DiskCacheProvider) 时每个调仓期落盘一次。
+
+    同时守护委托链: 回测内部把 provider 包成 _BacktestCacheProvider, flush 须经
+    __getattr__ 透传到内层; 多小时高保真拉取中途进程被杀也只丢当期数据。
+    """
+    class FlushingProvider(StrategyFakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.flush_calls = 0
+
+        def flush(self):
+            self.flush_calls += 1
+
+    provider = FlushingProvider()
+
+    def fake_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+        return [
+            {
+                "bond_code": code,
+                "status": "ok",
+                "S0": 100.0, "K": 100.0, "sigma": 0.30,
+                "theoretical_price": 110.0, "market_price": 100.0,
+                "deviation": -10.0 / 110.0,
+                "credit_rating": "AA+", "outstanding_balance": 10.0, "T": 3.0,
+            }
+            for code in codes
+        ]
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        fake_batch_price,
+    )
+
+    backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 3, 31),
+        config=ScoreStrategyConfig(top_n=1, rebalance_freq="M"),
+    )
+
+    # 2025-01-02 → 2025-03-31 月频共 3 个调仓期, 每期 flush 一次
+    assert provider.flush_calls == 3

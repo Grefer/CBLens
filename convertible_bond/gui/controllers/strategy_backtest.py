@@ -26,6 +26,7 @@ from ...batch_pricing import (
     build_batch_provider,
     parse_bond_codes,
 )
+from ...backtest_disk_cache import DiskCacheProvider
 from ...cb_events import CBEventStore, project_events_path
 from ...data_providers import WindDataProvider
 from ...historical_terms import (
@@ -33,6 +34,7 @@ from ...historical_terms import (
     TermsPatchStore,
     project_terms_patches_path,
 )
+from ...paths import data_dir
 from ...strategy_backtest import (
     ScoreStrategyConfig,
     _funding_legacy_alias,
@@ -690,20 +692,26 @@ class StrategyBacktestMixin:
                         self.strategy_bt_progress.set(pct)
                 self.after(0, _update)
 
-            result = backtest_score_strategy(
-                provider,
-                codes,
-                start_date=start,
-                end_date=end,
-                config=config,
-                terms_cache=None,
-                admission_config=admission_config,
-                pricing_snapshot_cache=getattr(self, "_strategy_pricing_cache", None),
-                progress_cb=progress,
-                stage_cb=stage_progress,
-                cancel_cb=cancel_check,
-                **params,
-            )
+            try:
+                result = backtest_score_strategy(
+                    provider,
+                    codes,
+                    start_date=start,
+                    end_date=end,
+                    config=config,
+                    terms_cache=None,
+                    admission_config=admission_config,
+                    pricing_snapshot_cache=getattr(self, "_strategy_pricing_cache", None),
+                    progress_cb=progress,
+                    stage_cb=stage_progress,
+                    cancel_cb=cancel_check,
+                    **params,
+                )
+            finally:
+                # 跨运行磁盘缓存: 中途取消/异常也落盘已拉取的昂贵数据 (与 CLI 同口径)
+                flush = getattr(provider, "flush", None)
+                if callable(flush):
+                    flush()
             result_config = dict(result.get("config") or {})
             result_config["history_mode"] = history_mode
             result["config"] = result_config
@@ -766,7 +774,7 @@ class StrategyBacktestMixin:
             # 而是 strip 掉 Wind 泄漏的当前状态、改由 cb_events 按 event_date 重建。
             # 这些状态本就是离散公告事件 (cb_events 已覆盖 18 类), 事件重建既防未来
             # 函数又把每债 Wind 调用压到 ~2 次 (条款批量 wss + close wsd)。
-            return HistoricalBondDataProvider(
+            provider = HistoricalBondDataProvider(
                 WindDataProvider(),
                 history_store=None,
                 patch_store=TermsPatchStore(project_terms_patches_path()),
@@ -775,6 +783,9 @@ class StrategyBacktestMixin:
                 merge_admission_status=False,
                 provider_history_terms=True,
             )
+            # 跨运行磁盘缓存 (与 CLI --cache-dir 同机制): 高保真逐债拉取的 point-in-time
+            # 条款/历史价落盘复用, 复跑从数小时降到定价时间; 补丁/事件文件一变自动失效。
+            return DiskCacheProvider(provider, data_dir("strategy_backtest_cache"))
 
         base_provider = build_batch_provider(
             source,
@@ -1354,6 +1365,17 @@ class StrategyBacktestMixin:
             verdict = "暂无足够收益数据"
         quality = "高" if fallback_ratio <= 0 else ("中" if fallback_ratio <= 0.2 else "低")
 
+        hints = {
+            "结论": "解读铁律: 一切对照「等权基准」——跑不赢基准 = 这套规则没有超额,\n"
+                    "哪怕绝对收益为正。机会分是复核标记、不是收益预测;\n"
+                    "单一市场周期的回测不构成策略承诺 (详见 USAGE 4.2 与 README 模型边界)。",
+            "最大回撤": "净值从峰值到谷底的最大跌幅 = 历史上最深要忍受的亏损。\n"
+                       "对照基准回撤判断风险是否换来了收益; 与持仓集中度、现金缓冲相关。",
+            "主要贡献": "收益贡献最大的单券。若总收益高度依赖个别券 (尤其强赎/退市收敛券),\n"
+                       "说明结果偏尾部运气而非系统性能力, 复现性存疑——去「归因」页核对。",
+            "数据质量": "条款回退占比 = 用当前条款顶替历史条款的样本比例, >0 有未来信息渗入风险。\n"
+                       "下结论前先看「数据」子页的补丁覆盖率与缺价跳过数。",
+        }
         items = [
             ("结论", verdict),
             ("最大回撤", (
@@ -1380,6 +1402,10 @@ class StrategyBacktestMixin:
                 font=(FONT_FAMILY, 13, "bold"), wraplength=260,
                 justify="left")
             value_label.pack(anchor="w")
+            hint = hints.get(title)
+            if hint:
+                Tooltip(cell, hint)
+                Tooltip(value_label, hint)
 
             def _update_wrap(event, label=value_label):
                 label.configure(wraplength=max(180, event.width - 24))

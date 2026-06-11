@@ -764,6 +764,11 @@ def backtest_score_strategy(
         pricer_overrides=pricer_overrides,
     )
 
+    # 跨运行磁盘缓存 (DiskCacheProvider, 经 _BacktestCacheProvider.__getattr__ 链可达)
+    # 的阶段性落盘句柄: 多小时高保真拉取中途进程被杀也只丢当期数据。
+    # flush 为原子写且无脏数据时零成本; 链上无 flush 能力时为 None, 安全跳过。
+    provider_flush = getattr(provider, "flush", None)
+
     for idx, period_start in enumerate(schedule[:-1]):
         period_end = schedule[idx + 1]
         res = _run_rebalance_period(
@@ -791,6 +796,8 @@ def backtest_score_strategy(
         periods.append(res.period)
         if progress_cb:
             progress_cb(idx + 1, total_periods)
+        if callable(provider_flush):
+            provider_flush()
 
     summary = _summarize_strategy(
         equity_curve,
