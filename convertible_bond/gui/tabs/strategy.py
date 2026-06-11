@@ -200,12 +200,13 @@ def build(app, tab):
 
     # 选券权重 ↔ TopN 联动: '等权全池'下模型完全忽略 top_n, 输入框置灰防误导。
     # CTkEntry 的 state="disabled" 几乎不改外观, 需显式降级视觉:
-    # 禁用 = 透明底 + 描边轮廓 + 暗色文字 ("幽灵框"), 启用 = 实底还原。
+    # 禁用 = 卡片底色 + 描边轮廓 + 暗色文字 ("幽灵框", 融入卡片背景), 启用 = 实底还原。
+    # 注意 CTkEntry 不支持 fg_color="transparent" (ValueError), 用 BG_CARD 等效。
     def _sync_selection_logic(*_):
         is_pool = app.v_st_weighting.get() == "等权全池"
         if is_pool:
             top_n_entry.configure(
-                state="disabled", fg_color="transparent",
+                state="disabled", fg_color=BG_CARD,
                 border_width=1, border_color=BORDER, text_color=TEXT_DIM)
         else:
             top_n_entry.configure(
