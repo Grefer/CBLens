@@ -139,8 +139,8 @@ class SensitivityMixin:
             )
             self.after(0, self._render_sensitivity_chart, S_vals, sig_vals, grid, K)
         except Exception as exc:
-            self.after(0, lambda: self.v_sens_status.set(f"❌ 敏感性分析失败: {exc}"))
-            self.after(0, lambda: messagebox.showerror("敏感性分析失败", str(exc)))
+            self.after(0, lambda exc=exc: self.v_sens_status.set(f"❌ 敏感性分析失败: {exc}"))
+            self.after(0, lambda exc=exc: messagebox.showerror("敏感性分析失败", str(exc)))
         finally:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_sensitivity.configure(state="normal"))

@@ -1451,7 +1451,7 @@ class PricingMixin:
                 self.after(0, lambda: var.set(label))
             except Exception as exc:
                 self.after(0, lambda: var.set(base_label))
-                self.after(0, lambda: self.v_status.set(f"What-if 失败: {exc}"))
+                self.after(0, lambda exc=exc: self.v_status.set(f"What-if 失败: {exc}"))
             finally:
                 self.after(0, lambda: btn.configure(state="normal"))
 

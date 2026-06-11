@@ -318,7 +318,7 @@ class WindSyncMixin:
                 else:
                     self.after(0, lambda: status_var.set(f"❌ 退出码 {rc}"))
             except Exception as exc:
-                self.after(0, lambda: status_var.set(f"❌ 启动失败: {exc}"))
+                self.after(0, lambda exc=exc: status_var.set(f"❌ 启动失败: {exc}"))
             finally:
                 self.after(0, lambda: cancel_btn.configure(state="disabled"))
                 self.after(0, lambda: close_btn.configure(state="normal"))

@@ -122,7 +122,7 @@ def main() -> int:
         print("\n无需要补的代码")
         return 0
     if args.dry_run:
-        print(f"\n--dry-run 启用, 不调 Wind 拉条款")
+        print("\n--dry-run 启用, 不调 Wind 拉条款")
         return 0
 
     print(f"\n开始 Wind 回拉 {len(missing)} 只静态条款 (预计 ~{len(missing)*0.6:.0f}s)")

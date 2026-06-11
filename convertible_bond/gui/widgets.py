@@ -641,11 +641,11 @@ def make_date_picker(parent, var, *, entry_width=120):
         try:
             existing = entry._date_popup
             if existing is not None and existing.winfo_exists():
-                _log(f"[OPEN] already open, skip")
+                _log("[OPEN] already open, skip")
                 return
             popup = DatePickerPopup(
                 entry.winfo_toplevel(), var, anchor=entry,
-                on_close=lambda: (_log(f"[CLOSE-CB] ref cleared"),
+                on_close=lambda: (_log("[CLOSE-CB] ref cleared"),
                                   setattr(entry, "_date_popup", None)))
             entry._date_popup = popup
             _log(f"[OPEN] popup created at "

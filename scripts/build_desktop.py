@@ -158,7 +158,7 @@ def _generate_spec(root: Path) -> str:
             windpy_rth = _rp(rth_path)
 
         # pip 包形态的 collect (安全失败)
-        spec_collect = f"""
+        spec_collect = """
 # --- WindPy pip 包形态收集 ---
 try:
     _sub = collect_submodules("WindPy")

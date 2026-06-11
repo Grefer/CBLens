@@ -73,7 +73,7 @@ class StrategySetupMixin:
             return codes, "批量页当前筛选结果"
         if mode == "自选代码":
             codes, invalid = self._parse_strategy_manual_codes()
-            label = f"自选代码池"
+            label = "自选代码池"
             if invalid:
                 label += f" (忽略无效 {len(invalid)} 个)"
             return codes, label

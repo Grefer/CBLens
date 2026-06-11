@@ -73,13 +73,13 @@ def _offline_demo():
     full = pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
                         distress_k=0.05, p_down=0.0, return_greeks=True)
 
-    print(f"--- 离线示例 ---")
+    print("--- 离线示例 ---")
     print(f"当前剩余期限: {pricer.T:.4f} 年")
     print(f"当前票面利率: {pricer.get_coupon_rate(today):.4%}")
     print(f"当前应计利息: {pricer.accrued_interest(today):.4f}")
     print(f"通用模型估算价: {full['price']:.3f}")
     print()
-    print(f"--- 希腊值 & 价值分解 ---")
+    print("--- 希腊值 & 价值分解 ---")
     print(f"  纯债价值: {full['bond_floor']:.3f}    "
           f"转股价值: {full['parity']:.3f}    "
           f"期权溢价: {full['option_premium']:.3f}")

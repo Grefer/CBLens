@@ -89,8 +89,8 @@ class BacktestMixin:
             self._last_bt_result = result
             self.after(0, self._render_backtest_chart, result)
         except Exception as exc:
-            self.after(0, lambda: self.v_bt_status.set(f"❌ 回测失败: {exc}"))
-            self.after(0, lambda: messagebox.showerror("回测失败", str(exc)))
+            self.after(0, lambda exc=exc: self.v_bt_status.set(f"❌ 回测失败: {exc}"))
+            self.after(0, lambda exc=exc: messagebox.showerror("回测失败", str(exc)))
         finally:
             self.after(0, lambda: self.btn_backtest.configure(state="normal"))
 

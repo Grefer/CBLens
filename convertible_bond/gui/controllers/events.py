@@ -446,7 +446,7 @@ class EventsMixin:
             )
             self.after(0, lambda: self._on_auto_sync_events_done(code, result, None))
         except Exception as exc:
-            self.after(0, lambda: self._on_auto_sync_events_done(code, None, exc))
+            self.after(0, lambda exc=exc: self._on_auto_sync_events_done(code, None, exc))
 
     def _reload_events_for_current_code(self, code: str) -> None:
         self.event_store = CBEventStore(project_events_path())
@@ -531,7 +531,7 @@ class EventsMixin:
             self.after(0, lambda: self._on_sync_events_done(code, msg))
         except Exception as exc:
             logger.warning("事件同步失败 (%s): %s", code, exc)
-            self.after(0, lambda: self._on_sync_events_done(
+            self.after(0, lambda exc=exc: self._on_sync_events_done(
                 code, f"同步失败: {exc}"))
 
     def _on_sync_events_done(self, code: str, msg: str):
