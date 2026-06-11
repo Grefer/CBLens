@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import tkinter as tk
 from datetime import date
@@ -32,7 +33,12 @@ from ...batch_pricing import (
     write_batch_results_csv,
 )
 from ...pricing_api import batch_price_from_provider_threaded
-from ...market_valuation import load_history, valuation_banner
+from ...market_valuation import (
+    append_history,
+    compute_snapshot,
+    load_history,
+    valuation_banner,
+)
 from ...paths import data_path
 from ...watchlist import load_watchlist
 from ..widgets import Tooltip
@@ -59,6 +65,8 @@ from .batch_watchlist import (
 
 if TYPE_CHECKING:
     from ..app import CBPricerApp
+
+logger = logging.getLogger(__name__)
 
 # 列预设: 简洁视图只保留投资决策最常看的字段, 完整视图沿用所有字段
 # 状态列: 成功 → ✓ (单字符即可), 失败行保留错误文本, 故宽度大幅收窄
@@ -413,6 +421,9 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
             params=params,
             upcoming_results=watchlist_pricing,
         )
+        # 样本外纪律: 全市场重算成功即自动记录当期估值快照 (同估值日幂等覆盖)。
+        # 仅主池重算触发; 缓存加载/关注池局部重算不记, 避免污染基线。
+        _record_valuation_history(results)
         app._batch_results = results
         app._batch_upcoming_results = watchlist_pricing
         app._last_batch_source = provider.name
@@ -526,6 +537,21 @@ def _render_batch_views(
     _render_table(app, display_results, total_results=len(base_results), view=view, cache_path=cache_path,
                   cache_meta=cache_meta, excluded_count=excluded_count)
     _render_watchlist_table(app)
+
+
+def _record_valuation_history(results, history_path=None) -> bool:
+    """全市场重算成功后把当期估值快照并入历史基线 (样本外纪律的自动化形态)。
+
+    同估值日幂等覆盖; 失败静默 (记录是副产品, 不能影响主流程)。返回是否成功记录。
+    """
+    try:
+        snapshot = compute_snapshot(results or [])
+        path = history_path or data_path("cb_valuation_history.json", seed=True)
+        append_history(path, snapshot)
+        return True
+    except Exception:
+        logger.debug("估值历史自动记录失败 (忽略)", exc_info=True)
+        return False
 
 
 def _update_valuation_banner(app, base_results) -> None:

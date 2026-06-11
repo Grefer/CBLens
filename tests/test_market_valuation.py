@@ -115,6 +115,23 @@ def test_load_history_missing_returns_empty(tmp_path):
     assert load_history(tmp_path / "nope.json") == []
 
 
+def test_gui_auto_record_helper_idempotent(tmp_path):
+    """批量页自动记录: 成功落盘、同估值日幂等覆盖、空结果静默失败。"""
+    from convertible_bond.gui.tabs.batch import _record_valuation_history
+    path = tmp_path / "hist.json"
+    assert _record_valuation_history(_rows([0.10, 0.15, 0.20]), history_path=path) is True
+    loaded = load_history(path)
+    assert len(loaded) == 1
+    assert loaded[0].median_deviation == pytest.approx(0.15)
+    # 同日重算 → 覆盖而非追加
+    assert _record_valuation_history(_rows([0.30, 0.30, 0.30]), history_path=path) is True
+    loaded = load_history(path)
+    assert len(loaded) == 1
+    assert loaded[0].median_deviation == pytest.approx(0.30)
+    # 空结果 → 静默失败不写盘
+    assert _record_valuation_history([], history_path=path) is False
+
+
 # ---------------- valuation_banner (GUI 横幅) ----------------
 
 def test_valuation_banner_rich():

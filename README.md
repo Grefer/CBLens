@@ -185,7 +185,14 @@ cb-sync-events --apply
 cb-screen-pool
 
 # ⑥ 打开 GUI 做批量复核、单债钻取和敏感性分析
+#    (批量重算成功后会自动把当期估值快照记入历史基线)
 cb-gui
+
+# ⑦ 查看转债大类估值/择时信号 (全市场中位偏差 + 历史分位; --record 手动入基线)
+cb-valuation
+
+# ⑧ 策略回测 CLI (与 GUI 策略页等价; --cache-dir 复跑提速, 详见 --help)
+cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M --cash-yield 0.022
 ```
 
 ---
