@@ -98,6 +98,10 @@ def main() -> int:
                         choices=["reserve_cash", "full_invest"],
                         help="C资金层: reserve_cash=未建仓/缺价槽位留现金; "
                              "full_invest=满仓等权(缺口/缺价摊回)")
+    parser.add_argument("--exposure-mode", default="full",
+                        choices=["full", "valuation"],
+                        help="D仓位层: full=恒定满仓(默认); valuation=按当期已定价池中位偏差"
+                             "缩放总仓位 (研究配置, 依据见 docs/research/2026-06-*)")
     parser.add_argument("--selection-view", default="综合机会", choices=BATCH_REVIEW_VIEWS,
                         help="复用批量页视图过滤候选 (默认 综合机会)")
     parser.add_argument("--min-score", type=float, default=None,
@@ -126,15 +130,20 @@ def main() -> int:
                         help="期初/期末转债收盘价向前查找天数 (默认 31)")
     parser.add_argument("--max-price-staleness-days", type=int, default=10,
                         help="信号日收盘成交时允许价格向前陈旧的最大自然日数 (默认 10)")
-    parser.add_argument("--execution-timing", default="signal_close",
-                        choices=["signal_close", "next_close"],
-                        help="成交时点: signal_close=信号日收盘, next_close=下一可得收盘 (默认 signal_close)")
+    parser.add_argument("--execution-timing", default="next_close",
+                        choices=["next_close", "signal_close"],
+                        help="成交时点: next_close=信号日后下一可得收盘 (默认, 与 GUI 一致); "
+                             "signal_close=信号日当日收盘 (在'用于计算信号的那根收盘'上成交, 偏乐观)")
     parser.add_argument("--execution-lookahead-days", type=int, default=10,
                         help="next_close 模式下向后寻找成交价的最大自然日数 (默认 10)")
     parser.add_argument("--no-mark-to-market", action="store_true",
                         help="关闭持仓期日频净值估值, 仅保留调仓端点净值")
     parser.add_argument("--cost-bps", type=float, default=0.0,
-                        help="单边换手对应的交易成本, 单位 bps; 区间净收益扣 turnover*成本 (默认 0)")
+                        help="单边换手对应的交易成本, 单位 bps; 区间净收益扣 turnover*成本 (默认 0); "
+                             "基准同口径计成员变动换手成本")
+    parser.add_argument("--cash-yield", type=float, default=0.0,
+                        help="闲置现金年化收益率, 小数 (如 0.02≈货基; 默认 0)。"
+                             "Sharpe 课征 rf 门槛, 现金 0 计息会低估持现金配置, 研究运行建议设为 --r 同值")
     parser.add_argument("--no-benchmark", action="store_true",
                         help="关闭等权全可投池基准对比 (默认开启)")
     parser.add_argument("--delist-window", type=int, default=0,
@@ -226,6 +235,8 @@ def main() -> int:
         holding_mode=args.holding_mode,
         max_holdings=args.max_holdings,
         funding_mode=args.funding_mode,
+        exposure_mode=args.exposure_mode,
+        cash_yield_rate=max(0.0, args.cash_yield),
     )
     if args.M is not None or args.N is not None:
         grid_M = args.M or 300

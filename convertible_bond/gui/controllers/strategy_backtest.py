@@ -143,6 +143,8 @@ _STRATEGY_TEMPLATE_BASE = {
         "" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
     ),
     "v_st_min_turnover": "", "v_st_delist_window": "0", "v_st_cost": "20",
+    # 模板 = 完整可复现配置: 选券权重与现金收益也随模板归位, 不残留上次手动值
+    "v_st_weighting": "机会分排序", "v_st_cash_yield": "2.2",
 }
 STRATEGY_TEMPLATES = {
     "低估轮动": {"v_st_view": "低估候选", "v_st_freq": "月", "v_st_top_n": "10",
@@ -503,10 +505,14 @@ class StrategyBacktestMixin:
                 if getattr(self, "v_st_weighting", None) is not None else "top_score")
             # pool→满仓等权(缺价摊回); top_score→缺口留现金 (沿用旧 score_rank 行为)
             funding_mode = "full_invest" if holding_mode == "pool" else "reserve_cash"
+            cash_yield_pct = (
+                self._optional_float(self.v_st_cash_yield)
+                if hasattr(self, "v_st_cash_yield") else None)
             config = ScoreStrategyConfig(
                 top_n=max(1, int(float(self.v_st_top_n.get()))),
                 holding_mode=holding_mode,
                 funding_mode=funding_mode,
+                cash_yield_rate=max(0.0, (cash_yield_pct or 0.0) / 100.0),
                 rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
                 selection_view=view,
                 min_confidence=policy["min_confidence"],
@@ -828,6 +834,7 @@ class StrategyBacktestMixin:
                 "holding_mode": config.holding_mode,
                 "max_holdings": config.max_holdings,
                 "funding_mode": config.funding_mode,
+                "cash_yield_rate": config.cash_yield_rate,
                 "top_n_shortfall_policy": _funding_legacy_alias(config.funding_mode),
                 "min_score": config.min_score,
                 "min_confidence": list(config.min_confidence) if config.min_confidence else None,
@@ -2504,6 +2511,12 @@ class StrategyBacktestMixin:
             cost_text = f"{float(cost) * 10000:.0f} bps"
         except (TypeError, ValueError):
             cost_text = "—"
+        cash_yield = config.get("cash_yield_rate")
+        try:
+            if float(cash_yield) > 0:
+                cost_text += f" · 现金计息 {float(cash_yield)*100:.1f}%/年"
+        except (TypeError, ValueError):
+            pass
         benchmark_text = "等权基准" if config.get("compute_benchmark") else "不对标"
 
         _info_card(0, "条款来源", source_text, f"历史口径 {history_mode}")

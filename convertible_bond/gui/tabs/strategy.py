@@ -172,6 +172,11 @@ def build(app, tab):
         "注: 两者均无稳健选股 alpha (跨周期横截面 Rank-IC≈0),\n"
         "均为研究配置, 请对照等权基准解读, 勿当作可照搬的策略。",
         control_width=130, label_width=72)
+    _grid_cell(cc, "现金收益", app.v_st_cash_yield, 2, 1, "entry", None,
+               "闲置现金年化收益率 (%/年), 如 2.2 ≈ 货基/逆回购\n"
+               "缺口留现金、缺成交价或择时缩放留出的现金按此计息\n"
+               "Sharpe 课征无风险门槛, 0 计息会系统性低估持现金策略; 设 0 复现旧口径",
+               control_width=120, label_width=80)
 
     # ── 核心参数联动逻辑 (手动修改时策略方案自动切“自定义”) ───────────────────────
     def _on_param_change(*_):
@@ -180,7 +185,7 @@ def build(app, tab):
 
     for var in (app.v_st_start, app.v_st_end, app.v_st_freq,
                 app.v_st_view, app.v_st_top_n, app.v_st_cost,
-                app.v_st_benchmark, app.v_st_weighting):
+                app.v_st_benchmark, app.v_st_weighting, app.v_st_cash_yield):
         var.trace_add("write", _on_param_change)
 
     # 回测范围/历史口径 状态变量 (UI 在高级设置卡内; 这两个 StringVar 由

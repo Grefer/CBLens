@@ -257,6 +257,252 @@ def test_pool_with_reserve_cash_leaves_gap_as_cash(monkeypatch):
     assert period["gross_return"] == pytest.approx((0.10 + 0.0) / 3)
 
 
+def _overpriced_batch_price_factory(premium):
+    """理论价 = 市价/(1+premium) → 每只券 deviation=+premium (模型判高估)。"""
+    def _fake(provider_arg, codes, *, valuation_date, **kwargs):
+        rows = []
+        for code in codes:
+            hist = provider_arg.bond_history.get(code, [])
+            market = next((v for d, v in reversed(hist) if d <= valuation_date), None)
+            if market is None:
+                rows.append({"bond_code": code, "status": "无市价",
+                             "bond_name": provider_arg.terms[code].sec_name})
+                continue
+            theo = market / (1.0 + premium)
+            rows.append({
+                "bond_code": code, "bond_name": provider_arg.terms[code].sec_name,
+                "stock_code": provider_arg.terms[code].underlying_code, "status": "ok",
+                "S0": market, "K": 100.0, "sigma": 0.28, "theoretical_price": theo,
+                "market_price": market, "deviation": (market - theo) / theo,
+                "credit_rating": "AA+", "outstanding_balance": 10.0, "T": 3.0,
+            })
+        return rows
+    return _fake
+
+
+def _exposure_test_config(**overrides):
+    base = dict(rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+                min_score=None, min_confidence=None, exclude_risk_tags=(),
+                compute_benchmark=False)
+    base.update(overrides)
+    return ScoreStrategyConfig(**base)
+
+
+def test_exposure_valuation_scales_gross_cash_and_turnover(monkeypatch):
+    """D 仓位层: medDev=+16% → gross=1-2.5*0.16=0.6; 收益/现金/换手/权重全口径缩放。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _overpriced_batch_price_factory(0.16))
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=_exposure_test_config(exposure_mode="valuation"),
+    )
+    period = result["periods"][0]
+    assert period["exposure"] == pytest.approx(0.6)
+    assert period["median_deviation"] == pytest.approx(0.16)
+    # raw = (10%+0+0)/3 = 3.33%; 缩放后 2%
+    assert period["gross_return"] == pytest.approx(0.6 * 0.10 / 3)
+    assert period["cash_weight"] == pytest.approx(0.4)
+    assert period["turnover"] == pytest.approx(0.6)        # 首期建仓 = 买入 gross
+    assert all(p["weight"] == pytest.approx(0.6 / 3) for p in period["positions"])
+
+
+def test_exposure_full_records_median_but_does_not_scale(monkeypatch):
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _overpriced_batch_price_factory(0.16))
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=_exposure_test_config(),                     # exposure_mode 默认 full
+    )
+    period = result["periods"][0]
+    assert period["exposure"] == pytest.approx(1.0)
+    assert period["median_deviation"] == pytest.approx(0.16)  # 仍记录, 便于对照
+    assert period["gross_return"] == pytest.approx(0.10 / 3)
+    assert period["cash_weight"] == pytest.approx(0.0)
+
+
+def test_exposure_valuation_caps_at_full_when_market_cheap(monkeypatch):
+    """medDev<0 (市场低于模型公允) → 满仓上限 1.0。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)                        # dev ≈ -7.4%
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=_exposure_test_config(exposure_mode="valuation"),
+    )
+    period = result["periods"][0]
+    assert period["exposure"] == pytest.approx(1.0)
+    assert period["median_deviation"] < 0
+
+
+def test_exposure_valuation_floor(monkeypatch):
+    """medDev=+30% → 1-0.75=0.25 → clip 到下限 0.5。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _overpriced_batch_price_factory(0.30))
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=_exposure_test_config(exposure_mode="valuation"),
+    )
+    assert result["periods"][0]["exposure"] == pytest.approx(0.5)
+
+
+def test_cash_yield_accrues_on_reserved_cash(monkeypatch):
+    """P1: 闲置现金按年化 cash_yield_rate 计息 (缺价槽位留现金场景)。"""
+    provider = StrategyFakeProvider()
+    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]   # 缺期末价 → 现金 1/3
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=3, rebalance_freq="M", holding_mode="pool", funding_mode="reserve_cash",
+            cash_yield_rate=0.0365, mark_to_market=False,
+            min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
+    )
+    period = result["periods"][0]
+    accrual = (1 / 3) * 0.0365 * 29 / 365          # 29 天, 现金权重 1/3
+    assert period["cash_yield_return"] == pytest.approx(accrual)
+    assert period["period_return"] == pytest.approx(0.10 / 3 + accrual)
+
+
+def test_cash_yield_accrues_on_exposure_scaled_cash(monkeypatch):
+    """P1×D层: 择时缩放留出的现金 (1-g) 同样计息。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _overpriced_batch_price_factory(0.16))     # medDev=16% → g=0.6 → 现金 0.4
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=_exposure_test_config(exposure_mode="valuation",
+                                     cash_yield_rate=0.0365, mark_to_market=False),
+    )
+    period = result["periods"][0]
+    accrual = 0.4 * 0.0365 * 29 / 365
+    assert period["cash_yield_return"] == pytest.approx(accrual)
+    assert period["period_return"] == pytest.approx(0.6 * 0.10 / 3 + accrual)
+
+
+def test_cash_yield_reflected_in_mark_to_market_curve(monkeypatch):
+    """P1: 日频净值曲线与区间记账同口径计息 (期末点一致)。"""
+    provider = StrategyFakeProvider()
+    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=3, rebalance_freq="M", holding_mode="pool", funding_mode="reserve_cash",
+            cash_yield_rate=0.0365, mark_to_market=True,
+            min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
+    )
+    accrual = (1 / 3) * 0.0365 * 29 / 365
+    assert result["summary"]["final_equity"] == pytest.approx(1 + 0.10 / 3 + accrual)
+
+
+def test_pool_max_holdings_caps_by_balance_not_score(monkeypatch):
+    """P3a: pool 截断按余额降序 (流动性), 分数不再从后门回流。"""
+    provider = StrategyFakeProvider()
+    balances = {"113001.SH": 1.0, "113002.SH": 50.0, "113003.SH": 30.0}
+    bonus = {"113001.SH": 0.08, "113002.SH": 0.05, "113003.SH": 0.03}  # 分数 A>B>C
+
+    def fake(provider_arg, codes, *, valuation_date, **kwargs):
+        rows = []
+        for code in codes:
+            hist = provider_arg.bond_history.get(code, [])
+            market = next((v for d, v in reversed(hist) if d <= valuation_date), None)
+            theo = market * (1.0 + bonus[code])
+            rows.append({
+                "bond_code": code, "bond_name": provider_arg.terms[code].sec_name,
+                "stock_code": provider_arg.terms[code].underlying_code, "status": "ok",
+                "S0": market, "K": 100.0, "sigma": 0.28, "theoretical_price": theo,
+                "market_price": market, "deviation": (market - theo) / theo,
+                "credit_rating": "AA+", "outstanding_balance": balances[code], "T": 3.0,
+            })
+        return rows
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded", fake)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            max_holdings=2, min_confidence=None, exclude_risk_tags=(),
+            compute_benchmark=False),
+    )
+    # 取余额最大的 113002/113003, 而非分数最高的 113001
+    assert set(result["periods"][0]["selected_codes"]) == {"113002.SH", "113003.SH"}
+
+
+def test_benchmark_pays_membership_turnover_costs(monkeypatch):
+    """P3b: 基准与策略同口径计成本 (首期建仓换手=1, 次期成员不变换手=0)。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 2, 28),
+        config=ScoreStrategyConfig(
+            rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            transaction_cost=0.01, min_confidence=None, exclude_risk_tags=()),
+    )
+    p1, p2 = result["periods"][0], result["periods"][1]
+    # P1: 等权均值 (10%+0+0)/3, 减首期建仓换手 1×1% ；P2: A +9.09%, B -5%, C +1.11%, 换手 0
+    assert p1["benchmark_return"] == pytest.approx(0.10 / 3 - 0.01)
+    mean2 = (120 / 110 - 1 + 190 / 200 - 1 + 91 / 90 - 1) / 3
+    assert p2["benchmark_return"] == pytest.approx(mean2)
+
+
+def test_strategy_template_resets_new_knobs_to_full_config():
+    """模板 = 完整可复现配置: 选券权重/现金收益不残留上次手动值。"""
+    from convertible_bond.gui.controllers.strategy_backtest import (
+        StrategyBacktestMixin, _STRATEGY_TEMPLATE_BASE)
+
+    class Var:
+        def __init__(self, value=""):
+            self.value = value
+
+        def set(self, v):
+            self.value = v
+
+        def get(self):
+            return self.value
+
+    class DummyApp(StrategyBacktestMixin):
+        def __init__(self):
+            for name in _STRATEGY_TEMPLATE_BASE:
+                setattr(self, name, Var(""))
+            self.v_st_view = Var("")
+            self.v_st_summary = Var("")
+            # 模拟残留态: 用户上次手动改过的新旋钮
+            self.v_st_weighting = Var("等权全池")
+            self.v_st_cash_yield = Var("0")
+
+    app = DummyApp()
+    app._apply_strategy_template("稳健打底")
+    assert app.v_st_weighting.get() == "机会分排序"   # 随模板归位, 不残留
+    assert app.v_st_cash_yield.get() == "2.2"
+    assert app.v_st_view.get() == "综合机会"
+    assert app.v_st_top_n.get() == "15"
+    assert app.v_st_max_price.get() == "120"
+
+
 def test_backtest_cache_history_end_never_extends_into_future():
     """批量历史区间 clamp 到昨天: 否则磁盘缓存的'只缓存过去'守卫拒绝落盘, 复跑退化为全量重拉。"""
     from convertible_bond.strategy_backtest import _BacktestCacheProvider

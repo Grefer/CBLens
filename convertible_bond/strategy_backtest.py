@@ -87,6 +87,9 @@ class ScoreStrategyConfig:
     max_sigma: float | None = None
     price_lookback_days: int = 31
     max_price_staleness_days: int = 10
+    # ⚠️ "signal_close" = 在"用于计算信号的那根收盘"上成交, 对低流动性偏乐观;
+    # 严肃研究请用 "next_close" (CLI/GUI 默认)。dataclass 默认保留 signal_close
+    # 仅为 Python API 向后兼容, 不代表推荐口径。
     execution_timing: str = "signal_close"
     execution_lookahead_days: int = 10
     mark_to_market: bool = True
@@ -107,6 +110,19 @@ class ScoreStrategyConfig:
     #   "reserve_cash": 留现金 (分母=目标槽位数; top_score 下=top_n, pool 下=候选数)。
     #   "full_invest" : 满仓等权, 缺口/缺价权重摊回已持仓 (分母=实际持仓数)。
     funding_mode: str = "reserve_cash"
+    # ── D 仓位层 (可选): 按当期全市场估值水平缩放总仓位 ──
+    #   "full"     : 恒定满仓 (默认, 行为与历史版本一致)。
+    #   "valuation": gross = clip(1 - k·max(0, medDev), floor, 1.0), medDev = 当期
+    #                **已定价池** (非候选子集) deviation 中位数, 逐期点时计算, 自包含无未来函数。
+    # 依据见 docs/research/2026-06-score-ic-and-valuation-timing.md: 聚合中位偏差与
+    # 下季指数收益 corr≈-0.52; 同组合离线对照 Sharpe 0.59→0.70 / MDD 12.4%→7.7%
+    # (以收益换风险的风险预算工具)。研究配置, 默认关闭。
+    exposure_mode: str = "full"
+    exposure_valuation_k: float = 2.5   # medDev 每 +1, gross 减 k (映射斜率, 锚点 +20%→半仓)
+    exposure_floor: float = 0.5         # gross 下限
+    # 闲置现金年化收益率 (如 0.02≈货基)。默认 0 = 旧行为; 但注意 Sharpe 课征 rf 门槛,
+    # 现金 0 计息会系统性低估一切持现金配置 (留现金/择时缩放), 研究运行建议设为 r。
+    cash_yield_rate: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -329,6 +345,8 @@ class _PeriodResult:
     selected_codes: list[str]
     held_codes: list[str]        # 实际建仓的标的码 (供下期换手计算, 不含缺价票)
     weight_denominator: int      # 本期等权份数分母 (intended), 供下期换手计算
+    exposure: float              # 本期总仓位 gross (D 仓位层), 供下期换手计算
+    benchmark_codes: list[str]   # 本期基准成分 (供下期基准换手/成本计算)
 
 
 def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
@@ -364,6 +382,10 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
         "transaction_cost": cfg.transaction_cost,
         "compute_benchmark": cfg.compute_benchmark,
         "pool_mode": cfg.pool_mode,
+        "exposure_mode": _normalize_exposure_mode(cfg.exposure_mode),
+        "exposure_valuation_k": cfg.exposure_valuation_k,
+        "exposure_floor": cfg.exposure_floor,
+        "cash_yield_rate": cfg.cash_yield_rate,
     }
 
 
@@ -375,6 +397,8 @@ def _run_rebalance_period(
     *,
     previous_held_codes: list[str],
     previous_intended: int,
+    previous_exposure: float,
+    previous_benchmark_codes: list[str],
     start_equity: float,
     benchmark_equity: float,
     equity_curve: list[dict[str, Any]],
@@ -459,9 +483,20 @@ def _run_rebalance_period(
     # B 持仓层: 从候选池构成持仓
     holding_mode = _normalize_holding_mode(cfg.holding_mode)
     if holding_mode == "pool":
-        # 等权持有整个候选池 (不按机会分精排); max_holdings 为可选上限。
+        # 等权持有整个候选池 (不按机会分精排)。max_holdings 截断按**余额降序**
+        # (流动性代理), 避免分数从截断的后门回流; 同余额按代码排序保证确定性。
         cap = cfg.max_holdings if cfg.max_holdings else len(candidates)
-        selected = candidates[:max(0, int(cap))]
+        cap = max(0, int(cap))
+        if cap < len(candidates):
+            selected = sorted(
+                candidates,
+                key=lambda row: (
+                    -(finite_float(row.get("outstanding_balance")) or 0.0),
+                    str(row.get("bond_code") or ""),
+                ),
+            )[:cap]
+        else:
+            selected = list(candidates)
     else:  # top_score: 按机会分取前 top_n
         selected = candidates[:cfg.top_n]
     selected_codes = [str(row.get("bond_code")) for row in selected]
@@ -497,37 +532,49 @@ def _run_rebalance_period(
         # reserve_cash: 分母=目标槽位 (top_score→top_n, pool→候选数); 未建仓/缺价槽位留现金。
         target = cfg.top_n if holding_mode == "top_score" else len(selected)
         intended = max(0, int(target))
-    # 换手/成本基于**实际持仓码** (非含缺价的 selected); 上期持仓码与分母由编排层顺延,
-    # 不再近似重算。reserve_cash 下分母>持仓数, 缺口/缺价自然计入现金、不算换手。
+    # D 仓位层: 按当期已定价池中位 deviation 缩放总仓位 (点时, 自包含)
+    exposure, median_deviation = _resolve_exposure(cfg, priced_rows)
+    # 换手/成本基于**实际持仓码**与各期 gross (非含缺价的 selected); 上期持仓码/分母/
+    # gross 由编排层顺延。reserve_cash 下分母>持仓数, 缺口/缺价自然计入现金、不算换手。
     turnover = _equal_weight_turnover(
         previous_held_codes,
         held_codes,
         previous_denominator=previous_intended,
         current_denominator=intended,
+        previous_gross=previous_exposure,
+        current_gross=exposure,
     )
 
-    # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母。
+    # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母; gross 缩放整体仓位。
     if intended > 0:
         for pos in positions:
-            pos["weight"] = 1.0 / intended
-            pos["return_contribution"] = float(pos["period_return"]) / intended
-        gross_return = float(sum(p["period_return"] for p in positions) / intended)
-        cash_weight = float(intended - len(positions)) / intended
+            pos["weight"] = exposure / intended
+            pos["return_contribution"] = exposure * float(pos["period_return"]) / intended
+        gross_return = exposure * float(sum(p["period_return"] for p in positions) / intended)
+        cash_weight = 1.0 - exposure * (held / intended)
     else:
         gross_return = 0.0
         cash_weight = 1.0
     period_start_equity = start_equity
     cost = turnover * cfg.transaction_cost
-    period_return = gross_return - cost
+    # 闲置现金按年化 cash_yield_rate 计息 (默认 0 = 旧行为)。不计息时, Sharpe 的
+    # rf 门槛会系统性惩罚一切持现金配置 (缺口留现金 / 择时缩放)——内部不一致。
+    period_days = max(0, (period_end - period_start).days)
+    cash_yield_return = cash_weight * cfg.cash_yield_rate * period_days / 365.0
+    period_return = gross_return + cash_yield_return - cost
     equity = period_start_equity * (1.0 + period_return)
     if cfg.mark_to_market:
         curve_points = _portfolio_mark_to_market_curve(
             provider,
             positions,
             start_equity=period_start_equity,
+            period_start=period_start,
             period_end=period_end,
             cost=cost,
             intended_count=intended,
+            exposure=exposure,
+            cash_weight=cash_weight,
+            cash_yield_rate=cfg.cash_yield_rate,
         )
         _upsert_equity_points(equity_curve, curve_points)
         if curve_points:
@@ -537,10 +584,11 @@ def _run_rebalance_period(
 
     benchmark_return = None
     benchmark_point = None
+    benchmark_codes: list[str] = list(previous_benchmark_codes)
     new_benchmark_equity = benchmark_equity
     if cfg.compute_benchmark:
         _emit_stage_progress(stage_cb, "基准估值", 0, len(priced_rows), idx, total_periods)
-        benchmark_return = _benchmark_period_return(
+        benchmark_return, benchmark_codes = _benchmark_period_return(
             provider,
             priced_rows,
             period_start,
@@ -551,6 +599,11 @@ def _run_rebalance_period(
             execution_lookahead_days=cfg.execution_lookahead_days,
             price_cache=price_cache,
         )
+        # 基准与策略同口径计成本 (等权满仓的成员变动换手), 消除"策略计费/基准免费"的不对称
+        if benchmark_return is not None and cfg.transaction_cost:
+            bench_turnover = _equal_weight_turnover(
+                previous_benchmark_codes, benchmark_codes)
+            benchmark_return -= bench_turnover * cfg.transaction_cost
         new_benchmark_equity = benchmark_equity * (1.0 + (benchmark_return or 0.0))
         benchmark_point = {"date": period_end, "equity": new_benchmark_equity}
         _emit_stage_progress(stage_cb, "基准估值", len(priced_rows), len(priced_rows), idx, total_periods)
@@ -578,6 +631,7 @@ def _run_rebalance_period(
         "end_date": period_end,
         "period_return": period_return,
         "gross_return": gross_return,
+        "cash_yield_return": cash_yield_return,
         "cost": cost,
         "cash_weight": cash_weight,
         "holding_mode": holding_mode,
@@ -589,6 +643,8 @@ def _run_rebalance_period(
         "equity": equity,
         "benchmark_equity": new_benchmark_equity if cfg.compute_benchmark else None,
         "turnover": turnover,
+        "exposure": exposure,
+        "median_deviation": median_deviation,
         "execution_timing": _normalize_execution_timing(cfg.execution_timing),
         "entry_date": _min_position_date(positions, "entry_date"),
         "exit_date": _max_position_date(positions, "exit_date"),
@@ -606,6 +662,8 @@ def _run_rebalance_period(
         selected_codes=selected_codes,
         held_codes=held_codes,
         weight_denominator=intended,
+        exposure=exposure,
+        benchmark_codes=benchmark_codes,
     )
 
 
@@ -677,6 +735,8 @@ def backtest_score_strategy(
     benchmark_equity = 1.0
     previous_held_codes: list[str] = []
     previous_intended = 0
+    previous_exposure = 1.0
+    previous_benchmark_codes: list[str] = []
     total_periods = len(schedule) - 1
     performance_stats: Counter = Counter()
 
@@ -713,6 +773,8 @@ def backtest_score_strategy(
             period_end,
             previous_held_codes=previous_held_codes,
             previous_intended=previous_intended,
+            previous_exposure=previous_exposure,
+            previous_benchmark_codes=previous_benchmark_codes,
             start_equity=equity,
             benchmark_equity=benchmark_equity,
             equity_curve=equity_curve,
@@ -721,6 +783,8 @@ def backtest_score_strategy(
         benchmark_equity = res.benchmark_equity
         previous_held_codes = res.held_codes
         previous_intended = res.weight_denominator
+        previous_exposure = res.exposure
+        previous_benchmark_codes = res.benchmark_codes
         if res.benchmark_point is not None:
             benchmark_curve.append(res.benchmark_point)
         snapshots.append(res.snapshot)
@@ -1698,12 +1762,15 @@ def _benchmark_period_return(
     execution_timing: str = "signal_close",
     execution_lookahead_days: int = 10,
     price_cache: dict[tuple, PricePoint | None] | None = None,
-) -> float | None:
+) -> tuple[float | None, list[str]]:
     """等权买下全部"通过准入且已定价"标的的区间收益, 作为筛选池基准.
 
     成交价采用与策略相同的执行时点设置, 避免基准和策略出现不同的未来函数口径。
+    返回 (等权区间收益, 实际可成交的成分码列表); 成分码供调用方计算基准自身的
+    成员变动换手并计成本 (与策略同口径)。
     """
     returns: list[float] = []
+    codes: list[str] = []
     for row in priced_rows:
         if row.get("status") != "ok":
             continue
@@ -1729,9 +1796,10 @@ def _benchmark_period_return(
         if entry_point is None or exit_point is None:
             continue
         returns.append(exit_point.price / entry_point.price - 1.0)
+        codes.append(code)
     if not returns:
-        return None
-    return float(sum(returns) / len(returns))
+        return None, []
+    return float(sum(returns) / len(returns)), codes
 
 
 def _normalize_execution_timing(value: str | None) -> str:
@@ -1811,16 +1879,28 @@ def _portfolio_mark_to_market_curve(
     period_end: date,
     cost: float,
     intended_count: int,
+    exposure: float = 1.0,
+    period_start: date | None = None,
+    cash_weight: float = 0.0,
+    cash_yield_rate: float = 0.0,
 ) -> list[dict[str, Any]]:
     """根据持仓期内可得收盘价生成组合净值点位.
 
     等权口径与区间收益保持一致: 未能建仓的标的占用现金权重, 已建仓标的在两个
-    可得成交价之间逐日按最新收盘价估值。
+    可得成交价之间逐日按最新收盘价估值; ``exposure`` 为 D 仓位层的总仓位缩放;
+    现金权重按 ``cash_yield_rate`` 自 ``period_start`` 起按日线性计息 (与区间记账一致)。
     """
+    def _cash_accrual(on_date: date) -> float:
+        if not cash_yield_rate or period_start is None:
+            return 0.0
+        return cash_weight * cash_yield_rate * max(0, (on_date - period_start).days) / 365.0
+
     if intended_count <= 0:
-        return [{"date": period_end, "equity": start_equity}]
+        return [{"date": period_end,
+                 "equity": start_equity * (1.0 + _cash_accrual(period_end))}]
     if not positions:
-        return [{"date": period_end, "equity": start_equity * (1.0 - cost)}]
+        return [{"date": period_end,
+                 "equity": start_equity * (1.0 + _cash_accrual(period_end) - cost)}]
 
     price_maps: dict[str, dict[date, float]] = {}
     all_dates: set[date] = set()
@@ -1842,7 +1922,8 @@ def _portfolio_mark_to_market_curve(
         all_dates.update(series)
 
     if not price_maps:
-        return [{"date": period_end, "equity": start_equity * (1.0 - cost)}]
+        return [{"date": period_end,
+                 "equity": start_equity * (1.0 + _cash_accrual(period_end) - cost)}]
 
     all_dates.add(period_end)
     curve: list[dict[str, Any]] = []
@@ -1864,10 +1945,11 @@ def _portfolio_mark_to_market_curve(
             else:
                 mark = _latest_price_from_map(series, current_date)
                 pos_return = (mark / entry_price - 1.0) if mark is not None else 0.0
-            gross_return += pos_return / intended_count
+            gross_return += exposure * pos_return / intended_count
         curve.append({
             "date": current_date,
-            "equity": start_equity * (1.0 + gross_return - cost),
+            "equity": start_equity * (
+                1.0 + gross_return + _cash_accrual(current_date) - cost),
         })
     return curve
 
@@ -2416,14 +2498,56 @@ def _funding_legacy_alias(funding_mode: str) -> str:
     return "renormalize" if _normalize_funding_mode(funding_mode) == "full_invest" else "cash"
 
 
-def _equal_weight_portfolio_weights(codes: list[str], denominator: int | None = None) -> dict[str, float]:
+def _normalize_exposure_mode(value: str | None) -> str:
+    """D 仓位层: full(恒定满仓) | valuation(估值水平缩放)。"""
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "": "full", "full": "full", "满仓": "full", "恒定满仓": "full",
+        "valuation": "valuation", "估值": "valuation", "估值择时": "valuation",
+        "估值缩放": "valuation", "timing": "valuation",
+    }
+    if raw not in aliases:
+        raise ValueError(f"未知仓位模式 exposure_mode: {value}")
+    return aliases[raw]
+
+
+def _resolve_exposure(
+    cfg: ScoreStrategyConfig,
+    priced_rows: list[dict[str, Any]],
+) -> tuple[float, float | None]:
+    """按当期已定价池中位 deviation 解析总仓位 gross。
+
+    返回 (gross, median_deviation)。full 模式恒为 (1.0, medDev) — medDev 仍记录,
+    便于结果里对照。valuation 模式: gross = clip(1 - k·max(0, medDev), floor, 1.0);
+    medDev 不可得 (无有效 deviation) 时回落满仓, 不猜。
+    """
+    devs = [
+        d for d in (finite_float(row.get("deviation")) for row in priced_rows
+                    if row.get("status") == "ok")
+        if d is not None
+    ]
+    median_dev = float(np.median(devs)) if devs else None
+    if _normalize_exposure_mode(cfg.exposure_mode) != "valuation" or median_dev is None:
+        return 1.0, median_dev
+    floor = min(max(float(cfg.exposure_floor), 0.0), 1.0)
+    gross = 1.0 - float(cfg.exposure_valuation_k) * max(0.0, median_dev)
+    return float(min(1.0, max(floor, gross))), median_dev
+
+
+def _equal_weight_portfolio_weights(
+    codes: list[str],
+    denominator: int | None = None,
+    gross: float = 1.0,
+) -> dict[str, float]:
+    """等权权重映射 (含现金桶)。``gross`` 为总仓位缩放 (D 仓位层), 余量计入现金。"""
     if denominator is None:
         denominator = len(codes)
     denominator = max(0, int(denominator))
     if denominator <= 0:
         return {"__cash__": 1.0}
-    weights = {code: 1.0 / denominator for code in codes}
-    cash_weight = max(0.0, (denominator - len(codes)) / denominator)
+    gross = max(0.0, float(gross))
+    weights = {code: gross / denominator for code in codes}
+    cash_weight = max(0.0, 1.0 - gross * len(codes) / denominator)
     if cash_weight > 0:
         weights["__cash__"] = cash_weight
     return weights
@@ -2435,11 +2559,17 @@ def _equal_weight_turnover(
     *,
     previous_denominator: int | None = None,
     current_denominator: int | None = None,
+    previous_gross: float = 1.0,
+    current_gross: float = 1.0,
 ) -> float:
-    prev_weight = _equal_weight_portfolio_weights(previous_codes, previous_denominator)
-    curr_weight = _equal_weight_portfolio_weights(current_codes, current_denominator)
+    prev_weight = _equal_weight_portfolio_weights(
+        previous_codes, previous_denominator, previous_gross)
+    curr_weight = _equal_weight_portfolio_weights(
+        current_codes, current_denominator, current_gross)
     codes = set(prev_weight) | set(curr_weight)
-    return 0.5 * sum(abs(curr_weight.get(code, 0.0) - prev_weight.get(code, 0.0)) for code in codes)
+    # 0.5·Σ|Δw| (含现金桶) = 单边换手: 证券净卖出与现金净增完全对偶, 不会双计。
+    return 0.5 * sum(
+        abs(curr_weight.get(code, 0.0) - prev_weight.get(code, 0.0)) for code in codes)
 
 
 def _periods_per_year(freq: str) -> int:

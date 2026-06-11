@@ -288,7 +288,7 @@ CBLens/
 
 | 文档 | 说明 |
 | --- | --- |
-| 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 四大页面、CLI 命令、Python API、常见问题排障 |
+| 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 五大页面、CLI 命令、Python API、常见问题排障 |
 | 🎨 [品牌说明](docs/BRAND.md) | 项目名称由来、图标含义、调色板与使用建议 |
 | 📦 [数据说明](data/README.md) | `cb_data.json`、`cb_events.json` 字段定义与刷新节奏 |
 | 🔧 [维护约定](AGENTS.md) | 给 agent 和维护者看的项目级上下文与编码规范 |
