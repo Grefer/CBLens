@@ -155,8 +155,10 @@ def build(app, tab):
         cc, "选债规则", app.v_st_view, 1, 0, "optmenu", list(STRATEGY_SELECTION_VIEWS),
         lambda: STRATEGY_VIEW_DESCRIPTIONS.get(app.v_st_view.get(), ""),
         command=app._describe_strategy_view, control_width=130, label_width=72)
-    _grid_cell(cc, "Top N", app.v_st_top_n, 1, 1, "entry", None,
-               "每期最大持仓转债数量\n(仅'机会分排序'权重下生效)", control_width=120, label_width=80)
+    top_n_entry = _grid_cell(
+        cc, "Top N", app.v_st_top_n, 1, 1, "entry", None,
+        "每期最大持仓转债数量\n仅'机会分排序'权重下生效; 选'等权全池'时此框置灰不参与",
+        control_width=120, label_width=80)
     _grid_cell(cc, "成本 (bps)", app.v_st_cost, 1, 2, "entry", None,
                "单边调仓交易成本\n单位 bps (万分之一)",
                control_width=120, label_width=80)
@@ -178,6 +180,14 @@ def build(app, tab):
                "Sharpe 课征无风险门槛, 0 计息会系统性低估持现金策略; 设 0 复现旧口径",
                control_width=120, label_width=80)
 
+    # ── 实时"选债逻辑"摘要行: 把 选债规则→选券权重→TopN→资金层 的实际管线
+    #    在配置阶段就渲染出来 (口径与模型层三层结构一致), 随任何控件改动即时更新
+    app.v_st_logic_summary = ctk.StringVar(value="")
+    logic_label = ctk.CTkLabel(
+        cc, textvariable=app.v_st_logic_summary, text_color=TEXT_DIM,
+        font=(FONT_FAMILY, 12), anchor="w", justify="left")
+    logic_label.grid(row=3, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 6))
+
     # ── 核心参数联动逻辑 (手动修改时策略方案自动切“自定义”) ───────────────────────
     def _on_param_change(*_):
         if not getattr(app, "_programmatic_update", False):
@@ -187,6 +197,16 @@ def build(app, tab):
                 app.v_st_view, app.v_st_top_n, app.v_st_cost,
                 app.v_st_benchmark, app.v_st_weighting, app.v_st_cash_yield):
         var.trace_add("write", _on_param_change)
+
+    # 选券权重 ↔ TopN 联动: '等权全池'下模型完全忽略 top_n, 输入框置灰防误导
+    def _sync_selection_logic(*_):
+        is_pool = app.v_st_weighting.get() == "等权全池"
+        top_n_entry.configure(state="disabled" if is_pool else "normal")
+        app.v_st_logic_summary.set(app._strategy_logic_summary_text())
+
+    for var in (app.v_st_view, app.v_st_weighting, app.v_st_top_n, app.v_st_cash_yield):
+        var.trace_add("write", _sync_selection_logic)
+    _sync_selection_logic()
 
     # 回测范围/历史口径 状态变量 (UI 在高级设置卡内; 这两个 StringVar 由
     # _refresh_strategy_setup_summary 维护, 供控制器逻辑读取, 不再常驻 UI)

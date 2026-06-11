@@ -1844,3 +1844,41 @@ def test_strategy_backtest_mixin_composition_integrity():
     for entry in ui_entry_points:
         assert callable(getattr(StrategyBacktestMixin, entry, None)), (
             f"聚合类缺少 UI 入口: {entry}")
+
+
+def test_strategy_logic_summary_text_reflects_weighting_mode():
+    """选债逻辑摘要: 机会分排序显示 TopN+留现金, 等权全池显示全候选+满仓摊回。
+
+    摘要行让筛选管线在配置阶段即可见 (选券权重决定 Top N 是否参与);
+    口径须与模型层三层结构 (选券 → 持仓 → 资金) 一致。
+    """
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    class Var:
+        def __init__(self, value):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+    app = StrategyBacktestMixin()
+    app.v_st_view = Var("低估候选")
+    app.v_st_weighting = Var("机会分排序")
+    app.v_st_top_n = Var("10")
+    app.v_st_cash_yield = Var("2.2")
+
+    text = app._strategy_logic_summary_text()
+    assert "「低估候选」" in text
+    assert "前 10 只" in text
+    assert "留现金" in text and "2.2%/年" in text
+
+    app.v_st_weighting = Var("等权全池")
+    pool_text = app._strategy_logic_summary_text()
+    assert "全部候选" in pool_text
+    assert "Top N 不参与" in pool_text
+    assert "摊回" in pool_text
+
+    # 输入半截非法 TopN 时摘要不崩溃 (实时 trace 下常见)
+    app.v_st_weighting = Var("机会分排序")
+    app.v_st_top_n = Var("")
+    assert "前 N 只" in app._strategy_logic_summary_text()

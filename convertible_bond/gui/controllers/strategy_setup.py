@@ -146,6 +146,38 @@ class StrategySetupMixin:
         history_var = getattr(self, "v_st_history_summary", None)
         if history_var is not None:
             history_var.set(self._strategy_history_preview_text())
+        logic_var = getattr(self, "v_st_logic_summary", None)
+        if logic_var is not None:
+            logic_var.set(self._strategy_logic_summary_text())
+
+    def _strategy_logic_summary_text(self) -> str:
+        """当前选债逻辑的一句话管线: 选券权重决定 Top N 是否参与、缺口留现金还是满仓摊回.
+
+        随控件值实时刷新, 让筛选链路在配置阶段即可见 (而不是跑完回测才在漏斗里出现);
+        口径与模型层三层结构 (选券 → 持仓 → 资金) 一致, 见 strategy_backtest.py docstring。
+        """
+        def _get(name, default=""):
+            var = getattr(self, name, None)
+            try:
+                return var.get() if var is not None else default
+            except Exception:
+                return default
+
+        view = _get("v_st_view", "综合机会") or "综合机会"
+        weighting = _get("v_st_weighting", "机会分排序")
+        if weighting == "等权全池":
+            return (f"当前逻辑: 准入筛选 → 「{view}」规则过滤 → 等权持有全部候选"
+                    f" (Top N 不参与) → 满仓, 缺口/缺价权重摊回已持仓")
+        try:
+            n_text = str(max(1, int(float(_get("v_st_top_n", "10")))))
+        except (TypeError, ValueError):
+            n_text = "N"
+        try:
+            yield_text = f"{float(_get('v_st_cash_yield', '0')):g}%/年计息"
+        except (TypeError, ValueError):
+            yield_text = "0 计息"
+        return (f"当前逻辑: 准入筛选 → 「{view}」规则过滤 → 按机会分取前 {n_text} 只等权持有"
+                f" → 候选不足/缺价留现金 ({yield_text})")
 
     def _clear_strategy_codes(self):
         self.v_st_codes.set("")
