@@ -458,11 +458,11 @@ def list_upcoming_tradable_from_cache(
     on_date: date | None = None,
     window_days: int = 7,
 ) -> list[dict]:
-    """列出未来 window_days 天内即将上市/进入可交易窗口的转债.
+    """列出未来 window_days 天内即将上市进入交易的**普通公募**新债.
 
-    包含两类:
-      1. 即将上市的普通公募新债 (listing_date 在窗口内, trading_status == 'pending')
-      2. 即将进入可交易窗口的定向/非主池转债 (原有逻辑)
+    仅包含公开交易标的。定向/私募转债 (非标准公募代码段、定转命名或
+    private 交易状态) 不进"扫新债"关注池: 它们无集中竞价交易、常无
+    上市正股关联 (PDE 模型不适用), 主池准入也会剔除 — 进池只产生噪音。
     """
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return []
@@ -478,16 +478,14 @@ def list_upcoming_tradable_from_cache(
         trading_status = _terms_value(terms, "trading_status") or ""
         is_std_public = is_standard_public_cb_code(code) and not looks_private_cb_name(name)
 
-        if is_std_public:
-            # 普通公募新债: listing/tradable 在窗口内且尚未开始交易 (pending)
-            if trading_status != "pending":
-                continue
-            if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
-                continue
-        else:
-            # 定向/非主池转债: 原有逻辑 — tradable_date 在窗口内
-            if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
-                continue
+        # 普通公募新债: listing/tradable 在窗口内且尚未开始交易 (pending)。
+        # 定向/私募券在此剔除; private_pending 等非公开状态由 != "pending" 一并排除。
+        if not is_std_public:
+            continue
+        if trading_status != "pending":
+            continue
+        if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
+            continue
 
         rows.append({
             "bond_code": code,

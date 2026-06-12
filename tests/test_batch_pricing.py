@@ -212,9 +212,15 @@ def test_batch_pool_screening_report_uses_configurable_thresholds():
     assert summarize_exclusions(report["excluded"]) == {"余额过小": 1, "评级过低": 1}
 
 
-def test_upcoming_tradable_cache_finds_private_bonds_in_window():
+def test_upcoming_tradable_cache_excludes_private_bonds():
+    """扫新债关注池只收普通公募新债: 定向/私募券即使进入可交易窗口也不出现.
+
+    非公开转债无集中竞价交易、常无上市正股关联 (如 145905.SH 智转债K1,
+    发行人未上市), 进池只会在单债定价处撞"无正股代码"。
+    """
     class FakeTermsCache:
         data = {
+            # 定转命名 + 定向代码段, 可交易窗口内 — 不应出现
             "124025.SZ": BondTerms(
                 sec_name="富乐定转",
                 underlying_code="301297.SZ",
@@ -223,6 +229,17 @@ def test_upcoming_tradable_cache_finds_private_bonds_in_window():
                 conversion_price=16.14,
                 close=99.99,
             ),
+            # 真实案例: 非上市公司私募科创转债, 名字不带"定转"但代码段非公募,
+            # private_pending 且 tradable_date 在窗口内 — 不应出现
+            "145905.SH": BondTerms(
+                sec_name="智转债K1",
+                issue_date=date(2025, 12, 16),
+                listing_date=date(2025, 12, 16),
+                tradable_date=date(2026, 9, 8),
+                trading_status="private_pending",
+                conversion_price=9.51,
+            ),
+            # 普通公募存量老债 (非 pending) — 不应出现
             "113050.SH": BondTerms(
                 sec_name="南银转债",
                 issue_date=date(2021, 6, 15),
@@ -242,12 +259,7 @@ def test_upcoming_tradable_cache_finds_private_bonds_in_window():
         window_days=7,
     )
 
-    assert [row["bond_code"] for row in rows] == ["124025.SZ"]
-    assert rows[0]["listing_date"] == date(2026, 3, 9)
-    assert rows[0]["tradable_date"] == date(2026, 9, 9)
-    assert rows[0]["days_to_trade"] == 5
-    assert rows[0]["K"] == 16.14
-    assert rows[0]["market_price"] == 99.99
+    assert rows == []
 
 
 def test_upcoming_tradable_cache_includes_public_listing_metadata():
