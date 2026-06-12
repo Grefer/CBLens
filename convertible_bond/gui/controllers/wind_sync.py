@@ -17,6 +17,7 @@ from ...data_providers import (
     CSVDataProvider,
     DataProvider,
     WindDataProvider,
+    is_standard_public_cb_code,
 )
 from ...historical_terms import project_terms
 from ..constants import (
@@ -354,7 +355,18 @@ class WindSyncMixin:
 
             stock_code = terms.underlying_code
             if not stock_code:
-                raise ValueError("本地条款库未包含标的正股代码 — 请先用 Wind 刷新基础信息")
+                # 分场景给准确提示: 定向/私募券 Wind 本就无正股关联 (正股可能未上市),
+                # 提示用户刷新只会原地打转; 仅当条款来自本地缓存时才建议强制刷新。
+                status = str(getattr(terms, "trading_status", "") or "")
+                if "private" in status or not is_standard_public_cb_code(code):
+                    raise ValueError(
+                        "该券为定向/非公开转债, Wind 无正股关联 (正股可能未上市) — "
+                        "如确有公开交易的标的股票, 请在定价页手动填写正股价 S0 与波动率后定价")
+                if terms_origin == "cb_data":
+                    raise ValueError(
+                        "本地条款库未包含标的正股代码 — 请尝试『Wind 强制刷新』")
+                raise ValueError(
+                    "Wind 未返回标的正股代码 — 可在定价页手动填写正股价 S0 与波动率后定价")
 
             try:
                 S0 = provider.get_stock_close(stock_code, val_date)
