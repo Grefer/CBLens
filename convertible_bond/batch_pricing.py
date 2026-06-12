@@ -320,10 +320,10 @@ def batch_pricing_exclusion_reason(
         return "正股 ST/退市风险"
     if _underlying_suspended(terms):
         return "正股停牌"
-    turnover = _finite_float(_terms_value(terms, "bond_turnover_amount"))
+    turnover = finite_float(_terms_value(terms, "bond_turnover_amount"))
     if min_turnover_amount is not None and turnover is not None and turnover < min_turnover_amount:
         return "成交额过低"
-    balance = _finite_float(_terms_value(terms, "outstanding_balance"))
+    balance = finite_float(_terms_value(terms, "outstanding_balance"))
     if (
         min_outstanding_balance is not None
         and balance is not None
@@ -414,7 +414,7 @@ def _underlying_limit_down_threshold(stock_code: Any) -> float:
 
 
 def _underlying_at_limit_down(terms_or_row: Any, stock_code: Any = None) -> bool:
-    pct = _finite_float(_terms_value(terms_or_row, "underlying_pct_change"))
+    pct = finite_float(_terms_value(terms_or_row, "underlying_pct_change"))
     if pct is None:
         return False
     code = stock_code if stock_code is not None else _terms_value(terms_or_row, "underlying_code") or _terms_value(terms_or_row, "stock_code")
@@ -663,14 +663,14 @@ def annotate_batch_result(row: dict) -> dict:
         out.setdefault("model_signal_status", "不可用")
         return out
 
-    s0 = _finite_float(out.get("S0"))
-    k = _finite_float(out.get("K"))
-    theo = _finite_float(out.get("theoretical_price"))
-    market = _finite_float(out.get("market_price"))
-    deviation = _finite_float(out.get("deviation"))
-    sigma = _finite_float(out.get("sigma"))
-    balance = _finite_float(out.get("outstanding_balance"))
-    t_years = _finite_float(out.get("T"))
+    s0 = finite_float(out.get("S0"))
+    k = finite_float(out.get("K"))
+    theo = finite_float(out.get("theoretical_price"))
+    market = finite_float(out.get("market_price"))
+    deviation = finite_float(out.get("deviation"))
+    sigma = finite_float(out.get("sigma"))
+    balance = finite_float(out.get("outstanding_balance"))
+    t_years = finite_float(out.get("T"))
     rating = str(out.get("credit_rating") or "").upper().strip()
 
     risk_tags: list[str] = []
@@ -792,9 +792,9 @@ def annotate_batch_result(row: dict) -> dict:
         score -= 15.0
         confidence_points -= 18.0
 
-    down_uplift = _finite_float(out.get("down_reset_uplift"))
+    down_uplift = finite_float(out.get("down_reset_uplift"))
     if down_uplift is None:
-        no_down = _finite_float(out.get("no_down_price"))
+        no_down = finite_float(out.get("no_down_price"))
         if theo is not None and no_down is not None:
             down_uplift = theo - no_down
             out["down_reset_uplift"] = down_uplift
@@ -847,8 +847,8 @@ def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
     annotated = annotate_batch_results(results)
 
     def key(row: dict):
-        score = _finite_float(row.get("opportunity_score"))
-        deviation = _finite_float(row.get("deviation"))
+        score = finite_float(row.get("opportunity_score"))
+        deviation = finite_float(row.get("deviation"))
         ok_rank = 0 if row.get("status") == "ok" else 1
         score_rank = -score if score is not None else float("inf")
         deviation_rank = deviation if deviation is not None else float("inf")
@@ -882,7 +882,7 @@ def filter_batch_results_by_view(
         return [
             row for row in rows
             if row.get("status") == "ok"
-            and _finite_float(row.get("opportunity_score")) is not None
+            and finite_float(row.get("opportunity_score")) is not None
             and float(row["opportunity_score"]) >= threshold
             and row.get("confidence") in {"高", "中"}
             and "转股折价" not in (row.get("risk_tags") or [])
@@ -1009,8 +1009,6 @@ def _restore_result_row(row: dict) -> dict:
     return restored
 
 
-_finite_float = finite_float
-
 
 def _dedupe_tags(tags: Sequence[str]) -> list[str]:
     out: list[str] = []
@@ -1043,7 +1041,7 @@ def _review_bucket(row: dict) -> str:
         return "需复核"
     if "转股折价" in tags:
         return "转股折价"
-    score = _finite_float(row.get("opportunity_score"))
+    score = finite_float(row.get("opportunity_score"))
     if score is not None and score >= 8.0 and row.get("confidence") in {"高", "中"}:
         return "低估候选"
     return "综合机会"

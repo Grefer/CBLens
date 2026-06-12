@@ -617,3 +617,38 @@ def test_batch_stock_cache_bond_history_fetch_does_not_hold_global_lock():
         assert bond_future.result(timeout=1.0) == [(end, 101.0)]
 
     assert inner.dividend_calls == 1
+
+
+def test_accrued_interest_caps_at_maturity_and_matches_pricer():
+    """应计利息共享口径守护: pricing_api 兜底实现与 pricer 类方法逐值一致, 且按到期日封顶。
+
+    历史上 pricing_api._accrued_interest 是独立实现且无到期日封顶 (残段期会漂移);
+    现两者共用 pricer.build_coupon_periods/accrued_interest_amount, 本测试防止再分叉。
+    """
+    from datetime import date as _date
+
+    from convertible_bond.pricer import UniversalCBPricer
+    from convertible_bond.pricing_api import _accrued_interest
+
+    issue = _date(2020, 1, 1)
+    maturity = _date(2022, 7, 1)   # 2.5 年: 第三期为半年残段, 封顶语义在此显形
+    rates = (0.01, 0.02, 0.03)
+
+    # 残段内: 两套口径逐值一致, 且等于手算 (第三期 2022-01-01 起息, 费率 3%)
+    on = _date(2022, 6, 1)
+    api_accrued = _accrued_interest(
+        face_value=100.0, coupon_rates=rates,
+        issue_date=issue, maturity_date=maturity, on_date=on)
+    pricer = UniversalCBPricer(
+        S0=10.0, K=10.0, current_date=_date(2021, 1, 2), maturity_date=maturity,
+        issue_date=issue, coupon_rates=rates)
+    assert api_accrued == pytest.approx(pricer.accrued_interest(on))
+    assert api_accrued == pytest.approx(100 * 0.03 * (on - _date(2022, 1, 1)).days / 365)
+
+    # 超过到期日: 按到期日封顶 (旧实现无封顶, 会按整年累到 3.0 元)
+    beyond = _accrued_interest(
+        face_value=100.0, coupon_rates=rates,
+        issue_date=issue, maturity_date=maturity, on_date=_date(2023, 1, 1))
+    capped = 100 * 0.03 * (maturity - _date(2022, 1, 1)).days / 365
+    assert beyond == pytest.approx(capped)
+    assert beyond == pytest.approx(pricer.accrued_interest(_date(2023, 1, 1)))

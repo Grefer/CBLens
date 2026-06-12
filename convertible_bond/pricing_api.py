@@ -20,16 +20,15 @@ from .pricer import (
     DEFAULT_COUPON_RATES,
     DEFAULT_FACE_VALUE,
     DEFAULT_REDEMPTION_PRICE,
+    accrued_interest_amount,
+    build_coupon_periods,
 )
 from .data_providers import DataProvider, WindDataProvider, auto_data_provider, finite_float
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
-from .dateutil import add_years as _add_years
 
-
-_finite_float = finite_float
 
 _RATING_SPREAD_FLOORS = {
     "AAA": 0.012,
@@ -59,7 +58,7 @@ def _latest_price_on_or_before(history, on_date: date) -> float | None:
     for d, value in history or []:
         if d is None or d > on_date:
             continue
-        price = _finite_float(value)
+        price = finite_float(value)
         if price is None:
             continue
         if latest_date is None or d >= latest_date:
@@ -69,7 +68,7 @@ def _latest_price_on_or_before(history, on_date: date) -> float | None:
 
 
 def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, fallback) -> float | None:
-    fallback_price = _finite_float(fallback)
+    fallback_price = finite_float(fallback)
     try:
         history = provider.get_bond_history(
             bond_code,
@@ -96,17 +95,20 @@ def _accrued_interest(
     face_value: float,
     coupon_rates: tuple[float, ...] | None,
     issue_date: date | None,
+    maturity_date: date,
     on_date: date,
 ) -> float:
-    if issue_date is None or on_date <= issue_date:
+    """已公告强赎缺赎回价时的应计利息兜底, 复用 pricer 的票息期口径 (到期日封顶)."""
+    if issue_date is None:
         return 0.0
-    period_start = issue_date
-    for rate in tuple(coupon_rates or DEFAULT_COUPON_RATES):
-        period_end = _add_years(period_start, 1)
-        if period_start <= on_date <= period_end:
-            return face_value * float(rate) * (on_date - period_start).days / 365.0
-        period_start = period_end
-    return 0.0
+    periods = build_coupon_periods(
+        face_value, tuple(coupon_rates or DEFAULT_COUPON_RATES),
+        issue_date, maturity_date,
+    )
+    return accrued_interest_amount(
+        periods, on_date,
+        face_value=face_value, issue_date=issue_date, maturity_date=maturity_date,
+    )
 
 
 def _estimate_down_reset_floor(provider: DataProvider, stock_code: str, val_date: date) -> float | None:
@@ -118,7 +120,7 @@ def _estimate_down_reset_floor(provider: DataProvider, stock_code: str, val_date
     closes = [
         float(v)
         for d, v in history or []
-        if d is not None and d <= val_date and _finite_float(v) is not None
+        if d is not None and d <= val_date and finite_float(v) is not None
     ]
     if len(closes) < 20:
         return None
@@ -179,10 +181,10 @@ def _model_signal_status(terms, sigma: float | None, risk_warnings: list[str]) -
     if rating:
         if not (rating.startswith("AAA") or rating.startswith("AA")):
             hard_risk = True
-    balance = _finite_float(getattr(terms, "outstanding_balance", None))
+    balance = finite_float(getattr(terms, "outstanding_balance", None))
     if balance is not None and balance < 0.5:
         hard_risk = True
-    vol = _finite_float(sigma)
+    vol = finite_float(sigma)
     if vol is not None and vol > 0.80:
         hard_risk = True
     return "不适合作为买入信号" if hard_risk else "可作为模型信号复核"
@@ -277,16 +279,16 @@ def price_from_provider(provider: DataProvider, bond_code,
     S0 = provider.get_stock_close(stock_code, val_date)
 
     # 校验 S0 / sigma: provider 可能返回 None/NaN/0, 提前拦截避免 pricer 报错不清晰
-    S0 = _finite_float(S0)
+    S0 = finite_float(S0)
     if S0 is None or S0 <= 0:
         raise ValueError(f"{bond_code} 正股价无效 (S0={S0!r}), 无法定价")
-    sigma = _finite_float(sigma)
+    sigma = finite_float(sigma)
     if sigma is None or sigma <= 0:
         raise ValueError(f"{bond_code} 波动率无效 (sigma={sigma!r}), 无法定价")
 
     if q is None:
         try:
-            q_pct = _finite_float(provider.get_stock_dividend_yield(stock_code, val_date))
+            q_pct = finite_float(provider.get_stock_dividend_yield(stock_code, val_date))
         except Exception:
             q_pct = None
         effective_q = (q_pct / 100.0) if q_pct is not None else 0.0
@@ -340,6 +342,7 @@ def price_from_provider(provider: DataProvider, bond_code,
                 face_value=face_value_for_call,
                 coupon_rates=coupon_rates,
                 issue_date=issue_dt,
+                maturity_date=contractual_maturity_dt,
                 on_date=terms.call_redemption_date,
             )
 
@@ -793,7 +796,7 @@ def _batch_result_from_provider(
 
 def _sort_batch_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def _key(row: dict[str, Any]) -> float:
-        deviation = _finite_float(row.get("deviation"))
+        deviation = finite_float(row.get("deviation"))
         return deviation if deviation is not None else float("inf")
 
     results.sort(key=_key)

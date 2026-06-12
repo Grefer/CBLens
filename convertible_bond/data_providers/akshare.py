@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 
 import numpy as np
@@ -45,6 +46,12 @@ _STALE_STOCK_CLOSE_DAYS = 7
 class AkshareDataProvider(DataProvider):
     name = "akshare"
 
+    # 转债列表缓存 TTL: 长开 GUI/桌面包场景下定期重拉, 否则新上市/退市债永不可见。
+    # 12 小时覆盖盘前到收盘后; 单次批量定价 (分钟级) 内仍只拉一次。
+    _CB_LIST_TTL_SECONDS = 12 * 3600
+    # 类级默认: 兼容绕过 __init__ 手工组装的实例 (测试常用模式)
+    _cb_list_fetched_at: float | None = None
+
     def __init__(self):
         try:
             import akshare as ak  # type: ignore[import-not-found]
@@ -54,13 +61,19 @@ class AkshareDataProvider(DataProvider):
             ) from e
         self._ak = ak
         self._cb_list_cache = None
+        self._cb_list_fetched_at: float | None = None
         self._profile_cache: dict = {}    # bond_code -> profile DataFrame
         self._value_analysis_cache: dict = {}  # bond_code -> value-analysis DataFrame
         self._historical_k_cache: dict[tuple[str, date], float | None] = {}
 
     def _cb_list(self):
-        if self._cb_list_cache is None:
+        # 时间戳未知 (手工预置缓存) 视为新鲜, 只有明确超过 TTL 才重拉
+        now = time.monotonic()
+        fetched_at = self._cb_list_fetched_at
+        expired = fetched_at is not None and now - fetched_at > self._CB_LIST_TTL_SECONDS
+        if self._cb_list_cache is None or expired:
             self._cb_list_cache = _retry(self._ak.bond_zh_cov, label="bond_zh_cov")
+            self._cb_list_fetched_at = now
         return self._cb_list_cache
 
     def _profile(self, bond_code):

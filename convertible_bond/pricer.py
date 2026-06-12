@@ -22,6 +22,53 @@ _DAYS_PER_YEAR: float = 365.0
 _S_MAX_CAP: float = 50.0  # 网格上界 S_max/K 的上限, 防止极端 σ/T 下内存爆炸
 
 
+# ── 票息期与应计利息 (模块级共享实现) ─────────────────────
+# UniversalCBPricer 与 pricing_api 共用同一套口径 (期末按到期日封顶),
+# 避免两处独立实现在票息规则演化时漂移。
+
+def build_coupon_periods(
+    face_value: float,
+    coupon_rates: tuple[float, ...],
+    issue_date: date,
+    maturity_date: date,
+) -> list[dict]:
+    """按年滚动构造票息期, 期末以到期日封顶; 最后一期标记 is_final."""
+    periods = []
+    period_start = issue_date
+    for rate in coupon_rates:
+        period_end = min(_add_years_impl(period_start, 1), maturity_date)
+        periods.append({
+            "start": period_start,
+            "end": period_end,
+            "rate": rate,
+            "coupon_amount": face_value * rate,
+            "is_final": period_end == maturity_date,
+        })
+        period_start = period_end
+        if period_end >= maturity_date:
+            break
+    return periods
+
+
+def accrued_interest_amount(
+    coupon_periods: list[dict],
+    valuation_date: date,
+    *,
+    face_value: float,
+    issue_date: date,
+    maturity_date: date,
+) -> float:
+    """按 build_coupon_periods 的票息期计算应计利息; 估值日超过到期日按到期日封顶."""
+    if valuation_date <= issue_date:
+        return 0.0
+    capped_date = min(valuation_date, maturity_date)
+    for period in coupon_periods:
+        if period["start"] <= capped_date <= period["end"]:
+            accrual_days = (capped_date - period["start"]).days
+            return face_value * period["rate"] * accrual_days / _DAYS_PER_YEAR
+    return 0.0
+
+
 class UniversalCBPricer:
     """
     通用可转债定价引擎。
@@ -183,21 +230,8 @@ class UniversalCBPricer:
     _add_years = staticmethod(_add_years_impl)
 
     def _build_coupon_periods(self):
-        periods = []
-        period_start = self.issue_date
-        for rate in self.coupon_rates:
-            period_end = min(self._add_years(period_start, 1), self.maturity_date)
-            periods.append({
-                "start": period_start,
-                "end": period_end,
-                "rate": rate,
-                "coupon_amount": self.face_value * rate,
-                "is_final": period_end == self.maturity_date,
-            })
-            period_start = period_end
-            if period_end >= self.maturity_date:
-                break
-        return periods
+        return build_coupon_periods(
+            self.face_value, self.coupon_rates, self.issue_date, self.maturity_date)
 
     def get_coupon_rate(self, valuation_date):
         for period in self.coupon_periods:
@@ -206,15 +240,12 @@ class UniversalCBPricer:
         return self.coupon_periods[-1]["rate"]
 
     def accrued_interest(self, valuation_date):
-        if valuation_date <= self.issue_date:
-            return 0.0
-
-        capped_date = min(valuation_date, self.maturity_date)
-        for period in self.coupon_periods:
-            if period["start"] <= capped_date <= period["end"]:
-                accrual_days = (capped_date - period["start"]).days
-                return self.face_value * period["rate"] * accrual_days / _DAYS_PER_YEAR
-        return 0.0
+        return accrued_interest_amount(
+            self.coupon_periods, valuation_date,
+            face_value=self.face_value,
+            issue_date=self.issue_date,
+            maturity_date=self.maturity_date,
+        )
 
     def discrete_coupon_amount(self, interval_start: date, interval_end: date) -> float:
         """计算 (interval_start, interval_end] 区间内的离散票息支付额.
@@ -244,7 +275,12 @@ class UniversalCBPricer:
                                 rights_issue_ratio=0.0,
                                 rights_issue_price=None,
                                 cash_dividend=0.0):
-        """按募集说明书中的公式调整转股价格。"""
+        """按募集说明书中的公式调整转股价格。
+
+        注意: 本方法就地修改实例状态 (self.K / self.ratio), 非线程安全;
+        多线程批量定价中共享同一 pricer 实例时不要调用, 应在构造前调整 K
+        或每线程独立构造实例。
+        """
         if rights_issue_ratio and rights_issue_price is None:
             raise ValueError("rights_issue_price is required when rights_issue_ratio > 0")
 
