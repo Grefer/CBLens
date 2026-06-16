@@ -90,11 +90,15 @@ class StrategyRunMixin:
             cash_yield_pct = (
                 self._optional_float(self.v_st_cash_yield)
                 if hasattr(self, "v_st_cash_yield") else None)
+            exposure_raw = (getattr(self, "v_st_exposure", None).get()
+                            if getattr(self, "v_st_exposure", None) is not None else "恒定满仓")
+            exposure_mode = "valuation" if "估值" in str(exposure_raw) else "full"
             config = ScoreStrategyConfig(
                 top_n=max(1, int(float(self.v_st_top_n.get()))),
                 holding_mode=holding_mode,
                 funding_mode=funding_mode,
                 cash_yield_rate=max(0.0, (cash_yield_pct or 0.0) / 100.0),
+                exposure_mode=exposure_mode,
                 rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
                 selection_view=view,
                 min_confidence=policy["min_confidence"],
@@ -426,6 +430,7 @@ class StrategyRunMixin:
                 "max_holdings": config.max_holdings,
                 "funding_mode": config.funding_mode,
                 "cash_yield_rate": config.cash_yield_rate,
+                "exposure_mode": config.exposure_mode,
                 "top_n_shortfall_policy": _funding_legacy_alias(config.funding_mode),
                 "min_score": config.min_score,
                 "min_confidence": list(config.min_confidence) if config.min_confidence else None,

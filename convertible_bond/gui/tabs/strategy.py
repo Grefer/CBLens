@@ -179,6 +179,14 @@ def build(app, tab):
                "缺口留现金、缺成交价或择时缩放留出的现金按此计息\n"
                "Sharpe 课征无风险门槛, 0 计息会系统性低估持现金策略; 设 0 复现旧口径",
                control_width=120, label_width=80)
+    _grid_cell(
+        cc, "仓位择时", app.v_st_exposure, 2, 2, "optmenu", ["恒定满仓", "估值缩放"],
+        "恒定满仓(默认): 总仓位恒为 100%。\n"
+        "估值缩放: 按当期全市场中位偏差缩放总仓位 gross=clip(1-2.5·max(0,中位偏差),0.5,1)\n"
+        "  · 偏差高(市场贵)→降仓, 低→满仓; 留出的现金按'现金收益'计息\n"
+        "  · 这是模型唯一跨牛熊·跨频率稳健的优势(风险预算工具), 详见研究笔记\n"
+        "  · 仍是研究配置, 待样本外检验; 映射参数固定不可调",
+        control_width=120, label_width=72)
 
     # ── 实时"选债逻辑"摘要行: 把 选债规则→选券权重→TopN→资金层 的实际管线
     #    在配置阶段就渲染出来 (口径与模型层三层结构一致), 随任何控件改动即时更新
@@ -195,7 +203,8 @@ def build(app, tab):
 
     for var in (app.v_st_start, app.v_st_end, app.v_st_freq,
                 app.v_st_view, app.v_st_top_n, app.v_st_cost,
-                app.v_st_benchmark, app.v_st_weighting, app.v_st_cash_yield):
+                app.v_st_benchmark, app.v_st_weighting, app.v_st_cash_yield,
+                app.v_st_exposure):
         var.trace_add("write", _on_param_change)
 
     # 选券权重 ↔ TopN 联动: '等权全池'下模型完全忽略 top_n, 输入框置灰防误导。

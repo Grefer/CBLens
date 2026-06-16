@@ -93,8 +93,9 @@ _STRATEGY_TEMPLATE_BASE = {
         "" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
     ),
     "v_st_min_turnover": "", "v_st_delist_window": "0", "v_st_cost": "20",
-    # 模板 = 完整可复现配置: 选券权重与现金收益也随模板归位, 不残留上次手动值
+    # 模板 = 完整可复现配置: 选券权重/现金收益/仓位择时也随模板归位, 不残留上次手动值
     "v_st_weighting": "机会分排序", "v_st_cash_yield": "2.2",
+    "v_st_exposure": "恒定满仓",
 }
 STRATEGY_TEMPLATES = {
     "低估轮动": {"v_st_view": "低估候选", "v_st_freq": "月", "v_st_top_n": "10",

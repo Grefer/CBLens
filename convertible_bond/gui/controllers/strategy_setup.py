@@ -165,9 +165,11 @@ class StrategySetupMixin:
 
         view = _get("v_st_view", "综合机会") or "综合机会"
         weighting = _get("v_st_weighting", "机会分排序")
+        expo_text = (" → 按估值中位偏差缩放总仓位"
+                     if "估值" in str(_get("v_st_exposure", "恒定满仓")) else "")
         if weighting == "等权全池":
             return (f"当前逻辑: 准入筛选 → 「{view}」规则过滤 → 等权持有全部候选"
-                    f" (Top N 不参与) → 满仓, 缺口/缺价权重摊回已持仓")
+                    f" (Top N 不参与) → 满仓, 缺口/缺价权重摊回已持仓{expo_text}")
         try:
             n_text = str(max(1, int(float(_get("v_st_top_n", "10")))))
         except (TypeError, ValueError):
@@ -177,7 +179,7 @@ class StrategySetupMixin:
         except (TypeError, ValueError):
             yield_text = "0 计息"
         return (f"当前逻辑: 准入筛选 → 「{view}」规则过滤 → 按机会分取前 {n_text} 只等权持有"
-                f" → 候选不足/缺价留现金 ({yield_text})")
+                f" → 候选不足/缺价留现金 ({yield_text}){expo_text}")
 
     def _clear_strategy_codes(self):
         self.v_st_codes.set("")

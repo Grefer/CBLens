@@ -276,6 +276,8 @@ class CBPricerApp(
         # 闲置现金年化收益 (%/年, 默认≈无风险利率)。0 计息会让 Sharpe 的 rf 门槛
         # 系统性低估持现金配置 (留现金/择时缩放); 设 0 可复现旧口径。
         self.v_st_cash_yield = ctk.StringVar(value="2.2")
+        # 仓位择时 (D 仓位层): 恒定满仓(默认) / 估值缩放。研究配置, 默认关闭。
+        self.v_st_exposure = ctk.StringVar(value="恒定满仓")
         self.v_st_pool_mode = ctk.StringVar(value="本地全市场")
         self.v_st_history_mode = ctk.StringVar(value="标准")
         self.v_st_min_price = ctk.StringVar(value="")

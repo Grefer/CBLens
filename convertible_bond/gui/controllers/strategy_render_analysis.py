@@ -782,6 +782,8 @@ class StrategyAnalysisRenderMixin:
                 cost_text += f" · 现金计息 {float(cash_yield)*100:.1f}%/年"
         except (TypeError, ValueError):
             pass
+        if config.get("exposure_mode") == "valuation":
+            cost_text += " · 估值择时缩放"
         benchmark_text = "等权基准" if config.get("compute_benchmark") else "不对标"
 
         _info_card(0, "条款来源", source_text, f"历史口径 {history_mode}")
