@@ -849,13 +849,15 @@ _SUMMARY_CSV_KEYS = (
     "calmar", "max_drawdown", "max_drawdown_days", "hit_rate",
     "avg_selected_count", "avg_turnover", "avg_cash_weight", "total_cost",
     "benchmark_final_equity", "benchmark_total_return", "excess_return",
+    "index_benchmark_total_return", "excess_vs_index",
 )
 
 
 _PERIOD_CSV_COLUMNS = [
     "start_date", "end_date", "entry_date", "exit_date",
-    "period_return", "gross_return", "cost",
+    "period_return", "gross_return", "cash_yield_return", "cost",
     "benchmark_return", "equity", "benchmark_equity", "turnover", "cash_weight",
+    "exposure", "median_deviation",
     "eligible_count", "priced_count", "candidate_count", "selected_count",
     "avg_score", "execution_timing", "selected_codes",
 ]

@@ -286,7 +286,7 @@ class StrategyRenderMixin:
         for child in frame.winfo_children():
             child.destroy()
         frame.grid_rowconfigure(0, weight=1)
-        for col in range(4):
+        for col in range(5):
             frame.grid_columnconfigure(col, weight=1, uniform="strategy_insight")
 
         summary = result.get("summary") or {}
@@ -312,6 +312,19 @@ class StrategyRenderMixin:
             verdict = "暂无足够收益数据"
         quality = "高" if fallback_ratio <= 0 else ("中" if fallback_ratio <= 0.2 else "低")
 
+        # 稳健性 (块自助): Sharpe CI 是否含 0 / 跑赢基准概率 — 判断差异是否为噪声
+        stab = summary.get("stability") or {}
+        sb = stab.get("sharpe_bootstrap")
+        eb = stab.get("excess_bootstrap")
+        if sb:
+            spans_zero = sb["ci_low"] <= 0 <= sb["ci_high"]
+            robust_value = f"Sharpe {sb['point']:.2f}∈[{sb['ci_low']:.2f},{sb['ci_high']:.2f}]"
+            if eb:
+                robust_value += f" · 跑赢基准 {eb['prob_beat_benchmark']*100:.0f}%"
+            robust_value += "\n⚠ CI 含 0, 难言显著" if spans_zero else "\nCI 不含 0"
+        else:
+            robust_value = "样本不足 (期数过少)"
+
         hints = {
             "结论": "解读铁律: 一切对照「等权基准」——跑不赢基准 = 这套规则没有超额,\n"
                     "哪怕绝对收益为正。机会分是复核标记、不是收益预测;\n"
@@ -322,6 +335,9 @@ class StrategyRenderMixin:
                        "说明结果偏尾部运气而非系统性能力, 复现性存疑——去「归因」页核对。",
             "数据质量": "条款回退占比 = 用当前条款顶替历史条款的样本比例, >0 有未来信息渗入风险。\n"
                        "下结论前先看「数据」子页的补丁覆盖率与缺价跳过数。",
+            "稳健性": "块自助法给 Sharpe 的置信区间与跑赢基准概率, 判断差异是不是噪声。\n"
+                     "CI 含 0 = 收益可能只是运气, 别把点估计当真; 样本期越短越宽。\n"
+                     "这是抵御'单段历史拍脑袋'的关键读数 (详见研究笔记治理规则)。",
         }
         items = [
             ("结论", verdict),
@@ -333,6 +349,7 @@ class StrategyRenderMixin:
                 f"{top_name} {self._fmt_strategy_pct(top_contrib.get('contribution'), sign=True)}"
             )),
             ("数据质量", f"{quality} · 条款回退占比 {self._fmt_strategy_pct(fallback_ratio)}"),
+            ("稳健性", robust_value),
         ]
         for col, (title, value) in enumerate(items):
             cell = ctk.CTkFrame(frame, fg_color=BG_INPUT, corner_radius=8, height=76)
