@@ -383,6 +383,9 @@ class StrategyRenderMixin:
         benchmark_curve = result.get("benchmark_curve") or []
         bench_dates = [p["date"] for p in benchmark_curve]
         bench_equity = [float(p["equity"]) for p in benchmark_curve]
+        index_curve = result.get("index_benchmark_curve") or []
+        index_dates = [p["date"] for p in index_curve]
+        index_equity = [float(p["equity"]) for p in index_curve]
 
         bg_card_color = get_color(BG_CARD)
         bg_input_color = get_color(BG_INPUT)
@@ -404,6 +407,9 @@ class StrategyRenderMixin:
         if bench_equity:
             ax_eq.plot(bench_dates, bench_equity, color=orange_color, linewidth=1.6,
                        linestyle="--", marker="s", markersize=3, label="等权基准")
+        if index_equity:
+            ax_eq.plot(index_dates, index_equity, color=text_dim_color, linewidth=1.4,
+                       linestyle=":", marker="^", markersize=3, label="中证转债指数")
         ax_eq.axhline(1.0, color=border_color, linewidth=1.0, linestyle="--")
 
         # 标注最大回撤起止区间

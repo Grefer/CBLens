@@ -97,6 +97,9 @@ class ScoreStrategyConfig:
     pre_filter_prices: bool = True
     transaction_cost: float = 0.0
     compute_benchmark: bool = True
+    # 真实指数第二基准 (如 "000832.CSI" 中证转债)。设置后回测额外输出该指数净值曲线,
+    # 回答"有没有跑赢被动持有指数"; 数据源取不到 (如 akshare) 时优雅缺省。默认关闭。
+    benchmark_index_code: str | None = None
     pool_mode: str = "static"  # "static" | "dynamic"
     # ── B 持仓层: 怎么从候选池构成持仓 (一律等权) ──
     #   "top_score": 按机会分取前 top_n 只。
@@ -800,6 +803,10 @@ def backtest_score_strategy(
         if callable(provider_flush):
             provider_flush()
 
+    index_benchmark_curve = (
+        _index_benchmark_curve(provider, cfg.benchmark_index_code, schedule, cfg)
+        if cfg.compute_benchmark and cfg.benchmark_index_code else []
+    )
     summary = _summarize_strategy(
         equity_curve,
         periods,
@@ -809,6 +816,7 @@ def backtest_score_strategy(
         top_n=cfg.top_n,
         risk_free_rate=r,
         benchmark_curve=benchmark_curve if cfg.compute_benchmark else None,
+        index_benchmark_curve=index_benchmark_curve,
     )
     diagnostics = _build_strategy_diagnostics(
         equity_curve,
@@ -827,6 +835,7 @@ def backtest_score_strategy(
         "config": _strategy_config_summary(cfg),
         "equity_curve": equity_curve,
         "benchmark_curve": benchmark_curve,
+        "index_benchmark_curve": index_benchmark_curve,
         "periods": periods,
         "rebalance_snapshots": snapshots,
         "summary": summary,
@@ -1810,6 +1819,40 @@ def _benchmark_period_return(
     return float(sum(returns) / len(returns)), codes
 
 
+def _index_benchmark_curve(
+    provider: DataProvider,
+    index_code: str,
+    schedule: list[date],
+    cfg: ScoreStrategyConfig,
+) -> list[dict[str, Any]]:
+    """真实指数 (如中证转债 000832.CSI) 的归一化净值曲线, 用作第二基准.
+
+    用与策略相同的成交时点在每个调仓边界取指数收盘, 归一到首日=1.0。数据源取不到
+    (akshare/CSV 无该指数, 或全程缺价) 时返回 [], 调用方据此跳过指数基准。
+    """
+    price_cache: dict[tuple, PricePoint | None] = {}
+    points: list[dict[str, Any]] = []
+    base: float | None = None
+    for d in schedule:
+        try:
+            p = _execution_price_point(
+                provider, index_code, d,
+                timing=cfg.execution_timing, side="entry",
+                lookback_days=cfg.price_lookback_days,
+                max_staleness_days=cfg.max_price_staleness_days,
+                lookahead_days=cfg.execution_lookahead_days,
+                cache=price_cache,
+            )
+        except Exception:
+            p = None
+        if p is None or not p.price or p.price <= 0:
+            continue
+        if base is None:
+            base = float(p.price)
+        points.append({"date": d, "equity": float(p.price) / base})
+    return points if len(points) >= 2 else []
+
+
 def _normalize_execution_timing(value: str | None) -> str:
     raw = (value or "signal_close").strip().lower()
     aliases = {
@@ -2106,6 +2149,7 @@ def _summarize_strategy(
     top_n: int,
     risk_free_rate: float = 0.0,
     benchmark_curve: list[dict[str, Any]] | None = None,
+    index_benchmark_curve: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     final_equity = float(equity_curve[-1]["equity"]) if equity_curve else 1.0
     total_return = final_equity - 1.0
@@ -2149,6 +2193,11 @@ def _summarize_strategy(
         benchmark_final_equity = float(benchmark_curve[-1]["equity"])
         benchmark_total_return = benchmark_final_equity - 1.0
         excess_return = total_return - benchmark_total_return
+    index_total_return = None
+    excess_vs_index = None
+    if index_benchmark_curve:
+        index_total_return = float(index_benchmark_curve[-1]["equity"]) - 1.0
+        excess_vs_index = total_return - index_total_return
     selected_counts = [int(row.get("selected_count") or 0) for row in periods]
     turnovers = [finite_float(row.get("turnover")) for row in periods]
     finite_turnovers = [t for t in turnovers if t is not None]
@@ -2200,6 +2249,8 @@ def _summarize_strategy(
         "benchmark_final_equity": benchmark_final_equity,
         "benchmark_total_return": benchmark_total_return,
         "excess_return": excess_return,
+        "index_benchmark_total_return": index_total_return,
+        "excess_vs_index": excess_vs_index,
         "stability": stability,
     }
 

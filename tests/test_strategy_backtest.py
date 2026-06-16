@@ -469,6 +469,49 @@ def test_benchmark_pays_membership_turnover_costs(monkeypatch):
     assert p2["benchmark_return"] == pytest.approx(mean2)
 
 
+def test_index_benchmark_curve_and_excess(monkeypatch):
+    """真实指数第二基准: provider 提供指数收盘 → 输出指数净值曲线 + 超额。"""
+    provider = StrategyFakeProvider()
+    # 指数 000832.CSI 的收盘序列 (100→106 = +6%)
+    provider.bond_history["000832.CSI"] = [
+        (date(2025, 1, 2), 100.0), (date(2025, 1, 31), 103.0), (date(2025, 2, 28), 106.0)]
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 2, 28),
+        config=ScoreStrategyConfig(
+            rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            benchmark_index_code="000832.CSI", mark_to_market=False,
+            min_confidence=None, exclude_risk_tags=()),
+    )
+    idx_curve = result["index_benchmark_curve"]
+    assert len(idx_curve) >= 2
+    assert idx_curve[0]["equity"] == pytest.approx(1.0)
+    assert result["summary"]["index_benchmark_total_return"] == pytest.approx(0.06)
+    assert result["summary"]["excess_vs_index"] == pytest.approx(
+        result["summary"]["total_return"] - 0.06)
+
+
+def test_index_benchmark_absent_when_unavailable(monkeypatch):
+    """数据源取不到指数 → 优雅缺省 (空曲线, 指数超额为 None)。"""
+    provider = StrategyFakeProvider()   # 无 000832.CSI 历史
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
+            benchmark_index_code="000832.CSI", mark_to_market=False,
+            min_confidence=None, exclude_risk_tags=()),
+    )
+    assert result["index_benchmark_curve"] == []
+    assert result["summary"]["index_benchmark_total_return"] is None
+
+
 def test_summary_includes_stability_block(monkeypatch):
     """引擎集成: summary['stability'] 含 Sharpe 块自助 + 跑赢基准概率 (多期+基准)。"""
     provider = StrategyFakeProvider()

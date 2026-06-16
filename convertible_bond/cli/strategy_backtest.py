@@ -168,6 +168,9 @@ def main() -> int:
                              "Sharpe 课征 rf 门槛, 现金 0 计息会低估持现金配置, 研究运行建议设为 --r 同值")
     parser.add_argument("--no-benchmark", action="store_true",
                         help="关闭等权全可投池基准对比 (默认开启)")
+    parser.add_argument("--benchmark-index", default="",
+                        help="真实指数第二基准代码 (如 000832.CSI 中证转债); "
+                             "数据源取不到时优雅跳过")
     parser.add_argument("--delist-window", type=int, default=0,
                         help=argparse.SUPPRESS)
     parser.add_argument("--min-balance", type=float, default=default_min_balance,
@@ -253,6 +256,7 @@ def main() -> int:
         mark_to_market=not args.no_mark_to_market,
         transaction_cost=max(0.0, args.cost_bps) / 10000.0,
         compute_benchmark=not args.no_benchmark,
+        benchmark_index_code=args.benchmark_index.strip() or None,
         pool_mode=args.pool_mode,
         holding_mode=args.holding_mode,
         max_holdings=args.max_holdings,
@@ -317,6 +321,9 @@ def main() -> int:
         print(f"基准净值: {summary['benchmark_final_equity']:.4f}")
         print(f"基准收益: {_fmt_pct(summary['benchmark_total_return'])}")
         print(f"超额收益: {_fmt_pct(summary['excess_return'])}")
+    if summary.get("index_benchmark_total_return") is not None:
+        print(f"指数基准({args.benchmark_index}): {_fmt_pct(summary['index_benchmark_total_return'])}"
+              f" | 超额 {_fmt_pct(summary['excess_vs_index'])}")
     _print_stability(summary.get("stability"))
     diagnostics = result.get("diagnostics") or {}
     performance = diagnostics.get("performance") or {}

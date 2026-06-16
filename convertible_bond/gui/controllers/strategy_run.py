@@ -117,6 +117,8 @@ class StrategyRunMixin:
                 execution_timing="next_close",
                 transaction_cost=max(0.0, self._optional_float(self.v_st_cost) or 0.0) / 10000.0,
                 compute_benchmark=bool(self.v_st_benchmark.get()),
+                # 开启基准时自动叠加中证转债指数第二基准 (Wind 可取; 其它源优雅缺省)
+                benchmark_index_code=("000832.CSI" if bool(self.v_st_benchmark.get()) else None),
                 pool_mode=engine_pool_mode,
             )
             admission_config = AdmissionFilterConfig(
