@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _SOURCE_OUTAGE_FAIL_RATIO = 0.6
 _MIN_OUTAGE_FAILURES = 20
 
+from . import backtest_stats
 from .batch_pricing import (
     AdmissionFilterConfig,
     BATCH_REVIEW_VIEWS,
@@ -2162,6 +2163,9 @@ def _summarize_strategy(
         if annualized_return is not None and max_drawdown and max_drawdown > 0
         else None
     )
+    stability = _stability_stats(
+        metric_returns, period_returns, benchmark_curve,
+        periods_per_year=periods_per_year, rf_per_period=rf_per_period)
     return {
         "top_n": top_n,
         "rebalance_freq": (freq or "M").upper(),
@@ -2196,6 +2200,37 @@ def _summarize_strategy(
         "benchmark_final_equity": benchmark_final_equity,
         "benchmark_total_return": benchmark_total_return,
         "excess_return": excess_return,
+        "stability": stability,
+    }
+
+
+def _stability_stats(
+    metric_returns: list[float],
+    period_returns: list[float],
+    benchmark_curve: list[dict[str, Any]] | None,
+    *,
+    periods_per_year: float,
+    rf_per_period: float,
+) -> dict[str, Any]:
+    """统计稳健性: Sharpe 块自助 CI、超额块自助/跑赢概率、滚动 Sharpe (1 年窗)。
+
+    Sharpe CI 用与表头同口径的 metric_returns; 超额检验用按期配对的 period_returns
+    vs 基准期收益 (二者等长可比)。样本不足时各项优雅返回 None。
+    """
+    roll = backtest_stats.rolling_sharpe(
+        metric_returns, window=int(round(periods_per_year)),
+        periods_per_year=periods_per_year, rf_per_period=rf_per_period)
+    bench_period_returns = _equity_curve_returns(benchmark_curve) if benchmark_curve else []
+    return {
+        "sharpe_bootstrap": backtest_stats.block_bootstrap_sharpe(
+            metric_returns, periods_per_year=periods_per_year,
+            rf_per_period=rf_per_period),
+        "excess_bootstrap": (
+            backtest_stats.block_bootstrap_excess(period_returns, bench_period_returns)
+            if bench_period_returns else None
+        ),
+        "rolling_sharpe": roll,
+        "rolling_summary": backtest_stats.summarize_stability(roll),
     }
 
 
