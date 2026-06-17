@@ -130,13 +130,15 @@ def build(app, tab):
             Tooltip(w, tooltip)
         return w
 
-    # 每列 label_width 取该列两行 label 的最大宽度, 同列控件左边缘对齐
-    # col 0: 策略方案/选债规则 → 72
-    # col 1: 开始日期/Top N → 80
-    # col 2: 结束日期/成本 (bps) → 80
-    # col 3: 频率/等权基准 → 80
+    # 控件按"模型四层管线"分行分组, 同层旋钮相邻 (与下方实时选债逻辑摘要同序):
+    #   行0 基础   : 策略方案 · 开始 · 结束 · 频率
+    #   行1 选债→建仓: 选债规则(A过滤) · 选券权重(B持仓) · Top N(B持仓) · 基准(对照)
+    #   行2 资金→仓位: 现金收益(C资金) · 仓位择时(D仓位) · 成本(交易摩擦)
+    # 每列 label_width 取该列各行 label 的最大宽度, 同列控件左边缘对齐
+    # col 0: 策略方案/选债规则/现金收益 → 72   col 1: 开始/选券权重/仓位择时 → 80
+    # col 2: 结束/Top N/成本 (bps) → 80         col 3: 频率/基准 → 32
 
-    # 第一行: 策略方案, 开始日期, 结束日期, 频率
+    # 第一行 — 基础: 策略方案, 开始日期, 结束日期, 频率
     _grid_cell(
         cc, "策略方案", app.v_st_template, 0, 0, "optmenu", list(STRATEGY_TEMPLATE_NAMES),
         lambda: STRATEGY_TEMPLATE_DESCRIPTIONS.get(app.v_st_template.get(), ""),
@@ -150,43 +152,43 @@ def build(app, tab):
     _grid_cell(cc, "频率", app.v_st_freq, 0, 3, "optmenu", ["周", "月", "季"],
                "定期调仓的时间间隔", control_width=80, label_width=32)
 
-    # 第二行: 选债规则, Top N, 成本, 等权基准
+    # 第二行 — 选债→建仓: A 过滤层(选债规则) + B 持仓层(选券权重/Top N) + 对照基准
     _grid_cell(
         cc, "选债规则", app.v_st_view, 1, 0, "optmenu", list(STRATEGY_SELECTION_VIEWS),
         lambda: STRATEGY_VIEW_DESCRIPTIONS.get(app.v_st_view.get(), ""),
         command=app._describe_strategy_view, control_width=130, label_width=72)
-    top_n_entry = _grid_cell(
-        cc, "Top N", app.v_st_top_n, 1, 1, "entry", None,
-        "每期最大持仓转债数量\n仅'机会分排序'权重下生效; 选'等权全池'时此框置灰不参与",
-        control_width=120, label_width=80)
-    _grid_cell(cc, "成本 (bps)", app.v_st_cost, 1, 2, "entry", None,
-               "单边调仓交易成本\n单位 bps (万分之一)",
-               control_width=120, label_width=80)
-    _grid_cell(cc, "基准", app.v_st_benchmark, 1, 3, "checkbox", None,
-               "等权买入全市场合格转债\n作为对比基准", label_width=32)
-
-    # 第三行: 选券权重 (默认机会分排序=原始行为; 两种均为研究配置, 无推荐)
     _grid_cell(
-        cc, "选券权重", app.v_st_weighting, 2, 0, "optmenu", ["机会分排序", "等权全池"],
+        cc, "选券权重", app.v_st_weighting, 1, 1, "optmenu", ["机会分排序", "等权全池"],
         "机会分排序(默认): 按机会分取 Top N 等权, 候选不足/缺价槽位留现金\n"
         "  · 4年季频对比回撤更小, 但源于'候选不足留现金'的隐性缓冲, 不跨频率稳健\n"
         "等权全池: 等权持有整个筛选后候选池, 满仓不留现金 (候选池 beta, 分散度高)\n"
         "注: 两者均无稳健选股 alpha (跨周期横截面 Rank-IC≈0),\n"
         "均为研究配置, 请对照等权基准解读, 勿当作可照搬的策略。",
-        control_width=130, label_width=72)
-    _grid_cell(cc, "现金收益", app.v_st_cash_yield, 2, 1, "entry", None,
+        control_width=130, label_width=80)
+    top_n_entry = _grid_cell(
+        cc, "Top N", app.v_st_top_n, 1, 2, "entry", None,
+        "每期最大持仓转债数量\n仅'机会分排序'权重下生效; 选'等权全池'时此框置灰不参与",
+        control_width=120, label_width=80)
+    _grid_cell(cc, "基准", app.v_st_benchmark, 1, 3, "checkbox", None,
+               "等权买入全市场合格转债 + 中证转债指数\n作为对比基准 (两条线)", label_width=32)
+
+    # 第三行 — 资金→仓位: C 资金层(现金收益) + D 仓位层(仓位择时) + 交易成本
+    _grid_cell(cc, "现金收益", app.v_st_cash_yield, 2, 0, "entry", None,
                "闲置现金年化收益率 (%/年), 如 2.2 ≈ 货基/逆回购\n"
                "缺口留现金、缺成交价或择时缩放留出的现金按此计息\n"
                "Sharpe 课征无风险门槛, 0 计息会系统性低估持现金策略; 设 0 复现旧口径",
-               control_width=120, label_width=80)
+               control_width=120, label_width=72)
     _grid_cell(
-        cc, "仓位择时", app.v_st_exposure, 2, 2, "optmenu", ["恒定满仓", "估值缩放"],
+        cc, "仓位择时", app.v_st_exposure, 2, 1, "optmenu", ["恒定满仓", "估值缩放"],
         "恒定满仓(默认): 总仓位恒为 100%。\n"
         "估值缩放: 按当期全市场中位偏差缩放总仓位 gross=clip(1-2.5·max(0,中位偏差),0.5,1)\n"
         "  · 偏差高(市场贵)→降仓, 低→满仓; 留出的现金按'现金收益'计息\n"
         "  · 这是模型唯一跨牛熊·跨频率稳健的优势(风险预算工具), 详见研究笔记\n"
         "  · 仍是研究配置, 待样本外检验; 映射参数固定不可调",
-        control_width=120, label_width=72)
+        control_width=120, label_width=80)
+    _grid_cell(cc, "成本 (bps)", app.v_st_cost, 2, 2, "entry", None,
+               "单边调仓交易成本\n单位 bps (万分之一); 基准同口径计成本",
+               control_width=120, label_width=80)
 
     # ── 实时"选债逻辑"摘要行: 把 选债规则→选券权重→TopN→资金层 的实际管线
     #    在配置阶段就渲染出来 (口径与模型层三层结构一致), 随任何控件改动即时更新
