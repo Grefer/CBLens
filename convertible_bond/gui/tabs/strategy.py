@@ -1,10 +1,11 @@
 """策略 Tab UI 构建.
 
-布局设计：
-  - 标题栏：策略 + PRO 徽标 + 一行简短描述
-  - 核心参数: 策略方案 + 选债规则 + 日期/频率/仓位/成本
-  - 联动: 手动修改核心参数或选债规则时, 策略方案自动切回 "自定义"
-  - 高级设置 (默认折叠): 整体浅底卡片, 内部两张设置子卡
+布局设计 (面向新人: 首屏只露上手必需项, 研究旋钮下沉)：
+  - 标题栏：策略 + PRO 徽标 + "①选方案 →②设区间 →③运行" 三步引导
+  - 核心参数 (首屏常驻, 两行): 策略方案 · 日期 · 频率 · 选债规则 · Top N · 基准
+  - 联动: 手动修改任一参数时, 策略方案自动切回 "自定义"
+  - 高级设置 (默认折叠): 回测数据 / 选债条件 / 策略调参 三张子卡
+      策略调参 = 选券权重·现金收益·仓位择时·成本 (研究旋钮, 默认即可)
   - 指标看板: 10 个独立 Dashboard Tile 卡, 主指标边框高亮
 """
 
@@ -52,7 +53,8 @@ def build(app, tab):
     title_box.grid(row=0, column=0, sticky="w")
     ctk.CTkLabel(title_box, text=E("🎯 策略"),
                  font=(FONT_FAMILY, 15, "bold"), text_color=TEXT).pack(side="left")
-    lbl_strategy_sub = ctk.CTkLabel(title_box, text="选择方案和规则, 定频调仓回测",
+    lbl_strategy_sub = ctk.CTkLabel(
+                 title_box, text="① 选方案 → ② 设区间 → ③ 运行   (想细调? 展开下方「高级设置」)",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM)
     lbl_strategy_sub.pack(side="left", padx=(12, 0))
     Tooltip(lbl_strategy_sub,
@@ -130,13 +132,13 @@ def build(app, tab):
             Tooltip(w, tooltip)
         return w
 
-    # 控件按"模型四层管线"分行分组, 同层旋钮相邻 (与下方实时选债逻辑摘要同序):
-    #   行0 基础   : 策略方案 · 开始 · 结束 · 频率
-    #   行1 选债→建仓: 选债规则(A过滤) · 选券权重(B持仓) · Top N(B持仓) · 基准(对照)
-    #   行2 资金→仓位: 现金收益(C资金) · 仓位择时(D仓位) · 成本(交易摩擦)
+    # 首屏只保留新人上手必需的两行 (研究旋钮下沉到「高级设置 · 策略调参」):
+    #   行0 基础: 策略方案 · 开始 · 结束 · 频率
+    #   行1 选债: 选债规则(A过滤) · Top N(B持仓上限) · 基准(对照)
+    #   行2     : 实时"选债逻辑"摘要 (跨 4 列)
     # 每列 label_width 取该列各行 label 的最大宽度, 同列控件左边缘对齐
-    # col 0: 策略方案/选债规则/现金收益 → 72   col 1: 开始/选券权重/仓位择时 → 80
-    # col 2: 结束/Top N/成本 (bps) → 80         col 3: 频率/基准 → 32
+    # col 0: 策略方案/选债规则 → 72   col 1: 开始/Top N → 80
+    # col 2: 结束/基准 → 80           col 3: 频率 → 32
 
     # 第一行 — 基础: 策略方案, 开始日期, 结束日期, 频率
     _grid_cell(
@@ -152,43 +154,19 @@ def build(app, tab):
     _grid_cell(cc, "频率", app.v_st_freq, 0, 3, "optmenu", ["周", "月", "季"],
                "定期调仓的时间间隔", control_width=80, label_width=32)
 
-    # 第二行 — 选债→建仓: A 过滤层(选债规则) + B 持仓层(选券权重/Top N) + 对照基准
+    # 第二行 — 选债 (首屏只留新人需要的): 选债规则(A 过滤) · Top N(B 持仓上限) · 等权基准对标
+    #   选券权重/现金收益/仓位择时/成本 = 研究旋钮 (均有合理默认且由策略方案归位),
+    #   已下沉到「高级设置 · 策略调参」, 不再占首屏认知带宽。
     _grid_cell(
         cc, "选债规则", app.v_st_view, 1, 0, "optmenu", list(STRATEGY_SELECTION_VIEWS),
         lambda: STRATEGY_VIEW_DESCRIPTIONS.get(app.v_st_view.get(), ""),
         command=app._describe_strategy_view, control_width=130, label_width=72)
-    _grid_cell(
-        cc, "选券权重", app.v_st_weighting, 1, 1, "optmenu", ["机会分排序", "等权全池"],
-        "机会分排序(默认): 按机会分取 Top N 等权, 候选不足/缺价槽位留现金\n"
-        "  · 4年季频对比回撤更小, 但源于'候选不足留现金'的隐性缓冲, 不跨频率稳健\n"
-        "等权全池: 等权持有整个筛选后候选池, 满仓不留现金 (候选池 beta, 分散度高)\n"
-        "注: 两者均无稳健选股 alpha (跨周期横截面 Rank-IC≈0),\n"
-        "均为研究配置, 请对照等权基准解读, 勿当作可照搬的策略。",
-        control_width=130, label_width=80)
     top_n_entry = _grid_cell(
-        cc, "Top N", app.v_st_top_n, 1, 2, "entry", None,
+        cc, "Top N", app.v_st_top_n, 1, 1, "entry", None,
         "每期最大持仓转债数量\n仅'机会分排序'权重下生效; 选'等权全池'时此框置灰不参与",
         control_width=120, label_width=80)
-    _grid_cell(cc, "基准", app.v_st_benchmark, 1, 3, "checkbox", None,
+    _grid_cell(cc, "基准", app.v_st_benchmark, 1, 2, "checkbox", None,
                "等权买入全市场合格转债 + 中证转债指数\n作为对比基准 (两条线)", label_width=32)
-
-    # 第三行 — 资金→仓位: C 资金层(现金收益) + D 仓位层(仓位择时) + 交易成本
-    _grid_cell(cc, "现金收益", app.v_st_cash_yield, 2, 0, "entry", None,
-               "闲置现金年化收益率 (%/年), 如 2.2 ≈ 货基/逆回购\n"
-               "缺口留现金、缺成交价或择时缩放留出的现金按此计息\n"
-               "Sharpe 课征无风险门槛, 0 计息会系统性低估持现金策略; 设 0 复现旧口径",
-               control_width=120, label_width=72)
-    _grid_cell(
-        cc, "仓位择时", app.v_st_exposure, 2, 1, "optmenu", ["恒定满仓", "估值缩放"],
-        "恒定满仓(默认): 总仓位恒为 100%。\n"
-        "估值缩放: 按当期全市场中位偏差缩放总仓位 gross=clip(1-2.5·max(0,中位偏差),0.5,1)\n"
-        "  · 偏差高(市场贵)→降仓, 低→满仓; 留出的现金按'现金收益'计息\n"
-        "  · 这是模型唯一跨牛熊·跨频率稳健的优势(风险预算工具), 详见研究笔记\n"
-        "  · 仍是研究配置, 待样本外检验; 映射参数固定不可调",
-        control_width=120, label_width=80)
-    _grid_cell(cc, "成本 (bps)", app.v_st_cost, 2, 2, "entry", None,
-               "单边调仓交易成本\n单位 bps (万分之一); 基准同口径计成本",
-               control_width=120, label_width=80)
 
     # ── 实时"选债逻辑"摘要行: 把 选债规则→选券权重→TopN→资金层 的实际管线
     #    在配置阶段就渲染出来 (口径与模型层三层结构一致), 随任何控件改动即时更新
@@ -196,7 +174,7 @@ def build(app, tab):
     logic_label = ctk.CTkLabel(
         cc, textvariable=app.v_st_logic_summary, text_color=TEXT_DIM,
         font=(FONT_FAMILY, 12), anchor="w", justify="left")
-    logic_label.grid(row=3, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 6))
+    logic_label.grid(row=2, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 6))
 
     # ── 核心参数联动逻辑 (手动修改时策略方案自动切“自定义”) ───────────────────────
     def _on_param_change(*_):
@@ -346,6 +324,45 @@ def build(app, tab):
     _range_grid_cell(
         range_grid, 1, 1, "HV%", app.v_st_min_sigma, app.v_st_max_sigma,
         tooltip="正股历史波动率\n窗口跟随顶部 σ 设置")
+
+    # 第二行 (跨两列): 策略调参 — 研究旋钮, 默认即可, 知道在做什么再动
+    tune_card, c2 = _adv_card(
+        adv_panel, 1, "策略调参",
+        "选券权重 · 现金收益 · 仓位择时 · 成本 (均有默认值, 新人可不动)",
+        col=0, columnspan=2)
+    tune_card.grid_configure(pady=(8, 0))
+    tune_grid = ctk.CTkFrame(c2, fg_color="transparent")
+    tune_grid.pack(fill="x")
+    for _c in range(2):
+        tune_grid.grid_columnconfigure(_c, weight=1, uniform="tune")
+    _grid_cell(
+        tune_grid, "选券权重", app.v_st_weighting, 0, 0, "optmenu",
+        ["机会分排序", "等权全池"],
+        "机会分排序(默认): 按机会分取 Top N 等权, 候选不足/缺价槽位留现金\n"
+        "  · 4年季频对比回撤更小, 但源于'候选不足留现金'的隐性缓冲, 不跨频率稳健\n"
+        "等权全池: 等权持有整个筛选后候选池, 满仓不留现金 (候选池 beta, 分散度高)\n"
+        "注: 两者均无稳健选股 alpha (跨周期横截面 Rank-IC≈0),\n"
+        "均为研究配置, 请对照等权基准解读, 勿当作可照搬的策略。",
+        control_width=150, label_width=64)
+    _grid_cell(
+        tune_grid, "仓位择时", app.v_st_exposure, 0, 1, "optmenu",
+        ["恒定满仓", "估值缩放"],
+        "恒定满仓(默认): 总仓位恒为 100%。\n"
+        "估值缩放: 按当期全市场中位偏差缩放总仓位 gross=clip(1-2.5·max(0,中位偏差),0.5,1)\n"
+        "  · 偏差高(市场贵)→降仓, 低→满仓; 留出的现金按'现金收益'计息\n"
+        "  · 这是模型唯一跨牛熊·跨频率稳健的优势(风险预算工具), 详见研究笔记\n"
+        "  · 仍是研究配置, 待样本外检验; 映射参数固定不可调",
+        control_width=150, label_width=64)
+    _grid_cell(
+        tune_grid, "现金收益", app.v_st_cash_yield, 1, 0, "entry", None,
+        "闲置现金年化收益率 (%/年), 如 2.2 ≈ 货基/逆回购\n"
+        "缺口留现金、缺成交价或择时缩放留出的现金按此计息\n"
+        "Sharpe 课征无风险门槛, 0 计息会系统性低估持现金策略; 设 0 复现旧口径",
+        control_width=150, label_width=64)
+    _grid_cell(
+        tune_grid, "成本 (bps)", app.v_st_cost, 1, 1, "entry", None,
+        "单边调仓交易成本\n单位 bps (万分之一); 基准同口径计成本",
+        control_width=150, label_width=64)
 
     # ── 执行状态栏: 摘要/预检压成一条信息带, 把首屏空间让给结果区 ────────────────
     console = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=10)
@@ -546,11 +563,12 @@ def build(app, tab):
         app.after_idle(lambda: app._load_strategy_backtest_snapshot(silent=True, render=False))
 
 
-def _adv_card(parent, row, title, subtitle=None, *, col=0):
+def _adv_card(parent, row, title, subtitle=None, *, col=0, columnspan=1):
     """高级设置子卡: 放在统一底色卡片内, 和执行控制台信息卡保持一致."""
-    padx = (0, 8) if col == 0 else (8, 0)
+    padx = (0, 0) if columnspan > 1 else ((0, 8) if col == 0 else (8, 0))
     card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=8)
-    card.grid(row=row, column=col, sticky="nsew", padx=padx, pady=0)
+    card.grid(row=row, column=col, columnspan=columnspan,
+              sticky="nsew", padx=padx, pady=0)
     head = ctk.CTkFrame(card, fg_color="transparent")
     head.pack(fill="x", padx=16, pady=(10, 5))
     ctk.CTkLabel(head, text=title, text_color=ACCENT,
