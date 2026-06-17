@@ -101,6 +101,40 @@ class StrategyRenderMixin:
         if hasattr(self, "update_idletasks"):
             self.update_idletasks()
 
+    def _render_strategy_empty_state(self):
+        """尚无回测结果时, 在概览图表区显示新手三步引导 (取代空白画布)."""
+        frame = getattr(self, "strategy_bt_chart_frame", None)
+        if frame is None:
+            return
+        for child in frame.winfo_children():
+            child.destroy()
+        try:
+            frame.configure(height=STRATEGY_OVERVIEW_CHART_HEIGHT)
+            frame.grid_propagate(False)
+        except Exception:
+            pass
+        card = ctk.CTkFrame(frame, fg_color=get_color(BG_CARD), corner_radius=12)
+        card.grid(row=0, column=0, sticky="nsew", padx=4, pady=8)
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(expand=True, fill="both", padx=24, pady=20)
+        ctk.CTkLabel(
+            inner, text="👋 这里会显示策略回测结果",
+            font=(FONT_FAMILY, 15, "bold"), text_color=get_color(TEXT),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            inner, justify="left", font=(FONT_FAMILY, 13), text_color=get_color(TEXT),
+            text=("① 顶部「策略方案」选一个 (如「稳健打底」) — 相关参数会自动填好\n"
+                  "② 确认「开始 / 结束」日期区间与「频率」\n"
+                  "③ 点右下角「⚡ 运行策略」"),
+        ).pack(anchor="w", pady=(10, 8))
+        ctk.CTkLabel(
+            inner, justify="left", font=(FONT_FAMILY, 12), text_color=get_color(TEXT_DIM),
+            text=("跑完后这里出现净值曲线, 上方指标卡显示收益 / 回撤 / Sharpe;\n"
+                  "「总览」下方「稳健性」卡会告诉你结果是不是只是运气。\n"
+                  "勾选「基准」可叠加等权全池与中证转债指数两条对照线。\n"
+                  "想细调选券权重 / 现金计息 / 仓位择时, 展开顶部「高级设置」。"),
+        ).pack(anchor="w")
+
     def _clear_active_strategy_backtest_result(self, *, status: str | None = None):
         """清空当前活跃策略回测结果, 防止删除快照后其他页继续显示旧数据."""
         self._last_strategy_bt_result = None
@@ -137,6 +171,8 @@ class StrategyRenderMixin:
         compare_frame = getattr(self, "strategy_bt_compare_frame", None)
         if compare_frame is not None:
             self._render_strategy_comparison()
+        # 结果清空后用三步引导取代空白图表区
+        self._render_strategy_empty_state()
         if status and hasattr(self, "v_st_status"):
             self.v_st_status.set(status)
 

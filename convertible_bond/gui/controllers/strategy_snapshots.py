@@ -147,6 +147,10 @@ class StrategySnapshotMixin:
             if not silent:
                 from tkinter import messagebox
                 messagebox.showinfo("提示", "未找到策略回测快照")
+            # 全新用户无任何快照: 用三步引导取代空白图表区
+            empty_state = getattr(self, "_render_strategy_empty_state", None)
+            if callable(empty_state):
+                empty_state()
             return
         loaded_count = 0
         latest_result = None
@@ -182,8 +186,12 @@ class StrategySnapshotMixin:
             if not silent:
                 self.v_st_status.set(
                     f"已加载 {loaded_count} 份快照 (最新 {latest_saved_at or '?'})")
-        elif not silent:
-            self.v_st_status.set("快照文件存在但无有效数据")
+        else:
+            empty_state = getattr(self, "_render_strategy_empty_state", None)
+            if callable(empty_state):
+                empty_state()
+            if not silent:
+                self.v_st_status.set("快照文件存在但无有效数据")
 
     @classmethod
     def _strategy_snapshot_dedupe_key(cls, payload, result) -> str:
