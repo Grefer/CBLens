@@ -1,15 +1,67 @@
 import json
+import subprocess
+import sys
 from datetime import date, timedelta
 
 import pytest
 
 from convertible_bond.data_providers import BondTerms, DataProvider
+from convertible_bond.cb_events import CBEvent, CBEventStore
 from convertible_bond.strategy_backtest import (
+    PDEStrategyConfig,
     ScoreStrategyConfig,
+    backtest_pde_strategy,
     backtest_score_strategy,
     build_rebalance_schedule,
     write_strategy_backtest_csv,
 )
+
+
+def test_pde_strategy_defaults_use_robust_signal_and_reserve_cash():
+    config = PDEStrategyConfig()
+    assert config.rank_signal == "down_reset_robust_edge"
+    assert config.holding_mode == "top_score"
+    assert config.funding_mode == "reserve_cash"
+    assert config.min_score is None
+    assert config.execution_timing == "next_close"
+    assert config.transaction_cost == pytest.approx(0.002)
+    assert config.cash_yield_rate == pytest.approx(0.022)
+
+
+def test_strategy_cli_help_exposes_only_pde_rank_signals():
+    completed = subprocess.run(
+        [sys.executable, "-m", "convertible_bond.cli.strategy_backtest", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    help_text = completed.stdout
+    assert "down_reset_robust_edge" in help_text
+    assert "deviation" in help_text
+    assert "--holding-mode" not in help_text
+    assert "--selection-view" not in help_text
+    assert "机会分" not in help_text and "双低" not in help_text
+
+
+def test_backtest_pde_strategy_uses_pde_config_by_default(monkeypatch):
+    captured = {}
+
+    def fake_backtest(provider, bond_codes, **kwargs):
+        captured.update(kwargs)
+        return {"config": kwargs["config"]}
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.backtest_score_strategy",
+        fake_backtest,
+    )
+    result = backtest_pde_strategy(
+        object(),
+        ["113001.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 2, 28),
+    )
+    assert isinstance(captured["config"], PDEStrategyConfig)
+    assert result["config"].rank_signal == "down_reset_robust_edge"
 
 
 class StrategyFakeProvider(DataProvider):
@@ -533,7 +585,7 @@ def test_summary_includes_stability_block(monkeypatch):
 
 
 def test_strategy_template_resets_new_knobs_to_full_config():
-    """模板 = 完整可复现配置: 选券权重/现金收益不残留上次手动值。"""
+    """旧市场策略模板迁移为 PDE 估值策略，且参数完整归位。"""
     from convertible_bond.gui.controllers.strategy_backtest import (
         StrategyBacktestMixin, _STRATEGY_TEMPLATE_BASE)
 
@@ -553,17 +605,144 @@ def test_strategy_template_resets_new_knobs_to_full_config():
                 setattr(self, name, Var(""))
             self.v_st_view = Var("")
             self.v_st_summary = Var("")
+            self.v_st_template = Var("稳健打底")
             # 模拟残留态: 用户上次手动改过的新旋钮
             self.v_st_weighting = Var("等权全池")
             self.v_st_cash_yield = Var("0")
+            self.v_st_rank_signal = Var("下修优势")
+            self.v_st_min_reset_edge = Var("8")
 
     app = DummyApp()
     app._apply_strategy_template("稳健打底")
-    assert app.v_st_weighting.get() == "机会分排序"   # 随模板归位, 不残留
+    assert app.v_st_weighting.get() == "Top N 排序"   # 随模板归位, 不残留
     assert app.v_st_cash_yield.get() == "2.2"
+    assert app.v_st_rank_signal.get() == "估值偏差"
+    assert app.v_st_min_reset_edge.get() == "0"
     assert app.v_st_view.get() == "综合机会"
-    assert app.v_st_top_n.get() == "15"
-    assert app.v_st_max_price.get() == "120"
+    assert app.v_st_top_n.get() == "10"
+    assert app.v_st_max_deviation.get() == "0"
+    assert app.v_st_event_exit.get() is False
+    assert app.v_st_template.get() == "估值偏差"
+
+
+def test_strategy_gui_exposes_simplified_workflow_and_no_legacy_rank_controls():
+    import inspect
+
+    from convertible_bond.gui import constants
+    from convertible_bond.gui.controllers import strategy_run
+    from convertible_bond.gui.tabs import strategy as strategy_tab
+
+    assert constants.STRATEGY_TEMPLATE_NAMES == ("下修错定价", "估值偏差")
+    source = inspect.getsource(strategy_tab.build)
+    for legacy_text in (
+        "机会分", "双低", "等权全池", "选债规则", "持仓方式", "✓ 预检",
+    ):
+        assert legacy_text not in source
+    assert 'values=["下修机会", "估值偏差"]' in source
+    assert 'for name in ("概览", "持仓", "诊断", "对比")' in source
+    assert 'app.v_st_benchmark.set(True)' in source
+    run_source = inspect.getsource(strategy_run.StrategyRunMixin._run_strategy_backtest)
+    assert "compute_benchmark=True" in run_source
+    assert 'benchmark_index_code="000832.CSI"' in run_source
+    assert 'text=E("▶ 运行回测")' in source
+    assert "运行策略" not in source
+
+
+def test_down_reset_template_selects_pde_signal_and_wind_history():
+    from convertible_bond.gui.controllers.strategy_backtest import (
+        StrategyBacktestMixin, _STRATEGY_TEMPLATE_BASE)
+
+    class Var:
+        def __init__(self, value=""):
+            self.value = value
+
+        def set(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    app = StrategyBacktestMixin()
+    for name in _STRATEGY_TEMPLATE_BASE:
+        setattr(app, name, Var(""))
+    app.v_st_view = Var("")
+    app.v_st_summary = Var("")
+    app.v_st_template = Var("下修错定价")
+    app.v_st_history_mode = Var("标准")
+
+    app._apply_strategy_template("下修错定价")
+
+    assert app.v_st_rank_signal.get() == "稳健下修优势"
+    assert app.v_st_min_reset_edge.get() == "0"
+    assert app.v_st_history_mode.get() == "Wind高保真"
+    assert app.v_st_top_n.get() == "10"
+
+    app._apply_strategy_template("PDE估值偏差")  # 旧预设名称仍可迁移
+    assert app.v_st_rank_signal.get() == "估值偏差"
+    assert app.v_st_max_deviation.get() == "0"
+    assert app.v_st_history_mode.get() == "Wind高保真"
+
+
+def test_strategy_pricing_params_are_independent_from_single_bond_page():
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    app = StrategyBacktestMixin()
+    app.v_st_r = Var("2.2")
+    app.v_st_spread = Var("3")
+    app.v_st_p_down = Var("25")
+    app.v_st_distress_k = Var("5")
+    app.v_st_vol_window = Var("1M")
+    app.v_st_sigma_band = Var("15")
+    app.v_st_spread_band_bps = Var("100")
+    # 单债页故意放入完全不同的值，策略参数不应读取它们。
+    app.v_r = Var("99")
+    app.v_spread = Var("88")
+    app.v_p_down = Var("77")
+    app.v_dk = Var("66")
+    app.v_vol_window = Var("1Y")
+
+    params = app._strategy_pricing_params()
+    assert params["r"] == pytest.approx(0.022)
+    assert params["base_spread"] == pytest.approx(0.03)
+    assert params["p_down"] == pytest.approx(0.25)
+    assert params["distress_k"] == pytest.approx(0.05)
+    assert params["vol_window_days"] == 21
+    assert params["pde_signal_sigma_rel_band"] == pytest.approx(0.15)
+    assert params["pde_signal_spread_band"] == pytest.approx(0.01)
+
+
+def test_strategy_run_settings_record_effective_and_requested_data_sources():
+    from convertible_bond.batch_pricing import AdmissionFilterConfig
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    settings = StrategyBacktestMixin._strategy_run_settings(
+        codes=["113001.SH"],
+        start=date(2025, 1, 2),
+        end=date(2025, 2, 28),
+        source="Wind",
+        requested_source="Akshare",
+        template_name="下修错定价",
+        history_mode="Wind高保真",
+        gui_pool_mode="自选代码",
+        engine_pool_mode="static",
+        config=PDEStrategyConfig(),
+        admission_config=AdmissionFilterConfig(),
+        params={"r": 0.022, "p_down": 0.25},
+        precheck={},
+    )
+
+    assert settings["data_source"] == "Wind"
+    assert settings["requested_data_source"] == "Akshare"
+    assert settings["strategy"]["template"] == "下修错定价"
+    assert settings["strategy"]["strategy_type"] == "pde_down_reset"
+    assert settings["pricing"]["p_down"] == pytest.approx(0.25)
 
 
 def test_backtest_cache_history_end_never_extends_into_future():
@@ -1311,6 +1490,9 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                     "rebalance_freq": "M",
                     "top_n": 10,
                     "holding_mode": "pool",
+                    "rank_signal": "down_reset_robust_edge",
+                    "min_down_reset_edge_value": 1.5,
+                    "down_reset_event_exit": True,
                     "funding_mode": "full_invest",
                     "max_holdings": None,
                     "top_n_shortfall_policy": "renormalize",
@@ -1334,6 +1516,9 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                     },
                     "strategy": {
                         "top_n": 10,
+                        "rank_signal": "down_reset_robust_edge",
+                        "min_down_reset_edge_value": 1.5,
+                        "down_reset_event_exit": True,
                         "top_n_shortfall_policy": "cash",
                     },
                     "admission_filter": {
@@ -1348,6 +1533,8 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                         "M": 120,
                         "N": 400,
                         "vol_window_days": 21,
+                        "pde_signal_sigma_rel_band": 0.15,
+                        "pde_signal_spread_band": 0.01,
                     },
                 },
                 "periods": [{"start_date": date(2025, 5, 30)}],
@@ -1372,11 +1559,14 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
     archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
     latest_payload = json.loads(latest_path.read_text(encoding="utf-8"))
     assert archive_payload == latest_payload
-    assert archive_payload["schema_version"] == 2
+    assert archive_payload["schema_version"] == 3
     assert archive_payload["snapshot_id"] == info["snapshot_id"]
     assert archive_payload["meta"]["config"]["selection_view"] == "综合机会"
     # 三层字段进入快照 meta (P3a)
     assert archive_payload["meta"]["config"]["holding_mode"] == "pool"
+    assert archive_payload["meta"]["config"]["rank_signal"] == "down_reset_robust_edge"
+    assert archive_payload["meta"]["config"]["min_down_reset_edge_value"] == pytest.approx(1.5)
+    assert archive_payload["meta"]["config"]["down_reset_event_exit"] is True
     assert archive_payload["meta"]["config"]["funding_mode"] == "full_invest"
     assert archive_payload["meta"]["config"]["top_n_shortfall_policy"] == "renormalize"  # 兼容镜像
     assert archive_payload["meta"]["config"]["history_mode"] == "Wind高保真"
@@ -1386,9 +1576,65 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
         "113001.SH", "113002.SH",
     ]
     assert archive_payload["meta"]["run_settings"]["pricing"]["M"] == 120
+    assert archive_payload["meta"]["run_settings"]["pricing"]["pde_signal_sigma_rel_band"] == pytest.approx(0.15)
+    assert archive_payload["meta"]["run_settings"]["pricing"]["pde_signal_spread_band"] == pytest.approx(0.01)
+    assert archive_payload["meta"]["config"]["strategy_type"] == "pde_down_reset"
+    assert archive_payload["meta"]["model_settings"]["p_down"] == pytest.approx(0.25)
+    assert archive_payload["meta"]["admission_filter"]["min_credit_rating"] == "A+"
     assert archive_payload["result"]["run_settings"]["admission_filter"]["min_credit_rating"] == "A+"
     assert archive_payload["meta"]["period_count"] == 1
     assert "_snapshot_path" not in archive_payload["result"]
+
+
+def test_comparison_label_uses_snapshot_config_not_current_gui_state():
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    app = StrategyBacktestMixin()
+    app.v_st_template = Var("当前界面的其他策略")
+    app.v_st_view = Var("当前视图")
+    app.v_st_freq = Var("周")
+    app.v_st_top_n = Var("99")
+    app._strategy_compare_results = []
+    result = {
+        "_snapshot_id": "snapshot-a",
+        "start_date": date(2025, 1, 2),
+        "end_date": date(2025, 2, 28),
+        "config": {
+            "strategy_type": "pde_down_reset",
+            "rank_signal": "down_reset_robust_edge",
+            "rebalance_freq": "M",
+            "top_n": 10,
+            "history_mode": "Wind高保真",
+        },
+        "summary": {"final_equity": 1.1, "max_drawdown": 0.05},
+    }
+
+    app._record_strategy_comparison_result(result)
+
+    label = app._strategy_compare_results[0]["label"]
+    assert "下修机会" in label and "PDE下修错定价" not in label
+    assert "Wind 历史" in label
+    assert "Top10" in label
+    assert "当前界面" not in label and "Top99" not in label
+
+
+def test_old_snapshot_pde_config_is_upgraded_in_memory():
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    result = {
+        "config": {"rank_signal": "down_reset_robust_edge"},
+        "run_settings": {"history_mode": "Wind高保真"},
+    }
+    StrategyBacktestMixin._patch_snapshot_strategy_config(result)
+    assert result["config"]["strategy_type"] == "pde_down_reset"
+    assert result["config"]["history_mode"] == "Wind高保真"
 
 
 def test_delete_selected_comparison_clears_current_result_and_snapshot_files(tmp_path):
@@ -1579,7 +1825,12 @@ def test_strategy_result_tab_change_refreshes_selected_panel():
 
     app = DummyApp()
     for selected, expected in (
+        ("概览", ["insight", "chart", "idle"]),
+        ("持仓", ["selection", "table", "attribution", "idle"]),
+        ("诊断", ["risk", "data", "idle"]),
         ("总览", ["insight", "chart", "idle"]),
+        ("明细", ["selection", "table", "idle"]),
+        ("归因", ["attribution", "idle"]),
         ("风险", ["risk", "idle"]),
         ("稳健性", ["robustness", "idle"]),
         ("数据", ["data", "idle"]),
@@ -1638,8 +1889,8 @@ def test_strategy_snapshot_load_marks_result_tabs_dirty(tmp_path):
     app._load_strategy_backtest_snapshot(silent=True, render=False)
 
     assert app._last_strategy_bt_result["summary"]["final_equity"] == 1.0
-    assert "总览" in app._strategy_dirty_tabs
-    assert "数据" in app._strategy_dirty_tabs
+    assert "概览" in app._strategy_dirty_tabs
+    assert "诊断" in app._strategy_dirty_tabs
     assert len(app._strategy_compare_results) == 1
 
 
@@ -1824,6 +2075,24 @@ def test_write_strategy_backtest_csv_emits_all_sections(tmp_path, monkeypatch):
             break
         period_rows.append(r)
     assert len(period_rows) == len(result["periods"]) == 3
+    header = parsed[header_idx]
+    assert "cash_yield_return" in header
+    assert "average_cash_weight" in header
+    assert "rank_signal" in header
+    assert all(len(row) == len(header) for row in period_rows)
+    for marker in ("# positions", "# candidate_rows", "# rejection_rows"):
+        marker_rows = [i for i, row in enumerate(parsed) if row[:1] == [marker]]
+        if not marker_rows:
+            continue
+        section_idx = marker_rows[0]
+        section_header = parsed[section_idx + 1]
+        section_data = []
+        for row in parsed[section_idx + 2:]:
+            if not row or row[0].startswith("#"):
+                break
+            section_data.append(row)
+        assert section_data
+        assert all(len(row) == len(section_header) for row in section_data), marker
 
 
 def test_score_strategy_flushes_provider_disk_cache_each_period(monkeypatch):
@@ -1909,12 +2178,8 @@ def test_strategy_backtest_mixin_composition_integrity():
             f"聚合类缺少 UI 入口: {entry}")
 
 
-def test_strategy_logic_summary_text_reflects_weighting_mode():
-    """选债逻辑摘要: 机会分排序显示 TopN+留现金, 等权全池显示全候选+满仓摊回。
-
-    摘要行让筛选管线在配置阶段即可见 (选券权重决定 Top N 是否参与);
-    口径须与模型层三层结构 (选券 → 持仓 → 资金) 一致。
-    """
+def test_strategy_logic_summary_text_reflects_pde_signal_and_cash_policy():
+    """新 GUI 固定 PDE Top N + 缺口留现金，摘要不再出现旧视图/全池逻辑。"""
     from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     class Var:
@@ -1925,23 +2190,392 @@ def test_strategy_logic_summary_text_reflects_weighting_mode():
             return self._v
 
     app = StrategyBacktestMixin()
-    app.v_st_view = Var("低估候选")
-    app.v_st_weighting = Var("机会分排序")
     app.v_st_top_n = Var("10")
     app.v_st_cash_yield = Var("2.2")
+    app.v_st_rank_signal = Var("估值偏差")
+    app.v_st_min_reset_edge = Var("0")
 
     text = app._strategy_logic_summary_text()
-    assert "「低估候选」" in text
-    assert "前 10 只" in text
-    assert "留现金" in text and "2.2%/年" in text
-
-    app.v_st_weighting = Var("等权全池")
-    pool_text = app._strategy_logic_summary_text()
-    assert "全部候选" in pool_text
-    assert "Top N 不参与" in pool_text
-    assert "摊回" in pool_text
+    assert "估值偏差 < 0" in text
+    assert "Top 10 等权" in text
+    assert "缺口留现金（2.2%/年）" in text
+    assert "机会分" not in text and "等权全池" not in text
 
     # 输入半截非法 TopN 时摘要不崩溃 (实时 trace 下常见)
-    app.v_st_weighting = Var("机会分排序")
     app.v_st_top_n = Var("")
-    assert "前 N 只" in app._strategy_logic_summary_text()
+    assert "Top N 等权" in app._strategy_logic_summary_text()
+
+    app.v_st_top_n = Var("10")
+    app.v_st_rank_signal = Var("下修优势")
+    app.v_st_min_reset_edge = Var("1.5")
+    pde_text = app._strategy_logic_summary_text()
+    assert "下修优势" in pde_text
+    assert "下修优势 ≥ 1.5元" in pde_text
+
+    app.v_st_rank_signal = Var("稳健下修优势")
+    assert "稳健下修优势" in app._strategy_logic_summary_text()
+
+    app.v_st_rank_signal = Var("估值偏差")
+    assert "估值偏差" in app._strategy_logic_summary_text()
+
+
+def test_strategy_signal_text_distinguishes_pde_and_legacy_snapshots():
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    app = StrategyBacktestMixin()
+    assert app._strategy_signal_text({
+        "rank_signal": "down_reset_robust_edge", "rank_value": 1.25,
+    }) == "稳健 +1.25元"
+    assert app._strategy_signal_text({
+        "rank_signal": "deviation", "rank_value": -0.08,
+    }) == "偏差 -8.00%"
+    assert app._strategy_signal_text({"score": 12.3}) == "旧分 12.3"
+
+
+# ── rank_signal (B 层排序信号) 与入口 fail-fast ──────────────────────────
+
+
+def _rank_signal_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+    """构造排序信号分歧场景: 113001 最低估(score/deviation 最优), 113003 价格最低(双低最优)。
+
+    三只券溢价均为 0, 双低值 = 市价; 113001 偏差 -9.1%, 其余 -2%。
+    """
+    theo_bonus = {"113001.SH": 0.10, "113002.SH": 0.02, "113003.SH": 0.02}
+    reset_edge = {"113001.SH": 1.0, "113002.SH": 4.0, "113003.SH": 2.0}
+    robust_reset_edge = {"113001.SH": 0.5, "113002.SH": 1.0, "113003.SH": 3.0}
+    rows = []
+    for code in codes:
+        market = _latest(provider_arg.bond_history[code], valuation_date)
+        theo = market * (1.0 + theo_bonus[code])
+        rows.append({
+            "bond_code": code,
+            "bond_name": provider_arg.terms[code].sec_name,
+            "stock_code": provider_arg.terms[code].underlying_code,
+            "status": "ok",
+            "S0": market, "K": 100.0, "sigma": 0.30,
+            "theoretical_price": theo, "market_price": market,
+            "deviation": (market - theo) / theo,
+            "conversion_premium": 0.0,
+            "down_reset_edge_value": reset_edge[code],
+            "down_reset_robust_edge_value": robust_reset_edge[code],
+            "pde_down_reset_robust_status": "ok",
+            "effective_p_down_1y_prob": 0.20,
+            "implied_p_down_1y_prob": 0.10,
+            "pde_down_reset_signal_status": "ok",
+            "credit_rating": "AA+", "outstanding_balance": 10.0, "T": 3.0,
+        })
+    return rows
+
+
+@pytest.mark.parametrize("rank_signal, expected_first", [
+    ("score", "113001.SH"),        # 机会分降序: 最低估的 113001
+    ("deviation", "113001.SH"),    # 偏差升序: 同 113001 (-9.1% 最小)
+    ("double_low", "113003.SH"),   # 双低升序: 价格最低的 113003 (90+0)
+    ("down_reset_edge", "113002.SH"),  # 下修优势降序: 4 元的 113002
+    ("down_reset_robust_edge", "113003.SH"),  # 扰动后最差优势降序: 3 元的 113003
+])
+def test_rank_signal_reorders_candidates(monkeypatch, rank_signal, expected_first):
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _rank_signal_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(top_n=1, rank_signal=rank_signal),
+    )
+
+    period = result["periods"][0]
+    assert period["selected_codes"] == [expected_first]
+    assert period["rank_signal"] == rank_signal
+    assert result["config"]["rank_signal"] == rank_signal
+    first_candidate = period["candidate_rows"][0]
+    assert first_candidate["bond_code"] == expected_first
+    assert first_candidate["rank_signal"] == rank_signal
+    if rank_signal == "double_low":
+        assert first_candidate["rank_value"] == pytest.approx(90.0)
+    if rank_signal == "down_reset_edge":
+        assert first_candidate["rank_value"] == pytest.approx(4.0)
+    if rank_signal == "down_reset_robust_edge":
+        assert first_candidate["rank_value"] == pytest.approx(3.0)
+    if rank_signal in {"down_reset_edge", "down_reset_robust_edge"}:
+        assert result["config"]["strategy_type"] == "pde_down_reset"
+        position = period["positions"][0]
+        assert position["rank_signal"] == rank_signal
+        assert position["rank_value"] == pytest.approx(first_candidate["rank_value"])
+        assert position["effective_p_down_1y_prob"] == pytest.approx(0.20)
+        assert position["implied_p_down_1y_prob"] == pytest.approx(0.10)
+
+
+def test_pde_backtest_snapshot_round_trip_preserves_strategy_settings(monkeypatch, tmp_path):
+    """PDE 主入口跑出的结果可自动保存，并在新 GUI 实例中原样恢复。"""
+    from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
+
+    provider = StrategyFakeProvider()
+    for history in provider.bond_history.values():
+        history.insert(1, (date(2025, 1, 3), history[0][1]))
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _rank_signal_batch_price,
+    )
+    result = backtest_pde_strategy(
+        provider,
+        ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=PDEStrategyConfig(
+            top_n=2,
+            min_confidence=None,
+            exclude_risk_tags=(),
+            compute_benchmark=False,
+        ),
+    )
+    result["config"]["history_mode"] = "Wind高保真"
+    result["run_settings"] = {
+        "data_source": "Wind",
+        "requested_data_source": "akshare",
+        "history_mode": "Wind高保真",
+        "strategy": {
+            "template": "下修错定价",
+            **result["config"],
+        },
+        "pricing": {
+            "r": 0.022,
+            "base_spread": 0.03,
+            "distress_k": 0.05,
+            "p_down": 0.25,
+            "pde_signal_sigma_rel_band": 0.15,
+            "pde_signal_spread_band": 0.01,
+        },
+        "admission_filter": {
+            "min_outstanding_balance": 0.5,
+            "min_credit_rating": "A+",
+        },
+    }
+
+    class SnapshotApp(StrategyBacktestMixin):
+        def __init__(self, active_result=None):
+            self._last_strategy_bt_result = active_result
+            self._strategy_compare_results = []
+
+        def _strategy_snapshots_dir(self):
+            return tmp_path / "strategy_backtest_snapshots"
+
+        def _strategy_snapshot_path(self):
+            return tmp_path / "strategy_backtest_snapshot.json"
+
+    writer = SnapshotApp(result)
+    saved = writer._save_strategy_backtest_snapshot()
+    payload = json.loads(saved["path"].read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 3
+    assert payload["meta"]["config"]["strategy_type"] == "pde_down_reset"
+    assert payload["meta"]["config"]["rank_signal"] == "down_reset_robust_edge"
+    assert payload["meta"]["run_settings"]["pricing"]["p_down"] == pytest.approx(0.25)
+
+    reader = SnapshotApp()
+    reader._load_strategy_backtest_snapshot(silent=True, render=False)
+    loaded = reader._last_strategy_bt_result
+    assert loaded["config"]["strategy_type"] == "pde_down_reset"
+    assert loaded["config"]["history_mode"] == "Wind高保真"
+    assert loaded["run_settings"]["strategy"]["template"] == "下修错定价"
+    assert loaded["periods"][0]["selected_codes"] == ["113003.SH", "113002.SH"]
+    assert loaded["periods"][0]["candidate_rows"][0]["rank_signal"] == (
+        "down_reset_robust_edge"
+    )
+
+
+def test_pde_deviation_signal_does_not_use_opportunity_score_gate(monkeypatch):
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _rank_signal_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=1,
+            rank_signal="deviation",
+            min_score=999.0,
+            max_deviation=0.0,
+            min_confidence=None,
+            exclude_risk_tags=(),
+        ),
+    )
+
+    assert result["periods"][0]["selected_codes"] == ["113001.SH"]
+
+
+def test_down_reset_edge_rank_signal_enables_pde_signal_pricing(monkeypatch):
+    provider = StrategyFakeProvider()
+    seen_compute_flags = []
+
+    def capturing_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+        seen_compute_flags.append(kwargs.get("compute_pde_signals"))
+        return _rank_signal_batch_price(
+            provider_arg,
+            codes,
+            valuation_date=valuation_date,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        capturing_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=1,
+            rank_signal="down_reset_edge",
+            min_down_reset_edge_value=1.5,
+        ),
+    )
+
+    assert seen_compute_flags == [True]
+    assert result["periods"][0]["selected_codes"] == ["113002.SH"]
+    assert result["config"]["min_down_reset_edge_value"] == pytest.approx(1.5)
+
+
+def test_down_reset_strategy_exits_after_resolution_event(monkeypatch, tmp_path):
+    provider = StrategyFakeProvider()
+    provider.bond_history["113001.SH"] = [
+        (date(2025, 1, 2), 100.0),
+        (date(2025, 1, 15), 105.0),
+        (date(2025, 1, 16), 106.0),
+        (date(2025, 1, 20), 108.0),
+        (date(2025, 1, 31), 110.0),
+    ]
+    provider.event_store = CBEventStore(tmp_path / "events.json")
+    provider.event_store.add_many([
+        CBEvent(
+            bond_code="113001.SH",
+            event_date=date(2025, 1, 15),
+            event_type="down_reset_approved",
+            raw_title="董事会通过向下修正转股价格议案",
+        )
+    ])
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _rank_signal_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=1,
+            rank_signal="down_reset_robust_edge",
+            cash_yield_rate=0.365,
+            min_confidence=None,
+            exclude_risk_tags=(),
+            compute_benchmark=False,
+        ),
+    )
+
+    period = result["periods"][0]
+    position = period["positions"][0]
+    assert position["exit_date"] == date(2025, 1, 16)
+    assert position["exit_reason"] == "down_reset_event"
+    assert position["exit_event_type"] == "down_reset_approved"
+    post_exit_cash = 1.06 * 0.365 * 15 / 365
+    assert position["price_return"] == pytest.approx(0.06)
+    assert position["post_exit_cash_return"] == pytest.approx(post_exit_cash)
+    assert period["period_return"] == pytest.approx(0.06 + post_exit_cash)
+    assert result["summary"]["final_equity"] == pytest.approx(1.06 + post_exit_cash)
+    jan20_equity = next(
+        row["equity"] for row in result["equity_curve"]
+        if row["date"] == date(2025, 1, 20)
+    )
+    assert jan20_equity == pytest.approx(1.06 * (1.0 + 0.365 * 4 / 365))
+    assert period["event_exit_count"] == 1
+    assert period["event_exit_turnover"] == pytest.approx(1.0)
+    assert period["average_cash_weight"] == pytest.approx(15 / 29)
+    assert period["end_cash_weight"] == pytest.approx(1.0)
+    assert result["summary"]["total_event_exits"] == 1
+    assert result["summary"]["avg_cash_weight"] == pytest.approx(15 / 29)
+
+    hold_to_rebalance = backtest_score_strategy(
+        provider,
+        ["113001.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=1,
+            rank_signal="down_reset_robust_edge",
+            down_reset_event_exit=False,
+            min_confidence=None,
+            exclude_risk_tags=(),
+            compute_benchmark=False,
+            mark_to_market=False,
+        ),
+    )
+    assert hold_to_rebalance["periods"][0]["period_return"] == pytest.approx(0.10)
+    assert hold_to_rebalance["periods"][0]["event_exit_count"] == 0
+
+
+def test_config_summary_records_benchmark_index_code(monkeypatch):
+    """benchmark_index_code 应回显进 result['config'] (复现口径); 指数取不到时优雅缺省。"""
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _rank_signal_batch_price,
+    )
+
+    result = backtest_score_strategy(
+        provider,
+        ["113001.SH", "113002.SH"],
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(top_n=1, benchmark_index_code="000832.CSI"),
+    )
+
+    assert result["config"]["benchmark_index_code"] == "000832.CSI"
+    # fake provider 无该指数历史 → 第二基准曲线优雅缺省
+    assert result["index_benchmark_curve"] == []
+    assert result["summary"]["index_benchmark_total_return"] is None
+
+
+@pytest.mark.parametrize("bad_config", [
+    {"rank_signal": "momentum"},
+    {"holding_mode": "cap_weight"},
+    {"funding_mode": "margin"},
+    {"exposure_mode": "kelly"},
+    {"execution_timing": "vwap"},
+])
+def test_backtest_rejects_invalid_enums_before_any_pricing(monkeypatch, bad_config):
+    """非法枚举必须在任何取数/定价发生前抛 ValueError (防白烧 Wind 配额)。"""
+    provider = StrategyFakeProvider()
+    calls = []
+
+    def counting_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
+        calls.append(valuation_date)
+        return []
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        counting_batch_price,
+    )
+
+    with pytest.raises(ValueError):
+        backtest_score_strategy(
+            provider,
+            ["113001.SH"],
+            start_date=date(2025, 1, 2),
+            end_date=date(2025, 1, 31),
+            config=ScoreStrategyConfig(**bad_config),
+        )
+    assert calls == []

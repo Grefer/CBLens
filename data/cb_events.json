@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "last_sync_at": "2026-06-12T14:25:55",
+    "last_sync_at": "2026-08-20T19:47:14",
     "synced_at_by_code": {
       "110025.SH": "2026-05-07T22:40:05",
       "110073.SH": "2026-05-27T06:12:45",
@@ -21,7 +21,7 @@
       "110098.SH": "2026-05-27T06:12:45",
       "110099.SH": "2026-05-27T06:12:45",
       "110100.SH": "2026-05-27T06:12:45",
-      "111000.SH": "2026-06-05T17:06:27",
+      "111000.SH": "2026-08-18T19:26:55",
       "111001.SH": "2026-05-27T06:12:45",
       "111002.SH": "2026-05-27T06:12:45",
       "111003.SH": "2026-05-27T06:12:45",
@@ -270,6 +270,7 @@
       "123267.SZ": "2026-05-27T06:12:45",
       "123268.SZ": "2026-05-27T06:12:45",
       "123269.SZ": "2026-05-27T06:12:45",
+      "123282.SZ": "2026-08-20T19:47:14",
       "127017.SZ": "2026-05-27T06:12:45",
       "127018.SZ": "2026-05-27T06:12:45",
       "127024.SZ": "2026-05-27T06:12:45",
@@ -349,7 +350,7 @@
       "128142.SZ": "2026-05-27T06:12:45",
       "145905.SH": "2026-06-12T14:25:55"
     },
-    "updated_at": "2026-06-12T14:25:55"
+    "updated_at": "2026-08-20T19:47:14"
   },
   "events": [
     {
@@ -55191,6 +55192,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2025-08-20/1224519562.PDF"
     },
     {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-08-21",
+      "event_date": "2025-08-21",
+      "event_price": 20.1,
+      "event_type": "down_reset_proposed",
+      "note": null,
+      "parsed_status": "提议下修",
+      "raw_title": "起帆电缆关于董事会提议向下修正“起帆转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2025-08-22/1224532452.PDF"
+    },
+    {
       "bond_code": "113046.SH",
       "commitment_months": null,
       "effective_end": "2025-08-25",
@@ -56855,6 +56870,20 @@
       "raw_title": "北京市金杜（广州）律师事务所关于上海科华生物工程股份有限公司可转换公司债券回售的法律意见书",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2025-09-08/1224642245.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-09-09",
+      "event_date": "2025-09-09",
+      "event_price": 20.1,
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "起帆电缆关于向下修正“起帆转债”转股价格暨转股停牌的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2025-09-10/1224646510.PDF"
     },
     {
       "bond_code": "113636.SH",
@@ -59683,6 +59712,20 @@
       "raw_title": "福建福能股份有限公司2025年向不特定对象发行可转换公司债券信用评级报告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2025-10-09/1224697639.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-10-09",
+      "event_date": "2025-10-09",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "起帆电缆关于可转债转股结果暨股份变动的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2025-10-10/1224701504.PDF"
     },
     {
       "bond_code": "111003.SH",
@@ -70857,6 +70900,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2025-12-31/1224910259.PDF"
     },
     {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-01-05",
+      "event_date": "2026-01-05",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "起帆电缆关于可转债转股结果暨股份变动的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-01-06/1224918246.PDF"
+    },
+    {
       "bond_code": "111001.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -79523,6 +79580,20 @@
       "url": "http://static.cninfo.com.cn/finalpage/2026-03-31/1225054259.PDF"
     },
     {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-04-01",
+      "event_date": "2026-04-01",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "起帆电缆关于可转债转股结果暨股份变动的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-04-02/1225070658.PDF"
+    },
+    {
       "bond_code": "111001.SH",
       "commitment_months": 3,
       "effective_end": "2026-06-30",
@@ -83665,6 +83736,20 @@
       "raw_title": "关于预计触发文科转债转股价格向下修正条件的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-04-18/1225116838.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": 6,
+      "effective_end": "2026-10-20",
+      "effective_start": "2026-04-21",
+      "event_date": "2026-04-20",
+      "event_price": null,
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "起帆电缆关于不提前赎回“起帆转债”的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-04-21/1225126892.PDF"
     },
     {
       "bond_code": "123129.SZ",
@@ -93605,6 +93690,90 @@
       "raw_title": "关于“洁美转债”恢复转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-05-27/1225331071.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": "2026-06-16",
+      "effective_start": "2026-06-11",
+      "event_date": "2026-06-11",
+      "event_price": null,
+      "event_type": "suspension",
+      "note": null,
+      "parsed_status": "停牌",
+      "raw_title": "起帆电缆关于实施权益分派时“起帆转债”转股连续停牌的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365049.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-17",
+      "event_date": "2026-06-17",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "起帆电缆关于“起帆转债”转股价格调整的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-18/1225375756.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "上海起帆电缆股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225383526.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "起帆电缆关于起帆转债2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225383522.PDF"
+    },
+    {
+      "bond_code": "111000.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-01",
+      "event_date": "2026-07-01",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "起帆电缆关于可转债转股结果暨股份变动的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402985.PDF"
+    },
+    {
+      "bond_code": "123282.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-12",
+      "event_date": "2026-08-12",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "宁波震裕科技股份有限公司向不特定对象发行可转换公司债券信用评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-13/1225470846.PDF"
     }
   ]
 }

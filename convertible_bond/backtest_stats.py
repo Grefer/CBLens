@@ -155,3 +155,97 @@ def summarize_stability(roll: list[float]) -> dict | None:
         "rolling_sharpe_pct_positive": float((arr > 0).mean()),
         "n_windows": int(arr.size),
     }
+
+
+# ── 多重检验校正: PSR / Deflated Sharpe (Bailey & López de Prado) ──────────
+#
+# 参数扫描便宜之后, 几十组变体里"总有一组好看"——最优变体的 Sharpe 必须为
+# 选择偏差付费。DSR = PSR(SR*), 其中 SR* 是"N 组零技能试验的期望最大 Sharpe"。
+# 只用 stdlib NormalDist + numpy, 维持本模块零 scipy 依赖。
+
+_EULER_GAMMA = 0.5772156649015329
+
+
+def _norm():
+    from statistics import NormalDist
+    return NormalDist()
+
+
+def probabilistic_sharpe(
+    returns,
+    *,
+    sr_benchmark: float = 0.0,
+    rf_per_period: float = 0.0,
+) -> float | None:
+    """PSR: 考虑样本长度/偏度/峰度后, 真实 (每期) Sharpe 超过基准值的概率。
+
+    ``sr_benchmark`` 与内部 SR 同为**每期非年化**口径。样本 < 4 或方差为零返回 None。
+    """
+    r = _finite_array(returns)
+    if r.size < 4:
+        return None
+    sd = float(r.std(ddof=1))
+    if sd <= _STD_EPS:
+        return None
+    sr = float((r.mean() - rf_per_period) / sd)
+    centered = r - r.mean()
+    m2 = float(np.mean(centered ** 2))
+    if m2 <= _STD_EPS:
+        return None
+    skew = float(np.mean(centered ** 3) / m2 ** 1.5)
+    kurt = float(np.mean(centered ** 4) / m2 ** 2)   # 非超额峰度 (正态=3)
+    denom = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr
+    if denom <= 0:
+        return None   # 极端高矩下方差近似失效, 不硬给数
+    z = (sr - sr_benchmark) * np.sqrt(r.size - 1.0) / np.sqrt(denom)
+    return float(_norm().cdf(float(z)))
+
+
+def expected_max_sharpe(trial_sharpes) -> float | None:
+    """N 组零技能独立试验的期望最大 (每期) Sharpe: sqrt(V[SR])·((1-γ)Z⁻¹(1-1/N)+γZ⁻¹(1-1/(Ne)))。
+
+    ``trial_sharpes`` 为全部变体的每期非年化 Sharpe。N < 2 时无法估计试验间方差, 返回 None。
+    """
+    s = _finite_array(trial_sharpes)
+    n = int(s.size)
+    if n < 2:
+        return None
+    var = float(s.var(ddof=1))
+    if var <= 0:
+        return 0.0
+    nd = _norm()
+    e = float(np.e)
+    return float(np.sqrt(var) * (
+        (1.0 - _EULER_GAMMA) * nd.inv_cdf(1.0 - 1.0 / n)
+        + _EULER_GAMMA * nd.inv_cdf(1.0 - 1.0 / (n * e))
+    ))
+
+
+def deflated_sharpe(
+    best_returns,
+    trial_sharpes,
+    *,
+    rf_per_period: float = 0.0,
+) -> dict | None:
+    """最优变体的 Deflated Sharpe: 为"从 N 组里挑最好"的选择偏差付费后仍为正的概率。
+
+    ``best_returns`` 为最优变体的每期收益序列; ``trial_sharpes`` 为**全部**变体的
+    每期非年化 Sharpe (含最优)。DSR = PSR(SR*), ≥0.95 常作"非数据挖掘产物"的门槛。
+    样本或试验数不足时返回 None。
+    """
+    sr_star = expected_max_sharpe(trial_sharpes)
+    if sr_star is None:
+        return None
+    dsr = probabilistic_sharpe(
+        best_returns, sr_benchmark=sr_star, rf_per_period=rf_per_period)
+    if dsr is None:
+        return None
+    r = _finite_array(best_returns)
+    sd = float(r.std(ddof=1))
+    return {
+        "dsr": dsr,
+        "sr_best": float((r.mean() - rf_per_period) / sd) if sd > _STD_EPS else None,
+        "sr_star": sr_star,
+        "n_trials": int(_finite_array(trial_sharpes).size),
+        "n_obs": int(r.size),
+    }

@@ -1,7 +1,7 @@
 """📈 历史回测 — 单债"模型 vs 市场"偏差复盘.
 
 从原 backtest.py 拆分: 本模块只保留单只转债的历史理论价 vs 市场价偏差回测;
-基于机会分的多债选债策略回测见 strategy_backtest.py。两个 mixin 都混入 CBPricerApp。
+基于 PDE 错定价的多债策略回测见 strategy_backtest.py。两个 mixin 都混入 CBPricerApp。
 """
 from __future__ import annotations
 

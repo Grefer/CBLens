@@ -58,6 +58,21 @@ BATCH_RESULT_COLUMNS = [
     "model_signal_status",
     "no_down_price",
     "down_reset_uplift",
+    "implied_p_down",
+    "effective_p_down_1y_prob",
+    "implied_p_down_1y_prob",
+    "p_down_gap",
+    "down_reset_probability_gap",
+    "down_reset_sensitivity",
+    "down_reset_edge_value",
+    "down_reset_edge_pct",
+    "down_reset_robust_edge_value",
+    "down_reset_edge_scenario_range",
+    "down_reset_edge_worst_sigma",
+    "down_reset_edge_worst_spread",
+    "down_reset_edge_scenario_count",
+    "pde_down_reset_robust_status",
+    "pde_down_reset_signal_status",
     "sensitivity_status",
     "review_bucket",
     "review_notes",
@@ -970,11 +985,20 @@ def _csv_value(row: dict, column: str):
         return ""
     if isinstance(value, float) and math.isnan(value):
         return ""
-    if column in {"deviation", "conversion_premium", "model_premium_to_parity"}:
+    if column in {
+        "deviation", "conversion_premium", "model_premium_to_parity",
+        "effective_p_down_1y_prob", "implied_p_down_1y_prob",
+        "down_reset_probability_gap", "down_reset_edge_pct",
+    }:
         return f"{float(value):.6f}" if value != "" else ""
     if column == "undervaluation_rate":
         return f"{float(value):.6f}" if value != "" else ""
-    if column in {"parity", "opportunity_score"}:
+    if column in {
+        "parity", "opportunity_score", "implied_p_down", "p_down_gap",
+        "down_reset_sensitivity", "down_reset_edge_value",
+        "down_reset_robust_edge_value", "down_reset_edge_scenario_range",
+        "down_reset_edge_worst_sigma", "down_reset_edge_worst_spread",
+    }:
         return f"{float(value):.4f}" if value != "" else ""
     if column == "risk_tags" and isinstance(value, list):
         return "|".join(str(tag) for tag in value)
@@ -1001,6 +1025,11 @@ def _restore_result_row(row: dict) -> dict:
         "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
         "conversion_premium", "model_premium_to_parity", "opportunity_score",
         "undervaluation_rate", "no_down_price", "down_reset_uplift",
+        "implied_p_down", "effective_p_down_1y_prob", "implied_p_down_1y_prob",
+        "p_down_gap", "down_reset_probability_gap", "down_reset_sensitivity",
+        "down_reset_edge_value", "down_reset_edge_pct", "down_reset_robust_edge_value",
+        "down_reset_edge_scenario_range", "down_reset_edge_worst_sigma",
+        "down_reset_edge_worst_spread",
     ):
         if key in restored and restored[key] is None:
             restored[key] = float("nan")

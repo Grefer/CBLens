@@ -595,7 +595,102 @@ class TestImpliedVol:
         assert np.isnan(iv), "超范围目标价应返回 NaN"
 
 
-# ── 10. 希腊值基本约束 ─────────────────────────────────────
+# ── 10. 隐含下修强度与敏感度 ───────────────────────────────
+class TestImpliedPDown:
+
+    @pytest.fixture
+    def reset_pricer(self):
+        return UniversalCBPricer(
+            S0=35.0,
+            K=52.77,
+            current_date=date(2024, 1, 1),
+            maturity_date=date(2027, 7, 30),
+            issue_date=date(2021, 7, 30),
+            conversion_start_date=date(2022, 2, 6),
+            redemption_price=107.0,
+        )
+
+    def test_implied_p_down_round_trip(self, reset_pricer):
+        p_down_true = 0.35
+        target = reset_pricer.price(
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            p_down=p_down_true,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+
+        implied = reset_pricer.solve_implied_p_down(
+            target_price=target,
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+
+        assert implied == pytest.approx(p_down_true, abs=2e-3)
+
+    def test_implied_p_down_out_of_range_returns_nan(self, reset_pricer):
+        no_down_price = reset_pricer.price(
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            p_down=0.0,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+
+        implied = reset_pricer.solve_implied_p_down(
+            target_price=no_down_price - 5.0,
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+
+        assert np.isnan(implied)
+
+    def test_down_reset_sensitivity_is_per_one_percentage_point(self, reset_pricer):
+        sensitivity = reset_pricer.down_reset_sensitivity(
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            p_down=0.35,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+        base = reset_pricer.price(
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            p_down=0.35,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+        bumped = reset_pricer.price(
+            sigma=0.30,
+            r=0.022,
+            base_spread=0.03,
+            p_down=0.36,
+            distress_k=0.05,
+            M=120,
+            N=350,
+        )
+
+        assert sensitivity > 0
+        assert sensitivity == pytest.approx(bumped - base, abs=1e-10)
+
+
+# ── 11. 希腊值基本约束 ─────────────────────────────────────
 class TestGreeks:
 
     @pytest.fixture

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from tkinter import filedialog, messagebox
 
-from ...strategy_backtest import write_strategy_backtest_csv
+from ...strategy_backtest import strategy_type_for_rank_signal, write_strategy_backtest_csv
 
 from .strategy_common import _strategy_snapshot_jsonable, _strategy_snapshot_object_hook
 
@@ -31,13 +31,17 @@ class StrategySnapshotMixin:
         payload = self._build_strategy_snapshot_payload(result, saved_at=saved_at)
         encoded = _strategy_snapshot_jsonable(payload)
         config = payload.get("meta", {}).get("config") or {}
+        strategy_type = str(config.get("strategy_type") or "legacy")
         freq = config.get("rebalance_freq", "M")
         top_n = config.get("top_n", "?")
         ts = saved_at.strftime("%Y%m%d-%H%M%S")
         start = payload.get("meta", {}).get("start_date", "")
         end = payload.get("meta", {}).get("end_date", "")
         snapshot_id = str(payload.get("snapshot_id") or "")[:12]
-        fname = f"strategy_backtest_{start}_{end}_{freq}_top{top_n}_{ts}_{snapshot_id}.json"
+        fname = (
+            f"strategy_backtest_{strategy_type}_{start}_{end}_{freq}_top{top_n}_"
+            f"{ts}_{snapshot_id}.json"
+        )
         path = snap_dir / fname
         self._write_strategy_snapshot_json(path, encoded)
         latest = self._strategy_snapshot_path()
@@ -62,21 +66,22 @@ class StrategySnapshotMixin:
         config = clean_result.get("config") or {}
         run_settings = clean_result.get("run_settings") or {}
         summary = clean_result.get("summary") or {}
+        try:
+            strategy_type = config.get("strategy_type") or strategy_type_for_rank_signal(
+                config.get("rank_signal")
+            )
+        except ValueError:
+            strategy_type = "legacy"
+        snapshot_config = dict(config)
+        snapshot_config["strategy_type"] = strategy_type
         meta = {
             "snapshot_id": snapshot_id,
             "start_date": clean_result.get("start_date"),
             "end_date": clean_result.get("end_date"),
-            "config": {
-                "rebalance_freq": config.get("rebalance_freq"),
-                "top_n": config.get("top_n"),
-                "holding_mode": config.get("holding_mode"),
-                "funding_mode": config.get("funding_mode"),
-                "max_holdings": config.get("max_holdings"),
-                "top_n_shortfall_policy": config.get("top_n_shortfall_policy"),  # 兼容旧快照
-                "selection_view": config.get("selection_view"),
-                "history_mode": config.get("history_mode"),
-            },
+            "config": snapshot_config,
             "run_settings": run_settings,
+            "model_settings": dict(run_settings.get("pricing") or {}),
+            "admission_filter": dict(run_settings.get("admission_filter") or {}),
             "summary": {
                 "final_equity": summary.get("final_equity"),
                 "total_return": summary.get("total_return"),
@@ -88,7 +93,7 @@ class StrategySnapshotMixin:
             "equity_curve_points": len(clean_result.get("equity_curve") or []),
         }
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "snapshot_id": snapshot_id,
             "saved_at": saved_at,
             "meta": meta,
@@ -167,6 +172,7 @@ class StrategySnapshotMixin:
                 if dedupe_key in seen_snapshot_keys:
                     continue
                 seen_snapshot_keys.add(dedupe_key)
+                self._patch_snapshot_strategy_config(result)
                 self._patch_snapshot_drawdown(result)
                 # 记录快照文件路径 (用于删除)
                 result["_snapshot_id"] = dedupe_key
@@ -203,6 +209,24 @@ class StrategySnapshotMixin:
             return str(snapshot_id)
         clean_result = cls._strategy_snapshot_result_for_save(result)
         return cls._strategy_snapshot_id(_strategy_snapshot_jsonable(clean_result))
+
+    @staticmethod
+    def _patch_snapshot_strategy_config(result):
+        """为 schema 1/2 快照补齐策略类型和历史口径，不改动原结果。"""
+        if not isinstance(result, dict):
+            return
+        config = dict(result.get("config") or {})
+        try:
+            config.setdefault(
+                "strategy_type",
+                strategy_type_for_rank_signal(config.get("rank_signal")),
+            )
+        except ValueError:
+            config.setdefault("strategy_type", "legacy")
+        run_settings = result.get("run_settings") or {}
+        if not config.get("history_mode") and run_settings.get("history_mode"):
+            config["history_mode"] = run_settings.get("history_mode")
+        result["config"] = config
 
     @staticmethod
     def _patch_snapshot_drawdown(result):
@@ -267,7 +291,7 @@ class StrategySnapshotMixin:
 
     def _export_strategy_backtest_csv(self):
         if not self._last_strategy_bt_result:
-            messagebox.showinfo("提示", "请先运行策略回测")
+            messagebox.showinfo("提示", "请先完成一次回测")
             return
         path = filedialog.asksaveasfilename(
             title="导出策略回测逐期摘要",

@@ -229,6 +229,7 @@ def resolve_down_reset(
     overrides: DownResetOverrides | None = None,
     *,
     valuation_date: date | None = None,
+    event_store=None,
 ) -> ResolvedDownReset:
     """合并条款 + 事件层, 给 pricer 一组现成参数.
 
@@ -240,6 +241,7 @@ def resolve_down_reset(
       5. 无 (block_until = None, 即不屏蔽)
 
     p_scale: 事件层 ``p_scale_after_cooldown`` 优先, 否则用 ``terms.down_reset_p_scale``.
+    ``event_store`` 允许历史 provider/CLI 使用自定义事件文件; 缺省仍读取项目事件表。
     """
     raw_ov = (overrides or default_overrides()).get(bond_code) or {}
     announce_date = to_date(raw_ov.get("announce_date")) if raw_ov else None
@@ -260,7 +262,11 @@ def resolve_down_reset(
     down_events = []
     try:
         from .cb_events import events_for_down_reset
-        down_events = events_for_down_reset(bond_code, through_date=valuation_date)
+        down_events = events_for_down_reset(
+            bond_code,
+            store=event_store,
+            through_date=valuation_date,
+        )
     except Exception:
         down_events = []
     if announce_date is None:

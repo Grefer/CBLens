@@ -26,17 +26,14 @@ DEFAULT_CREDIT_SPREAD_PCT = 3.0
 EVENT_SYNC_STALE_HOURS = 24
 
 
-# 策略页选债规则: 只保留对"系统化买入"有意义的规则 (剔除"需复核")
-STRATEGY_SELECTION_VIEWS = ("综合机会", "低估候选", "转股折价")
-# 策略页顶部策略方案的展示顺序; "自定义" 表示完全手动
-STRATEGY_TEMPLATE_NAMES = ("自定义", "低估轮动", "折价套利", "稳健打底")
+# 新策略页只暴露模型错定价策略；旧批量视图常量保留给历史预设兼容。
+STRATEGY_SELECTION_VIEWS = ("综合机会",)
+STRATEGY_TEMPLATE_NAMES = ("下修错定价", "估值偏差")
 STRATEGY_POOL_MODES = ("本地全市场", "当前筛选结果", "自选代码")
 STRATEGY_HISTORY_MODES = ("标准", "Wind高保真")
 STRATEGY_TEMPLATE_DESCRIPTIONS = {
-    "自定义": "保留当前手动参数\n适合在已有结果上继续微调",
-    "低估轮动": "月频 · Top 10 · 低估候选\n转股溢价 ≤ 30%",
-    "折价套利": "周频 · Top 10 · 转股折价\n转股溢价 ≤ 5%",
-    "稳健打底": "月频 · Top 15 · 综合机会\n价格 ≤ 120 · 转股溢价 ≤ 20%",
+    "下修错定价": "选择下修价值被低估且情景扰动后仍有优势的转债",
+    "估值偏差": "选择市价低于模型理论价的转债",
 }
 STRATEGY_VIEW_DESCRIPTIONS = {
     "综合机会": "平衡低估程度、机会分和风险标签\n默认稳健视图",
@@ -49,9 +46,56 @@ STRATEGY_POOL_DESCRIPTIONS = {
     "自选代码": "手动粘贴或导入一组转债代码\n适合小组合复盘",
 }
 STRATEGY_HISTORY_DESCRIPTIONS = {
-    "标准": "推荐 · 本地条款修正 + 公告事件回放\n离线可跑, 适合日常复盘",
-    "Wind高保真": "Wind 按估值日实时查询历史条款\n可信度最高, 需 Wind 接口且较慢",
+    "标准": "快速诊断 · 本地条款修正 + 公告事件回放\n离线可跑, 最终结论需高保真复核",
+    "Wind高保真": "推荐 · Wind 按估值日查询历史条款\n用于正式策略回测, 速度较慢",
 }
+
+STRATEGY_TEMPLATE_LEGACY_ALIASES = {
+    "PDE下修错定价": "下修错定价",
+    "PDE估值偏差": "估值偏差",
+    "自定义": "下修错定价",
+    "自定义PDE": "下修错定价",
+    "低估轮动": "估值偏差",
+    "折价套利": "估值偏差",
+    "稳健打底": "估值偏差",
+}
+
+STRATEGY_PDE_RANK_SIGNAL_LABELS = (
+    "稳健下修优势",
+    "下修优势",
+    "估值偏差",
+)
+STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES = {
+    "": "稳健下修优势",
+    "PDE稳健下修优势": "稳健下修优势",
+    "PDE下修优势": "下修优势",
+    "PDE估值偏差": "估值偏差",
+    "机会分": "估值偏差",
+    "双低": "估值偏差",
+    "score": "估值偏差",
+    "double_low": "估值偏差",
+    "down_reset_robust_edge": "稳健下修优势",
+    "down_reset_edge": "下修优势",
+    "deviation": "估值偏差",
+}
+
+
+def normalize_pde_strategy_template(value: str | None) -> str:
+    name = str(value or "").strip()
+    name = STRATEGY_TEMPLATE_LEGACY_ALIASES.get(name, name)
+    return name if name in STRATEGY_TEMPLATE_NAMES else "下修错定价"
+
+
+def normalize_pde_rank_signal_label(value: str | None) -> str:
+    label = str(value or "").strip()
+    label = STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES.get(label, label)
+    return (
+        label
+        if label in STRATEGY_PDE_RANK_SIGNAL_LABELS
+        else "稳健下修优势"
+    )
+
+
 STRATEGY_HISTORY_LEGACY_ALIASES = {
     "快速": "标准",
     "Wind防未来": "Wind高保真",

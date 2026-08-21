@@ -34,7 +34,9 @@ from .batch_pricing import (
 )
 from .backtest import backtest_theoretical_price
 from .strategy_backtest import (
+    PDEStrategyConfig,
     ScoreStrategyConfig,
+    backtest_pde_strategy,
     backtest_score_strategy,
     build_rebalance_schedule,
     write_strategy_backtest_csv,
@@ -145,7 +147,9 @@ __all__ = [
     "summarize_exclusions",
     "write_batch_results_csv",
     "backtest_theoretical_price",
+    "PDEStrategyConfig",
     "ScoreStrategyConfig",
+    "backtest_pde_strategy",
     "backtest_score_strategy",
     "build_rebalance_schedule",
     "write_strategy_backtest_csv",

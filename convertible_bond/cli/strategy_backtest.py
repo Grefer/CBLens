@@ -1,4 +1,4 @@
-"""机会分选债策略回测.
+"""CBLens 错定价策略回测.
 
 用法:
     python -m convertible_bond.cli.strategy_backtest --start 2024-01-01 --end 2025-12-31
@@ -13,7 +13,6 @@ from pathlib import Path
 
 from ..batch_pricing import (
     AdmissionFilterConfig,
-    BATCH_REVIEW_VIEWS,
     DEFAULT_MIN_CREDIT_RATING,
     DEFAULT_MIN_OUTSTANDING_BALANCE,
     build_batch_provider,
@@ -29,8 +28,8 @@ from ..historical_terms import (
     project_terms_patches_path,
 )
 from ..strategy_backtest import (
-    ScoreStrategyConfig,
-    backtest_score_strategy,
+    PDEStrategyConfig,
+    backtest_pde_strategy,
     write_strategy_backtest_csv,
 )
 
@@ -77,12 +76,19 @@ def main() -> int:
         else -1.0
     )
     parser = argparse.ArgumentParser(
-        description="按 CBLens 机会分选债并做固定频率调仓回测",
+        description="按 CBLens 下修错定价或估值偏差做定期调仓回测",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("--source", default="akshare", choices=["wind", "akshare", "csv"],
                         help="动态行情数据源 (默认 akshare)")
+    parser.add_argument(
+        "--history-mode",
+        default="standard",
+        choices=["standard", "wind-high-fidelity"],
+        help="历史条款口径: standard=本地修正; "
+             "wind-high-fidelity=Wind tradeDate历史截面 (正式结论推荐)",
+    )
     parser.add_argument("--csv-root", default="",
                         help="source=csv 时的 CSV 数据根目录")
     parser.add_argument("--bundle", "-b", default="",
@@ -109,25 +115,27 @@ def main() -> int:
     parser.add_argument("--mode", default="standard", choices=["fast", "standard", "precise"],
                         help="定价速度/精度: fast=快速预览, standard=标准, precise=精确 (默认 standard)")
     parser.add_argument("--top-n", type=int, default=10,
-                        help="每次调仓选债数量 (仅 top_score 模式; 默认 10)")
-    parser.add_argument("--holding-mode", default="top_score",
-                        choices=["top_score", "pool"],
-                        help="B持仓层: top_score=按机会分取Top N; pool=等权持有整个候选池。"
-                             "两者均无稳健选股 alpha, 各有取舍 (见 README 模型边界)")
-    parser.add_argument("--max-holdings", type=int, default=None,
-                        help="pool 模式持仓上限 (默认不限, 持全部候选)")
-    parser.add_argument("--funding-mode", default="reserve_cash",
-                        choices=["reserve_cash", "full_invest"],
-                        help="C资金层: reserve_cash=未建仓/缺价槽位留现金; "
-                             "full_invest=满仓等权(缺口/缺价摊回)")
+                        help="每次调仓按策略信号选债数量; 不足时留现金 (默认 10)")
+    parser.add_argument("--rank-signal", default="down_reset_robust_edge",
+                        choices=[
+                            "deviation", "down_reset_edge", "down_reset_robust_edge",
+                        ],
+                        help="排序信号: deviation=市价/理论价偏差升序; "
+                             "down_reset_edge=下修优势金额降序; "
+                             "down_reset_robust_edge=HV/信用利差扰动后的最差优势降序 "
+                             "(默认)")
+    parser.add_argument("--min-down-reset-edge", type=float, default=0.0,
+                        help="下修错定价排序时的最低优势金额(元, 默认 0)")
+    parser.add_argument(
+        "--no-down-reset-event-exit",
+        action="store_false",
+        dest="down_reset_event_exit",
+        help="关闭下修提议/通过/拒绝公告后的提前退出 (默认开启)",
+    )
     parser.add_argument("--exposure-mode", default="full",
                         choices=["full", "valuation"],
                         help="D仓位层: full=恒定满仓(默认); valuation=按当期已定价池中位偏差"
                              "缩放总仓位 (研究配置, 依据见 docs/research/2026-06-*)")
-    parser.add_argument("--selection-view", default="综合机会", choices=BATCH_REVIEW_VIEWS,
-                        help="复用批量页视图过滤候选 (默认 综合机会)")
-    parser.add_argument("--min-score", type=float, default=None,
-                        help="最低机会分; 未设置时不过滤")
     parser.add_argument("--min-price", type=float, default=None,
                         help="最低转债市价")
     parser.add_argument("--max-price", type=float, default=None,
@@ -160,12 +168,11 @@ def main() -> int:
                         help="next_close 模式下向后寻找成交价的最大自然日数 (默认 10)")
     parser.add_argument("--no-mark-to-market", action="store_true",
                         help="关闭持仓期日频净值估值, 仅保留调仓端点净值")
-    parser.add_argument("--cost-bps", type=float, default=0.0,
-                        help="单边换手对应的交易成本, 单位 bps; 区间净收益扣 turnover*成本 (默认 0); "
+    parser.add_argument("--cost-bps", type=float, default=20.0,
+                        help="单边换手对应的交易成本, 单位 bps; 区间净收益扣 turnover*成本 (默认 20); "
                              "基准同口径计成员变动换手成本")
-    parser.add_argument("--cash-yield", type=float, default=0.0,
-                        help="闲置现金年化收益率, 小数 (如 0.02≈货基; 默认 0)。"
-                             "Sharpe 课征 rf 门槛, 现金 0 计息会低估持现金配置, 研究运行建议设为 --r 同值")
+    parser.add_argument("--cash-yield", type=float, default=0.022,
+                        help="闲置现金年化收益率小数 (默认 0.022)")
     parser.add_argument("--no-benchmark", action="store_true",
                         help="关闭等权全可投池基准对比 (默认开启)")
     parser.add_argument("--benchmark-index", default="",
@@ -185,14 +192,18 @@ def main() -> int:
                         help="基础信用利差小数 (默认 0.03)")
     parser.add_argument("--distress-k", type=float, default=0.05,
                         help="困境信用利差斜率 (默认 0.05)")
-    parser.add_argument("--p-down", type=float, default=0.15,
-                        help="年化下修事件强度 (默认 0.15)")
+    parser.add_argument("--p-down", type=float, default=0.25,
+                        help="年化下修事件强度 (默认 0.25)")
     parser.add_argument("--vol-window", type=int, default=21,
                         help="历史波动率窗口交易日数 (默认 21)")
+    parser.add_argument("--pde-sigma-band", type=float, default=0.15,
+                        help="稳健下修优势的 HV 相对扰动带 (默认 0.15)")
+    parser.add_argument("--pde-spread-band", type=float, default=0.01,
+                        help="稳健下修优势的信用利差扰动带 (默认 0.01=100bp)")
     parser.add_argument("--M", type=int, default=None,
-                        help="覆盖 PDE 价格网格 M")
+                        help="覆盖定价价格网格 M")
     parser.add_argument("--N", type=int, default=None,
-                        help="覆盖 PDE 时间网格 N")
+                        help="覆盖定价时间网格 N")
     parser.add_argument("--max-workers", type=int, default=4,
                         help="批量定价线程数 (默认 4)")
     parser.add_argument("--output", "-o", default="",
@@ -200,6 +211,14 @@ def main() -> int:
     parser.add_argument("--show-holdings", action="store_true",
                         help="打印每期选中持仓")
     args = parser.parse_args()
+    if args.pde_sigma_band < 0 or args.pde_spread_band < 0:
+        parser.error("稳健情景扰动带不能为负")
+    if args.p_down < 0:
+        parser.error("--p-down 不能为负")
+    if args.top_n <= 0:
+        parser.error("--top-n 必须为正整数")
+    if args.history_mode == "wind-high-fidelity" and args.source != "wind":
+        parser.error("--history-mode wind-high-fidelity 需要 --source wind")
 
     bundle_path = Path(args.bundle) if args.bundle else project_bundle_path()
     bundle = TermsBundle(bundle_path)
@@ -210,7 +229,8 @@ def main() -> int:
 
     base_provider = build_batch_provider(
         args.source,
-        terms_cache=bundle,
+        # Wind高保真必须绕过 cb_data 当前条款缓存，才会按 tradeDate 查询。
+        terms_cache=None if args.history_mode == "wind-high-fidelity" else bundle,
         csv_root=args.csv_root or None,
     )
     history_store = TermsHistoryStore(args.terms_history_dir) if args.terms_history_dir else None
@@ -218,12 +238,25 @@ def main() -> int:
         Path(args.terms_patches) if args.terms_patches else project_terms_patches_path()
     )
     event_store = CBEventStore(Path(args.events) if args.events else project_events_path())
-    provider = HistoricalBondDataProvider(
-        base_provider,
-        history_store=history_store,
-        patch_store=patch_store,
-        event_store=event_store,
-    )
+    if args.history_mode == "wind-high-fidelity":
+        provider = HistoricalBondDataProvider(
+            base_provider,
+            history_store=None,
+            patch_store=patch_store,
+            event_store=event_store,
+            strip_fallback_status=True,
+            merge_admission_status=False,
+            provider_history_terms=True,
+        )
+    else:
+        provider = HistoricalBondDataProvider(
+            base_provider,
+            history_store=history_store,
+            patch_store=patch_store,
+            event_store=event_store,
+            strip_fallback_status=False,
+            merge_admission_status=True,
+        )
     disk_cache = None
     if args.cache_dir:
         disk_cache = DiskCacheProvider(provider, args.cache_dir)
@@ -234,19 +267,23 @@ def main() -> int:
         min_credit_rating=args.min_rating.strip() or None,
         min_turnover_amount=None if args.min_turnover < 0 else args.min_turnover,
     )
-    strategy_config = ScoreStrategyConfig(
+    max_deviation = args.max_deviation
+    if args.rank_signal == "deviation" and max_deviation is None:
+        max_deviation = 0.0
+    is_down_reset = args.rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
+    strategy_config = PDEStrategyConfig(
         top_n=args.top_n,
         rebalance_freq=args.freq,
-        selection_view=args.selection_view,
-        min_score=args.min_score,
+        selection_view="综合机会",
+        min_score=None,
         min_confidence=None if args.allow_low_confidence else ("高", "中"),
-        exclude_risk_tags=() if args.include_review_risks else ScoreStrategyConfig().exclude_risk_tags,
+        exclude_risk_tags=() if args.include_review_risks else PDEStrategyConfig().exclude_risk_tags,
         min_market_price=args.min_price,
         max_market_price=args.max_price,
         min_conversion_premium=(args.min_premium / 100.0) if args.min_premium is not None else None,
         max_conversion_premium=(args.max_premium / 100.0) if args.max_premium is not None else None,
         min_deviation=(args.min_deviation / 100.0) if args.min_deviation is not None else None,
-        max_deviation=(args.max_deviation / 100.0) if args.max_deviation is not None else None,
+        max_deviation=(max_deviation / 100.0) if max_deviation is not None else None,
         min_sigma=(args.min_sigma / 100.0) if args.min_sigma is not None else None,
         max_sigma=(args.max_sigma / 100.0) if args.max_sigma is not None else None,
         price_lookback_days=max(1, args.price_lookback_days),
@@ -258,9 +295,12 @@ def main() -> int:
         compute_benchmark=not args.no_benchmark,
         benchmark_index_code=args.benchmark_index.strip() or None,
         pool_mode=args.pool_mode,
-        holding_mode=args.holding_mode,
-        max_holdings=args.max_holdings,
-        funding_mode=args.funding_mode,
+        holding_mode="top_score",
+        rank_signal=args.rank_signal,
+        min_down_reset_edge_value=(args.min_down_reset_edge if is_down_reset else None),
+        down_reset_event_exit=bool(args.down_reset_event_exit and is_down_reset),
+        max_holdings=None,
+        funding_mode="reserve_cash",
         exposure_mode=args.exposure_mode,
         cash_yield_rate=max(0.0, args.cash_yield),
     )
@@ -273,9 +313,12 @@ def main() -> int:
         grid_M, grid_N = 300, 1000
     else:
         grid_M, grid_N = 220, 700
+    effective_max_workers = (
+        1 if args.history_mode == "wind-high-fidelity" else max(1, args.max_workers)
+    )
 
     try:
-        result = backtest_score_strategy(
+        result = backtest_pde_strategy(
             provider,
             codes,
             start_date=args.start,
@@ -288,18 +331,53 @@ def main() -> int:
             distress_k=args.distress_k,
             p_down=args.p_down,
             vol_window_days=args.vol_window,
+            pde_signal_sigma_rel_band=args.pde_sigma_band,
+            pde_signal_spread_band=args.pde_spread_band,
             M=grid_M,
             N=grid_N,
-            max_workers=args.max_workers,
+            max_workers=effective_max_workers,
         )
     finally:
         # 中途异常/中断也要落盘已拉取的昂贵缓存
         if disk_cache is not None:
             disk_cache.flush()
+    result_config = dict(result.get("config") or {})
+    result_config["history_mode"] = (
+        "Wind高保真" if args.history_mode == "wind-high-fidelity" else "标准"
+    )
+    result["config"] = result_config
+    result["run_settings"] = {
+        "data_source": args.source,
+        "history_mode": result_config["history_mode"],
+        "strategy": {
+            "template": (
+                "估值偏差"
+                if args.rank_signal == "deviation" else "下修错定价"
+            ),
+            **result_config,
+        },
+        "pricing": {
+            "r": args.r,
+            "base_spread": args.base_spread,
+            "distress_k": args.distress_k,
+            "p_down": args.p_down,
+            "vol_window_days": args.vol_window,
+            "M": grid_M,
+            "N": grid_N,
+            "pde_signal_sigma_rel_band": args.pde_sigma_band,
+            "pde_signal_spread_band": args.pde_spread_band,
+            "max_workers": effective_max_workers,
+        },
+    }
     summary = result["summary"]
     print(f"区间: {result['start_date']} ~ {result['end_date']}")
     print(f"样本池: {len(codes)} | top_n: {summary['top_n']} | 调仓: {summary['rebalance_freq']}")
     print(f"模式: {args.mode} | 网格: M={grid_M}, N={grid_N}")
+    print(
+        f"策略信号: {strategy_config.rank_signal} | p_down={args.p_down:.2%} | "
+        f"HV扰动=±{args.pde_sigma_band:.0%} | "
+        f"利差扰动=±{args.pde_spread_band*10000:.0f}bp"
+    )
     print(f"成交: {strategy_config.execution_timing} | 日频净值: {'是' if strategy_config.mark_to_market else '否'}")
     print(f"期数: {summary['periods']}")
     print(f"最终净值: {summary['final_equity']:.4f}")

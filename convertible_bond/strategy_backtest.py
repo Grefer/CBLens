@@ -1,9 +1,10 @@
-"""基于批量机会分的选债策略回测.
+"""基于批量 PDE 信号的可转债策略回测.
 
-第一版策略保持可解释:
-  - 每个调仓日对候选池做批量定价并复用 ``opportunity_score`` 排序
+策略保持可解释且分层:
+  - 每个调仓日对候选池做批量定价, 可按机会分或 PDE 下修错定价信号排序
   - 选出前 N 只转债, 按等权持有到下一调仓边界
-  - 收益用调仓日/期末附近最近有效转债收盘价计算
+  - 下修策略遇到提议/通过/拒绝公告时提前退出, 其余持有到调仓边界
+  - 收益用信号日或下一可得收盘价计算
 
 注意: 若使用当前 ``cb_data`` 作为历史条款快照, 下修、强赎和退市状态可能带有
 当前信息偏差。该模块负责把口径固定下来; 更严格的历史点位数据可通过 provider
@@ -43,12 +44,23 @@ from .data_providers import DataProvider, finite_float
 from .pricing_api import batch_price_from_provider_threaded
 
 
+_DOWN_RESET_RANK_SIGNALS = frozenset({"down_reset_edge", "down_reset_robust_edge"})
+_DOWN_RESET_EXIT_EVENT_TYPES = frozenset({
+    "down_reset_proposed",
+    "down_reset_approved",
+    "down_reset_rejected",
+})
+
+
 @dataclass(frozen=True)
 class ScoreStrategyConfig:
-    """机会分选债策略参数 (三层解耦: A 过滤 / B 持仓 / C 资金)。
+    """策略回测配置基类。
+
+    旧机会分字段继续保留用于读取历史快照和 Python API 兼容；新 GUI/CLI 使用
+    :class:`PDEStrategyConfig`，正常流程只暴露 PDE 信号。
 
     A 过滤层(选什么): selection_view + min_score/min_confidence/exclude_risk_tags +
-        价格/溢价/偏差/波动率区间 → 候选池; **机会分在此仅作过滤, 不再做权重排序**。
+        价格/溢价/偏差/波动率区间 → 候选池。PDE 排序信号不使用 min_score。
     B 持仓层(持哪些/多少): holding_mode + top_n / max_holdings; 一律等权持有。
     C 资金层(缺口/缺价怎么办): funding_mode。
     三层互不耦合: 任意 holding_mode 都可搭配任意 funding_mode。
@@ -105,11 +117,26 @@ class ScoreStrategyConfig:
     #   "top_score": 按机会分取前 top_n 只。
     #   "pool"     : 等权持有整个候选池, 不按机会分精排。
     # 证据现状 (两种均为研究配置, 无推荐): 跨周期(2022-2026)横截面 Rank-IC≈0,
-    # 机会分排序无稳健选股 alpha; top_score 在 4 年季频对比中风险调整更优
+    # 旧机会分排序无稳健选股 alpha; top_score 在 4 年季频对比中风险调整更优
     # (Sharpe 0.60 vs 0.40), 但源于"候选不足→留现金"的隐性缓冲与极端偏差尾部集中,
     # 月频 2025-26 反向 (现金拖累跑输基准), 不跨频率稳健。
     holding_mode: str = "top_score"
     max_holdings: int | None = None    # pool 模式持仓上限 (None=全池; 设值时取分数最高的若干只)
+    # ── B 持仓层排序信号: top_score 取前 N 的排序依据 (pool 的余额截断与此解耦) ──
+    #   "score"     : 机会分降序 (默认, 原行为)。
+    #   "double_low": 双低值 = 转债价格 + 转股溢价率×100, 升序 (经典双低轮动)。
+    #   "deviation" : 模型偏差 (市价-理论价)/理论价 升序 (最低估优先, 纯 PDE 信号)。
+    #   "down_reset_edge": 事件模型 p_down 对应理论价 - 市价, 降序; 仅接受市场价
+    #                       可反解出隐含 p_down 的标的, 计算成本显著高于普通排序。
+    #   "down_reset_robust_edge": 在 sigma ±15% / 信用利差 ±100bp 四角点中取最差
+    #                              下修优势, 降序; GUI 下修策略默认使用此稳健信号。
+    # 注意: 置信度/风险标签/数值区间仍生效; min_score 只适用于 score/double_low,
+    # PDE deviation/down_reset 信号不再被已证实无显著性的机会分门槛二次过滤。
+    rank_signal: str = "score"
+    min_down_reset_edge_value: float | None = 0.0
+    # 下修策略的 thesis 在提议/通过/拒绝公告后已经发生或证伪; 默认在公告后的
+    # 可成交收盘退出, 余下时间持有现金, 而不是机械等到下一调仓边界。
+    down_reset_event_exit: bool = True
     # ── C 资金层: 未建仓/缺成交价的槽位怎么办 ──
     #   "reserve_cash": 留现金 (分母=目标槽位数; top_score 下=top_n, pool 下=候选数)。
     #   "full_invest" : 满仓等权, 缺口/缺价权重摊回已持仓 (分母=实际持仓数)。
@@ -127,6 +154,21 @@ class ScoreStrategyConfig:
     # 闲置现金年化收益率 (如 0.02≈货基)。默认 0 = 旧行为; 但注意 Sharpe 课征 rf 门槛,
     # 现金 0 计息会系统性低估一切持现金配置 (留现金/择时缩放), 研究运行建议设为 r。
     cash_yield_rate: float = 0.0
+
+
+@dataclass(frozen=True)
+class PDEStrategyConfig(ScoreStrategyConfig):
+    """PDE 策略的推荐默认口径。
+
+    主策略为稳健下修错定价：反解市场隐含下修强度，在 HV 与信用利差角点取
+    最差优势，公告后下一可得收盘退出。未满 Top N 的仓位保留现金。
+    """
+
+    min_score: float | None = None
+    execution_timing: str = "next_close"
+    transaction_cost: float = 0.002
+    rank_signal: str = "down_reset_robust_edge"
+    cash_yield_rate: float = 0.022
 
 
 @dataclass(frozen=True)
@@ -347,19 +389,49 @@ class _PeriodResult:
     benchmark_equity: float
     benchmark_point: dict[str, Any] | None
     selected_codes: list[str]
-    held_codes: list[str]        # 实际建仓的标的码 (供下期换手计算, 不含缺价票)
+    held_codes: list[str]        # 期末仍持有的标的码 (不含缺价票和期内事件退出)
     weight_denominator: int      # 本期等权份数分母 (intended), 供下期换手计算
     exposure: float              # 本期总仓位 gross (D 仓位层), 供下期换手计算
     benchmark_codes: list[str]   # 本期基准成分 (供下期基准换手/成本计算)
+
+
+def validate_strategy_config(cfg: ScoreStrategyConfig) -> None:
+    """枚举/取值 fail-fast: 非法配置在任何取数/定价之前抛 ValueError。
+
+    避免 Wind 高保真跑完第一期准入+定价才在 ``_normalize_*`` 处炸掉、白烧配额;
+    ``sweep_score_strategy`` 也用它在跑任何变体前校验全部变体。
+    """
+    if cfg.top_n <= 0:
+        raise ValueError("top_n 必须为正整数")
+    _normalize_holding_mode(cfg.holding_mode)
+    _normalize_rank_signal(cfg.rank_signal)
+    _normalize_funding_mode(cfg.funding_mode)
+    _normalize_exposure_mode(cfg.exposure_mode)
+    _normalize_execution_timing(cfg.execution_timing)
+
+
+def strategy_type_for_rank_signal(value: str | None) -> str:
+    """排序信号对应的产品策略类型；legacy 仅用于旧快照兼容。"""
+    signal = _normalize_rank_signal(value)
+    if signal in _DOWN_RESET_RANK_SIGNALS:
+        return "pde_down_reset"
+    if signal == "deviation":
+        return "pde_valuation"
+    return "legacy"
 
 
 def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
     """回测结果里回显的配置快照 (供 GUI/CSV 展示与复现)。"""
     holding_mode = _normalize_holding_mode(cfg.holding_mode)
     funding_mode = _normalize_funding_mode(cfg.funding_mode)
+    rank_signal = _normalize_rank_signal(cfg.rank_signal)
     return {
+        "strategy_type": strategy_type_for_rank_signal(rank_signal),
         "top_n": cfg.top_n,
         "holding_mode": holding_mode,
+        "rank_signal": rank_signal,
+        "min_down_reset_edge_value": cfg.min_down_reset_edge_value,
+        "down_reset_event_exit": bool(cfg.down_reset_event_exit),
         "max_holdings": cfg.max_holdings,
         "funding_mode": funding_mode,
         # 兼容旧快照/GUI 的派生镜像 (新接口请读 holding_mode/funding_mode)
@@ -385,6 +457,7 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
         "pre_filter_prices": cfg.pre_filter_prices,
         "transaction_cost": cfg.transaction_cost,
         "compute_benchmark": cfg.compute_benchmark,
+        "benchmark_index_code": cfg.benchmark_index_code,
         "pool_mode": cfg.pool_mode,
         "exposure_mode": _normalize_exposure_mode(cfg.exposure_mode),
         "exposure_valuation_k": cfg.exposure_valuation_k,
@@ -414,6 +487,7 @@ def _run_rebalance_period(
     """
     cfg = ctx.cfg
     provider = ctx.provider
+    rank_signal = _normalize_rank_signal(cfg.rank_signal)
     total_periods = ctx.total_periods
     stage_cb = ctx.stage_cb
     cancel_cb = ctx.cancel_cb
@@ -455,6 +529,9 @@ def _run_rebalance_period(
         excluded.extend(prefilter_excluded)
         ctx.performance_stats["price_prefilter_excluded"] += len(prefilter_excluded)
     _emit_stage_progress(stage_cb, "定价", 0, len(pricing_codes), idx, total_periods)
+    pricing_overrides = dict(ctx.pricer_overrides)
+    if rank_signal in _DOWN_RESET_RANK_SIGNALS:
+        pricing_overrides["compute_pde_signals"] = True
     priced_rows = _batch_price_with_snapshot_cache(
         provider,
         pricing_codes,
@@ -473,7 +550,7 @@ def _run_rebalance_period(
         max_workers=ctx.max_workers,
         progress_cb=lambda done, total: _emit_stage_progress(
             stage_cb, "定价", done, total, idx, total_periods),
-        **ctx.pricer_overrides,
+        **pricing_overrides,
     )
     _raise_if_pricing_transport_outage(
         priced_rows,
@@ -484,7 +561,8 @@ def _run_rebalance_period(
     # 转债成交价缓存: 策略持仓与基准共享, 避免同一调仓期重复拉历史。
     price_cache: dict[tuple, PricePoint | None] = {}
     candidates = _select_candidate_rows(priced_rows, cfg)
-    # B 持仓层: 从候选池构成持仓
+    # B 持仓层: 先按排序信号重排候选, 再构成持仓
+    candidates = _sort_candidates_by_rank_signal(candidates, rank_signal)
     holding_mode = _normalize_holding_mode(cfg.holding_mode)
     if holding_mode == "pool":
         # 等权持有整个候选池 (不按机会分精排)。max_holdings 截断按**余额降序**
@@ -501,10 +579,11 @@ def _run_rebalance_period(
             )[:cap]
         else:
             selected = list(candidates)
-    else:  # top_score: 按机会分取前 top_n
+    else:  # top_score: 按当前排序信号取前 top_n
         selected = candidates[:cfg.top_n]
     selected_codes = [str(row.get("bond_code")) for row in selected]
-    candidate_rows = _candidate_explanation_rows(candidates, selected_codes, cfg)
+    candidate_rows = _candidate_explanation_rows(
+        candidates, selected_codes, cfg, rank_signal=rank_signal)
     rejection_rows = _rejection_explanation_rows(
         priced_rows,
         excluded,
@@ -512,6 +591,11 @@ def _run_rebalance_period(
         candidate_codes={str(row.get("bond_code")) for row in candidates},
     )
     _emit_stage_progress(stage_cb, "持仓估值", 0, len(selected), idx, total_periods)
+    event_exit_store = (
+        _event_store_from_provider(provider)
+        if rank_signal in _DOWN_RESET_RANK_SIGNALS and cfg.down_reset_event_exit
+        else None
+    )
     positions, skipped_positions = _position_returns(
         provider,
         selected,
@@ -522,13 +606,24 @@ def _run_rebalance_period(
         execution_timing=cfg.execution_timing,
         execution_lookahead_days=cfg.execution_lookahead_days,
         price_cache=price_cache,
+        event_exit_store=event_exit_store,
+        cash_yield_rate=cfg.cash_yield_rate,
+        rank_signal=rank_signal,
     )
     _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
 
     # C 资金层: 等权份数分母 (intended)
     funding_mode = _normalize_funding_mode(cfg.funding_mode)
     held = len(positions)            # 实际有成交价、能建仓的标的数
-    held_codes = [str(pos.get("bond_code")) for pos in positions]
+    initial_held_codes = [str(pos.get("bond_code")) for pos in positions]
+    event_exit_positions = [
+        pos for pos in positions if pos.get("exit_reason") == "down_reset_event"
+    ]
+    held_codes = [
+        str(pos.get("bond_code"))
+        for pos in positions
+        if pos.get("exit_reason") != "down_reset_event"
+    ]
     if funding_mode == "full_invest":
         # 满仓等权: 分母=实际持仓; 未建仓/缺价权重摊回已持仓 (不留现金)。
         intended = held
@@ -540,14 +635,19 @@ def _run_rebalance_period(
     exposure, median_deviation = _resolve_exposure(cfg, priced_rows)
     # 换手/成本基于**实际持仓码**与各期 gross (非含缺价的 selected); 上期持仓码/分母/
     # gross 由编排层顺延。reserve_cash 下分母>持仓数, 缺口/缺价自然计入现金、不算换手。
-    turnover = _equal_weight_turnover(
+    rebalance_turnover = _equal_weight_turnover(
         previous_held_codes,
-        held_codes,
+        initial_held_codes,
         previous_denominator=previous_intended,
         current_denominator=intended,
         previous_gross=previous_exposure,
         current_gross=exposure,
     )
+    event_exit_turnover = (
+        exposure * len(event_exit_positions) / intended
+        if intended > 0 else 0.0
+    )
+    turnover = rebalance_turnover + event_exit_turnover
 
     # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母; gross 缩放整体仓位。
     if intended > 0:
@@ -559,11 +659,30 @@ def _run_rebalance_period(
     else:
         gross_return = 0.0
         cash_weight = 1.0
+    event_exit_cash_yield_return = (
+        exposure * sum(
+            float(pos.get("post_exit_cash_return") or 0.0)
+            for pos in event_exit_positions
+        ) / intended
+        if intended > 0 else 0.0
+    )
+    end_cash_weight = min(1.0, cash_weight + event_exit_turnover)
     period_start_equity = start_equity
     cost = turnover * cfg.transaction_cost
     # 闲置现金按年化 cash_yield_rate 计息 (默认 0 = 旧行为)。不计息时, Sharpe 的
     # rf 门槛会系统性惩罚一切持现金配置 (缺口留现金 / 择时缩放)——内部不一致。
     period_days = max(0, (period_end - period_start).days)
+    event_exit_time_weighted_cash = (
+        sum(
+            exposure / intended
+            * max(0, (period_end - pos["exit_date"]).days)
+            / period_days
+            for pos in event_exit_positions
+            if isinstance(pos.get("exit_date"), date)
+        )
+        if intended > 0 and period_days > 0 else 0.0
+    )
+    average_cash_weight = min(1.0, cash_weight + event_exit_time_weighted_cash)
     cash_yield_return = cash_weight * cfg.cash_yield_rate * period_days / 365.0
     period_return = gross_return + cash_yield_return - cost
     equity = period_start_equity * (1.0 + period_return)
@@ -614,6 +733,8 @@ def _run_rebalance_period(
 
     scored = [finite_float(row.get("opportunity_score")) for row in selected]
     finite_scores = [s for s in scored if s is not None]
+    rank_values = [_rank_signal_value(row, rank_signal) for row in selected]
+    finite_rank_values = [value for value in rank_values if value is not None]
     snapshot = {
         "date": period_start,
         "eligible_count": len(eligible),
@@ -624,7 +745,13 @@ def _run_rebalance_period(
         "failed_count": sum(1 for row in priced_rows if row.get("status") != "ok"),
         "candidate_count": len(candidates),
         "selected_count": len(selected),
+        "event_exit_count": len(event_exit_positions),
         "selected_codes": selected_codes,
+        "rank_signal": rank_signal,
+        "avg_rank_value": (
+            sum(finite_rank_values) / len(finite_rank_values)
+            if finite_rank_values else None
+        ),
         "candidate_rows": candidate_rows,
         "rejection_rows": rejection_rows,
         "avg_score": (sum(finite_scores) / len(finite_scores)) if finite_scores else None,
@@ -638,7 +765,14 @@ def _run_rebalance_period(
         "cash_yield_return": cash_yield_return,
         "cost": cost,
         "cash_weight": cash_weight,
+        "average_cash_weight": average_cash_weight,
+        "end_cash_weight": end_cash_weight,
+        "rebalance_turnover": rebalance_turnover,
+        "event_exit_turnover": event_exit_turnover,
+        "event_exit_count": len(event_exit_positions),
+        "event_exit_cash_yield_return": event_exit_cash_yield_return,
         "holding_mode": holding_mode,
+        "rank_signal": rank_signal,
         "funding_mode": funding_mode,
         "top_n_shortfall_policy": _funding_legacy_alias(funding_mode),  # 兼容旧快照/GUI
         "target_count": cfg.top_n if holding_mode == "top_score" else len(selected),
@@ -697,7 +831,7 @@ def backtest_score_strategy(
     cancel_cb=None,
     **pricer_overrides,
 ) -> dict[str, Any]:
-    """回测机会分选债策略.
+    """回测机会分或 PDE 错定价选债策略.
 
     返回结构包含:
       - ``equity_curve``: 组合净值点位
@@ -711,11 +845,10 @@ def backtest_score_strategy(
         仓位按现金(0 收益)计入, 避免少数可成交标的把组合静默放大成高集中度。
       - 区间净收益 = 毛收益 - ``turnover * transaction_cost`` (单边换手 × 成本率)。
       - 基准为每个调仓日"全部通过准入且已定价"标的的等权收益, 表示买下整个筛选池
-        的参照线; 用于衡量机会分排序带来的超额。
+        的参照线; 用于衡量当前排序信号带来的超额。
     """
     cfg = config or ScoreStrategyConfig()
-    if cfg.top_n <= 0:
-        raise ValueError("top_n 必须为正整数")
+    validate_strategy_config(cfg)
     if not bond_codes:
         raise ValueError("bond_codes 不能为空")
     runtime_cache_provider = None
@@ -843,11 +976,32 @@ def backtest_score_strategy(
     }
 
 
+def backtest_pde_strategy(
+    provider: DataProvider,
+    bond_codes: list[str],
+    *,
+    start_date: date,
+    end_date: date,
+    config: PDEStrategyConfig | None = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """PDE 策略主入口；旧 ``backtest_score_strategy`` 继续作为兼容接口。"""
+    return backtest_score_strategy(
+        provider,
+        bond_codes,
+        start_date=start_date,
+        end_date=end_date,
+        config=config or PDEStrategyConfig(),
+        **kwargs,
+    )
+
+
 _SUMMARY_CSV_KEYS = (
     "periods", "final_equity", "total_return", "annualized_return",
     "annualized_volatility", "volatility_basis", "sharpe", "sortino",
     "calmar", "max_drawdown", "max_drawdown_days", "hit_rate",
-    "avg_selected_count", "avg_turnover", "avg_cash_weight", "total_cost",
+    "avg_selected_count", "avg_turnover", "avg_cash_weight", "avg_end_cash_weight",
+    "total_event_exits", "total_cost",
     "benchmark_final_equity", "benchmark_total_return", "excess_return",
     "index_benchmark_total_return", "excess_vs_index",
 )
@@ -855,11 +1009,14 @@ _SUMMARY_CSV_KEYS = (
 
 _PERIOD_CSV_COLUMNS = [
     "start_date", "end_date", "entry_date", "exit_date",
-    "period_return", "gross_return", "cash_yield_return", "cost",
+    "period_return", "gross_return", "cash_yield_return", "event_exit_cash_yield_return",
+    "cost",
     "benchmark_return", "equity", "benchmark_equity", "turnover", "cash_weight",
+    "average_cash_weight",
+    "end_cash_weight", "rebalance_turnover", "event_exit_turnover", "event_exit_count",
     "exposure", "median_deviation",
     "eligible_count", "priced_count", "candidate_count", "selected_count",
-    "avg_score", "execution_timing", "selected_codes",
+    "rank_signal", "avg_rank_value", "avg_score", "execution_timing", "selected_codes",
 ]
 
 
@@ -880,27 +1037,14 @@ def _write_csv_config(writer, config: dict[str, Any]) -> None:
 def _write_csv_periods(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow(_PERIOD_CSV_COLUMNS)
     for row in periods:
-        writer.writerow([
-            _csv_value(row.get("start_date")),
-            _csv_value(row.get("end_date")),
-            _csv_value(row.get("entry_date")),
-            _csv_value(row.get("exit_date")),
-            _csv_value(row.get("period_return")),
-            _csv_value(row.get("gross_return")),
-            _csv_value(row.get("cost")),
-            _csv_value(row.get("benchmark_return")),
-            _csv_value(row.get("equity")),
-            _csv_value(row.get("benchmark_equity")),
-            _csv_value(row.get("turnover")),
-            _csv_value(row.get("cash_weight")),
-            row.get("eligible_count", ""),
-            row.get("priced_count", ""),
-            row.get("candidate_count", ""),
-            row.get("selected_count", ""),
-            _csv_value(row.get("avg_score")),
-            row.get("execution_timing", ""),
-            "|".join(str(code) for code in row.get("selected_codes") or []),
-        ])
+        values = []
+        for column in _PERIOD_CSV_COLUMNS:
+            if column == "selected_codes":
+                value = "|".join(str(code) for code in row.get(column) or [])
+            else:
+                value = _csv_value(row.get(column))
+            values.append(value)
+        writer.writerow(values)
 
 
 def _write_csv_equity_curve(writer, curve: list[dict[str, Any]]) -> None:
@@ -921,8 +1065,15 @@ def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow(["# positions"])
     writer.writerow([
         "period_start", "period_end", "rank", "bond_code", "bond_name",
+        "rank_signal", "rank_value", "signal_market_price", "theoretical_price",
+        "deviation", "effective_p_down_1y_prob", "implied_p_down_1y_prob",
+        "down_reset_probability_gap", "down_reset_edge_value",
+        "down_reset_robust_edge_value", "pde_down_reset_signal_status",
+        "pde_down_reset_robust_status",
         "entry_date", "exit_date", "start_price", "end_price",
-        "period_return", "score", "confidence", "risk_tags",
+        "price_return", "post_exit_cash_return", "period_return",
+        "exit_reason", "exit_signal_date", "exit_event_type", "exit_event_title",
+        "score", "confidence", "risk_tags",
     ])
     for period, pos in positions:
         writer.writerow([
@@ -931,11 +1082,29 @@ def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
             pos.get("rank", ""),
             pos.get("bond_code", ""),
             pos.get("bond_name", ""),
+            pos.get("rank_signal", ""),
+            _csv_value(pos.get("rank_value")),
+            _csv_value(pos.get("signal_market_price")),
+            _csv_value(pos.get("theoretical_price")),
+            _csv_value(pos.get("deviation")),
+            _csv_value(pos.get("effective_p_down_1y_prob")),
+            _csv_value(pos.get("implied_p_down_1y_prob")),
+            _csv_value(pos.get("down_reset_probability_gap")),
+            _csv_value(pos.get("down_reset_edge_value")),
+            _csv_value(pos.get("down_reset_robust_edge_value")),
+            pos.get("pde_down_reset_signal_status", ""),
+            pos.get("pde_down_reset_robust_status", ""),
             _csv_value(pos.get("entry_date")),
             _csv_value(pos.get("exit_date")),
             _csv_value(pos.get("start_price")),
             _csv_value(pos.get("end_price")),
+            _csv_value(pos.get("price_return")),
+            _csv_value(pos.get("post_exit_cash_return")),
             _csv_value(pos.get("period_return")),
+            pos.get("exit_reason", ""),
+            _csv_value(pos.get("exit_signal_date")),
+            pos.get("exit_event_type", ""),
+            pos.get("exit_event_title", ""),
             _csv_value(pos.get("score")),
             pos.get("confidence", ""),
             "|".join(str(tag) for tag in pos.get("risk_tags") or []),
@@ -949,15 +1118,19 @@ def _write_csv_skipped_positions(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow([])
     writer.writerow(["# skipped_positions"])
     writer.writerow([
-        "period_start", "period_end", "bond_code", "bond_name",
-        "reason", "entry_date", "exit_date", "start_price", "end_price",
+        "period_start", "period_end", "rank", "bond_code", "bond_name",
+        "rank_signal", "rank_value", "reason", "entry_date", "exit_date",
+        "start_price", "end_price",
     ])
     for period, pos in skipped:
         writer.writerow([
             _csv_value(period.get("start_date")),
             _csv_value(period.get("end_date")),
+            pos.get("rank", ""),
             pos.get("bond_code", ""),
             pos.get("bond_name", ""),
+            pos.get("rank_signal", ""),
+            _csv_value(pos.get("rank_value")),
             pos.get("reason", ""),
             _csv_value(pos.get("entry_date")),
             _csv_value(pos.get("exit_date")),
@@ -974,7 +1147,12 @@ def _write_csv_candidate_rows(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow(["# candidate_rows"])
     writer.writerow([
         "period_start", "period_end", "rank", "selected", "bond_code", "bond_name",
-        "selection_reason", "score", "market_price", "deviation",
+        "selection_reason", "rank_signal", "rank_value", "market_price",
+        "theoretical_price", "deviation", "effective_p_down_1y_prob",
+        "implied_p_down_1y_prob", "down_reset_probability_gap",
+        "down_reset_edge_value", "down_reset_robust_edge_value",
+        "down_reset_edge_scenario_range", "pde_down_reset_signal_status",
+        "pde_down_reset_robust_status", "score",
         "conversion_premium", "sigma", "confidence", "risk_tags",
     ])
     for period, row in candidate_rows:
@@ -986,9 +1164,20 @@ def _write_csv_candidate_rows(writer, periods: list[dict[str, Any]]) -> None:
             row.get("bond_code", ""),
             row.get("bond_name", ""),
             row.get("selection_reason", ""),
-            _csv_value(row.get("score")),
+            row.get("rank_signal", ""),
+            _csv_value(row.get("rank_value")),
             _csv_value(row.get("market_price")),
+            _csv_value(row.get("theoretical_price")),
             _csv_value(row.get("deviation")),
+            _csv_value(row.get("effective_p_down_1y_prob")),
+            _csv_value(row.get("implied_p_down_1y_prob")),
+            _csv_value(row.get("down_reset_probability_gap")),
+            _csv_value(row.get("down_reset_edge_value")),
+            _csv_value(row.get("down_reset_robust_edge_value")),
+            _csv_value(row.get("down_reset_edge_scenario_range")),
+            row.get("pde_down_reset_signal_status", ""),
+            row.get("pde_down_reset_robust_status", ""),
+            _csv_value(row.get("score")),
             _csv_value(row.get("conversion_premium")),
             _csv_value(row.get("sigma")),
             row.get("confidence", ""),
@@ -1004,7 +1193,10 @@ def _write_csv_rejection_rows(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow(["# rejection_rows"])
     writer.writerow([
         "period_start", "period_end", "source", "bond_code", "bond_name",
-        "reason", "score", "market_price", "deviation",
+        "reason", "rank_signal", "rank_value", "market_price", "deviation",
+        "effective_p_down_1y_prob", "implied_p_down_1y_prob",
+        "down_reset_edge_value", "down_reset_robust_edge_value",
+        "pde_down_reset_signal_status", "pde_down_reset_robust_status", "score",
         "conversion_premium", "confidence", "risk_tags",
     ])
     for period, row in rejection_rows:
@@ -1015,9 +1207,17 @@ def _write_csv_rejection_rows(writer, periods: list[dict[str, Any]]) -> None:
             row.get("bond_code", ""),
             row.get("bond_name", ""),
             row.get("reason", ""),
-            _csv_value(row.get("score")),
+            row.get("rank_signal", ""),
+            _csv_value(row.get("rank_value")),
             _csv_value(row.get("market_price")),
             _csv_value(row.get("deviation")),
+            _csv_value(row.get("effective_p_down_1y_prob")),
+            _csv_value(row.get("implied_p_down_1y_prob")),
+            _csv_value(row.get("down_reset_edge_value")),
+            _csv_value(row.get("down_reset_robust_edge_value")),
+            row.get("pde_down_reset_signal_status", ""),
+            row.get("pde_down_reset_robust_status", ""),
+            _csv_value(row.get("score")),
             _csv_value(row.get("conversion_premium")),
             row.get("confidence", ""),
             "|".join(str(tag) for tag in row.get("risk_tags") or []),
@@ -1474,16 +1674,35 @@ def _dynamic_pool_for_date(
 def _select_candidate_rows(rows: list[dict[str, Any]], cfg: ScoreStrategyConfig) -> list[dict[str, Any]]:
     view = cfg.selection_view if cfg.selection_view in BATCH_REVIEW_VIEWS else "综合机会"
     ranked = filter_batch_results_by_view(rows, view)
+    rank_signal = _normalize_rank_signal(cfg.rank_signal)
     excluded_tags = set(cfg.exclude_risk_tags or ())
     selected: list[dict[str, Any]] = []
     for row in ranked:
         if row.get("status") != "ok":
             continue
-        score = finite_float(row.get("opportunity_score"))
-        if score is None:
-            continue
-        if cfg.min_score is not None and score < cfg.min_score:
-            continue
+        if rank_signal in _DOWN_RESET_RANK_SIGNALS:
+            edge = _rank_signal_value(row, rank_signal)
+            if edge is None:
+                continue
+            if (
+                rank_signal == "down_reset_robust_edge"
+                and row.get("pde_down_reset_robust_status") != "ok"
+            ):
+                continue
+            if (
+                cfg.min_down_reset_edge_value is not None
+                and edge < cfg.min_down_reset_edge_value
+            ):
+                continue
+        elif rank_signal == "deviation":
+            if finite_float(row.get("deviation")) is None:
+                continue
+        else:
+            score = finite_float(row.get("opportunity_score"))
+            if score is None:
+                continue
+            if cfg.min_score is not None and score < cfg.min_score:
+                continue
         if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
             continue
         if excluded_tags and excluded_tags & set(row.get("risk_tags") or []):
@@ -1511,6 +1730,7 @@ def _candidate_explanation_rows(
     selected_codes: list[str],
     cfg: ScoreStrategyConfig,
     *,
+    rank_signal: str = "score",
     limit: int = 60,
 ) -> list[dict[str, Any]]:
     selected_set = set(selected_codes)
@@ -1524,6 +1744,8 @@ def _candidate_explanation_rows(
             "bond_name": row.get("bond_name"),
             "selected": selected,
             "selection_reason": _candidate_selection_reason(row, rank, cfg, selected),
+            "rank_signal": rank_signal,
+            "rank_value": _rank_signal_value(row, rank_signal),
             "score": finite_float(row.get("opportunity_score")),
             "market_price": finite_float(row.get("market_price")),
             "theoretical_price": finite_float(row.get("theoretical_price")),
@@ -1533,6 +1755,23 @@ def _candidate_explanation_rows(
             "confidence": row.get("confidence"),
             "risk_tags": list(row.get("risk_tags") or []),
             "model_signal_status": row.get("model_signal_status"),
+            "implied_p_down": finite_float(row.get("implied_p_down")),
+            "effective_p_down_1y_prob": finite_float(
+                row.get("effective_p_down_1y_prob")
+            ),
+            "implied_p_down_1y_prob": finite_float(row.get("implied_p_down_1y_prob")),
+            "down_reset_probability_gap": finite_float(
+                row.get("down_reset_probability_gap")
+            ),
+            "down_reset_edge_value": finite_float(row.get("down_reset_edge_value")),
+            "down_reset_robust_edge_value": finite_float(
+                row.get("down_reset_robust_edge_value")
+            ),
+            "down_reset_edge_scenario_range": finite_float(
+                row.get("down_reset_edge_scenario_range")
+            ),
+            "pde_down_reset_signal_status": row.get("pde_down_reset_signal_status"),
+            "pde_down_reset_robust_status": row.get("pde_down_reset_robust_status"),
         })
     return rows
 
@@ -1543,14 +1782,36 @@ def _candidate_selection_reason(
     cfg: ScoreStrategyConfig,
     selected: bool,
 ) -> str:
+    rank_signal = _normalize_rank_signal(cfg.rank_signal)
     score = finite_float(row.get("opportunity_score"))
     deviation = finite_float(row.get("deviation"))
     premium = finite_float(row.get("conversion_premium"))
     tags = [str(tag) for tag in row.get("risk_tags") or []]
     parts = []
-    if score is not None:
+    if rank_signal in _DOWN_RESET_RANK_SIGNALS:
+        edge = _rank_signal_value(row, rank_signal)
+        point_edge = finite_float(row.get("down_reset_edge_value"))
+        effective_prob = finite_float(row.get("effective_p_down_1y_prob"))
+        implied_prob = finite_float(row.get("implied_p_down_1y_prob"))
+        if edge is not None:
+            label = "稳健下修优势" if rank_signal == "down_reset_robust_edge" else "下修优势"
+            parts.append(f"{label} {edge:+.2f}元")
+        if (
+            rank_signal == "down_reset_robust_edge"
+            and point_edge is not None
+            and edge is not None
+        ):
+            parts.append(f"基准参数 {point_edge:+.2f}元")
+        if effective_prob is not None and implied_prob is not None:
+            parts.append(
+                f"一年概率 模型{effective_prob * 100:.1f}%/隐含{implied_prob * 100:.1f}%"
+            )
+    elif rank_signal == "deviation":
+        if deviation is not None:
+            parts.append(f"PDE偏差 {deviation * 100:+.1f}%")
+    elif score is not None:
         parts.append(f"机会分 {score:.1f}")
-    if deviation is not None:
+    if deviation is not None and rank_signal != "deviation":
         parts.append(f"偏差 {deviation * 100:+.1f}%")
     if premium is not None:
         parts.append(f"溢价 {premium * 100:+.1f}%")
@@ -1568,6 +1829,7 @@ def _rejection_explanation_rows(
     candidate_codes: set[str],
     limit: int = 120,
 ) -> list[dict[str, Any]]:
+    rank_signal = _normalize_rank_signal(cfg.rank_signal)
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for code, reason in excluded:
@@ -1577,6 +1839,8 @@ def _rejection_explanation_rows(
             "bond_name": "",
             "source": "准入/预筛",
             "reason": str(reason),
+            "rank_signal": rank_signal,
+            "rank_value": None,
             "score": None,
             "market_price": None,
             "deviation": None,
@@ -1600,12 +1864,24 @@ def _rejection_explanation_rows(
             "bond_name": row.get("bond_name"),
             "source": "筛选",
             "reason": reason,
+            "rank_signal": rank_signal,
+            "rank_value": _rank_signal_value(row, rank_signal),
             "score": finite_float(row.get("opportunity_score")),
             "market_price": finite_float(row.get("market_price")),
             "deviation": finite_float(row.get("deviation")),
             "conversion_premium": finite_float(row.get("conversion_premium")),
             "confidence": row.get("confidence"),
             "risk_tags": list(row.get("risk_tags") or []),
+            "effective_p_down_1y_prob": finite_float(
+                row.get("effective_p_down_1y_prob")
+            ),
+            "implied_p_down_1y_prob": finite_float(row.get("implied_p_down_1y_prob")),
+            "down_reset_edge_value": finite_float(row.get("down_reset_edge_value")),
+            "down_reset_robust_edge_value": finite_float(
+                row.get("down_reset_robust_edge_value")
+            ),
+            "pde_down_reset_signal_status": row.get("pde_down_reset_signal_status"),
+            "pde_down_reset_robust_status": row.get("pde_down_reset_robust_status"),
         })
         seen.add(code)
         if len(rows) >= limit:
@@ -1619,6 +1895,7 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
 
     tags = set(str(tag) for tag in row.get("risk_tags") or [])
     score = finite_float(row.get("opportunity_score"))
+    rank_signal = _normalize_rank_signal(cfg.rank_signal)
     view = cfg.selection_view if cfg.selection_view in BATCH_REVIEW_VIEWS else "综合机会"
     if view == "低估候选":
         if score is None:
@@ -1639,10 +1916,33 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
     ):
         return "需复核视图: 不属于复核池"
 
-    if score is None:
-        return "缺少机会分"
-    if cfg.min_score is not None and score < cfg.min_score:
-        return f"机会分 {score:.1f} < 最低分 {cfg.min_score:.1f}"
+    if rank_signal in _DOWN_RESET_RANK_SIGNALS:
+        edge = _rank_signal_value(row, rank_signal)
+        if edge is None:
+            status = str(row.get("pde_down_reset_signal_status") or "未计算")
+            return f"缺少可解释的下修优势 ({status})"
+        if (
+            rank_signal == "down_reset_robust_edge"
+            and row.get("pde_down_reset_robust_status") != "ok"
+        ):
+            status = str(row.get("pde_down_reset_robust_status") or "未计算")
+            return f"下修优势情景不完整 ({status})"
+        if (
+            cfg.min_down_reset_edge_value is not None
+            and edge < cfg.min_down_reset_edge_value
+        ):
+            return (
+                f"下修优势 {edge:+.2f}元 < 下限 "
+                f"{cfg.min_down_reset_edge_value:+.2f}元"
+            )
+    elif rank_signal == "deviation":
+        if finite_float(row.get("deviation")) is None:
+            return "缺少PDE估值偏差"
+    else:
+        if score is None:
+            return "缺少机会分"
+        if cfg.min_score is not None and score < cfg.min_score:
+            return f"机会分 {score:.1f} < 最低分 {cfg.min_score:.1f}"
     if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
         return f"置信度 {row.get('confidence') or '—'} 不在允许范围"
     excluded_tags = set(cfg.exclude_risk_tags or ())
@@ -1707,6 +2007,58 @@ def _passes_range(value: float | None, min_value: float | None, max_value: float
     return True
 
 
+def _event_store_from_provider(provider: DataProvider):
+    """沿 provider 装饰链寻找点时公告事件表; 无事件能力时返回 None."""
+    current = provider
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        store = getattr(current, "event_store", None)
+        if callable(getattr(store, "list_events", None)):
+            return store
+        current = getattr(current, "inner", None)
+    return None
+
+
+def _first_down_reset_exit_event(
+    event_store,
+    bond_code: str,
+    *,
+    after_date: date,
+    before_date: date,
+):
+    """返回持仓期间首个会使下修 thesis 落地或失效的公告事件."""
+    if event_store is None or after_date >= before_date:
+        return None
+    try:
+        events = event_store.list_events(
+            bond_code=bond_code,
+            through_date=before_date,
+        )
+    except Exception:
+        return None
+    matched = []
+    for event in events or []:
+        event_date = getattr(event, "event_date", None)
+        if not isinstance(event_date, date):
+            continue
+        if (
+            getattr(event, "event_type", None) in _DOWN_RESET_EXIT_EVENT_TYPES
+            and after_date < event_date < before_date
+        ):
+            matched.append(event)
+    if not matched:
+        return None
+    return min(
+        matched,
+        key=lambda event: (
+            event.event_date,
+            str(getattr(event, "event_type", "")),
+            str(getattr(event, "raw_title", "")),
+        ),
+    )
+
+
 def _position_returns(
     provider: DataProvider,
     selected: list[dict[str, Any]],
@@ -1718,6 +2070,9 @@ def _position_returns(
     execution_timing: str = "signal_close",
     execution_lookahead_days: int = 10,
     price_cache: dict[tuple, PricePoint | None] | None = None,
+    event_exit_store=None,
+    cash_yield_rate: float = 0.0,
+    rank_signal: str = "score",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     positions: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -1732,7 +2087,7 @@ def _position_returns(
             lookahead_days=execution_lookahead_days,
             cache=price_cache,
         )
-        exit_point = _execution_price_point(
+        regular_exit_point = _execution_price_point(
             provider, code, end_date,
             timing=execution_timing,
             side="exit",
@@ -1741,8 +2096,43 @@ def _position_returns(
             lookahead_days=execution_lookahead_days,
             cache=price_cache,
         )
+        exit_point = regular_exit_point
+        exit_event = None
+        exit_signal_date = end_date
+        if entry_point is not None and event_exit_store is not None:
+            candidate_event = _first_down_reset_exit_event(
+                event_exit_store,
+                code,
+                after_date=entry_point.date,
+                before_date=end_date,
+            )
+            if candidate_event is not None:
+                event_exit_point = _execution_price_point(
+                    provider,
+                    code,
+                    candidate_event.event_date,
+                    # 公告通常在收盘后披露; 即便普通回测选 signal_close, 事件退出也必须
+                    # 用公告后的下一可得收盘, 不能倒用公告日收盘制造未来函数。
+                    timing="next_close",
+                    side="exit",
+                    lookback_days=lookback_days,
+                    max_staleness_days=max_staleness_days,
+                    lookahead_days=execution_lookahead_days,
+                    cache=price_cache,
+                )
+                if (
+                    event_exit_point is not None
+                    and (
+                        regular_exit_point is None
+                        or event_exit_point.date < regular_exit_point.date
+                    )
+                ):
+                    exit_point = event_exit_point
+                    exit_event = candidate_event
+                    exit_signal_date = candidate_event.event_date
         if entry_point is None or exit_point is None:
             skipped.append({
+                "rank": rank,
                 "bond_code": code,
                 "bond_name": row.get("bond_name"),
                 "reason": _missing_execution_reason(
@@ -1751,21 +2141,58 @@ def _position_returns(
                 "exit_date": exit_point.date if exit_point else None,
                 "start_price": entry_point.price if entry_point else None,
                 "end_price": exit_point.price if exit_point else None,
+                "rank_signal": rank_signal,
+                "rank_value": _rank_signal_value(row, rank_signal),
             })
             continue
-        ret = exit_point.price / entry_point.price - 1.0
+        price_ratio = exit_point.price / entry_point.price
+        price_return = price_ratio - 1.0
+        event_cash_days = (
+            max(0, (end_date - exit_point.date).days)
+            if exit_event is not None else 0
+        )
+        post_exit_cash_return = (
+            price_ratio * max(0.0, float(cash_yield_rate)) * event_cash_days / 365.0
+        )
+        ret = price_return + post_exit_cash_return
         positions.append({
             "rank": rank,
             "bond_code": code,
             "bond_name": row.get("bond_name"),
+            "rank_signal": rank_signal,
+            "rank_value": _rank_signal_value(row, rank_signal),
             "score": finite_float(row.get("opportunity_score")),
+            "signal_market_price": finite_float(row.get("market_price")),
+            "theoretical_price": finite_float(row.get("theoretical_price")),
+            "deviation": finite_float(row.get("deviation")),
+            "implied_p_down": finite_float(row.get("implied_p_down")),
+            "effective_p_down_1y_prob": finite_float(
+                row.get("effective_p_down_1y_prob")
+            ),
+            "implied_p_down_1y_prob": finite_float(row.get("implied_p_down_1y_prob")),
+            "down_reset_probability_gap": finite_float(
+                row.get("down_reset_probability_gap")
+            ),
+            "down_reset_edge_value": finite_float(row.get("down_reset_edge_value")),
+            "down_reset_robust_edge_value": finite_float(
+                row.get("down_reset_robust_edge_value")
+            ),
+            "pde_down_reset_signal_status": row.get("pde_down_reset_signal_status"),
+            "pde_down_reset_robust_status": row.get("pde_down_reset_robust_status"),
             "confidence": row.get("confidence"),
             "risk_tags": list(row.get("risk_tags") or []),
             "entry_date": entry_point.date,
             "exit_date": exit_point.date,
             "start_price": entry_point.price,
             "end_price": exit_point.price,
+            "price_return": price_return,
+            "post_exit_cash_return": post_exit_cash_return,
             "period_return": ret,
+            "exit_reason": "down_reset_event" if exit_event is not None else "rebalance",
+            "exit_signal_date": exit_signal_date,
+            "exit_event_type": getattr(exit_event, "event_type", None),
+            "exit_event_title": getattr(exit_event, "raw_title", None),
+            "event_exit_cash_days": event_cash_days,
         })
     return positions, skipped
 
@@ -1967,7 +2394,11 @@ def _portfolio_mark_to_market_curve(
             continue
         if entry_price is None or exit_price is None:
             continue
-        start, end = min(entry_date, exit_date), max(entry_date, exit_date)
+        start = min(entry_date, exit_date)
+        end = max(entry_date, exit_date)
+        if pos.get("exit_reason") == "down_reset_event":
+            # 退出后虽不再使用债价, 仍借该券交易日序列补齐现金持有期的日频净值点。
+            end = max(end, period_end)
         series = _bond_price_map(provider, code, start, end)
         series[entry_date] = entry_price
         series[exit_date] = exit_price
@@ -1994,7 +2425,14 @@ def _portfolio_mark_to_market_curve(
             if current_date < entry_date:
                 pos_return = 0.0
             elif current_date >= exit_date:
-                pos_return = exit_price / entry_price - 1.0
+                price_ratio = exit_price / entry_price
+                if pos.get("exit_reason") == "down_reset_event":
+                    cash_days = max(0, (min(current_date, period_end) - exit_date).days)
+                    pos_return = (
+                        price_ratio * (1.0 + cash_yield_rate * cash_days / 365.0) - 1.0
+                    )
+                else:
+                    pos_return = price_ratio - 1.0
             else:
                 mark = _latest_price_from_map(series, current_date)
                 pos_return = (mark / entry_price - 1.0) if mark is not None else 0.0
@@ -2203,8 +2641,18 @@ def _summarize_strategy(
     selected_counts = [int(row.get("selected_count") or 0) for row in periods]
     turnovers = [finite_float(row.get("turnover")) for row in periods]
     finite_turnovers = [t for t in turnovers if t is not None]
-    cash_weights = [finite_float(row.get("cash_weight")) for row in periods]
+    cash_weights = [
+        finite_float(
+            row.get("average_cash_weight")
+            if row.get("average_cash_weight") is not None
+            else row.get("cash_weight")
+        )
+        for row in periods
+    ]
     finite_cash_weights = [w for w in cash_weights if w is not None]
+    end_cash_weights = [finite_float(row.get("end_cash_weight")) for row in periods]
+    finite_end_cash_weights = [w for w in end_cash_weights if w is not None]
+    total_event_exits = sum(int(row.get("event_exit_count") or 0) for row in periods)
     costs = [finite_float(row.get("cost")) for row in periods]
     finite_costs = [c for c in costs if c is not None]
     dd_stats = _drawdown_stats(equity_curve)
@@ -2247,6 +2695,11 @@ def _summarize_strategy(
         "avg_cash_weight": (
             sum(finite_cash_weights) / len(finite_cash_weights) if finite_cash_weights else None
         ),
+        "avg_end_cash_weight": (
+            sum(finite_end_cash_weights) / len(finite_end_cash_weights)
+            if finite_end_cash_weights else None
+        ),
+        "total_event_exits": total_event_exits,
         "total_cost": sum(finite_costs) if finite_costs else 0.0,
         "benchmark_final_equity": benchmark_final_equity,
         "benchmark_total_return": benchmark_total_return,
@@ -2407,7 +2860,12 @@ def _strategy_attribution(periods: list[dict[str, Any]]) -> dict[str, Any]:
     for period in periods:
         selected_count = int(period.get("selected_count") or 0)
         costs.append(finite_float(period.get("cost")) or 0.0)
-        cash_weights.append(finite_float(period.get("cash_weight")) or 0.0)
+        period_cash = (
+            period.get("average_cash_weight")
+            if period.get("average_cash_weight") is not None
+            else period.get("cash_weight")
+        )
+        cash_weights.append(finite_float(period_cash) or 0.0)
         skipped += len(period.get("skipped_positions") or [])
         for pos in period.get("positions") or []:
             code = str(pos.get("bond_code") or "")
@@ -2563,6 +3021,7 @@ def _normalize_holding_mode(value: str | None) -> str:
         "": "top_score",
         "top_score": "top_score", "score_rank": "top_score", "score": "top_score",
         "rank": "top_score", "top_n": "top_score", "机会分排序": "top_score", "按分topn": "top_score",
+        "top n 排序": "top_score", "topn排序": "top_score",
         "pool": "pool", "equal_pool": "pool", "equal": "pool",
         "等权": "pool", "等权全池": "pool", "等权候选池": "pool",
     }
@@ -2591,6 +3050,70 @@ def _normalize_funding_mode(value: str | None) -> str:
 def _funding_legacy_alias(funding_mode: str) -> str:
     """新 funding_mode → 旧 top_n_shortfall_policy 取值 (快照/GUI 兼容镜像)。"""
     return "renormalize" if _normalize_funding_mode(funding_mode) == "full_invest" else "cash"
+
+
+def _normalize_rank_signal(value: str | None) -> str:
+    """B 持仓层排序信号, 含普通排序与按需 PDE 下修优势."""
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "": "score",
+        "score": "score", "opportunity_score": "score", "机会分": "score",
+        "double_low": "double_low", "doublelow": "double_low", "双低": "double_low",
+        "deviation": "deviation", "偏差": "deviation", "模型偏差": "deviation",
+        "pde估值偏差": "deviation",
+        "down_reset_edge": "down_reset_edge", "reset_edge": "down_reset_edge",
+        "下修优势": "down_reset_edge", "pde下修优势": "down_reset_edge",
+        "下修错定价": "down_reset_edge",
+        "down_reset_robust_edge": "down_reset_robust_edge",
+        "robust_reset_edge": "down_reset_robust_edge",
+        "稳健下修优势": "down_reset_robust_edge",
+        "pde稳健下修优势": "down_reset_robust_edge",
+    }
+    if raw not in aliases:
+        raise ValueError(f"未知排序信号 rank_signal: {value}")
+    return aliases[raw]
+
+
+def _rank_signal_value(row: dict[str, Any], signal: str) -> float | None:
+    """行的排序信号值; 排序方向由 ``_sort_candidates_by_rank_signal`` 决定."""
+    if signal == "double_low":
+        price = finite_float(row.get("market_price"))
+        premium = finite_float(row.get("conversion_premium"))
+        if price is None or premium is None:
+            return None
+        return price + premium * 100.0
+    if signal == "deviation":
+        return finite_float(row.get("deviation"))
+    if signal == "down_reset_edge":
+        return finite_float(row.get("down_reset_edge_value"))
+    if signal == "down_reset_robust_edge":
+        return finite_float(row.get("down_reset_robust_edge_value"))
+    return finite_float(row.get("opportunity_score"))
+
+
+def _sort_candidates_by_rank_signal(
+    candidates: list[dict[str, Any]],
+    signal: str,
+) -> list[dict[str, Any]]:
+    """按排序信号重排候选池。
+
+    ``score`` 保持 ``sort_batch_results_for_review`` 的原研究排序 (分降序/偏差升序),
+    与历史行为逐行一致; 两种下修优势降序, 其余信号升序。缺值行沉底,
+    同值按代码稳定排序。
+    """
+    if signal == "score":
+        return list(candidates)
+
+    def key(row: dict[str, Any]):
+        value = _rank_signal_value(row, signal)
+        sort_value = -value if value is not None and signal in _DOWN_RESET_RANK_SIGNALS else value
+        return (
+            0 if value is not None else 1,
+            sort_value if sort_value is not None else float("inf"),
+            str(row.get("bond_code") or ""),
+        )
+
+    return sorted(candidates, key=key)
 
 
 def _normalize_exposure_mode(value: str | None) -> str:

@@ -30,11 +30,17 @@ from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
 from ..batch_pricing import DEFAULT_MIN_CREDIT_RATING, DEFAULT_MIN_OUTSTANDING_BALANCE
 from ..paths import asset_path, seed_data_files
+from ..pricing_api import (
+    DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND,
+    DEFAULT_PDE_SIGNAL_SPREAD_BAND,
+)
 from .constants import (
     BOND_CODE_RE,
     DEFAULT_DOWN_RESET_TRIGGER_PCT,
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
+    normalize_pde_rank_signal_label,
+    normalize_pde_strategy_template,
     normalize_strategy_history_mode,
 )
 from .controllers import (
@@ -267,19 +273,33 @@ class CBPricerApp(
         self.v_st_end = ctk.StringVar(value=today.isoformat())
         self.v_st_freq = ctk.StringVar(value="月")
         self.v_st_top_n = ctk.StringVar(value="10")
-        self.v_st_template = ctk.StringVar(value="自定义")
+        self.v_st_template = ctk.StringVar(value="下修错定价")
         self.v_st_view = ctk.StringVar(value="综合机会")
-        # 选券权重: 默认"机会分排序"(top_score, 原始行为)。"等权全池"为研究配置。
-        # 两者均无稳健选股 alpha (跨周期横截面 Rank-IC≈0); top_score 在 4 年季频对比中
-        # 风险调整更优, 但源于"候选不足留现金"的隐性缓冲, 不跨频率稳健 — 不构成推荐依据。
-        self.v_st_weighting = ctk.StringVar(value="机会分排序")
+        # 新策略页固定为按 PDE 信号取 Top N，候选不足时留现金。
+        # 字段保留为内部兼容镜像，不再向正常 GUI 流程暴露“等权全池”。
+        self.v_st_weighting = ctk.StringVar(value="Top N 排序")
+        self.v_st_rank_signal = ctk.StringVar(value="稳健下修优势")
+        self.v_st_min_reset_edge = ctk.StringVar(value="0")
+        # 策略模型参数独立于单债定价页，避免拉取单债后暗中改变回测口径。
+        self.v_st_r = ctk.StringVar(value="2.2")
+        self.v_st_spread = ctk.StringVar(value="3.0")
+        self.v_st_distress_k = ctk.StringVar(value="5.0")
+        self.v_st_p_down = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
+        self.v_st_vol_window = ctk.StringVar(value=VOL_WINDOW_DEFAULT)
+        self.v_st_sigma_band = ctk.StringVar(
+            value=f"{DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND * 100:g}"
+        )
+        self.v_st_spread_band_bps = ctk.StringVar(
+            value=f"{DEFAULT_PDE_SIGNAL_SPREAD_BAND * 10000:g}"
+        )
+        self.v_st_event_exit = ctk.BooleanVar(value=True)
         # 闲置现金年化收益 (%/年, 默认≈无风险利率)。0 计息会让 Sharpe 的 rf 门槛
         # 系统性低估持现金配置 (留现金/择时缩放); 设 0 可复现旧口径。
         self.v_st_cash_yield = ctk.StringVar(value="2.2")
         # 仓位择时 (D 仓位层): 恒定满仓(默认) / 估值缩放。研究配置, 默认关闭。
         self.v_st_exposure = ctk.StringVar(value="恒定满仓")
         self.v_st_pool_mode = ctk.StringVar(value="本地全市场")
-        self.v_st_history_mode = ctk.StringVar(value="标准")
+        self.v_st_history_mode = ctk.StringVar(value="Wind高保真")
         self.v_st_min_price = ctk.StringVar(value="")
         self.v_st_max_price = ctk.StringVar(value="")
         self.v_st_min_premium = ctk.StringVar(value="")
@@ -297,9 +317,10 @@ class CBPricerApp(
         self.v_st_cost = ctk.StringVar(value="20")
         self.v_st_benchmark = ctk.BooleanVar(value=True)
         self.v_st_codes = ctk.StringVar(value="")
-        self.v_st_status = ctk.StringVar(value="就绪 · 调整参数后点击「运行策略」")
-        self.v_st_precheck = ctk.StringVar(value="预检: 尚未运行")
-        # 已选策略摘要 (静态, 显示策略方案 + 选债规则), 与运行状态分离
+        self.v_st_status = ctk.StringVar(value="就绪")
+        # 预检在运行前自动执行；空闲时不占用界面空间。
+        self.v_st_precheck = ctk.StringVar(value="")
+        # 模板摘要保留给控制器和预设兼容，不再占用执行状态区。
         self.v_st_summary = ctk.StringVar(value="")
         self.v_st_detail_period = ctk.StringVar(value="最近一期")
         self.v_st_detail_status = ctk.StringVar(value="全部")
@@ -985,6 +1006,10 @@ class CBPricerApp(
         "v_data_source",
         # 策略页配置 (模板/选债逻辑/范围过滤/成本); 文件路径与日期不纳入, 保持预设可移植
         "v_st_freq", "v_st_top_n", "v_st_template", "v_st_view",
+        "v_st_weighting", "v_st_rank_signal", "v_st_min_reset_edge",
+        "v_st_r", "v_st_spread", "v_st_distress_k", "v_st_p_down",
+        "v_st_vol_window", "v_st_sigma_band", "v_st_spread_band_bps",
+        "v_st_event_exit", "v_st_cash_yield", "v_st_exposure",
         "v_st_pool_mode", "v_st_history_mode", "v_st_codes",
         "v_st_min_price", "v_st_max_price",
         "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",
@@ -1030,10 +1055,35 @@ class CBPricerApp(
                         value = data[name]
                         if name == "v_st_history_mode":
                             value = normalize_strategy_history_mode(value)
+                        elif name == "v_st_template":
+                            value = normalize_pde_strategy_template(value)
+                        elif name == "v_st_rank_signal":
+                            value = normalize_pde_rank_signal_label(value)
                         getattr(self, name).set(value)
+                # 旧版把任意手动调参都记为“自定义”。新版不再把它作为第三种
+                # 策略，按实际排名信号还原到两个真实策略之一。
+                if str(data.get("v_st_template") or "").strip() in {"自定义", "自定义PDE"}:
+                    inferred_template = (
+                        "估值偏差"
+                        if normalize_pde_rank_signal_label(self.v_st_rank_signal.get()) == "估值偏差"
+                        else "下修错定价"
+                    )
+                    self.v_st_template.set(inferred_template)
+                # 旧预设中的市场通用选债/全池持仓不再进入新 GUI 主流程。
+                self.v_st_view.set("综合机会")
+                self.v_st_weighting.set("Top N 排序")
+                if "v_st_rank_signal" not in data:
+                    if self.v_st_template.get() == "估值偏差":
+                        self.v_st_rank_signal.set("估值偏差")
+                        self.v_st_event_exit.set(False)
+                    else:
+                        self.v_st_rank_signal.set("稳健下修优势")
+                        self.v_st_event_exit.set(True)
             finally:
                 self._suppress_bond_autoload = False
                 self._programmatic_update = False
+            if hasattr(self, "v_st_params_state"):
+                self.v_st_params_state.set("")
             for src in (
                 self.v_src_S0, self.v_src_K, self.v_src_face, self.v_src_redemp,
                 self.v_src_cur_date, self.v_src_mat_date, self.v_src_iss_date,

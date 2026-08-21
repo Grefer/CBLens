@@ -56,7 +56,11 @@ class StrategyAnalysisRenderMixin:
             metrics.grid_columnconfigure(i, weight=1)
         self._strategy_metric_tile(metrics, 0, "交易成本", self._fmt_strategy_pct(attribution.get("cost_drag"), sign=True))
         self._strategy_metric_tile(metrics, 1, "平均现金", self._fmt_strategy_pct(summary.get("avg_cash_weight")))
-        self._strategy_metric_tile(metrics, 2, "未成交笔数", str(attribution.get("skipped_positions") or 0))
+        execution_text = (
+            f"未成交 {attribution.get('skipped_positions') or 0} · "
+            f"事件退出 {summary.get('total_event_exits') or 0}"
+        )
+        self._strategy_metric_tile(metrics, 2, "执行情况", execution_text)
         self._strategy_metric_tile(metrics, 3, "总交易费", self._fmt_strategy_pct(summary.get("total_cost")))
 
         self._strategy_section_title(frame, "贡献最大", 1, 0)
@@ -309,6 +313,7 @@ class StrategyAnalysisRenderMixin:
         data_quality = diagnostics.get("data_quality") or {}
         warnings = diagnostics.get("warnings") or []
         periods = result.get("periods") or []
+        rank_signal = str((result.get("config") or {}).get("rank_signal") or "")
 
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_columnconfigure(1, weight=1)
@@ -396,7 +401,7 @@ class StrategyAnalysisRenderMixin:
         )
         suggestions = self._strategy_dynamic_suggestions(
             summary=summary, win_rate=win_rate, worst=worst,
-            concentration=concentration, ret_std=ret_std,
+            concentration=concentration, ret_std=ret_std, rank_signal=rank_signal,
         )
         ctk.CTkLabel(right, text="改进建议", text_color=TEXT,
                      font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
@@ -613,33 +618,44 @@ class StrategyAnalysisRenderMixin:
         if summary.get("avg_turnover") is not None and float(summary.get("avg_turnover")) >= 0.8:
             notes.append("平均换手较高, 成本和滑点敏感度需要重点复核")
         if fallback_ratio > 0.2:
-            notes.append("当前条款回退比例较高, 历史口径可信度偏弱")
+            notes.append("当前条款回退比例较高, 数据模式可信度偏弱")
         if not notes:
             notes.append("未发现特别突出的单点脆弱性, 可继续用参数对比做复核")
         return notes
 
     @staticmethod
-    def _strategy_dynamic_suggestions(*, summary, win_rate, worst, concentration, ret_std):
+    def _strategy_dynamic_suggestions(
+        *, summary, win_rate, worst, concentration, ret_std, rank_signal="",
+    ):
         suggestions = []
+        is_down_reset = rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
         avg_turnover = summary.get("avg_turnover")
         if avg_turnover is not None and float(avg_turnover) >= 0.6:
-            suggestions.append("换手偏高 → 把交易成本调到 30~50 bps 检查收益是否大幅缩水")
+            action = "提高下修优势门槛" if is_down_reset else "收紧低估偏差上限"
+            suggestions.append(f"换手偏高 → {action}，并用30~50bp成本做压力测试")
         elif avg_turnover is not None and float(avg_turnover) < 0.3:
-            suggestions.append("换手很低 → 尝试缩短调仓频率 (周频) 看是否能捕获更多机会")
+            suggestions.append("换手很低 → 对比月频/周频，检查错定价的修复速度")
         if win_rate is not None and win_rate < 0.45:
-            suggestions.append("胜率偏低 → 把 TopN 减少 2~3 档, 提高选债集中度")
+            action = (
+                "上调最低稳健优势"
+                if is_down_reset else "要求更负的估值偏差"
+            )
+            suggestions.append(f"胜率偏低 → {action}，减少边界错定价")
         if concentration is not None and concentration >= 0.65:
-            suggestions.append("收益集中 → 把 TopN 增加到 15~20, 分散个券依赖风险")
+            suggestions.append("收益集中 → 增加持仓数并核对主要贡献券的下修/退市事件价格")
         if worst is not None and worst <= -0.1:
-            suggestions.append("极端亏损 → 尝试加价格上限 (如 ≤130), 控制高位入场风险")
+            suggestions.append("极端亏损 → 对照该期模型/隐含下修概率和公告退出时点")
         if ret_std is not None and ret_std > 0.05:
-            suggestions.append("波动偏大 → 加转股溢价率上限, 筛掉高弹性高波动标的")
+            if is_down_reset:
+                suggestions.append("波动偏大 → 扩大HV/信用利差扰动带，检查稳健优势是否消失")
+            else:
+                suggestions.append("波动偏大 → 扰动p_down、HV和信用利差，检查低估排名是否稳定")
         sharpe = summary.get("sharpe")
         if sharpe is not None and float(sharpe) < 0.5:
-            suggestions.append("Sharpe 偏低 → 切换选债规则 (综合机会 vs 低估候选) 做对比")
+            suggestions.append("Sharpe 偏低 → 对比下修机会与估值偏差，判断优势来源")
         if not suggestions:
-            suggestions.append("各项指标尚可, 用快速模式把 TopN 上下浮动一档加入对比验证")
-        suggestions.append("切到精确模式 (M/N 调大) 复核最终候选策略")
+            suggestions.append("各项指标尚可 → 对p_down、HV和信用利差做邻域扰动，验证结论是否稳定")
+        suggestions.append("最终结论使用Wind高保真口径复跑，并保留完整模型参数快照")
         return suggestions
 
     def _render_strategy_data_panel(self, result):
@@ -652,6 +668,7 @@ class StrategyAnalysisRenderMixin:
         data_quality = diagnostics.get("data_quality") or {}
         performance = diagnostics.get("performance") or {}
         config = result.get("config") or {}
+        run_pricing = (result.get("run_settings") or {}).get("pricing") or {}
         periods = result.get("periods") or []
 
         frame.grid_columnconfigure(0, weight=1)
@@ -710,12 +727,12 @@ class StrategyAnalysisRenderMixin:
         # ── 中部: 条款来源 / 运算缓存 / 策略参数 / 成本基准 ─────────
         mid = ctk.CTkFrame(frame, fg_color="transparent")
         mid.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 4))
-        for c in range(4):
+        for c in range(5):
             mid.grid_columnconfigure(c, weight=1, uniform="strategy_data_info")
 
         def _info_card(col, title, value, meta=None, *, color=None):
             card = ctk.CTkFrame(
-                mid, fg_color=BG_INPUT, corner_radius=8, height=64,
+                mid, fg_color=BG_INPUT, corner_radius=8, height=82,
                 border_width=1, border_color=BORDER)
             card.grid(row=0, column=col, sticky="nsew", padx=4, pady=2)
             card.grid_propagate(False)
@@ -742,7 +759,7 @@ class StrategyAnalysisRenderMixin:
 
             card.bind("<Configure>", _update_wrap)
 
-        history_mode = config.get("history_mode") or "标准"
+        history_mode = config.get("history_mode") or "未记录"
         perf_parts = []
         hits = performance.get("pricing_snapshot_hits")
         misses = performance.get("pricing_snapshot_misses")
@@ -764,13 +781,50 @@ class StrategyAnalysisRenderMixin:
         if not funding_mode:   # 兼容旧快照: 由 top_n_shortfall_policy 推断
             legacy = str(config.get("top_n_shortfall_policy") or "cash")
             funding_mode = "full_invest" if legacy in ("renormalize", "full_invest") else "reserve_cash"
-        strategy_text = f"{config.get('selection_view') or '—'} · {freq_text}"
+        strategy_type = str(config.get("strategy_type") or "")
+        if not strategy_type:
+            strategy_type = {
+                "deviation": "pde_valuation",
+                "down_reset_edge": "pde_down_reset",
+                "down_reset_robust_edge": "pde_down_reset",
+            }.get(config.get("rank_signal"), "legacy")
+        strategy_name = {
+            "pde_down_reset": "下修机会",
+            "pde_valuation": "估值偏差",
+        }.get(strategy_type, "旧策略(兼容)")
+        strategy_text = f"{strategy_name} · {freq_text}"
+        rank_signal = str(config.get("rank_signal") or "score")
+        rank_label = {
+            "deviation": "估值偏差",
+            "down_reset_edge": "下修优势",
+            "down_reset_robust_edge": "稳健下修优势",
+        }.get(rank_signal, "旧机会分")
         if holding_mode == "pool":
             cap = config.get("max_holdings")
             strategy_text += " · 等权全池" + (f"(≤{int(cap)})" if cap else "")
         elif top_n is not None:   # top_score 或旧快照
-            strategy_text += f" · 机会分Top{top_n}"
+            strategy_text += f" · {rank_label} Top{top_n}"
+            if rank_signal in {"down_reset_edge", "down_reset_robust_edge"}:
+                min_edge = config.get("min_down_reset_edge_value")
+                try:
+                    strategy_text += f"(≥{float(min_edge):g}元)"
+                except (TypeError, ValueError):
+                    pass
         shortfall_text = "满仓等权" if funding_mode == "full_invest" else "缺口留现金"
+        if (
+            rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
+            and config.get("down_reset_event_exit", True)
+        ):
+            shortfall_text += " · 下修公告后退出"
+        if rank_signal == "down_reset_robust_edge":
+            sigma_band = run_pricing.get("pde_signal_sigma_rel_band", 0.15)
+            spread_band = run_pricing.get("pde_signal_spread_band", 0.01)
+            try:
+                shortfall_text += (
+                    f" · HV±{float(sigma_band)*100:g}%/利差±{float(spread_band)*10000:g}bp"
+                )
+            except (TypeError, ValueError):
+                pass
         cost = config.get("transaction_cost")
         try:
             cost_text = f"{float(cost) * 10000:.0f} bps"
@@ -786,10 +840,30 @@ class StrategyAnalysisRenderMixin:
             cost_text += " · 估值择时缩放"
         benchmark_text = "等权基准" if config.get("compute_benchmark") else "不对标"
 
-        _info_card(0, "条款来源", source_text, f"历史口径 {history_mode}")
+        def _pricing_pct(key):
+            try:
+                return f"{float(run_pricing.get(key)) * 100:g}%"
+            except (TypeError, ValueError):
+                return "—"
+
+        model_text = (
+            f"r {_pricing_pct('r')} · 利差 {_pricing_pct('base_spread')} · "
+            f"p_down {_pricing_pct('p_down')}"
+        )
+        model_meta = (
+            f"困境斜率 {_pricing_pct('distress_k')} · "
+            f"HV窗口 {run_pricing.get('vol_window_days') or '—'}日"
+        )
+
+        display_history_mode = {
+            "标准": "快速验证",
+            "Wind高保真": "Wind 历史",
+        }.get(history_mode, history_mode)
+        _info_card(0, "条款来源", source_text, f"数据模式 {display_history_mode}")
         _info_card(1, "运算缓存", perf_text)
         _info_card(2, "策略参数", strategy_text, shortfall_text)
-        _info_card(3, "成本 / 基准", cost_text, benchmark_text)
+        _info_card(3, "定价模型", model_text, model_meta)
+        _info_card(4, "成本 / 基准", cost_text, benchmark_text)
 
         # 逐期数据口径
         period_rows = []

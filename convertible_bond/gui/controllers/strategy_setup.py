@@ -15,11 +15,13 @@ from ...strategy_backtest import build_rebalance_schedule
 from ..constants import (
     BOND_CODE_RE,
     STRATEGY_TEMPLATE_DESCRIPTIONS,
-    STRATEGY_VIEW_DESCRIPTIONS,
+    normalize_pde_rank_signal_label,
+    normalize_pde_strategy_template,
     normalize_strategy_history_mode,
 )
 
 from .strategy_common import (
+    PDE_DOWN_RESET_SOLVE_MULTIPLIER,
     STRATEGY_TEMPLATES,
     WIND_HIGH_FIDELITY_CODE_WARN_LIMIT,
     WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT,
@@ -35,12 +37,18 @@ class StrategySetupMixin:
 
     # ── 策略回测 (Pro 预览) ───────────────────────────────
     def _apply_strategy_template(self, name):
-        """套用策略方案; 选「自定义」不改动现有参数, 仅保留手动调整。"""
+        """套用模型策略方案；自定义方案仅保留当前参数。"""
+        name = normalize_pde_strategy_template(name)
+        template_var = getattr(self, "v_st_template", None)
+        if template_var is not None and template_var.get() != name:
+            self._programmatic_update = True
+            try:
+                template_var.set(name)
+            finally:
+                self._programmatic_update = False
         overrides = STRATEGY_TEMPLATES.get(name)
-        if overrides is None:  # 自定义
-            view = self.v_st_view.get()
-            desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "可手动调整选债和过滤条件")
-            self.v_st_summary.set(f"自定义参数 · 选债规则「{view}」: {desc}")
+        if overrides is None:
+            self.v_st_summary.set("自定义参数 · 保留当前模型、情景与执行口径")
             return
         merged = {**_STRATEGY_TEMPLATE_BASE, **overrides}
         self._programmatic_update = True
@@ -51,19 +59,16 @@ class StrategySetupMixin:
                     var.set(value)
         finally:
             self._programmatic_update = False
-        view = merged.get("v_st_view", self.v_st_view.get())
         template_desc = STRATEGY_TEMPLATE_DESCRIPTIONS.get(name, "")
-        view_desc = STRATEGY_VIEW_DESCRIPTIONS.get(view, "")
-        self.v_st_summary.set(
-            f"策略方案「{name}」 · {template_desc} · 选债规则: {view_desc}")
+        self.v_st_summary.set(f"策略方案「{name}」 · {template_desc}")
 
     def _describe_strategy_view(self, name):
-        """用户切换选债规则时, 写入策略摘要区 (不覆盖运行状态)。"""
-        desc = STRATEGY_VIEW_DESCRIPTIONS.get(name)
-        if desc:
-            template = self.v_st_template.get() if hasattr(self, "v_st_template") else "自定义"
-            prefix = f"策略方案「{template}」" if template != "自定义" else "自定义参数"
-            self.v_st_summary.set(f"{prefix} · 选债规则「{name}」: {desc}")
+        """旧预设回调的兼容入口; 新 GUI 不再暴露市场通用视图。"""
+        template = normalize_pde_strategy_template(
+            self.v_st_template.get() if hasattr(self, "v_st_template") else None
+        )
+        desc = STRATEGY_TEMPLATE_DESCRIPTIONS.get(template, "")
+        self.v_st_summary.set(f"策略方案「{template}」 · {desc}")
 
     def _strategy_codes_from_pool(self) -> tuple[list[str], str]:
         mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
@@ -151,11 +156,7 @@ class StrategySetupMixin:
             logic_var.set(self._strategy_logic_summary_text())
 
     def _strategy_logic_summary_text(self) -> str:
-        """当前选债逻辑的一句话管线: 选券权重决定 Top N 是否参与、缺口留现金还是满仓摊回.
-
-        随控件值实时刷新, 让筛选链路在配置阶段即可见 (而不是跑完回测才在漏斗里出现);
-        口径与模型层三层结构 (选券 → 持仓 → 资金) 一致, 见 strategy_backtest.py docstring。
-        """
+        """实时展示策略信号、Top N、现金和事件退出口径。"""
         def _get(name, default=""):
             var = getattr(self, name, None)
             try:
@@ -163,23 +164,36 @@ class StrategySetupMixin:
             except Exception:
                 return default
 
-        view = _get("v_st_view", "综合机会") or "综合机会"
-        weighting = _get("v_st_weighting", "机会分排序")
-        expo_text = (" → 按估值中位偏差缩放总仓位"
-                     if "估值" in str(_get("v_st_exposure", "恒定满仓")) else "")
-        if weighting == "等权全池":
-            return (f"当前逻辑: 准入筛选 → 「{view}」规则过滤 → 等权持有全部候选"
-                    f" (Top N 不参与) → 满仓, 缺口/缺价权重摊回已持仓{expo_text}")
+        rank_signal = normalize_pde_rank_signal_label(
+            _get("v_st_rank_signal", "稳健下修优势")
+        )
+        use_valuation_exposure = "估值" in str(
+            _get("v_st_exposure", "恒定满仓")
+        )
         try:
             n_text = str(max(1, int(float(_get("v_st_top_n", "10")))))
         except (TypeError, ValueError):
             n_text = "N"
         try:
-            yield_text = f"{float(_get('v_st_cash_yield', '0')):g}%/年计息"
+            yield_text = f"{float(_get('v_st_cash_yield', '0')):g}%/年"
         except (TypeError, ValueError):
-            yield_text = "0 计息"
-        return (f"当前逻辑: 准入筛选 → 「{view}」规则过滤 → 按机会分取前 {n_text} 只等权持有"
-                f" → 候选不足/缺价留现金 ({yield_text}){expo_text}")
+            yield_text = "不计息"
+        if rank_signal == "估值偏差":
+            signal_text = "估值偏差 < 0"
+            event_exit = False
+        else:
+            try:
+                min_edge = float(_get("v_st_min_reset_edge", "0"))
+                signal_text = f"{rank_signal} ≥ {min_edge:g}元"
+            except (TypeError, ValueError):
+                signal_text = rank_signal
+            event_exit = bool(_get("v_st_event_exit", True))
+        parts = [signal_text, f"Top {n_text} 等权", f"缺口留现金（{yield_text}）"]
+        if event_exit:
+            parts.append("公告后退出")
+        if use_valuation_exposure:
+            parts.append("估值缩放")
+        return " · ".join(parts)
 
     def _clear_strategy_codes(self):
         self.v_st_codes.set("")
@@ -253,6 +267,15 @@ class StrategySetupMixin:
             estimated_pricing * WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER
             if mode == "Wind高保真" else 0
         )
+        rank_raw = normalize_pde_rank_signal_label(
+            self.v_st_rank_signal.get()
+            if hasattr(self, "v_st_rank_signal") else "稳健下修优势"
+        )
+        uses_pde_down_reset_signal = "下修" in str(rank_raw)
+        estimated_pde_solves = (
+            estimated_pricing * PDE_DOWN_RESET_SOLVE_MULTIPLIER
+            if uses_pde_down_reset_signal else estimated_pricing
+        )
         history = self._strategy_history_precheck(schedule[:-1])
         patch = self._strategy_patch_precheck()
         events = self._strategy_events_precheck()
@@ -265,6 +288,11 @@ class StrategySetupMixin:
         ):
             warnings.append(
                 "Wind高保真会逐债拉取历史条款/状态/行情, 大池回测可能耗时数小时"
+            )
+        if uses_pde_down_reset_signal:
+            warnings.append(
+                "下修优势需逐债反解隐含强度并做参数角点重算, "
+                f"本地求解量约为普通回测的{PDE_DOWN_RESET_SOLVE_MULTIPLIER}倍"
             )
         if top_n > len(codes):
             warnings.append("TopN 大于代码池数量")
@@ -281,12 +309,16 @@ class StrategySetupMixin:
             "pool_label": pool_label,
             "pool_mode": self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场",
             "history_mode": mode,
+            "strategy_template": normalize_pde_strategy_template(self.v_st_template.get()),
+            "rank_signal_label": rank_raw,
             "code_count": len(codes),
             "period_count": period_count,
             "top_n": top_n,
             "grid_M": _STRATEGY_PDE_GRID_M,
             "grid_N": _STRATEGY_PDE_GRID_N,
             "estimated_pricing": estimated_pricing,
+            "estimated_pde_solves": estimated_pde_solves,
+            "uses_pde_down_reset_signal": uses_pde_down_reset_signal,
             "estimated_wind_requests": estimated_wind_requests,
             "history": history,
             "patch": patch,
@@ -347,24 +379,23 @@ class StrategySetupMixin:
 
     @staticmethod
     def _format_strategy_precheck(info: dict) -> str:
-        history = info["history"]
         warnings = info.get("warnings") or []
-        patch_info = f"{info['patch']['count']} 条"
-        if info['patch'].get('earliest') and info['patch'].get('latest'):
-            patch_info += f" ({info['patch']['earliest']}~{info['patch']['latest']})"
-        warning_text = "; ".join(warnings[:3]) if warnings else "未发现明显口径问题"
-        wind_text = ""
+        parts = [
+            f"{info['pool_label']} {info['code_count']}只",
+            f"{info['period_count']}期",
+            f"预计定价 {int(info['estimated_pricing']):,}次",
+        ]
+        if info.get("uses_pde_down_reset_signal"):
+            parts.append(f"模型求解 {int(info['estimated_pde_solves']):,}次")
         if info.get("estimated_wind_requests"):
-            wind_text = f" · Wind请求估算≈{info['estimated_wind_requests']} 次"
-        return (
-            f"规模 {info['pool_label']} {info['code_count']} 只 · "
-            f"{info['period_count']} 期 · Top{info['top_n']} · "
-            f"预计定价≈{info['estimated_pricing']} 次{wind_text} · "
-            f"{info.get('history_mode', '标准')}口径 · "
-            f"条款 {history['label']} 覆盖 {history['coverage_ratio']*100:.0f}% · "
-            f"修正 {patch_info} · 事件 {info['events']['count']} 条 · "
-            f"提醒: {warning_text}"
-        )
+            parts.append(f"Wind请求 {int(info['estimated_wind_requests']):,}次")
+        parts.append(str(info.get("history_mode") or "标准"))
+        if warnings:
+            suffix = f"（另有{len(warnings) - 1}项）" if len(warnings) > 1 else ""
+            parts.append(f"⚠ {warnings[0]}{suffix}")
+        else:
+            parts.append("口径检查通过")
+        return " · ".join(parts)
 
     @staticmethod
     def _strategy_codes_preview(codes, limit=6):

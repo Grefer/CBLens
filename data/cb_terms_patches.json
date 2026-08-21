@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-05-27T06:15:42"
+    "updated_at": "2026-08-18T19:26:55"
   },
   "patches": [
     {
@@ -22974,6 +22974,22 @@
       "bond_code": "111000.SH",
       "confidence": "parsed",
       "effective_date": "2025-09-11",
+      "event_date": "2025-09-09",
+      "fields": {
+        "conversion_price": 20.1
+      },
+      "note": "转股价 20.53->20.1 | https://static.cninfo.com.cn/finalpage/2025-09-10/1224646510.PDF",
+      "raw_title": "起帆电缆关于向下修正“起帆转债”转股价格暨转股停牌的公告",
+      "source": "cninfo",
+      "source_event_key": "111000.SH|2025-09-09|down_reset_approved|起帆电缆关于向下修正“起帆转债”转股价格暨转股停牌的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 20.53
+      },
+      "bond_code": "111000.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-09-11",
       "event_date": "2025-09-10",
       "fields": {
         "conversion_price": 20.1
@@ -30393,6 +30409,19 @@
     {
       "bond_code": "111000.SH",
       "confidence": "parsed",
+      "effective_date": "2026-04-20",
+      "event_date": "2026-04-20",
+      "fields": {
+        "outstanding_balance": 0.3
+      },
+      "note": "余额 0.3亿 | https://static.cninfo.com.cn/finalpage/2026-04-21/1225126892.PDF",
+      "raw_title": "起帆电缆关于不提前赎回“起帆转债”的公告",
+      "source": "cninfo",
+      "source_event_key": "111000.SH|2026-04-20|call_no_redemption|起帆电缆关于不提前赎回“起帆转债”的公告"
+    },
+    {
+      "bond_code": "111000.SH",
+      "confidence": "parsed",
       "effective_date": "2026-04-21",
       "event_date": "2026-04-21",
       "fields": {
@@ -35946,6 +35975,48 @@
       "raw_title": "关于柳工转2转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "127084.SZ|2026-05-27|conversion_price_adjusted|关于柳工转2转股价格调整的公告"
+    },
+    {
+      "bond_code": "111000.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225383526.PDF",
+      "raw_title": "上海起帆电缆股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "111000.SH|2026-06-23|rating_change|上海起帆电缆股份有限公司2026年度跟踪评级报告"
+    },
+    {
+      "bond_code": "111000.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225383522.PDF",
+      "raw_title": "起帆电缆关于起帆转债2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "111000.SH|2026-06-23|rating_change|起帆电缆关于起帆转债2026年跟踪评级结果的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 17.35
+      },
+      "bond_code": "111000.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-25",
+      "event_date": "2026-06-17",
+      "fields": {
+        "conversion_price": 17.29
+      },
+      "note": "转股价 17.35->17.29 | https://static.cninfo.com.cn/finalpage/2026-06-18/1225375756.PDF",
+      "raw_title": "起帆电缆关于“起帆转债”转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "111000.SH|2026-06-17|conversion_price_adjusted|起帆电缆关于“起帆转债”转股价格调整的公告"
     }
   ]
 }

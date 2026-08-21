@@ -42,13 +42,17 @@ class StrategyRenderMixin:
 
     # ── 懒渲染: 子页 tab 名 → 渲染函数映射 ──────────────────
     _STRATEGY_TAB_RENDERERS = {
+        "概览": "_render_strategy_overview_tab",
+        "持仓": "_render_strategy_positions_tab",
+        "诊断": "_render_strategy_diagnosis_tab",
+        "对比": "_render_strategy_compare_tab",
+        # 旧页名保留为兼容入口，不再出现在正常 GUI 中。
         "总览": "_render_strategy_overview_tab",
         "明细": "_render_strategy_detail_tab",
         "归因": "_render_strategy_attribution_tab",
         "风险": "_render_strategy_risk_tab",
         "稳健性": "_render_strategy_robustness_tab",  # legacy alias, kept for tests/old callbacks
         "数据": "_render_strategy_data_tab",
-        "对比": "_render_strategy_compare_tab",
     }
 
     def _mark_strategy_tabs_dirty(self, *tab_names):
@@ -118,21 +122,8 @@ class StrategyRenderMixin:
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(expand=True, fill="both", padx=24, pady=20)
         ctk.CTkLabel(
-            inner, text="👋 这里会显示策略回测结果",
-            font=(FONT_FAMILY, 15, "bold"), text_color=get_color(TEXT),
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            inner, justify="left", font=(FONT_FAMILY, 13), text_color=get_color(TEXT),
-            text=("① 顶部「策略方案」选一个 (如「稳健打底」) — 相关参数会自动填好\n"
-                  "② 确认「开始 / 结束」日期区间与「频率」\n"
-                  "③ 点右下角「⚡ 运行策略」"),
-        ).pack(anchor="w", pady=(10, 8))
-        ctk.CTkLabel(
-            inner, justify="left", font=(FONT_FAMILY, 12), text_color=get_color(TEXT_DIM),
-            text=("跑完后这里出现净值曲线, 上方指标卡显示收益 / 回撤 / Sharpe;\n"
-                  "「总览」下方「稳健性」卡会告诉你结果是不是只是运气。\n"
-                  "勾选「基准」可叠加等权全池与中证转债指数两条对照线。\n"
-                  "想细调选券权重 / 现金计息 / 仓位择时, 展开顶部「高级设置」。"),
+            inner, text="暂无回测结果 · 已保存快照会自动恢复",
+            font=(FONT_FAMILY, 14, "bold"), text_color=get_color(TEXT),
         ).pack(anchor="w")
 
     def _clear_active_strategy_backtest_result(self, *, status: str | None = None):
@@ -236,8 +227,13 @@ class StrategyRenderMixin:
         self._render_strategy_selection_panel(result)
         self._render_strategy_table(result)
 
+    def _render_strategy_positions_tab(self, result):
+        self._render_strategy_selection_panel(result)
+        self._render_strategy_table(result)
+        self._render_strategy_attribution(result)
+
     def _on_strategy_detail_filter_change(self, *_):
-        self._mark_strategy_tabs_dirty("明细")
+        self._mark_strategy_tabs_dirty("持仓", "明细")
         if hasattr(self, "after_idle"):
             self.after_idle(self._render_current_strategy_tab)
         else:
@@ -257,6 +253,10 @@ class StrategyRenderMixin:
             self._render_strategy_risk_panel(result)
 
     def _render_strategy_data_tab(self, result):
+        self._render_strategy_data_panel(result)
+
+    def _render_strategy_diagnosis_tab(self, result):
+        self._render_strategy_risk_panel(result)
         self._render_strategy_data_panel(result)
 
     def _render_strategy_compare_tab(self, result):
@@ -283,19 +283,28 @@ class StrategyRenderMixin:
             else:
                 lbl.configure(text_color=green if value > 0 else red)
 
+        def set_value(key, value):
+            var = stats.get(key)
+            if var is not None:
+                var.set(value)
+
         final_equity = summary.get("final_equity")
-        stats["final_equity"].set(f"{float(final_equity):.4f}" if final_equity is not None else "—")
+        set_value(
+            "final_equity",
+            f"{float(final_equity):.4f}" if final_equity is not None else "—",
+        )
         total_return = summary.get("total_return")
         annualized = summary.get("annualized_return")
         excess = summary.get("excess_return")
         sharpe = summary.get("sharpe")
         sortino = summary.get("sortino")
         calmar = summary.get("calmar")
-        stats["total_return"].set(pct(total_return, sign=True))
-        stats["annualized"].set(pct(annualized, sign=True))
-        stats["excess"].set(pct(excess, sign=True))
-        stats["max_drawdown"].set(pct(summary.get("max_drawdown")))
-        stats["sharpe"].set(
+        set_value("total_return", pct(total_return, sign=True))
+        set_value("annualized", pct(annualized, sign=True))
+        set_value("excess", pct(excess, sign=True))
+        set_value("max_drawdown", pct(summary.get("max_drawdown")))
+        set_value(
+            "sharpe",
             f"{sharpe:.2f}" if sharpe is not None and np.isfinite(sharpe) else "—")
         if "sortino" in stats:
             stats["sortino"].set(
@@ -307,7 +316,7 @@ class StrategyRenderMixin:
             stats["hit_rate"].set(pct(summary.get("hit_rate")))
         if "cash" in stats:
             stats["cash"].set(pct(summary.get("avg_cash_weight")))
-        stats["turnover"].set(pct(summary.get("avg_turnover")))
+        set_value("turnover", pct(summary.get("avg_turnover")))
         colorize("total_return", total_return)
         colorize("annualized", annualized)
         colorize("excess", excess)
@@ -322,7 +331,7 @@ class StrategyRenderMixin:
         for child in frame.winfo_children():
             child.destroy()
         frame.grid_rowconfigure(0, weight=1)
-        for col in range(5):
+        for col in range(4):
             frame.grid_columnconfigure(col, weight=1, uniform="strategy_insight")
 
         summary = result.get("summary") or {}
@@ -348,32 +357,16 @@ class StrategyRenderMixin:
             verdict = "暂无足够收益数据"
         quality = "高" if fallback_ratio <= 0 else ("中" if fallback_ratio <= 0.2 else "低")
 
-        # 稳健性 (块自助): Sharpe CI 是否含 0 / 跑赢基准概率 — 判断差异是否为噪声
-        stab = summary.get("stability") or {}
-        sb = stab.get("sharpe_bootstrap")
-        eb = stab.get("excess_bootstrap")
-        if sb:
-            spans_zero = sb["ci_low"] <= 0 <= sb["ci_high"]
-            robust_value = f"Sharpe {sb['point']:.2f}∈[{sb['ci_low']:.2f},{sb['ci_high']:.2f}]"
-            if eb:
-                robust_value += f" · 跑赢基准 {eb['prob_beat_benchmark']*100:.0f}%"
-            robust_value += "\n⚠ CI 含 0, 难言显著" if spans_zero else "\nCI 不含 0"
-        else:
-            robust_value = "样本不足 (期数过少)"
-
         hints = {
-            "结论": "解读铁律: 一切对照「等权基准」——跑不赢基准 = 这套规则没有超额,\n"
-                    "哪怕绝对收益为正。机会分是复核标记、不是收益预测;\n"
-                    "单一市场周期的回测不构成策略承诺 (详见 USAGE 4.2 与 README 模型边界)。",
+            "结论": "下修机会策略比较‘模型给定’与‘市场隐含’的下修强度;\n"
+                    "估值偏差策略比较市价与理论价。两者都必须对照等权/指数基准解读;\n"
+                    "稳健优势只代表对当前参数扰动不敏感，不等于统计显著的收益预测。",
             "最大回撤": "净值从峰值到谷底的最大跌幅 = 历史上最深要忍受的亏损。\n"
                        "对照基准回撤判断风险是否换来了收益; 与持仓集中度、现金缓冲相关。",
             "主要贡献": "收益贡献最大的单券。若总收益高度依赖个别券 (尤其强赎/退市收敛券),\n"
-                       "说明结果偏尾部运气而非系统性能力, 复现性存疑——去「归因」页核对。",
+                       "说明结果偏尾部运气而非系统性能力, 复现性存疑——去「持仓」页核对。",
             "数据质量": "条款回退占比 = 用当前条款顶替历史条款的样本比例, >0 有未来信息渗入风险。\n"
-                       "下结论前先看「数据」子页的补丁覆盖率与缺价跳过数。",
-            "稳健性": "块自助法给 Sharpe 的置信区间与跑赢基准概率, 判断差异是不是噪声。\n"
-                     "CI 含 0 = 收益可能只是运气, 别把点估计当真; 样本期越短越宽。\n"
-                     "这是抵御'单段历史拍脑袋'的关键读数 (详见研究笔记治理规则)。",
+                       "下结论前先看「诊断」页的数据来源与缺价跳过数。",
         }
         items = [
             ("结论", verdict),
@@ -385,7 +378,6 @@ class StrategyRenderMixin:
                 f"{top_name} {self._fmt_strategy_pct(top_contrib.get('contribution'), sign=True)}"
             )),
             ("数据质量", f"{quality} · 条款回退占比 {self._fmt_strategy_pct(fallback_ratio)}"),
-            ("稳健性", robust_value),
         ]
         for col, (title, value) in enumerate(items):
             cell = ctk.CTkFrame(frame, fg_color=BG_INPUT, corner_radius=8, height=76)
@@ -634,10 +626,11 @@ class StrategyRenderMixin:
                     row.get("rank", ""),
                     row.get("bond_code", ""),
                     row.get("bond_name", ""),
-                    f"{float(row.get('score')):.1f}" if row.get("score") is not None else "—",
+                    self._strategy_signal_text(row),
+                    self._fmt_strategy_pct(row.get("effective_p_down_1y_prob")),
+                    self._fmt_strategy_pct(row.get("implied_p_down_1y_prob")),
                     self._fmt_strategy_price(row.get("market_price")),
                     self._fmt_strategy_pct(row.get("deviation"), sign=True),
-                    self._fmt_strategy_pct(row.get("conversion_premium"), sign=True),
                     row.get("confidence", ""),
                     row.get("selection_reason", ""),
                 ])
@@ -653,10 +646,11 @@ class StrategyRenderMixin:
                     "",
                     row.get("bond_code", ""),
                     row.get("bond_name", ""),
-                    f"{float(row.get('score')):.1f}" if row.get("score") is not None else "—",
+                    self._strategy_signal_text(row),
+                    self._fmt_strategy_pct(row.get("effective_p_down_1y_prob")),
+                    self._fmt_strategy_pct(row.get("implied_p_down_1y_prob")),
                     self._fmt_strategy_price(row.get("market_price")),
                     self._fmt_strategy_pct(row.get("deviation"), sign=True),
-                    self._fmt_strategy_pct(row.get("conversion_premium"), sign=True),
                     row.get("confidence", ""),
                     " / ".join(
                         text for text in (
@@ -670,11 +664,11 @@ class StrategyRenderMixin:
         all_rows = candidate_rows + rejection_rows
         self._render_strategy_small_tree(
             frame, 2, 0,
-            ["period", "status", "rank", "code", "name", "score", "price",
-             "dev", "premium", "confidence", "reason"],
-            ["区间", "状态", "排名", "代码", "名称", "分数", "价格",
-             "偏差", "溢价", "置信", "解释/原因"],
-            [150, 58, 44, 88, 88, 56, 64, 68, 68, 52, 340],
+            ["period", "status", "rank", "code", "name", "signal", "model_prob",
+             "implied_prob", "price", "dev", "confidence", "reason"],
+            ["区间", "状态", "排名", "代码", "名称", "策略信号", "模型1Y",
+             "隐含1Y", "价格", "偏差", "置信", "解释/原因"],
+            [150, 58, 44, 88, 88, 100, 72, 72, 64, 68, 52, 340],
             all_rows,
             xscroll=True,
             max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
@@ -760,6 +754,13 @@ class StrategyRenderMixin:
         for period in periods:
             period_label = f"{period.get('start_date')} → {period.get('end_date')}"
             for pos in period.get("positions") or []:
+                exit_reason = (
+                    "下修事件退出"
+                    if pos.get("exit_reason") == "down_reset_event" else "调仓退出"
+                )
+                notes = [str(tag) for tag in pos.get("risk_tags") or []]
+                if pos.get("exit_event_title"):
+                    notes.append(str(pos.get("exit_event_title")))
                 detail_rows.append([
                     period_label,
                     "成交",
@@ -768,11 +769,13 @@ class StrategyRenderMixin:
                     pos.get("bond_name", ""),
                     self._fmt_strategy_pct(pos.get("return_contribution"), sign=True),
                     self._fmt_strategy_pct(pos.get("period_return"), sign=True),
-                    f"{float(pos.get('score')):.1f}" if pos.get("score") is not None else "—",
+                    self._strategy_signal_text(pos),
+                    self._fmt_strategy_pct(pos.get("effective_p_down_1y_prob")),
+                    self._fmt_strategy_pct(pos.get("implied_p_down_1y_prob")),
                     pos.get("confidence", ""),
                     f"{pos.get('entry_date', '—')} @ {self._fmt_strategy_price(pos.get('start_price'))}",
-                    f"{pos.get('exit_date', '—')} @ {self._fmt_strategy_price(pos.get('end_price'))}",
-                    " / ".join(str(tag) for tag in pos.get("risk_tags") or []),
+                    f"{pos.get('exit_date', '—')} @ {self._fmt_strategy_price(pos.get('end_price'))} · {exit_reason}",
+                    " / ".join(notes),
                 ])
             for pos in period.get("skipped_positions") or []:
                 detail_rows.append([
@@ -781,6 +784,8 @@ class StrategyRenderMixin:
                     "",
                     pos.get("bond_code", ""),
                     pos.get("bond_name", ""),
+                    "—",
+                    "—",
                     "—",
                     "—",
                     "—",
@@ -794,10 +799,10 @@ class StrategyRenderMixin:
         tree = self._render_strategy_small_tree(
             self.strategy_bt_table_frame, 3, 0,
             ["period", "status", "rank", "code", "name", "contrib", "ret",
-             "score", "confidence", "entry", "exit", "note"],
+             "signal", "model_prob", "implied_prob", "confidence", "entry", "exit", "note"],
             ["区间", "状态", "排名", "代码", "名称", "贡献(%)", "收益(%)",
-             "分数", "置信", "买入", "卖出", "标签/原因"],
-            [170, 56, 52, 88, 96, 76, 76, 62, 58, 122, 122, 260],
+             "策略信号", "模型1Y", "隐含1Y", "置信", "买入", "卖出/原因", "标签/事件"],
+            [170, 56, 52, 88, 96, 76, 76, 100, 72, 72, 58, 122, 190, 260],
             detail_rows,
             xscroll=True,
             max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
@@ -915,3 +920,30 @@ class StrategyRenderMixin:
         except (TypeError, ValueError):
             return "—"
         return f"{f:.2f}" if np.isfinite(f) else "—"
+
+    def _strategy_signal_text(self, row):
+        """策略信号的紧凑展示；旧快照显式标成兼容分。"""
+        signal = str(row.get("rank_signal") or "")
+        value = row.get("rank_value")
+        if value is None:
+            if signal == "down_reset_robust_edge":
+                value = row.get("down_reset_robust_edge_value")
+            elif signal == "down_reset_edge":
+                value = row.get("down_reset_edge_value")
+            elif signal == "deviation":
+                value = row.get("deviation")
+            else:
+                value = row.get("score")
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        if not np.isfinite(number):
+            return "—"
+        if signal == "down_reset_robust_edge":
+            return f"稳健 {number:+.2f}元"
+        if signal == "down_reset_edge":
+            return f"下修 {number:+.2f}元"
+        if signal == "deviation":
+            return f"偏差 {number*100:+.2f}%"
+        return f"旧分 {number:.1f}"

@@ -19,20 +19,25 @@ from ...historical_terms import (
     project_terms_patches_path,
 )
 from ...paths import data_dir
-from ...strategy_backtest import (
-    ScoreStrategyConfig,
-    _funding_legacy_alias,
-    _normalize_holding_mode,
-    backtest_score_strategy,
+from ...pricing_api import (
+    DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND,
+    DEFAULT_PDE_SIGNAL_SPREAD_BAND,
 )
-from ..theme import VOL_WINDOW_MAP
-from ..constants import normalize_strategy_history_mode
+from ...strategy_backtest import (
+    PDEStrategyConfig,
+    _funding_legacy_alias,
+    backtest_pde_strategy,
+    strategy_type_for_rank_signal,
+)
+from ..theme import VOL_WINDOW_MAP, E
+from ..constants import normalize_pde_rank_signal_label, normalize_strategy_history_mode
 
 from .strategy_common import (
     STRATEGY_BACKTEST_PRO_FEATURE,
     STRATEGY_BACKTEST_PRO_PREVIEW,
     STRATEGY_VIEW_POLICY,
     StrategyBacktestCancelled,
+    PDE_DOWN_RESET_SOLVE_WARN_LIMIT,
     WIND_HIGH_FIDELITY_CODE_WARN_LIMIT,
     WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT,
     _DEFAULT_VIEW_POLICY,
@@ -74,36 +79,50 @@ class StrategyRunMixin:
             return
 
         freq_map = {"周": "W", "月": "M", "季": "Q"}
-        view = self.v_st_view.get()
-        policy = STRATEGY_VIEW_POLICY.get(view, _DEFAULT_VIEW_POLICY)
+        policy = STRATEGY_VIEW_POLICY.get("综合机会", _DEFAULT_VIEW_POLICY)
         # 本地全市场池含大量退市/已到期/定向债, 静态全量送 Wind 会大面积取数失败。
         # 改用动态时点池: 每期先按 list_tradable_cbs(当期) 取存活券再筛选定价,
         # 无幸存者偏差且从源头避开死债的 Wind 请求。自选/当前筛选池保持静态。
         gui_pool_mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
         engine_pool_mode = "dynamic" if gui_pool_mode == "本地全市场" else "static"
         try:
-            holding_mode = _normalize_holding_mode(
-                getattr(self, "v_st_weighting", None).get()
-                if getattr(self, "v_st_weighting", None) is not None else "top_score")
-            # pool→满仓等权(缺价摊回); top_score→缺口留现金 (沿用旧 score_rank 行为)
-            funding_mode = "full_invest" if holding_mode == "pool" else "reserve_cash"
             cash_yield_pct = (
                 self._optional_float(self.v_st_cash_yield)
                 if hasattr(self, "v_st_cash_yield") else None)
             exposure_raw = (getattr(self, "v_st_exposure", None).get()
                             if getattr(self, "v_st_exposure", None) is not None else "恒定满仓")
             exposure_mode = "valuation" if "估值" in str(exposure_raw) else "full"
-            config = ScoreStrategyConfig(
+            rank_label = normalize_pde_rank_signal_label(
+                getattr(self, "v_st_rank_signal", None).get()
+                if getattr(self, "v_st_rank_signal", None) is not None
+                else "稳健下修优势"
+            )
+            rank_signal = {
+                "稳健下修优势": "down_reset_robust_edge",
+                "下修优势": "down_reset_edge",
+                "估值偏差": "deviation",
+            }[rank_label]
+            is_down_reset = rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
+            min_reset_edge = (
+                self._optional_float(self.v_st_min_reset_edge)
+                if is_down_reset and hasattr(self, "v_st_min_reset_edge") else None
+            )
+            event_exit = bool(self.v_st_event_exit.get()) if hasattr(self, "v_st_event_exit") else True
+            config = PDEStrategyConfig(
                 top_n=max(1, int(float(self.v_st_top_n.get()))),
-                holding_mode=holding_mode,
-                funding_mode=funding_mode,
+                holding_mode="top_score",
+                rank_signal=rank_signal,
+                min_down_reset_edge_value=min_reset_edge,
+                down_reset_event_exit=bool(event_exit and is_down_reset),
+                funding_mode="reserve_cash",
                 cash_yield_rate=max(0.0, (cash_yield_pct or 0.0) / 100.0),
                 exposure_mode=exposure_mode,
                 rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
-                selection_view=view,
+                selection_view="综合机会",
+                min_score=None,
                 min_confidence=policy["min_confidence"],
                 exclude_risk_tags=(
-                    ScoreStrategyConfig().exclude_risk_tags
+                    PDEStrategyConfig().exclude_risk_tags
                     if policy["exclude_review_risks"] else ()
                 ),
                 min_market_price=self._optional_float(self.v_st_min_price),
@@ -114,11 +133,11 @@ class StrategyRunMixin:
                 max_deviation=self._optional_pct(self.v_st_max_deviation),
                 min_sigma=self._optional_pct(self.v_st_min_sigma),
                 max_sigma=self._optional_pct(self.v_st_max_sigma),
-                execution_timing="next_close",
                 transaction_cost=max(0.0, self._optional_float(self.v_st_cost) or 0.0) / 10000.0,
-                compute_benchmark=bool(self.v_st_benchmark.get()),
-                # 开启基准时自动叠加中证转债指数第二基准 (Wind 可取; 其它源优雅缺省)
-                benchmark_index_code=("000832.CSI" if bool(self.v_st_benchmark.get()) else None),
+                # 基准是回测解释口径的一部分，GUI 固定计算全池等权基准，
+                # 并在数据源支持时叠加中证转债指数。
+                compute_benchmark=True,
+                benchmark_index_code="000832.CSI",
                 pool_mode=engine_pool_mode,
             )
             admission_config = AdmissionFilterConfig(
@@ -127,15 +146,7 @@ class StrategyRunMixin:
                 min_credit_rating=self.v_st_min_rating.get().strip() or None,
                 min_turnover_amount=self._optional_float(self.v_st_min_turnover),
             )
-            params = dict(
-                r=float(self.v_r.get()) / 100.0,
-                base_spread=float(self.v_spread.get()) / 100.0,
-                p_down=float(self.v_p_down.get()) / 100.0,
-                distress_k=float(self.v_dk.get()) / 100.0,
-                M=_STRATEGY_PDE_GRID_M,
-                N=_STRATEGY_PDE_GRID_N,
-                vol_window_days=VOL_WINDOW_MAP.get(self.v_vol_window.get(), 21),
-            )
+            params = self._strategy_pricing_params()
         except ValueError as exc:
             messagebox.showerror("参数错误", f"策略参数解析失败: {exc}")
             return
@@ -150,25 +161,40 @@ class StrategyRunMixin:
             self.v_st_precheck.set(f"⚠ 预检异常: {exc}")
             self._strategy_bt_expected_pricing = None
 
+        expensive_confirmed = False
         if precheck is not None and precheck.get("history_mode") == "Wind高保真":
             params["max_workers"] = 1
             if self._strategy_wind_high_fidelity_is_expensive(precheck):
                 if not self._confirm_expensive_wind_strategy_backtest(precheck):
                     self.v_st_status.set("已取消 Wind高保真大池回测")
                     return
+                expensive_confirmed = True
+        if (
+            precheck is not None
+            and not expensive_confirmed
+            and self._strategy_pde_signal_is_expensive(precheck)
+        ):
+            if not self._confirm_expensive_pde_strategy_backtest(precheck):
+                self.v_st_status.set("已取消下修机会大池回测")
+                return
         history_mode = (
             precheck.get("history_mode") if precheck is not None
             else normalize_strategy_history_mode(
-                self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+                self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "Wind高保真"
             )
         )
 
-        source = self.v_data_source.get()
+        requested_source = self.v_data_source.get()
+        # Wind高保真的条款与行情都由 Wind 提供；冻结有效数据源，
+        # 避免顶部动态数据源名与实际 provider 不一致。
+        source = "Wind" if history_mode == "Wind高保真" else requested_source
         run_settings = self._strategy_run_settings(
             codes=codes,
             start=start,
             end=end,
             source=source,
+            requested_source=requested_source,
+            template_name=self.v_st_template.get(),
             history_mode=history_mode,
             gui_pool_mode=gui_pool_mode,
             engine_pool_mode=engine_pool_mode,
@@ -179,7 +205,9 @@ class StrategyRunMixin:
         )
         self._strategy_bt_cancel = threading.Event()
         self._strategy_bt_running = True
-        self.btn_strategy_backtest.configure(text="停止", command=self._cancel_strategy_backtest)
+        self.btn_strategy_backtest.configure(
+            text=E("■ 停止"), command=self._cancel_strategy_backtest
+        )
         self.btn_strategy_bt_csv.configure(state="disabled")
         if hasattr(self, "strategy_bt_progress"):
             self.strategy_bt_progress.set(0)
@@ -211,15 +239,39 @@ class StrategyRunMixin:
         )
 
     @staticmethod
+    def _strategy_pde_signal_is_expensive(precheck: dict) -> bool:
+        return bool(
+            precheck.get("uses_pde_down_reset_signal")
+            and int(precheck.get("estimated_pde_solves") or 0)
+            > PDE_DOWN_RESET_SOLVE_WARN_LIMIT
+        )
+
+    @staticmethod
+    def _confirm_expensive_pde_strategy_backtest(precheck: dict) -> bool:
+        return messagebox.askokcancel(
+            "下修机会计算量较大",
+            "当前配置需要逐债反解市场隐含下修强度并运行参数情景:\n\n"
+            f"代码池: {precheck.get('code_count')} 只\n"
+            f"调仓期: {precheck.get('period_count')} 期\n"
+            f"模型求解估算: ≈{precheck.get('estimated_pde_solves')} 次\n\n"
+            "建议先缩短区间或切换到当前筛选结果/自选代码的小池验证。",
+        )
+
+    @staticmethod
     def _confirm_expensive_wind_strategy_backtest(precheck: dict) -> bool:
+        pde_line = (
+            f"模型求解估算: ≈{precheck.get('estimated_pde_solves')} 次\n"
+            if precheck.get("uses_pde_down_reset_signal") else ""
+        )
         return messagebox.askokcancel(
             "Wind高保真回测耗时很长",
             "当前配置会对 Wind 做大量同步请求:\n\n"
             f"代码池: {precheck.get('code_count')} 只\n"
             f"调仓期: {precheck.get('period_count')} 期\n"
             f"预计定价: ≈{precheck.get('estimated_pricing')} 次\n"
+            f"{pde_line}"
             f"Wind请求估算: ≈{precheck.get('estimated_wind_requests')} 次\n\n"
-            "建议改用「标准」历史口径, 或切换到「当前筛选结果/自选代码」的小池再跑。"
+            "建议改用「快速验证」数据模式, 或切换到「当前筛选结果/自选代码」的小池再跑。"
             "仍要继续时将自动把 Wind 调用设为单线程, 但耗时仍可能很长。",
         )
 
@@ -244,7 +296,7 @@ class StrategyRunMixin:
         run_settings,
     ):
         try:
-            provider = self._build_strategy_provider(source)
+            provider = self._build_strategy_provider(source, history_mode=history_mode)
 
             def cancel_check():
                 if self._strategy_bt_cancel is not None and self._strategy_bt_cancel.is_set():
@@ -279,7 +331,7 @@ class StrategyRunMixin:
                 self.after(0, _update)
 
             try:
-                result = backtest_score_strategy(
+                result = backtest_pde_strategy(
                     provider,
                     codes,
                     start_date=start,
@@ -329,7 +381,9 @@ class StrategyRunMixin:
 
     def _finish_strategy_backtest(self):
         self._strategy_bt_running = False
-        self.btn_strategy_backtest.configure(text="运行策略", command=self._run_strategy_backtest)
+        self.btn_strategy_backtest.configure(
+            text=E("▶ 运行回测"), command=self._run_strategy_backtest
+        )
         if getattr(self, "_last_strategy_bt_result", None):
             self.btn_strategy_bt_csv.configure(state="normal")
 
@@ -351,8 +405,13 @@ class StrategyRunMixin:
         elif snapshot_info:
             self.v_st_status.set(f"策略回测完成 · 快照已保存: {snapshot_info['path'].name}")
 
-    def _build_strategy_provider(self, source):
-        raw_mode = self.v_st_history_mode.get() if hasattr(self, "v_st_history_mode") else "标准"
+    def _build_strategy_provider(self, source, *, history_mode=None):
+        raw_mode = history_mode
+        if raw_mode is None:
+            raw_mode = (
+                self.v_st_history_mode.get()
+                if hasattr(self, "v_st_history_mode") else "Wind高保真"
+            )
         mode = normalize_strategy_history_mode(raw_mode)
         if mode == "Wind高保真":
             # 高保真 = 条款逐日从 Wind 历史 tradeDate 拉取; 但日级状态 (停牌/强赎/
@@ -398,6 +457,35 @@ class StrategyRunMixin:
         raw = var.get().strip()
         return float(raw) / 100.0 if raw else None
 
+    def _strategy_pricing_params(self):
+        """仅从策略页取 PDE 参数，不读取单债定价页状态。"""
+        sigma_band = (
+            float(self.v_st_sigma_band.get()) / 100.0
+            if hasattr(self, "v_st_sigma_band")
+            else DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND
+        )
+        spread_band = (
+            float(self.v_st_spread_band_bps.get()) / 10000.0
+            if hasattr(self, "v_st_spread_band_bps")
+            else DEFAULT_PDE_SIGNAL_SPREAD_BAND
+        )
+        if sigma_band < 0 or spread_band < 0:
+            raise ValueError("稳健情景扰动幅度不能为负")
+        p_down = float(self.v_st_p_down.get()) / 100.0
+        if p_down < 0.0:
+            raise ValueError("年化下修强度不能为负")
+        return {
+            "r": float(self.v_st_r.get()) / 100.0,
+            "base_spread": float(self.v_st_spread.get()) / 100.0,
+            "p_down": p_down,
+            "distress_k": float(self.v_st_distress_k.get()) / 100.0,
+            "M": _STRATEGY_PDE_GRID_M,
+            "N": _STRATEGY_PDE_GRID_N,
+            "vol_window_days": VOL_WINDOW_MAP.get(self.v_st_vol_window.get(), 21),
+            "pde_signal_sigma_rel_band": sigma_band,
+            "pde_signal_spread_band": spread_band,
+        }
+
     @staticmethod
     def _strategy_run_settings(
         *,
@@ -405,6 +493,8 @@ class StrategyRunMixin:
         start,
         end,
         source,
+        requested_source,
+        template_name,
         history_mode,
         gui_pool_mode,
         engine_pool_mode,
@@ -415,6 +505,7 @@ class StrategyRunMixin:
     ):
         return {
             "data_source": source,
+            "requested_data_source": requested_source,
             "start_date": start,
             "end_date": end,
             "history_mode": history_mode,
@@ -425,10 +516,15 @@ class StrategyRunMixin:
                 "bond_codes": list(codes),
             },
             "strategy": {
+                "template": template_name,
+                "strategy_type": strategy_type_for_rank_signal(config.rank_signal),
                 "selection_view": config.selection_view,
                 "rebalance_freq": config.rebalance_freq,
                 "top_n": config.top_n,
                 "holding_mode": config.holding_mode,
+                "rank_signal": config.rank_signal,
+                "min_down_reset_edge_value": config.min_down_reset_edge_value,
+                "down_reset_event_exit": config.down_reset_event_exit,
                 "max_holdings": config.max_holdings,
                 "funding_mode": config.funding_mode,
                 "cash_yield_rate": config.cash_yield_rate,
@@ -464,6 +560,9 @@ class StrategyRunMixin:
             "precheck": {
                 "period_count": precheck.get("period_count") if isinstance(precheck, dict) else None,
                 "estimated_pricing": precheck.get("estimated_pricing") if isinstance(precheck, dict) else None,
+                "estimated_pde_solves": (
+                    precheck.get("estimated_pde_solves") if isinstance(precheck, dict) else None
+                ),
                 "estimated_wind_requests": (
                     precheck.get("estimated_wind_requests") if isinstance(precheck, dict) else None
                 ),

@@ -6,7 +6,9 @@ from datetime import date, timedelta
 import pytest
 
 from convertible_bond import pricing_api
+from convertible_bond.cb_events import CBEvent, CBEventStore
 from convertible_bond.data_providers import BondTerms
+from convertible_bond.down_reset_overrides import PROPOSED_EFFECTIVE_LAG_DAYS
 from convertible_bond.historical_terms import TermsPatch, TermsPatchStore
 
 
@@ -247,6 +249,112 @@ def test_price_from_provider_reports_down_reset_uplift(monkeypatch):
     assert result["no_down_price"] == 100.0
     assert result["down_reset_uplift"] == pytest.approx(8.0)
     assert result["down_reset_uplift_pct"] == pytest.approx(8.0 / 108.0)
+    assert result["pde_down_reset_signal_status"] == "not_computed"
+
+
+def test_price_from_provider_computes_pde_down_reset_signals_on_demand(monkeypatch):
+    calls = {}
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            if kwargs["p_down"] <= 0:
+                return 100.0
+            return (
+                104.0
+                + 10.0 * (kwargs["sigma"] - 0.20)
+                - 50.0 * (kwargs["base_spread"] - 0.03)
+            )
+
+        def down_reset_sensitivity(self, **kwargs):
+            calls["sensitivity"] = kwargs
+            return 0.25
+
+        def solve_implied_p_down(self, **kwargs):
+            calls["implied"] = kwargs
+            return 0.10
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+
+    result = pricing_api.price_from_provider(
+        SimplePricingProvider(_base_terms()),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+        p_down=0.15,
+        compute_pde_signals=True,
+    )
+
+    assert calls["implied"]["target_price"] == pytest.approx(101.0)
+    assert calls["implied"]["p_down_hi"] == pytest.approx(3.0)
+    assert calls["sensitivity"]["bump"] == pytest.approx(0.01)
+    assert result["implied_p_down"] == pytest.approx(0.10)
+    assert result["p_down_gap"] == pytest.approx(0.05)
+    assert result["effective_p_down_1y_prob"] > result["implied_p_down_1y_prob"]
+    assert result["down_reset_probability_gap"] > 0
+    assert result["down_reset_sensitivity"] == pytest.approx(0.25)
+    assert result["down_reset_edge_value"] == pytest.approx(3.0)
+    assert result["down_reset_edge_pct"] == pytest.approx(3.0 / 101.0)
+    assert result["down_reset_robust_edge_value"] == pytest.approx(2.2)
+    assert result["down_reset_edge_scenario_range"] == pytest.approx(1.6)
+    assert result["down_reset_edge_worst_sigma"] == pytest.approx(0.17)
+    assert result["down_reset_edge_worst_spread"] == pytest.approx(0.04)
+    assert result["down_reset_edge_scenario_count"] == 5
+    assert result["pde_down_reset_robust_status"] == "ok"
+    assert result["pde_down_reset_signal_status"] == "ok"
+
+
+def test_price_from_provider_uses_wrapped_provider_history_stores(monkeypatch, tmp_path):
+    provider = SimplePricingProvider(_base_terms())
+    provider.event_store = CBEventStore(tmp_path / "custom-events.json")
+    provider.patch_store = TermsPatchStore(tmp_path / "custom-patches.json")
+    provider.patch_store.add_many([
+        TermsPatch(
+            bond_code="199999.SZ",
+            effective_date=date(2026, 5, 5),
+            fields={"conversion_price": 9.0},
+        )
+    ])
+    proposal_date = date(2026, 5, 10)
+    provider.event_store.add_many([
+        CBEvent(
+            bond_code="199999.SZ",
+            event_date=proposal_date,
+            event_type="down_reset_proposed",
+            raw_title="董事会提议向下修正转股价格",
+        )
+    ])
+    constructor_calls = []
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            constructor_calls.append(kwargs)
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            return 104.0 if kwargs["p_down"] > 0 else 100.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+
+    result = pricing_api.price_from_provider(
+        pricing_api._BatchStockCache(provider),
+        "199999.SZ",
+        valuation_date=date(2026, 5, 20),
+        sigma=0.20,
+    )
+
+    expected_date = proposal_date + timedelta(days=PROPOSED_EFFECTIVE_LAG_DAYS)
+    assert result["down_reset_proposed_date"] == proposal_date
+    assert result["down_reset_scheduled_date"] == expected_date
+    assert result["K"] == pytest.approx(9.0)
+    assert constructor_calls[0]["scheduled_reset_date"] == expected_date
 
 
 def test_price_from_provider_marks_risky_single_bond_signal(monkeypatch):

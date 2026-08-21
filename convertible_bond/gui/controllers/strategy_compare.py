@@ -37,19 +37,31 @@ class StrategyCompareMixin:
     def _record_strategy_comparison_result(self, result):
         summary = result.get("summary") or {}
         config = result.get("config") or {}
-        try:
-            template = self.v_st_template.get()
-            view = self.v_st_view.get()
-            freq = self.v_st_freq.get()
-            top_n = self.v_st_top_n.get()
-        except Exception:
-            template = "—"
-            view = config.get("selection_view", "—")
-            freq = config.get("rebalance_freq", "—")
-            top_n = config.get("top_n", "—")
+        strategy_type = str(config.get("strategy_type") or "")
+        if not strategy_type:
+            strategy_type = {
+                "deviation": "pde_valuation",
+                "down_reset_edge": "pde_down_reset",
+                "down_reset_robust_edge": "pde_down_reset",
+            }.get(config.get("rank_signal"), "legacy")
+        strategy_name = {
+            "pde_down_reset": "下修机会",
+            "pde_valuation": "估值偏差",
+        }.get(strategy_type, f"旧策略·{config.get('selection_view') or '—'}")
+        rank_label = {
+            "deviation": "估值偏差",
+            "down_reset_edge": "下修优势",
+            "down_reset_robust_edge": "稳健下修优势",
+        }.get(config.get("rank_signal"), "旧机会分")
+        freq = config.get("rebalance_freq") or "—"
+        top_n = config.get("top_n") or "—"
+        history_mode = {
+            "标准": "快速验证",
+            "Wind高保真": "Wind 历史",
+        }.get(config.get("history_mode"), config.get("history_mode") or "数据模式未记录")
         label = (
-            f"{template} · {config.get('selection_view') or view} · "
-            f"{freq}频 Top{config.get('top_n') or top_n}"
+            f"{strategy_name} · {history_mode} · "
+            f"{freq}频 · {rank_label} Top{top_n}"
         )
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         key = (
@@ -98,7 +110,7 @@ class StrategyCompareMixin:
         if not records:
             ctk.CTkLabel(
                 frame,
-                text="运行策略后会自动保留最近 8 次结果, 用于横向比较",
+                text="完成回测后会保留最近 8 次结果",
                 font=(FONT_FAMILY, 13),
                 text_color=TEXT_DIM,
             ).grid(row=0, column=0, padx=12, pady=12, sticky="w")
@@ -113,7 +125,7 @@ class StrategyCompareMixin:
         header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text="最近策略对比", text_color=TEXT,
+            header, text="回测对比", text_color=TEXT,
             font=(FONT_FAMILY, 14, "bold"),
         ).grid(row=0, column=0, sticky="w")
         self._strategy_compare_selection_text = ctk.StringVar(value="")
@@ -122,7 +134,7 @@ class StrategyCompareMixin:
             text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
         ).grid(row=0, column=1, sticky="e", padx=(8, 10))
         delete_btn = ctk.CTkButton(
-            header, text="删除选中",
+            header, text="🗑 删除",
             command=lambda: self._delete_selected_comparison(),
             fg_color="transparent", hover_color=get_color(BG_INPUT),
             border_width=1, border_color=RED,
@@ -131,7 +143,7 @@ class StrategyCompareMixin:
         )
         delete_btn.grid(row=0, column=2, sticky="e")
         self.btn_strategy_compare_delete = delete_btn
-        Tooltip(delete_btn, "删除下方表格中选中的对比记录\n支持 Shift / Command 多选")
+        Tooltip(delete_btn, "删除选中的对比记录；支持多选")
 
         rows = []
         best_idx = self._best_strategy_record_index(records)
@@ -434,7 +446,7 @@ class StrategyCompareMixin:
         if not records:
             ctk.CTkLabel(
                 chart_frame,
-                text="在下方表格选择一条或多条回测记录后显示净值对比",
+                text="选择记录后显示净值曲线",
                 text_color=TEXT_DIM,
                 font=(FONT_FAMILY, 13),
             ).grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
