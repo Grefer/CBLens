@@ -2579,3 +2579,65 @@ def test_backtest_rejects_invalid_enums_before_any_pricing(monkeypatch, bad_conf
             config=ScoreStrategyConfig(**bad_config),
         )
     assert calls == []
+
+
+def test_eligible_codes_excludes_bond_issued_but_not_yet_listed():
+    """起息日已过、上市日未到的新债不能进回测池.
+
+    issue_date 是起息日 (比上市日早 2~4 周), 只看它会让还没挂牌、
+    根本买不到的新债提前进池子。
+    """
+    from convertible_bond.strategy_backtest import _eligible_codes_for_date
+
+    class _Provider(DataProvider):
+        name = "stub"
+
+        def __init__(self, terms):
+            self._terms = terms
+
+        def get_bond_terms(self, bond_code, valuation_date):
+            return self._terms[bond_code]
+
+        def get_stock_close(self, stock_code, valuation_date):
+            return 10.0
+
+        def hist_vol(self, stock_code, valuation_date, window_days=126):
+            return 0.3
+
+        def get_risk_free_rate(self, valuation_date):
+            return 2.0
+
+        def get_stock_history(self, stock_code, start_date, end_date):
+            return []
+
+        def get_bond_history(self, bond_code, start_date, end_date):
+            return []
+
+    base = dict(
+        underlying_code="300953.SZ",
+        conversion_price=100.0,
+        maturity_date=date(2032, 8, 17),
+        face_value=100.0,
+        credit_rating="AA-",
+        is_tradable=True,
+        trading_status="tradable",
+    )
+    terms = {
+        # 起息 8/17 已过, 上市 9/10 未到 → 应剔除
+        "123282.SZ": BondTerms(issue_date=date(2026, 8, 17),
+                               listing_date=date(2026, 9, 10), **base),
+        # 已上市 → 保留
+        "123283.SZ": BondTerms(issue_date=date(2026, 7, 24),
+                               listing_date=date(2026, 8, 13), **base),
+        # 缺上市日 → 退回起息日判断, 仍保留
+        "123284.SZ": BondTerms(issue_date=date(2026, 7, 24), listing_date=None, **base),
+    }
+    provider = _Provider(terms)
+
+    eligible, excluded, _ = _eligible_codes_for_date(
+        provider, list(terms), date(2026, 8, 20))
+
+    assert "123282.SZ" not in eligible
+    assert ("123282.SZ", "尚未上市 (上市日 2026-09-10)") in excluded
+    assert "123283.SZ" in eligible
+    assert "123284.SZ" in eligible

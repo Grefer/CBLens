@@ -1,5 +1,5 @@
 import sys
-from datetime import date
+from datetime import date, datetime
 
 import convertible_bond.data_providers.wind as wind_mod
 from convertible_bond.data_providers.wind import (
@@ -194,3 +194,75 @@ def test_call_wss_retries_transient_error_with_connection_reset(monkeypatch):
     assert second.calls == 1
     assert first.stopped
     assert sleeps == [provider._TRANSIENT_BACKOFF_SEC]
+
+
+class _StubResult:
+    ErrorCode = 0
+
+    def __init__(self, fields, values):
+        self.Fields = fields
+        self.Data = [[values.get(field)] for field in fields]
+
+
+class _StubWind:
+    """按字段字典应答 wss 的假 Wind; 记录实际请求过的字段."""
+
+    def __init__(self, values):
+        self.values = values
+        self.requested_fields = None
+
+    def wss(self, code, fields, options):
+        requested = fields.split(",")
+        self.requested_fields = requested
+        return _StubResult(requested, self.values)
+
+
+def _terms_with(monkeypatch, values):
+    provider = WindDataProvider()
+    fake = _StubWind(values)
+    monkeypatch.setattr(provider, "_ensure", lambda: fake)
+    return provider.get_bond_terms("113001.SH", date(2026, 8, 20)), fake
+
+
+def test_issue_date_uses_carrydate_not_ipo_date(monkeypatch):
+    """发行日/起息日取 carrydate; ipo_date 是上市首日, 只喂 listing_date.
+
+    实测 400 只可交易公开转债: 到期日 100% 对齐 carrydate 的整周年,
+    0% 对齐 ipo_date, 两者中位差 25 天 — 用 ipo_date 会整体错开票息期。
+    """
+    terms, fake = _terms_with(monkeypatch, {
+        "sec_name": "南航转债",
+        "carrydate": datetime(2020, 10, 15),
+        "issue_firstissue": datetime(2020, 10, 15),
+        "ipo_date": datetime(2020, 11, 3),
+        "maturitydate": datetime(2026, 10, 15),
+    })
+
+    assert "carrydate" in fake.requested_fields
+    assert terms.issue_date == date(2020, 10, 15)
+    assert terms.listing_date == date(2020, 11, 3)
+
+
+def test_issue_date_falls_back_to_first_issue_then_ipo_date(monkeypatch):
+    terms, _ = _terms_with(monkeypatch, {
+        "issue_firstissue": datetime(2019, 2, 27),
+        "ipo_date": datetime(2019, 3, 20),
+    })
+    assert terms.issue_date == date(2019, 2, 27)
+
+    terms, _ = _terms_with(monkeypatch, {"ipo_date": datetime(2019, 3, 20)})
+    assert terms.issue_date == date(2019, 3, 20)
+
+
+def test_unlisted_new_bond_keeps_issue_date_without_ipo_date(monkeypatch):
+    """已发行未上市的新债: Wind 无 ipo_date, 但 carrydate 有值 → 仍可定价."""
+    terms, _ = _terms_with(monkeypatch, {
+        "sec_name": "震裕转02",
+        "carrydate": datetime(2026, 8, 17),
+        "issue_firstissue": datetime(2026, 8, 17),
+        "ipo_date": None,
+        "maturitydate": datetime(2032, 8, 17),
+    })
+
+    assert terms.issue_date == date(2026, 8, 17)
+    assert terms.listing_date is None

@@ -51,7 +51,9 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 
 ### 交易状态字段
 
-- `listing_date`: 数据源返回的上市/挂牌日期；没有显式字段时可能与 `issue_date` 相同
+- `issue_date`: 发行日/起息日（Wind `carrydate`），票息期与应计利息的锚点；到期日恒为它的 N 周年
+- `listing_date`: 上市/挂牌日期（Wind `ipo_date`，即首个交易日），通常比 `issue_date` 晚 2~4 周；
+  已发行未上市的新债该字段为空
 - `tradable_date`: 进入可交易或关注窗口的日期；定向/非标准代码段若无明确字段，默认用上市/发行后 6 个月估算
 - `is_tradable`: 同步日视角是否已进入可交易日期
 - `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`

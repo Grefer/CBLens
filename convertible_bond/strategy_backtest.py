@@ -1538,10 +1538,15 @@ def _eligible_codes_for_date(
                 except Exception as exc:
                     excluded.append((code, f"条款获取失败: {exc}"))
                     continue
-            # 防前视: 回测日期早于发行日 → 该转债尚未存在
-            issue_dt = getattr(terms, 'issue_date', None) if terms is not None else None
-            if issue_dt is not None and issue_dt > on_date:
-                excluded.append((code, f"尚未发行 (发行日 {issue_dt})"))
+            # 防前视: 回测日期早于上市日 → 该转债还不能买
+            # 注意用 listing_date 而不是 issue_date: issue_date 是起息日,
+            # 比上市日早 2~4 周 (中位 25 天), 单用它会把还没挂牌的新债放进池子。
+            listed_dt = (
+                (getattr(terms, 'listing_date', None) or getattr(terms, 'issue_date', None))
+                if terms is not None else None
+            )
+            if listed_dt is not None and listed_dt > on_date:
+                excluded.append((code, f"尚未上市 (上市日 {listed_dt})"))
                 continue
             # 到期检查: strip_current_status_fields 不清 maturity_date, 此处冗余但安全
             maturity_dt = getattr(terms, 'maturity_date', None) if terms is not None else None
@@ -1634,10 +1639,10 @@ def _dynamic_pool_for_date(
     *,
     terms_cache=None,
 ) -> list[str]:
-    """动态标的池: 只保留估值日已发行且未到期的转债.
+    """动态标的池: 只保留估值日已上市且未到期的转债.
 
     优先使用 provider.list_tradable_cbs(on_date), 取与 base_codes 的交集;
-    若 provider 不支持, 则根据 issue_date/maturity_date 过滤 base_codes.
+    若 provider 不支持, 则根据 listing_date/maturity_date 过滤 base_codes.
     """
     try:
         tradable = provider.list_tradable_cbs(on_date)
@@ -1661,10 +1666,11 @@ def _dynamic_pool_for_date(
             except Exception:
                 filtered.append(code)  # 无法获取条款, 保守保留
                 continue
-        issue_dt = getattr(terms, 'issue_date', None)
+        # 同上: 以上市日为准, 缺失才退回起息日
+        listed_dt = getattr(terms, 'listing_date', None) or getattr(terms, 'issue_date', None)
         maturity_dt = getattr(terms, 'maturity_date', None)
-        if issue_dt is not None and issue_dt > on_date:
-            continue  # 尚未发行
+        if listed_dt is not None and listed_dt > on_date:
+            continue  # 尚未上市
         if maturity_dt is not None and maturity_dt <= on_date:
             continue  # 已到期
         filtered.append(code)

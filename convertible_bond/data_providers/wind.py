@@ -189,8 +189,17 @@ class WindDataProvider(DataProvider):
 
     _BOND_FIELDS = (
         # 注: listdate 在某些 Wind 终端版本/账户上被拒 (CWSSService: invalid indicators),
-        # 而 ipo_date 总是返回; listing_date 已统一兜底到 ipo_date, 因此不再请求 listdate.
-        "sec_name", "underlyingcode", "ipo_date", "maturitydate",
+        # 因此不再请求; 转债的 ipo_date 实测就是"上市首日" (与首根成交 K 线同日), listing_date 直接取它.
+        #
+        # 发行日/起息日必须取 carrydate, 不能用 ipo_date (400 只可交易公开转债全样本实测):
+        #   到期日 == carrydate + N 周年        400/400
+        #   到期日 == ipo_date  + N 周年          0/400
+        #   ipo_date - carrydate                 中位 25 天 (最小 13, 最大 1134)
+        # 且已发行未上市的新债 ipo_date 为空 (无上市日), 用它会让整只债缺发行日无法定价.
+        # issue_firstissue (发行首日) 在 39/400 只老债上比 carrydate 早 1~3 天,
+        # 且到期日 0/39 对齐它, 因此只作为 carrydate 缺失时的次选.
+        "sec_name", "underlyingcode", "carrydate", "issue_firstissue",
+        "ipo_date", "maturitydate",
         "latestpar",
         "clause_conversion2_swapshareprice",
         "clause_calloption_redemptionprice",
@@ -353,8 +362,12 @@ class WindDataProvider(DataProvider):
         terms = BondTerms(
             sec_name=d.get("sec_name"),
             underlying_code=d.get("underlyingcode"),
-            issue_date=to_date(d.get("ipo_date")),
-            listing_date=to_date(d.get("listdate")) or to_date(d.get("ipo_date")),
+            issue_date=(
+                to_date(d.get("carrydate"))
+                or to_date(d.get("issue_firstissue"))
+                or to_date(d.get("ipo_date"))
+            ),
+            listing_date=to_date(d.get("ipo_date")),
             maturity_date=to_date(d.get("maturitydate")),
             face_value=_f("latestpar"),
             conversion_price=_f("clause_conversion2_swapshareprice"),

@@ -214,7 +214,7 @@ class PricingMixin:
             redemption_price=pf(self.v_redemp, "到期赎回价"),
             current_date=current_date,
             maturity_date=pd(self.v_mat_date, "到期日期"),
-            issue_date=pd(self.v_iss_date, "发行日期"),
+            issue_date=pd(self.v_iss_date, "起息日"),
             conversion_start_date=pd(self.v_conv_date, "转股起始日"),
             coupon_rates=coupon_rates,
             call_trigger_ratio=pf(self.v_call_ratio, "强赎触发") / 100.0,

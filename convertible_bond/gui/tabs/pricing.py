@@ -137,8 +137,10 @@ def build(app, tab):
     _form_row(sec_terms, "估值日期", app.v_cur_date, 2, source_var=app.v_src_cur_date,
               tooltip="模型当前日期。历史定价或复盘时可手动调整。")
     _form_row(sec_terms, "到期日期", app.v_mat_date, 3, wind=True, source_var=app.v_src_mat_date)
-    _form_row(sec_terms, "发行日期", app.v_iss_date, 4, wind=True, source_var=app.v_src_iss_date)
-    _form_row(sec_terms, "转股起始日", app.v_conv_date, 5, wind=True, source_var=app.v_src_conv_date)
+    _form_row(sec_terms, "起息日", app.v_iss_date, 4, wind=True, source_var=app.v_src_iss_date,
+              tooltip="债券起息日 (= 发行首日), 票息期与应计利息按它逐年滚动; 注意不是上市日。")
+    _form_row(sec_terms, "转股起始日", app.v_conv_date, 5, wind=True, source_var=app.v_src_conv_date,
+              tooltip="可转股起始日, 默认按起息日 + 6 个月推算。")
     _form_row(sec_terms, "各年票息 (%)", app.v_coupons, 6, wind=True, width=240,
               compact=True, source_var=app.v_src_coupons,
               tooltip="逐年票息百分比, 逗号分隔。")

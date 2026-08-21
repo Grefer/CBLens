@@ -20,8 +20,8 @@ class BondTerms:
     """转债条款快照. 字段全部可选 (不同数据源能拉到的字段不一样)."""
     sec_name: str | None = None
     underlying_code: str | None = None
-    issue_date: date | None = None
-    listing_date: date | None = None             # 上市/挂牌日期
+    issue_date: date | None = None               # 发行日/起息日 (票息期与应计利息的锚点)
+    listing_date: date | None = None             # 上市/挂牌日期 (通常晚于 issue_date 约 2~4 周)
     tradable_date: date | None = None            # 可自由交易/关注日期
     is_tradable: bool | None = None              # valuation_date 视角是否可交易
     trading_status: str | None = None            # tradable/private_pending/pending/unknown
@@ -167,26 +167,28 @@ def infer_cb_trading_metadata(
     数据源没有明确字段时采用保守规则:
     - 普通公募可转债: 上市/挂牌后视为可交易
     - 定向/非标准沪深代码段: 若无明确可交易日, 以发行/挂牌后 6 个月作为关注日期
+
+    注: 缺上市日时用发行日当"可交易起点"的锚, 但**不回填** ``listing_date`` —
+    已发行未上市的新债上市日就该是空的, 回填会让该字段谎报成起息日。
     """
     val_date = valuation_date or date.today()
-    listing_date = terms.listing_date or terms.issue_date
+    listing_anchor = terms.listing_date or terms.issue_date
     tradable_date = terms.tradable_date
     explicit_is_tradable = terms.is_tradable
     explicit_status = terms.trading_status
     standard_public = is_standard_public_cb_code(bond_code) and not looks_private_cb_name(terms.sec_name)
 
     if standard_public:
-        tradable_date = tradable_date or listing_date
+        tradable_date = tradable_date or listing_anchor
         status = explicit_status or ("tradable" if tradable_date is None or tradable_date <= val_date else "pending")
     else:
-        if tradable_date is None and listing_date is not None:
-            tradable_date = _add_months(listing_date, 6)
+        if tradable_date is None and listing_anchor is not None:
+            tradable_date = _add_months(listing_anchor, 6)
         if tradable_date is None:
             status = explicit_status or "private_unknown"
             is_tradable = explicit_is_tradable if explicit_is_tradable is not None else False
             return replace(
                 terms,
-                listing_date=listing_date,
                 tradable_date=tradable_date,
                 is_tradable=is_tradable,
                 trading_status=status,
@@ -197,7 +199,6 @@ def infer_cb_trading_metadata(
     is_tradable = explicit_is_tradable if explicit_is_tradable is not None else inferred_is_tradable
     return replace(
         terms,
-        listing_date=listing_date,
         tradable_date=tradable_date,
         is_tradable=is_tradable,
         trading_status=status,
