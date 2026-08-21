@@ -11,7 +11,7 @@ import site
 import sys
 import threading
 import time
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,7 @@ from ._helpers import (
     _string_or_none,
     _wind_table_rows,
 )
+from ..market_time import market_today
 
 
 logger = logging.getLogger(__name__)
@@ -730,7 +731,7 @@ class WindDataProvider(DataProvider):
         sectorid 'a101020600000000' = 沪深可转债 (含已退市标记的债不入此列).
         返回 ``[(wind_code, sec_name), ...]``; ``sec_name`` 留给上层过滤定向转债。
         """
-        d = (on_date or date.today()).isoformat()
+        d = (on_date or market_today()).isoformat()
         res = self._call_wset(
             "sectorconstituent",
             f"date={d};sectorid=a101020600000000;field=wind_code,sec_name",

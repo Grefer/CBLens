@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-08-18T19:26:55"
+    "updated_at": "2026-08-20T22:54:18"
   },
   "patches": [
     {
@@ -35975,6 +35975,19 @@
       "raw_title": "关于柳工转2转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "127084.SZ|2026-05-27|conversion_price_adjusted|关于柳工转2转股价格调整的公告"
+    },
+    {
+      "bond_code": "123064.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-16",
+      "event_date": "2026-06-16",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225372832.PDF",
+      "raw_title": "广州万孚生物技术股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123064.SZ|2026-06-16|rating_change|广州万孚生物技术股份有限公司相关债券2026年跟踪评级报告"
     },
     {
       "bond_code": "111000.SH",

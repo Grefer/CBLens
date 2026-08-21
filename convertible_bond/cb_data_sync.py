@@ -26,6 +26,7 @@ from .data_providers import (
     BondTerms, DataProvider,
     is_standard_public_cb_code, looks_private_cb_name,
 )
+from .market_time import market_today
 
 
 
@@ -142,7 +143,7 @@ def sync_cb_terms(
     跳过的代码进入 ``skipped`` 列表, 不消耗 Wind 调用. 全量同步用 False.
     """
     store = store or TermsBundle()
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     success: list[str] = []
     failed: list[tuple[str, str]] = []
     dropped: list[tuple[str, str]] = []
@@ -209,7 +210,7 @@ def sync_cb_data(
     ``dropped`` 合并了 Stage 1 (代码层) 与 Stage 2 (条款层) 两阶段被剔除的债。
     ``incremental=True`` 时只刷新 ``max_age_days`` 天前/缺失的债。
     """
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     raw = provider.list_tradable_cbs(val_date)
     # 兼容旧实现仍返回 list[str] 的情况 (无 sec_name, 名字过滤不会触发)
     codes_with_names: list[tuple[str, str | None]] = []
@@ -246,7 +247,7 @@ def refresh_one(
     with_cashflow: bool = True,
 ) -> BondTerms:
     """单只刷新 (GUI 🔄 按钮). 用户主动刷新即视为想要, 不做过滤."""
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     terms = _fetch_one(provider, bond_code, val_date, with_cashflow=with_cashflow)
     if store is not None:
         _store_set(store, bond_code, terms, source=provider.name)

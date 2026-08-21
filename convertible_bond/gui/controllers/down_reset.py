@@ -15,6 +15,7 @@ from ...down_reset_overrides import (
 )
 from ..theme import BTN_CTRL, BTN_HOVER, FONT_FAMILY, ORANGE, TEXT_DIM
 from ..widgets import _form_row, create_card
+from ...market_time import market_today
 
 
 class DownResetMixin:
@@ -105,7 +106,7 @@ class DownResetMixin:
         """根据 cb_events + cb_data.cooldown + overrides.json 填充 GUI 字段."""
         ov = default_overrides().get(code) or {}
         ann = ov.get("announce_date") or ""
-        resolved = resolve_down_reset(code, terms, valuation_date=date.today())
+        resolved = resolve_down_reset(code, terms, valuation_date=market_today())
         note_parts = []
         if ov.get("note"):
             note_parts.append(str(ov["note"]))

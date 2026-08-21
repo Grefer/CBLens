@@ -27,6 +27,7 @@ from .data_providers import (
     WindDataProvider,
     finite_float,
     infer_cb_trading_metadata,
+    is_issued_pending_listing,
     is_standard_public_cb_code,
     looks_private_cb_name,
     to_date,
@@ -34,6 +35,7 @@ from .data_providers import (
 from .cb_events import CBEventStore, project_events_path
 from .historical_terms import TermsPatchStore, project_terms
 from .paths import data_path
+from .market_time import market_today
 
 
 BATCH_RESULT_COLUMNS = [
@@ -198,7 +200,7 @@ def list_batch_codes_from_cache(
     codes = list(terms_cache.list_bonds())
     if include_nonstandard:
         return codes
-    check_date = on_date or date.today()
+    check_date = on_date or market_today()
     patch_store, event_store = _admission_projection_stores()
     return [
         code for code in codes
@@ -226,7 +228,7 @@ def split_batch_codes_from_cache(
     """把缓存代码池拆成 (可批量定价代码, 被过滤代码及原因)."""
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return [], []
-    check_date = on_date or date.today()
+    check_date = on_date or market_today()
     patch_store, event_store = _admission_projection_stores()
     kept: list[str] = []
     excluded: list[tuple[str, str]] = []
@@ -306,7 +308,7 @@ def batch_pricing_exclusion_reason(
         min_outstanding_balance = admission_config.min_outstanding_balance
         min_credit_rating = admission_config.min_credit_rating
         min_turnover_amount = admission_config.min_turnover_amount
-    check_date = on_date or date.today()
+    check_date = on_date or market_today()
     terms = _with_inferred_trading_metadata(code, terms, check_date)
     tradable_date = _terms_date(terms, "tradable_date")
     is_tradable = _terms_value(terms, "is_tradable")
@@ -329,6 +331,9 @@ def batch_pricing_exclusion_reason(
     status_reason = _public_trading_status_reason(terms)
     if status_reason:
         return status_reason
+    if is_issued_pending_listing(raw_code, terms, check_date):
+        # 已发行但还没挂牌: 买不到, 也没有市价可比 —— 归"扫新债"关注池而不是主池
+        return "已发行未上市"
     if is_tradable is False:
         return "不可交易"
     if _underlying_has_st_risk(terms):
@@ -473,7 +478,16 @@ def list_upcoming_tradable_from_cache(
     on_date: date | None = None,
     window_days: int = 7,
 ) -> list[dict]:
-    """列出未来 window_days 天内即将上市进入交易的**普通公募**新债.
+    """列出尚未开始交易的**普通公募**新债 (含已发行未上市).
+
+    两类都算"新债":
+
+    1. **已定上市日**: ``trading_status="pending"`` 且 tradable_date 落在
+       ``[on_date, on_date + window_days]`` 窗口内。
+    2. **已发行未上市**: 数据源还没给出上市日 (``listing_date`` 为空) 但已过
+       起息日 —— 这类债连"哪天能买"都还不知道, 却正是最需要提前算理论价的一批。
+       它们的 ``tradable_date`` / ``days_to_trade`` 返回 ``None`` (待定), 不受
+       window_days 约束。
 
     仅包含公开交易标的。定向/私募转债 (非标准公募代码段、定转命名或
     private 交易状态) 不进"扫新债"关注池: 它们无集中竞价交易、常无
@@ -481,7 +495,7 @@ def list_upcoming_tradable_from_cache(
     """
     if terms_cache is None or not hasattr(terms_cache, "list_bonds"):
         return []
-    check_date = on_date or date.today()
+    check_date = on_date or market_today()
     end_date = check_date + timedelta(days=max(0, int(window_days)))
     rows: list[dict] = []
     for code in terms_cache.list_bonds():
@@ -493,14 +507,21 @@ def list_upcoming_tradable_from_cache(
         trading_status = _terms_value(terms, "trading_status") or ""
         is_std_public = is_standard_public_cb_code(code) and not looks_private_cb_name(name)
 
-        # 普通公募新债: listing/tradable 在窗口内且尚未开始交易 (pending)。
-        # 定向/私募券在此剔除; private_pending 等非公开状态由 != "pending" 一并排除。
+        # 普通公募新债: 尚未开始交易 (pending)。定向/私募券在此剔除;
+        # private_pending 等非公开状态由 != "pending" 一并排除。
         if not is_std_public:
             continue
         if trading_status != "pending":
             continue
-        if tradable_date is None or tradable_date < check_date or tradable_date > end_date:
-            continue
+        if tradable_date is None:
+            # 上市日待定 — 只有"已发行未上市"才算新债, 纯缺字段的老债不算
+            if not is_issued_pending_listing(code, terms, check_date):
+                continue
+            days_to_trade = None
+        else:
+            if tradable_date < check_date or tradable_date > end_date:
+                continue
+            days_to_trade = (tradable_date - check_date).days
 
         rows.append({
             "bond_code": code,
@@ -510,7 +531,7 @@ def list_upcoming_tradable_from_cache(
             "issue_date": _terms_date(terms, "issue_date"),
             "listing_date": _terms_date(terms, "listing_date"),
             "tradable_date": tradable_date,
-            "days_to_trade": (tradable_date - check_date).days,
+            "days_to_trade": days_to_trade,
             "K": _terms_value(terms, "conversion_price"),
             "market_price": _terms_value(terms, "close"),
             "credit_rating": _terms_value(terms, "credit_rating"),
@@ -519,7 +540,8 @@ def list_upcoming_tradable_from_cache(
             "is_tradable": _terms_value(terms, "is_tradable"),
             "trading_status": trading_status,
         })
-    rows.sort(key=lambda row: (row["tradable_date"], row["bond_code"]))
+    # 上市日待定的排在已定上市日之后
+    rows.sort(key=lambda row: (row["tradable_date"] or date.max, row["bond_code"]))
     return rows
 
 

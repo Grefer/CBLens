@@ -5,6 +5,14 @@
 全市场存续可转债的**静态基础信息快照** (semi-static fields)，由 `TermsBundle` 维护。
 runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wind 接口。
 
+> **只增不删**：同步只是不再*写入*终止态的债（`is_terminal_terms` 会拦下已到期/违约的），
+> 但从不删除已有条目；而 Wind 的"沪深可转债"成分表不再返回退市债，所以旧条目永远不会被回访。
+> 因此本文件里近一半是已到期/已退市的债（1058 只中约 449 只），这是**档案库而不是存续清单**。
+> 任何遍历全库的功能（主池准入、代码联想候选、批量定价）都必须自己过滤终止态，
+> 不能假设"在 cb_data 里"= "还能交易"。判定终止要同时看简称里的 `(退市)` 后缀和日期字段：
+> 强赎转股提前摘牌的债 `delisting_date` 常为空（全库仅 17 只有值），只有简称带后缀；
+> 而 `maturity_date` 只兜得住自然到期。
+
 ### 文件结构
 
 ```json
@@ -57,6 +65,14 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `tradable_date`: 进入可交易或关注窗口的日期；定向/非标准代码段若无明确字段，默认用上市/发行后 6 个月估算
 - `is_tradable`: 同步日视角是否已进入可交易日期
 - `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`
+
+> 公募转债的 `tradable_date` / `is_tradable` / `trading_status` **数据源并不提供**，
+> 它们由 `infer_cb_trading_metadata` 从 `issue_date` / `listing_date` 推断后写回本文件。
+> 因此判断"是不是新债"只认 `issue_date` / `listing_date`：已过起息日但 `listing_date`
+> 仍为空（且起息在 180 天内）= **已发行未上市**，强制 `trading_status="pending"`、
+> `tradable_date=None`、`is_tradable=False`。缓存里的旧推断值不参与判断，否则一次误判
+> 会被自己确认下来再也翻不回来。这类新债不进主批量池（剔除原因「已发行未上市」），
+> 由批量页「🆕 扫新债」收进关注池。
 - `suspension_status`: 停牌/暂停交易等补充状态
 - `call_status`, `call_announce_date`, `call_redemption_date`: 强赎公告和执行状态
 - `down_reset_trigger_pct`, `call_trigger_pct`, `put_trigger_pct`: 下修 / 强赎 / 回售触发比例，单位为 `%K`。下修触发缺失时, 定价层显式使用 `85%K` 作为模型默认。

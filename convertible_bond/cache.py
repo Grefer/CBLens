@@ -28,7 +28,8 @@ from typing import get_args, get_origin, get_type_hints
 # 注: 类型标注统一使用 X | None / list[X] (PEP 604, Python 3.10+).
 
 from .data_providers import (
-    BondTerms, CashflowSchedule, DataProvider, WindDataProvider, to_date,
+    BondTerms, CashflowSchedule, DataProvider, WindDataProvider,
+    infer_cb_trading_metadata, to_date,
 )
 from .paths import data_path
 
@@ -151,6 +152,15 @@ class TermsBundle:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2, sort_keys=True)
         tmp.replace(self.path)
+
+    def reload(self):
+        """重新读取磁盘上的 bundle.
+
+        条款同步是独立子进程写文件的 (见 GUI 的池同步), 长驻的 GUI 实例必须显式
+        重读才能看到新债; 否则"扫新债"永远只看得到进程启动那一刻的快照。
+        """
+        self._load()
+        return self
 
     # ── 查询 ─────────────────────────────────────────────
     def has(self, bond_code: str) -> bool:
@@ -429,11 +439,25 @@ class CachedBondDataProvider(DataProvider):
             self.cache.set(bond_code, fresh, source=self.static_source.name)
         return fresh
 
+    @staticmethod
+    def _rederive_trading_metadata(bond_code, terms: BondTerms, valuation_date: date) -> BondTerms:
+        """按 valuation_date 重算交易状态字段.
+
+        ``tradable_date`` / ``is_tradable`` / ``trading_status`` 是估值日的函数,
+        而 cb_data 里存的是**写入那天**的判断。直接返回缓存值会让"已发行未上市"
+        的新债一路顶着旧的 ``tradable`` 标签走完定价链, 关注池因此既看不出它还没
+        挂牌, 也丢掉新债高亮。
+        """
+        try:
+            return infer_cb_trading_metadata(bond_code, terms, valuation_date)
+        except Exception:
+            return terms
+
     def get_bond_terms(self, bond_code, valuation_date):
         cached = self.cache.get(bond_code)
         stale = self.cache.is_stale(bond_code, self.max_age_days) if cached else True
         if cached is not None and (not stale or not self.auto_refresh):
-            return cached
+            return self._rederive_trading_metadata(bond_code, cached, valuation_date)
         try:
             return self._refresh_static_terms(bond_code, valuation_date)
         except Exception as e:

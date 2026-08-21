@@ -17,6 +17,7 @@ from .cb_events import (
 )
 from .data_providers import DataProvider, to_date
 from .historical_terms import TermsPatch, TermsPatchStore
+from .market_time import market_today
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def sync_cb_events(
         默认 True; 设 False 可跳过 PDF 下载 (仅解析标题).
     """
     store = event_store or CBEventStore()
-    end_date = end or date.today()
+    end_date = end or market_today()
     start_date = start or (end_date - timedelta(days=max(1, int(lookback_days))))
     codes = list(bond_codes)
     parsed_events: list[CBEvent] = []
@@ -479,7 +480,7 @@ def apply_events_to_bundle(
     on_progress=None,
 ) -> dict:
     """把事件表应用回 cb_data bundle 的状态字段."""
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     changed: list[tuple[str, list[str]]] = []
     items = []
     codes = bundle.list_bonds()

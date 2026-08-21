@@ -18,6 +18,7 @@ from ..theme import (
     TABLE_FONT_SIZE, TABLE_ROW_HEIGHT,
     get_color,
 )
+from ...market_time import market_today
 
 
 # ── Treeview 行标签颜色 (主表 + 关注池表共用) ──────────────────
@@ -99,7 +100,7 @@ def _is_new_bond(row) -> bool:
     if is_tradable is False or status in {"pending", "private_pending"}:
         return True
 
-    today = date.today()
+    today = market_today()
     for key in ("tradable_date", "listing_date"):
         d = _coerce_date(row.get(key))
         if d is None:

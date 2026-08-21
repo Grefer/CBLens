@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import threading
 import tkinter as tk
 from datetime import date, datetime, timedelta
@@ -36,9 +37,11 @@ from .batch_common import (
     _configure_tree_style,
     _format_tags,
     _is_finite,
+    _is_new_bond,
     _median,
     _resolve_row_tag,
 )
+from ...market_time import market_today
 
 _WATCHLIST_COL_STRETCH_WEIGHTS = {
     "代码": 0.5,
@@ -62,30 +65,111 @@ _WATCHLIST_COL_STRETCH_WEIGHTS = {
 
 
 # ── 关注池新债自动发现 / 刷新 ─────────────────────────────────
+# 扫描窗口: 已定上市日的新债往前看 30 天 (交易所公告通常提前 1-2 周,
+# 7 天窗口会让"周一发公告、下周三上市"这类债只在最后两天才出现)。
+# "已发行未上市"那一类不受本窗口约束 —— 它们连上市日都还没有。
+_UPCOMING_SCAN_WINDOW_DAYS = 30
+
+# 必须与 wind_sync._POOL_SYNC_TARGETS 中的条目一致 (label 用于匹配确认文案)
+_TERMS_SYNC_MODULE = "convertible_bond.cli.sync_tradable"
+_TERMS_SYNC_LABEL = "🔄 增量更新基础信息 (推荐)"
+# 条款库超过这个天数就在扫新债前提示同步 —— 新债每天都在发, 隔夜的快照就可能漏
+_TERMS_STALE_DAYS = 1.0
+
+
+def _terms_sync_available() -> bool:
+    """条款库同步只走 Wind (cb-sync-tradable 固定 --source wind); 没装就别提示."""
+    try:
+        from ...data_providers.wind import prepare_windpy_import_path
+        prepare_windpy_import_path()
+        return importlib.util.find_spec("WindPy") is not None
+    except Exception:
+        return False
+
+
+def _terms_bundle_age_days(app) -> float | None:
+    """本地条款库距上次同步的天数; 无法判断时返回 None."""
+    cache = getattr(app, "terms_cache", None)
+    if cache is None or not hasattr(cache, "bundle_meta"):
+        return None
+    try:
+        updated = (cache.bundle_meta() or {}).get("updated_at")
+        if not updated:
+            return None
+        return (datetime.now() - datetime.fromisoformat(str(updated))).total_seconds() / 86400.0
+    except (TypeError, ValueError):
+        return None
+
+
 def _auto_add_upcoming_to_watchlist(app, *, silent=False):
-    """自动发现即将上市/可交易的新债并加入关注池."""
+    """自动发现尚未开始交易的新债 (含已发行未上市) 并加入关注池."""
     upcoming = list_upcoming_tradable_from_cache(
-        getattr(app, "terms_cache", None))
+        getattr(app, "terms_cache", None),
+        window_days=_UPCOMING_SCAN_WINDOW_DAYS,
+    )
     if upcoming:
         new_items = [dict(r) for r in upcoming]
         app._batch_watchlist, added = add_to_watchlist(new_items)
         if not silent:
             if added:
-                app.v_batch_status.set(
-                    f"已自动添加 {added} 只即将上市/可交易转债到关注池")
+                app.v_batch_status.set(f"已自动添加 {added} 只新债到关注池")
             else:
-                app.v_batch_status.set(
-                    "关注池已包含所有即将上市/可交易转债, 无新增")
+                app.v_batch_status.set("关注池已包含所有已发行/即将上市的新债, 无新增")
     else:
         app._batch_watchlist = load_watchlist()
         if not silent:
-            app.v_batch_status.set("暂无即将上市/可交易的新债")
+            app.v_batch_status.set("暂无已发行未上市或即将上市的新债")
 
 
 def _refresh_watchlist_with_upcoming(app):
-    """'扫新债' 按钮: 检测即将上市新债 → 自动加入关注池 → 刷新显示."""
+    """'扫新债' 按钮: (可选) 先增量同步条款库 → 扫描新债 → 加入关注池 → 立刻定价.
+
+    只扫本地 cb_data 的话, 新债得等用户想起来手动同步基础信息才看得见; 这里把
+    "同步 → 扫描 → 定价"串成一步, 让按钮自己就能拿到当天新发的债和它的理论价。
+    """
+    age = _terms_bundle_age_days(app)
+    if _terms_sync_available() and (age is None or age >= _TERMS_STALE_DAYS):
+        age_text = "无法判断上次同步时间" if age is None else f"本地条款库最后同步于 {age:.1f} 天前"
+        if messagebox.askyesno(
+            "先同步基础信息?",
+            f"新债要先同步进本地条款库才扫得到 ({age_text}).\n\n"
+            "「是」: 先跑一次增量同步 (需 Wind 终端, 通常 1-3 分钟), 完成后自动继续扫描并定价\n"
+            "「否」: 直接扫描现有条款库",
+        ):
+            app._run_pool_sync(
+                _TERMS_SYNC_MODULE, _TERMS_SYNC_LABEL, ("--incremental",),
+                confirm=False,
+                on_success=lambda: _scan_upcoming_and_price(app, reload_terms=True),
+            )
+            return
+    _scan_upcoming_and_price(app)
+
+
+def _scan_upcoming_and_price(app, *, reload_terms: bool = False):
+    """扫描新债 → 加入关注池 → 对还没有理论价的关注标的立刻定价."""
+    if reload_terms:
+        cache = getattr(app, "terms_cache", None)
+        if hasattr(cache, "reload"):
+            try:
+                cache.reload()
+            except Exception as exc:
+                app.v_batch_status.set(f"⚠ 条款库重载失败: {exc}")
+
     _auto_add_upcoming_to_watchlist(app, silent=False)
     _render_watchlist_table(app)
+
+    # 新债刚加进来时只有条款元数据, 表里一排空白; 顺手把还没有理论价的新债算出来,
+    # 否则"扫新债"给出的只是一张代码清单, 没法判断贵贱。
+    # 只管新债 — 关注池里其他没定价的标的交给 ⚡ 关注池重算, 免得一个按钮做两件事。
+    pending = [
+        row.get("bond_code")
+        for row in _watchlist_display_rows(app)
+        if row.get("bond_code") and row.get("status") != "ok" and _is_new_bond(row)
+    ]
+    if pending:
+        scanned = app.v_batch_status.get()
+        if _start_watchlist_pricing(app, pending, note=f"新债 {len(pending)} 只"):
+            app.v_batch_status.set(f"{scanned} · 正在定价 {len(pending)} 只新债 ...")
 
 
 # ── ⚡ 关注池快速重定价 ─────────────────────────────────────────
@@ -95,13 +179,21 @@ def _refresh_watchlist_pricing(app):
     if not codes:
         messagebox.showinfo("提示", "关注池为空 — 在主表中右键加入或点 🆕 扫新债")
         return
+    _start_watchlist_pricing(app, codes)
+
+
+def _start_watchlist_pricing(app, codes, *, note: str | None = None) -> bool:
+    """对给定代码起一轮关注池定价; 参数不合法或已在跑时返回 False."""
+    codes = [c for c in dict.fromkeys(codes) if c]
+    if not codes:
+        return False
 
     source = app.v_batch_source.get()
     csv_root = getattr(app, "_csv_root", None)
     if source == "CSV" and not csv_root:
         csv_root = filedialog.askdirectory(title="选择 CSV 数据根目录 (含 bonds/ stocks/ terms/ 子目录)")
         if not csv_root:
-            return
+            return False
         app._csv_root = csv_root
 
     try:
@@ -116,17 +208,19 @@ def _refresh_watchlist_pricing(app):
         )
     except ValueError as exc:
         messagebox.showerror("参数错误", str(exc))
-        return
+        return False
 
+    label = note or f"关注池 {len(codes)} 只"
     app.btn_batch_refresh_watch.configure(state="disabled")
-    app.v_batch_status.set(f"⚡ 正在定价关注池 {len(codes)} 只 ...")
-    app._start_progress(f"定价关注池 {len(codes)} 只")
+    app.v_batch_status.set(f"⚡ 正在定价{label} ...")
+    app._start_progress(f"定价{label}")
 
     threading.Thread(
         target=_watchlist_pricing_worker,
         args=(app, codes, source, csv_root, params),
         daemon=True,
     ).start()
+    return True
 
 
 def _watchlist_pricing_worker(app, codes, source, csv_root, params):
@@ -141,7 +235,7 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params):
             max_age_days=30,
         )
         try:
-            rf = provider.get_risk_free_rate(date.today())
+            rf = provider.get_risk_free_rate(market_today())
             if rf is not None:
                 params = dict(params, r=float(rf) / 100.0)
         except Exception:
@@ -295,17 +389,41 @@ def _format_watchlist_date(value):
     return parsed.isoformat() if parsed else "—"
 
 
+def _is_pending_listing(entry) -> bool:
+    """已发行未上市: 还没挂牌, 上市日/可交易日都是"待定"而不是"没有数据"."""
+    return (
+        str(entry.get("trading_status") or "").strip().lower() == "pending"
+        and _parse_watchlist_date(entry.get("listing_date")) is None
+    )
+
+
+def _format_listing_cell(entry, key):
+    parsed = _parse_watchlist_date(entry.get(key))
+    if parsed is not None:
+        return parsed.isoformat()
+    return "待定" if _is_pending_listing(entry) else "—"
+
+
 def _format_days_to_trade(entry):
+    """还有几天能买 — 已经能买的说"已可交易", 不显示负数.
+
+    这列是"距交易", 负数读起来像"欠了 3 天", 没有意义: 可交易日已过就是能买了。
+    """
     tradable_date = _parse_watchlist_date(entry.get("tradable_date"))
     if tradable_date is not None:
-        days = (tradable_date - date.today()).days
+        days = (tradable_date - market_today()).days
+    elif _is_pending_listing(entry):
+        # 上市日未公告时 days_to_trade 可能是上一轮扫描留下的旧值, 不能拿来显示
+        return "待定"
     else:
         days = entry.get("days_to_trade")
         try:
             days = int(days)
         except (TypeError, ValueError):
             return "—"
-    return "0" if days == 0 else f"{days:+d}"
+    if days <= 0:
+        return "已可交易"
+    return f"+{days}"
 
 
 def _render_watchlist_table(app):
@@ -382,8 +500,8 @@ def _render_watchlist_table(app):
             code,
             entry.get("bond_name", "") or "",
             entry.get("stock_code", "") or "",
-            _format_watchlist_date(entry.get("listing_date")),
-            _format_watchlist_date(entry.get("tradable_date")),
+            _format_listing_cell(entry, "listing_date"),
+            _format_listing_cell(entry, "tradable_date"),
             _format_days_to_trade(entry),
             f"{float(score):.1f}" if _is_finite(score) else "—",
             entry.get("confidence", "") if is_ok else "—",
@@ -507,7 +625,7 @@ def _refresh_events_banner(app, *, window_days: int = 30):
         label.grid_remove()
         return
 
-    today = date.today()
+    today = market_today()
     horizon = today + timedelta(days=window_days)
     watchlist_codes = {e.get("bond_code") for e in (app._batch_watchlist or []) if e.get("bond_code")}
 

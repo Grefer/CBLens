@@ -313,6 +313,125 @@ def test_upcoming_tradable_cache_includes_public_listing_metadata():
     ]
 
 
+def test_infer_trading_metadata_marks_issued_but_unlisted_as_pending():
+    """已发行未上市: 起息日不能当可交易起点, 否则新债一发行就被判成 tradable."""
+    from convertible_bond.data_providers import infer_cb_trading_metadata
+
+    terms = BondTerms(
+        sec_name="强达转债",
+        issue_date=date(2026, 8, 19),
+        listing_date=None,
+        maturity_date=date(2032, 8, 19),
+    )
+    out = infer_cb_trading_metadata("123284.SZ", terms, date(2026, 8, 20))
+
+    assert out.trading_status == "pending"
+    assert out.is_tradable is False
+    assert out.tradable_date is None
+    assert out.listing_date is None  # 不回填, 上市日就该是空的
+
+
+def test_infer_trading_metadata_ignores_stale_derived_status():
+    """cb_data 里的 tradable/tradable_date 是上一轮推断写回的, 不能拿来自我确认."""
+    from convertible_bond.data_providers import infer_cb_trading_metadata
+
+    terms = BondTerms(
+        sec_name="强达转债",
+        issue_date=date(2026, 8, 19),
+        listing_date=None,
+        tradable_date=date(2026, 8, 19),   # 上一轮错误推断的残留
+        is_tradable=True,
+        trading_status="tradable",
+    )
+    out = infer_cb_trading_metadata("123284.SZ", terms, date(2026, 8, 20))
+
+    assert out.trading_status == "pending"
+    assert out.is_tradable is False
+
+
+def test_infer_trading_metadata_keeps_old_missing_listing_date_tradable():
+    """起息日已久却仍缺上市日 → 数据缺口, 保持旧的保守判定, 不误杀老债."""
+    from convertible_bond.data_providers import infer_cb_trading_metadata
+
+    terms = BondTerms(
+        sec_name="岭南转债",
+        issue_date=date(2018, 8, 14),
+        listing_date=None,
+    )
+    out = infer_cb_trading_metadata("128044.SZ", terms, date(2026, 8, 20))
+
+    assert out.trading_status == "tradable"
+    assert out.is_tradable is True
+
+
+def test_upcoming_tradable_cache_includes_issued_but_unlisted():
+    """新债扫描要覆盖"已发行未上市"这一档 — 上市日待定, 不受 window_days 约束."""
+    class FakeTermsCache:
+        data = {
+            # 已发行未上市 (Wind 还没给 ipo_date) → 应出现, 上市日/可交易日待定
+            "123284.SZ": BondTerms(
+                sec_name="强达转债",
+                underlying_code="301628.SZ",
+                issue_date=date(2026, 8, 19),
+                listing_date=None,
+                conversion_price=84.04,
+                maturity_date=date(2032, 8, 19),
+            ),
+            # 已定上市日且落在窗口内 → 应出现
+            "123281.SZ": BondTerms(
+                sec_name="中仑转债",
+                underlying_code="301565.SZ",
+                issue_date=date(2026, 8, 6),
+                listing_date=date(2026, 8, 24),
+                conversion_price=20.28,
+                maturity_date=date(2032, 8, 6),
+            ),
+            # 缺上市日但起息已久 → 数据缺口而非新债, 不应出现
+            "128044.SZ": BondTerms(
+                sec_name="岭南转债",
+                issue_date=date(2018, 8, 14),
+                listing_date=None,
+            ),
+        }
+
+        def list_bonds(self):
+            return list(self.data)
+
+        def get(self, code):
+            return self.data[code]
+
+    rows = list_upcoming_tradable_from_cache(
+        FakeTermsCache(), on_date=date(2026, 8, 20), window_days=30)
+
+    by_code = {row["bond_code"]: row for row in rows}
+    assert set(by_code) == {"123281.SZ", "123284.SZ"}
+    # 已定上市日的排在待定之前
+    assert [row["bond_code"] for row in rows] == ["123281.SZ", "123284.SZ"]
+    assert by_code["123281.SZ"]["days_to_trade"] == 4
+    assert by_code["123284.SZ"]["tradable_date"] is None
+    assert by_code["123284.SZ"]["days_to_trade"] is None
+    assert by_code["123284.SZ"]["K"] == 84.04
+
+
+def test_exclusion_reason_reports_issued_but_unlisted():
+    """已发行未上市既买不到也没有市价可比 — 归"扫新债"关注池而不是主池."""
+    terms = BondTerms(
+        sec_name="强达转债",
+        issue_date=date(2026, 8, 19),
+        listing_date=None,
+        maturity_date=date(2032, 8, 19),
+        credit_rating="AA-",
+        outstanding_balance=5.5,
+    )
+    reason = batch_pricing_exclusion_reason(
+        "123284.SZ", terms, on_date=date(2026, 8, 20))
+    assert reason == "已发行未上市"
+
+    listed = replace(terms, listing_date=date(2026, 8, 25))
+    assert batch_pricing_exclusion_reason(
+        "123284.SZ", listed, on_date=date(2026, 9, 1)) is None
+
+
 def test_merge_upcoming_pricing_results_adds_theoretical_price():
     merged = merge_upcoming_pricing_results(
         [

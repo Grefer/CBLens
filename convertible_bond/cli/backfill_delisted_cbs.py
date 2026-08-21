@@ -28,6 +28,7 @@ from pathlib import Path
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_data_sync import sync_cb_terms
 from ..data_providers import WindDataProvider
+from ..market_time import market_today
 
 
 def _quarter_end_dates(start_year: int, end_year: int) -> list[date]:
@@ -82,7 +83,7 @@ def main() -> int:
                         help="cb_data bundle 路径 (默认 <repo>/data/cb_data.json)")
     parser.add_argument("--start-year", type=int, default=2018,
                         help="历史成分扫描起始年 (默认 2018)")
-    parser.add_argument("--end-year", type=int, default=date.today().year,
+    parser.add_argument("--end-year", type=int, default=market_today().year,
                         help="历史成分扫描结束年 (默认今年)")
     parser.add_argument("--codes", nargs="*", default=[],
                         help="跳过历史扫描, 直接指定要补的代码 (调试用)")

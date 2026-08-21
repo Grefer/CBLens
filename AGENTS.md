@@ -99,6 +99,11 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 - **年化强度**: p_down 解释为年化事件强度，每步 `1-exp(-p·dt)`
 - **原子写**: JSON 先写 `.tmp` 再 `rename`，防半截文件
 - **鸭子类型缓存**: TermsBundle/TermsCache 共用接口 `has/get/set/list_bonds/fetched_at/is_stale/delete`
+- **市场口径的"今天"**: 一律用 `market_time.market_today()` (Asia/Shanghai), 不要用
+  `date.today()` — 后者跟着运行机器时区走, 非东八区 (如美西) 会让估值日、公告同步窗口、
+  准入判断整体错开一天, 且静默不报错。落盘元信息 (`saved_at`/`fetched_at` 这类本机挂钟
+  时间戳) 才继续用 `datetime.now()`。`tests/test_market_time.py` 有守护测试扫描裸 `date.today()`；
+  数据源返回的时间戳同理按 `EXCHANGE_TZ` 换算 (例: 巨潮 `announcementTime` 是北京时间毫秒戳)。
 
 ### BondTerms 字段约定
 

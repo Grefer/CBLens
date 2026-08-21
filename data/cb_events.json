@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "last_sync_at": "2026-08-20T20:27:32",
+    "last_sync_at": "2026-08-20T22:54:18",
     "synced_at_by_code": {
       "110025.SH": "2026-05-07T22:40:05",
       "110073.SH": "2026-05-27T06:12:45",
@@ -168,10 +168,11 @@
       "118065.SH": "2026-05-27T06:12:45",
       "118066.SH": "2026-05-27T06:12:45",
       "118067.SH": "2026-05-27T06:12:45",
+      "123001.SZ": "2026-08-20T22:26:13",
       "123054.SZ": "2026-05-27T06:12:45",
       "123059.SZ": "2026-05-27T06:12:45",
       "123061.SZ": "2026-05-27T06:12:45",
-      "123064.SZ": "2026-05-27T06:12:45",
+      "123064.SZ": "2026-08-20T22:54:18",
       "123065.SZ": "2026-05-27T06:12:45",
       "123071.SZ": "2026-05-27T06:12:45",
       "123072.SZ": "2026-05-27T06:12:45",
@@ -272,6 +273,7 @@
       "123269.SZ": "2026-05-27T06:12:45",
       "123281.SZ": "2026-08-20T20:27:32",
       "123282.SZ": "2026-08-20T19:47:14",
+      "123283.SZ": "2026-08-20T22:34:02",
       "127017.SZ": "2026-05-27T06:12:45",
       "127018.SZ": "2026-05-27T06:12:45",
       "127024.SZ": "2026-05-27T06:12:45",
@@ -351,7 +353,7 @@
       "128142.SZ": "2026-05-27T06:12:45",
       "145905.SH": "2026-06-12T14:25:55"
     },
-    "updated_at": "2026-08-20T20:27:32"
+    "updated_at": "2026-08-20T22:54:18"
   },
   "events": [
     {
@@ -70621,6 +70623,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2025-12-29/1224902520.PDF"
     },
     {
+      "bond_code": "123064.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2025-12-29",
+      "event_date": "2025-12-29",
+      "event_price": 93.57,
+      "event_type": "down_reset_proposed",
+      "note": null,
+      "parsed_status": "提议下修",
+      "raw_title": "关于董事会提议向下修正可转换公司债券转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2025-12-30/1224904141.PDF"
+    },
+    {
       "bond_code": "123065.SZ",
       "commitment_months": 1,
       "effective_end": "2026-01-29",
@@ -93693,6 +93709,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-05-27/1225331071.PDF"
     },
     {
+      "bond_code": "123064.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-06-02",
+      "effective_start": "2021-03-08",
+      "event_date": "2026-06-01",
+      "event_price": null,
+      "event_type": "conversion_resume",
+      "note": null,
+      "parsed_status": "恢复转股",
+      "raw_title": "关于万孚转债恢复转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-01/1225342646.PDF"
+    },
+    {
       "bond_code": "111000.SH",
       "commitment_months": null,
       "effective_end": "2026-06-16",
@@ -93705,6 +93735,20 @@
       "raw_title": "起帆电缆关于实施权益分派时“起帆转债”转股连续停牌的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365049.PDF"
+    },
+    {
+      "bond_code": "123064.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-16",
+      "event_date": "2026-06-16",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "广州万孚生物技术股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225372832.PDF"
     },
     {
       "bond_code": "111000.SH",
@@ -93789,6 +93833,20 @@
       "raw_title": "宁波震裕科技股份有限公司向不特定对象发行可转换公司债券信用评级报告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-13/1225470846.PDF"
+    },
+    {
+      "bond_code": "123283.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-13",
+      "event_date": "2026-08-13",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "浙江丰茂科技股份有限公司向不特定对象发行可转换公司债券信用评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-14/1225472673.PDF"
     }
   ]
 }

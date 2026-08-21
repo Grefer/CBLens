@@ -30,6 +30,7 @@ from typing import Any
 
 from .cache import _json_dict_to_terms, _terms_to_json_dict
 from .data_providers import DataProvider, to_date
+from .market_time import market_today
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class DiskCacheProvider(DataProvider):
         self.name = f"{getattr(inner, 'name', 'provider')}+disk"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._today = today or date.today()
+        self._today = today or market_today()
         # 缓存身份: 显式 namespace 优先, 否则按 provider+条款来源文件 mtime 自动派生。
         # 身份变 (patch/events/bundle 更新) → 旧缓存视为失效。
         self._identity = namespace or _provider_identity(inner)

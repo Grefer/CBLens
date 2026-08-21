@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from .market_time import market_today
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ class _BacktestCacheProvider(DataProvider):
         # 批量历史区间不越过昨天: 未来日期本就无数据, 且越过今天会让 DiskCacheProvider 的
         # "只缓存严格过去"守卫拒绝落盘, 导致跨运行复跑重复拉取全部历史 (实测 6 小时级)。
         padded_end = end_date + timedelta(days=max(1, execution_lookahead_days) + 15)
-        self._history_end = min(padded_end, date.today() - timedelta(days=1))
+        self._history_end = min(padded_end, market_today() - timedelta(days=1))
         self._bond_history: dict[str, list[tuple[date, float | None]]] = {}
         self._stock_history: dict[str, list[tuple[date, float | None]]] = {}
         self._bond_history_exact: dict[tuple, list[tuple[date, float | None]]] = {}

@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import numpy as np
+from ..market_time import market_today
 
 
 # ── 数据载体 ──────────────────────────────────────────────
@@ -157,6 +158,52 @@ def looks_private_cb_name(name: Any) -> bool:
     return bool(name and _PRIVATE_CB_NAME_RE.search(str(name)))
 
 
+# 标准公募转债"已发行未上市"的判定窗口 (自起息日算起).
+# 起息日 (carrydate) → 上市日 (ipo_date) 实测中位 25 天, 但有长尾; 超过这个天数
+# 仍拿不到上市日, 更可能是数据缺口而不是真的没挂牌 —— 此时保持旧的保守判定
+# (按可交易处理), 避免把有数据缺口的老债误杀出主池。
+UNLISTED_MAX_DAYS = 180
+
+
+def _terms_field(terms: Any, name: str):
+    """兼容 BondTerms / dict / None 的字段读取."""
+    if terms is None:
+        return None
+    if isinstance(terms, dict):
+        return terms.get(name)
+    return getattr(terms, name, None)
+
+
+def is_issued_pending_listing(
+    bond_code: str,
+    terms: Any,
+    valuation_date: date | None = None,
+) -> bool:
+    """标准公募转债已过起息日, 但数据源仍未给出上市日 → 已发行未上市.
+
+    Wind 的 ``ipo_date`` (= ``listing_date``) 只有挂牌后才有值, 所以"缺上市日 +
+    起息日就在不久前"基本等价于"债已经发出去了但还没挂牌交易"。
+
+    判定**只看 issue_date / listing_date**, 不看 ``tradable_date`` /
+    ``trading_status`` / ``is_tradable``: 公募转债这三个字段数据源根本不提供,
+    它们是 :func:`infer_cb_trading_metadata` 的派生产物并被写回 cb_data, 缓存里
+    读到的值只是上一次推断的结果, 不能当独立证据用 (否则一旦推断错过一次,
+    错误状态会被自己"确认"下来, 永远翻不回来)。
+    """
+    if _terms_field(terms, "listing_date") is not None:
+        return False
+    issue_date = _terms_field(terms, "issue_date")
+    if not isinstance(issue_date, date):
+        return False
+    name = _terms_field(terms, "sec_name")
+    if not (is_standard_public_cb_code(bond_code) and not looks_private_cb_name(name)):
+        return False
+    val_date = valuation_date or market_today()
+    if issue_date > val_date:
+        return True
+    return (val_date - issue_date).days <= UNLISTED_MAX_DAYS
+
+
 def infer_cb_trading_metadata(
     bond_code: str,
     terms: BondTerms,
@@ -170,8 +217,14 @@ def infer_cb_trading_metadata(
 
     注: 缺上市日时用发行日当"可交易起点"的锚, 但**不回填** ``listing_date`` —
     已发行未上市的新债上市日就该是空的, 回填会让该字段谎报成起息日。
+
+    公募新债 (已发行未上市) 单独一档: 起息日**不是**可交易起点, 拿它当锚会把
+    刚发行还没挂牌的债判成 tradable, 于是新债既进不了"扫新债", 又会带着空市价
+    混进主池。这一档强制 ``tradable_date=None / is_tradable=False /
+    trading_status="pending"``, 并且不受缓存里旧派生值影响 (见
+    :func:`is_issued_pending_listing`)。
     """
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     listing_anchor = terms.listing_date or terms.issue_date
     tradable_date = terms.tradable_date
     explicit_is_tradable = terms.is_tradable
@@ -179,6 +232,13 @@ def infer_cb_trading_metadata(
     standard_public = is_standard_public_cb_code(bond_code) and not looks_private_cb_name(terms.sec_name)
 
     if standard_public:
+        if is_issued_pending_listing(bond_code, terms, val_date):
+            return replace(
+                terms,
+                tradable_date=None,
+                is_tradable=False,
+                trading_status="pending",
+            )
         tradable_date = tradable_date or listing_anchor
         status = explicit_status or ("tradable" if tradable_date is None or tradable_date <= val_date else "pending")
     else:

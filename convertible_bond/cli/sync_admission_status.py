@@ -14,12 +14,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import date
 from pathlib import Path
 
 from ..admission_status import refresh_admission_status
 from ..cache import TermsBundle, project_bundle_path
 from ..data_providers import DataProvider, WindDataProvider
+from ..market_time import market_today
 
 
 def _make_provider(name: str) -> DataProvider:
@@ -75,7 +75,7 @@ def main() -> int:
         provider,
         codes,
         store=bundle,
-        valuation_date=date.today(),
+        valuation_date=market_today(),
         on_progress=progress,
     )
     elapsed = time.time() - start

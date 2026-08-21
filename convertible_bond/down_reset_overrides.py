@@ -31,6 +31,7 @@ from pathlib import Path
 
 from .data_providers import BondTerms, _add_months, to_date
 from .paths import data_path
+from .market_time import market_today
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +309,7 @@ def resolve_down_reset(
             eff = latest_approved.effective_end or latest_approved.effective_start
             if eff is None:
                 eff = latest_approved.event_date + timedelta(days=APPROVED_EFFECTIVE_LAG_DAYS)
-            cmp_date = valuation_date or date.today()
+            cmp_date = valuation_date or market_today()
             if eff > cmp_date:
                 approved_date = latest_approved.event_date
                 approved_effective_date = eff

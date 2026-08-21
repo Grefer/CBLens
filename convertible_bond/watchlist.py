@@ -110,9 +110,24 @@ def add_to_watchlist(new_items: Iterable[dict]) -> tuple[list[dict], int]:
         )
         if code in by_code:
             entry = by_code[code]
-            for key in ("bond_name", "stock_code", *_WATCHLIST_METADATA_FIELDS):
+            for key in ("bond_name", "stock_code"):
                 value = item.get(key)
                 if value is not None and _json_ready(entry.get(key)) != _json_ready(value):
+                    entry[key] = value
+                    changed = True
+            for key in _WATCHLIST_METADATA_FIELDS:
+                if key not in item:
+                    continue          # 调用方没提这个字段 → 保持原值
+                value = item.get(key)
+                if value is None:
+                    # 显式传 None = "这个字段现在确实没有值" (例: 新债上市日尚未公告)。
+                    # 只 enrich 不 clear 的话, 一次写进来的错值就再也洗不掉了 —
+                    # 扫新债重扫也修不好, 因为新结果里的 None 会被当成"没提供"跳过。
+                    if key in entry:
+                        del entry[key]
+                        changed = True
+                    continue
+                if _json_ready(entry.get(key)) != _json_ready(value):
                     entry[key] = value
                     changed = True
             continue

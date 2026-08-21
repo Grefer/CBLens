@@ -18,6 +18,7 @@ from ...data_providers import (
     DataProvider,
     WindDataProvider,
     is_standard_public_cb_code,
+    to_date,
 )
 from ...historical_terms import project_terms
 from ..constants import (
@@ -34,6 +35,7 @@ from ..theme import (
     VOL_WINDOW_DEFAULT,
     VOL_WINDOW_MAP,
 )
+from ...market_time import market_today
 
 
 logger = logging.getLogger(__name__)
@@ -105,26 +107,58 @@ class WindSyncMixin:
             self._fetch_wind(auto=True)
 
     # ── 转债代码联想 ─────────────────────────────────────────
+    @staticmethod
+    def _bond_index_terminal_reason(d: dict, on_date: date) -> str | None:
+        """本地索引条目是否已终止 (退市/摘牌/到期), 返回原因文案.
+
+        名字里的 "(退市)" 比日期字段更灵: 强赎转股提前摘牌的债 ``delisting_date``
+        常是空的 (全库仅 17 只有值), 但 Wind 简称会带后缀; 而 ``maturity_date``
+        只兜得住自然到期。两个信号都要看。
+        """
+        if "退市" in (d.get("sec_name") or ""):
+            return "已退市"
+        for key, label, expired_when_equal in (
+            ("delisting_date", "已退市", True),
+            ("last_trading_date", "已过最后交易日", False),
+            ("maturity_date", "已到期", True),
+        ):
+            value = to_date(d.get(key))
+            if value is None:
+                continue
+            if value <= on_date if expired_when_equal else value < on_date:
+                return label
+        return None
+
     def _search_bond_index(self, query: str, limit: int = 30):
         """在本地 cb_data.json 索引上做模糊匹配, 同时支持代码与中文简称.
 
-        返回 [(code, "code  sec_name"), ...]; query 为空返回 []."""
+        cb_data 是只增不删的档案库 (1000+ 只里近一半已退市/到期 — 同步只是不再
+        *写入* 终止态的债, 从不删除旧条目), 按代码排序会让 2017 年那批最早的退市
+        债霸占前几行, 存续债根本挤不进可见区。因此排序是 **存续优先**, 终止态沉底
+        并标出原因; 不直接剔除, 是因为回测页共用这个输入框, 复盘已到期的债是正当用法。
+
+        返回 [(code, "code  sec_name [· 原因]"), ...]; query 为空返回 []."""
         q = (query or "").strip().lower()
         if not q:
             return []
-        prefix, contains = [], []
+        today = market_today()
+        rows: list[tuple[bool, bool, str, str]] = []
         for code, d in self.terms_cache._data.items():
             if code.startswith("_") or not isinstance(d, dict):
                 continue
             name = (d.get("sec_name") or "")
             cl, nl = code.lower(), name.lower()
-            if q in cl or q in nl:
-                label = f"{code}  {name}" if name else code
-                bucket = prefix if (cl.startswith(q) or nl.startswith(q)) else contains
-                bucket.append((code, label))
-        prefix.sort(key=lambda t: t[0])
-        contains.sort(key=lambda t: t[0])
-        return (prefix + contains)[:limit]
+            if q not in cl and q not in nl:
+                continue
+            reason = self._bond_index_terminal_reason(d, today)
+            label = f"{code}  {name}" if name else code
+            # 名字已经带 "(退市)" 就不再重复贴标签
+            if reason and "退市" not in name:
+                label = f"{label} · {reason}"
+            is_contains = not (cl.startswith(q) or nl.startswith(q))
+            rows.append((reason is not None, is_contains, code, label))
+        rows.sort()
+        return [(code, label) for _terminal, _contains, code, label in rows][:limit]
 
     def _fill_from_cache(self, code: str):
         """从本地 cb_data.json 直接填表, 不走网络.
@@ -136,7 +170,7 @@ class WindSyncMixin:
         projection = project_terms(
             code,
             terms,
-            date.today(),
+            market_today(),
             event_store=getattr(self, "event_store", None),
         )
         terms = projection.terms
@@ -232,16 +266,17 @@ class WindSyncMixin:
         finally:
             menu.grab_release()
 
-    def _run_pool_sync(self, module: str, label: str, extra_args: tuple = ()):
-        """运行 python -m <module> [extra_args...], 在弹窗里实时显示输出."""
+    def _run_pool_sync(self, module: str, label: str, extra_args: tuple = (),
+                       *, confirm: bool = True, on_success=None):
+        """运行 python -m <module> [extra_args...], 在弹窗里实时显示输出.
+
+        ``confirm=False`` 跳过确认弹窗 (调用方已经问过了);
+        ``on_success`` 在子进程退出码为 0 时于主线程回调, 供"同步完再干活"的链式流程使用。
+        """
         # 同一 module 可能对应多个菜单项 (全量 / 增量), 用 label 精确匹配 desc
         desc = next((d for lbl, mod, _, d in _POOL_SYNC_TARGETS
                      if mod == module and lbl == label), "")
-        confirm = messagebox.askokcancel(
-            label,
-            f"{desc}\n\n继续执行?",
-        )
-        if not confirm:
+        if confirm and not messagebox.askokcancel(label, f"{desc}\n\n继续执行?"):
             return
 
         win = ctk.CTkToplevel(self)
@@ -316,6 +351,8 @@ class WindSyncMixin:
                 rc = proc.wait()
                 if rc == 0:
                     self.after(0, lambda: status_var.set("✅ 完成"))
+                    if on_success is not None:
+                        self.after(0, on_success)
                 else:
                     self.after(0, lambda: status_var.set(f"❌ 退出码 {rc}"))
             except Exception as exc:
@@ -336,7 +373,7 @@ class WindSyncMixin:
         try:
             provider = self._get_provider(source_name)
             market_source = self._provider_market_name(provider)
-            val_date = date.today()
+            val_date = market_today()
 
             had_cached = self.terms_cache.has(code)
             if force and isinstance(provider, CachedBondDataProvider):
@@ -490,7 +527,7 @@ class WindSyncMixin:
             self._set_field(self.v_K, f"{d['K']:.2f}", self.v_src_K, k_label)
         if d.get("face") is not None:
             self._set_field(self.v_face, f"{d['face']:.0f}", self.v_src_face, terms_label)
-        self._set_field(self.v_cur_date, date.today().isoformat(), self.v_src_cur_date, "系统")
+        self._set_field(self.v_cur_date, market_today().isoformat(), self.v_src_cur_date, "系统")
         self._set_field(
             self.v_mat_date,
             d["mat_date"].isoformat() if d.get("mat_date") else "",
@@ -660,7 +697,7 @@ class WindSyncMixin:
     def _recompute_vol_worker(self, stock_code, days):
         try:
             provider = self._get_provider()
-            sigma = provider.hist_vol(stock_code, date.today(), days)
+            sigma = provider.hist_vol(stock_code, market_today(), days)
             self.after(0, lambda: self._set_field(
                 self.v_sigma, f"{sigma * 100:.2f}", self.v_src_sigma, "历史"))
             self.after(0, lambda: self.v_status.set(
@@ -681,7 +718,7 @@ class WindSyncMixin:
     def _fetch_shibor_worker(self):
         try:
             provider = self._get_provider()
-            latest = provider.get_risk_free_rate(date.today())
+            latest = provider.get_risk_free_rate(market_today())
             if latest is None:
                 raise RuntimeError(f"{provider.name} 未返回有效无风险利率")
             self.after(0, lambda: self._set_field(

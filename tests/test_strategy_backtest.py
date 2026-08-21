@@ -15,6 +15,7 @@ from convertible_bond.strategy_backtest import (
     build_rebalance_schedule,
     write_strategy_backtest_csv,
 )
+from convertible_bond.market_time import market_today
 
 
 def test_pde_strategy_defaults_use_robust_signal_and_reserve_cash():
@@ -750,9 +751,9 @@ def test_backtest_cache_history_end_never_extends_into_future():
     from convertible_bond.strategy_backtest import _BacktestCacheProvider
     provider = StrategyFakeProvider()
     near_today = _BacktestCacheProvider(
-        provider, start_date=date.today() - timedelta(days=90), end_date=date.today(),
+        provider, start_date=market_today() - timedelta(days=90), end_date=market_today(),
         price_lookback_days=31, execution_lookahead_days=10, vol_window_days=21)
-    assert near_today._history_end <= date.today() - timedelta(days=1)
+    assert near_today._history_end <= market_today() - timedelta(days=1)
     # 区间完全在过去时不受 clamp 影响 (保持原 padding 语义)
     past = _BacktestCacheProvider(
         provider, start_date=date(2024, 1, 2), end_date=date(2024, 6, 28),
@@ -2629,8 +2630,10 @@ def test_eligible_codes_excludes_bond_issued_but_not_yet_listed():
         # 已上市 → 保留
         "123283.SZ": BondTerms(issue_date=date(2026, 7, 24),
                                listing_date=date(2026, 8, 13), **base),
-        # 缺上市日 → 退回起息日判断, 仍保留
+        # 缺上市日 + 起息不久 → 已发行未上市 (Wind ipo_date 挂牌后才有值), 剔除
         "123284.SZ": BondTerms(issue_date=date(2026, 7, 24), listing_date=None, **base),
+        # 缺上市日 + 起息已久 (超过 UNLISTED_MAX_DAYS) → 视为数据缺口而非未挂牌, 保留
+        "123285.SZ": BondTerms(issue_date=date(2024, 1, 10), listing_date=None, **base),
     }
     provider = _Provider(terms)
 
@@ -2640,4 +2643,6 @@ def test_eligible_codes_excludes_bond_issued_but_not_yet_listed():
     assert "123282.SZ" not in eligible
     assert ("123282.SZ", "尚未上市 (上市日 2026-09-10)") in excluded
     assert "123283.SZ" in eligible
-    assert "123284.SZ" in eligible
+    assert "123284.SZ" not in eligible
+    assert ("123284.SZ", "已发行未上市") in excluded
+    assert "123285.SZ" in eligible

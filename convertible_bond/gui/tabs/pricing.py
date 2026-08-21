@@ -248,6 +248,13 @@ def build(app, tab):
         font=(FONT_FAMILY, 12, "bold"), width=90, height=28, corner_radius=6)
     app.btn_cashflow.pack(side="right")
 
+    # ⭐ 加入关注池: 单债钻取完能直接跟踪, 不必回批量页重新找一遍
+    app.btn_add_watchlist = ctk.CTkButton(
+        action_tools, text="⭐ 加入关注池", command=app._add_current_to_watchlist,
+        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=ORANGE,
+        font=(FONT_FAMILY, 12, "bold"), width=110, height=28, corner_radius=6)
+    app.btn_add_watchlist.pack(side="right", padx=(0, 8))
+
     # ── 🎯 What-if 快算 (波动率 ±2pp/±5pp · 正股 ±5%/±10%) ──
     _build_what_if_row(app, rp, row=1)
 

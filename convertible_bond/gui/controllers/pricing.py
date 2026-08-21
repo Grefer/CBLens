@@ -14,6 +14,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from ...pricer import UniversalCBPricer
 from ...dateutil import add_years as _add_years
 from ...cb_events import is_down_reset_trigger_notice_title
+from ...data_providers import infer_cb_trading_metadata
 from ...down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
 from ...historical_terms import project_terms
 from ...model_defaults import DEFAULT_DOWN_RESET_TRIGGER_RATIO
@@ -24,13 +25,15 @@ from ...pricing_api import (
     _rating_spread_floor,
     _risk_warnings,
 )
-from ..constants import P_DOWN_AUTO_SOURCE_LABELS, default_p_down_pct_for_state
+from ...watchlist import add_to_watchlist, load_watchlist
+from ..constants import BOND_CODE_RE, P_DOWN_AUTO_SOURCE_LABELS, default_p_down_pct_for_state
 from ..theme import (
     ACCENT, BG_APP, BG_CARD, BG_INPUT, BORDER,
     FONT_FAMILY, FONT_MONO,
     GREEN, ORANGE, RED, TEXT, TEXT_DIM,
     get_color,
 )
+from ...market_time import market_today
 
 
 class PricingMixin:
@@ -1211,7 +1214,7 @@ class PricingMixin:
     @staticmethod
     def _date_var_or_today(var) -> date:
         parsed = PricingMixin._date_text_or_none(var.get())
-        return parsed or date.today()
+        return parsed or market_today()
 
     @staticmethod
     def _date_text_or_none(text) -> date | None:
@@ -1358,6 +1361,138 @@ class PricingMixin:
             if hasattr(self, "lbl_deviation"):
                 self.lbl_deviation.configure(text_color=TEXT_DIM)
         self._refresh_terms_snapshot_card()
+
+    # ── ⭐ 加入关注池 ────────────────────────────────────────
+    # 按钮同时承担"动作"和"状态显示": 定价页的状态栏在窗口右下角 11px 一行,
+    # 点完只改那行字等于没有反馈, 所以结果直接写回按钮本身。
+    _WATCHLIST_BTN_IDLE = "⭐ 加入关注池"
+    _WATCHLIST_BTN_TRACKED = "★ 已关注"
+
+    def _is_watched(self, code: str) -> bool:
+        if not code:
+            return False
+        watchlist = getattr(self, "_batch_watchlist", None)
+        if watchlist is None:
+            watchlist = load_watchlist()
+        return any(entry.get("bond_code") == code for entry in watchlist)
+
+    def _refresh_watchlist_button(self):
+        """按当前代码是否已在关注池刷新按钮文案/配色 (闪烁提示期间不覆盖)."""
+        btn = getattr(self, "btn_add_watchlist", None)
+        if btn is None or getattr(self, "_watchlist_btn_flash", None) is not None:
+            return
+        try:
+            code = self._normalize_bond_code(self.v_bond_code.get())
+        except Exception:
+            code = ""
+        watched = self._is_watched(code)
+        btn.configure(
+            text=self._WATCHLIST_BTN_TRACKED if watched else self._WATCHLIST_BTN_IDLE,
+            text_color=GREEN if watched else ORANGE,
+        )
+
+    def _flash_watchlist_button(self, text: str, *, hold_ms: int = 1800):
+        """把操作结果直接闪在按钮上, 到点后回落到常态 (已关注 / 未关注)."""
+        btn = getattr(self, "btn_add_watchlist", None)
+        if btn is None:
+            return
+        pending = getattr(self, "_watchlist_btn_flash", None)
+        if pending is not None:
+            self.after_cancel(pending)
+        btn.configure(text=text, text_color=GREEN)
+
+        def _restore():
+            self._watchlist_btn_flash = None
+            self._refresh_watchlist_button()
+
+        self._watchlist_btn_flash = self.after(hold_ms, _restore)
+
+    @staticmethod
+    def _float_or_none(text):
+        try:
+            value = float(str(text).strip())
+        except (TypeError, ValueError):
+            return None
+        return value if value == value else None  # 过滤 NaN
+
+    def _add_current_to_watchlist(self):
+        """把定价页当前这只债连同刚算出的理论价快照写进关注池.
+
+        关注池此前只能从批量页加入, 于是"单债钻取看着不错 → 想跟踪"这条最自然的
+        路径是断的; 这里补上, 快照字段与批量页保持同一口径 (偏差 = (市价−理论)/理论)。
+        """
+        code = self._normalize_bond_code(self.v_bond_code.get())
+        if not BOND_CODE_RE.match(code):
+            messagebox.showwarning("提示", "请先填入有效的转债代码 (如 128009.SZ) 再加入关注池")
+            return
+
+        item = {"bond_code": code}
+        terms = None
+        cache = getattr(self, "terms_cache", None)
+        if cache is not None and cache.has(code):
+            try:
+                terms = cache.get(code)
+            except Exception:
+                terms = None
+        if terms is not None:
+            # cb_data 存的 tradable_date/is_tradable/trading_status 是**写入那天**推断的,
+            # 直接抄进关注池会把过期判断固化下来 (新债尤其明显: 旧值把起息日当可交易日)
+            try:
+                terms = infer_cb_trading_metadata(code, terms, market_today())
+            except Exception:
+                pass
+            for key, attr in (
+                ("bond_name", "sec_name"),
+                ("stock_code", "underlying_code"),
+                ("underlying_name", "underlying_name"),
+                ("issue_date", "issue_date"),
+                ("listing_date", "listing_date"),
+                ("tradable_date", "tradable_date"),
+                ("is_tradable", "is_tradable"),
+                ("trading_status", "trading_status"),
+                ("credit_rating", "credit_rating"),
+                ("outstanding_balance", "outstanding_balance"),
+                ("maturity_date", "maturity_date"),
+                ("K", "conversion_price"),
+            ):
+                value = getattr(terms, attr, None)
+                if value is not None:
+                    item[key] = value
+        item.setdefault("K", self._float_or_none(self.v_K.get()))
+
+        theo = self._float_or_none(self.v_result.get())
+        mkt = self._float_or_none(self.v_market_price.get())
+        if theo is not None and theo > 0:
+            item["snapshot_theoretical_price"] = theo
+        if mkt is not None and mkt > 0:
+            item["snapshot_market_price"] = mkt
+            item["market_price"] = mkt
+            if theo is not None and theo > 0:
+                # 与批量页同一符号约定: 负值 = 市价低于理论价 = 低估
+                item["snapshot_deviation"] = (mkt - theo) / theo
+        item = {k: v for k, v in item.items() if v is not None}
+
+        watchlist, added = add_to_watchlist([item])
+        self._batch_watchlist = watchlist
+        # 延迟导入: 控制器 → tabs 的反向依赖只在这里用一次, 模块级导入会成环
+        try:
+            from ..tabs.batch_watchlist import _render_watchlist_table
+            _render_watchlist_table(self)
+        except Exception:
+            pass
+
+        name = item.get("bond_name") or code
+        if added:
+            msg = f"⭐ 已加入关注池: {name}"
+            if "snapshot_theoretical_price" not in item:
+                msg += " (尚无理论价快照 — 先点 ✨ 开始计算再加入可留存当时的定价)"
+            self._flash_watchlist_button("✓ 已加入关注池")
+        else:
+            msg = f"⭐ {name} 已在关注池中, 已刷新条款信息"
+            self._flash_watchlist_button("✓ 已在关注池")
+        self.v_status.set(msg)
+        if hasattr(self, "v_batch_status"):
+            self.v_batch_status.set(msg)
 
     # ── 隐含波动率反解 ──────────────────────────────────────
     def _solve_iv(self):

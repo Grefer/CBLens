@@ -28,6 +28,7 @@ from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
+from .market_time import market_today
 
 
 _RATING_SPREAD_FLOORS = {
@@ -448,7 +449,7 @@ def price_from_provider(provider: DataProvider, bond_code,
     q 默认从 provider.get_stock_dividend_yield() 读取 (返回百分数), 缺失时回退 0;
     如需覆盖直接传 sigma=0.30 或其他 pricer kwarg (K/maturity_date/...).
     """
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     provider_event_store = _provider_event_store(provider)
     effective_patch_store = term_patch_store or _provider_patch_store(provider)
     terms = provider.get_bond_terms(bond_code, val_date)
@@ -1073,7 +1074,7 @@ def batch_price_from_provider_threaded(
     内部自动启用 _BatchStockCache: 同一正股的现价/历史/波动率只从数据源拉取一次,
     后续引用相同正股的转债直接走内存缓存, 大幅减少网络请求量.
     """
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     codes = list(bond_codes)
     total = len(codes)
     if total == 0:

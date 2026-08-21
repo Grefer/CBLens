@@ -2,8 +2,9 @@
 可复用 GUI 组件: 表单行, 卡片, 折叠面板, 悬浮提示, 自动补全输入框, 日期选择.
 """
 import calendar
-from datetime import date, datetime
+from datetime import datetime
 import tkinter as tk
+import tkinter.font as tkfont
 import customtkinter as ctk
 
 from .theme import (
@@ -20,6 +21,7 @@ from .theme import (
     FONT_MONO,
     get_color,
 )
+from ..market_time import market_today
 
 
 def _source_label_color(source: str):
@@ -264,6 +266,7 @@ class AutocompleteEntry(ctk.CTkFrame):
     on_select : Callable[[str], None] | None
         选中后的回调 (textvariable 已被设置).
     max_rows : int
+        下拉同时**可见**的行数; 候选更多时列表可滚动 (↑/↓ 会自动跟随), 不再截断。
     其余 kwargs 透传给内部 CTkEntry (width/height/font/...).
     """
     def __init__(self, parent, textvariable, get_suggestions,
@@ -279,6 +282,8 @@ class AutocompleteEntry(ctk.CTkFrame):
 
         self._popup = None
         self._listbox = None
+        self._scrollbar = None
+        self._label_font = None
         self._items = []
         self._hide_after = None
         self._suppress = False
@@ -295,8 +300,9 @@ class AutocompleteEntry(ctk.CTkFrame):
         if self._suppress:
             return
         query = self.var.get().strip()
-        items = list(self.get_suggestions(query))
-        self._items = items[: self.max_rows]
+        # 全量保留候选: 多出 max_rows 的部分靠滚动够得着, 截断会让"123009"这种
+        # 排在第 9 位的代码根本选不中 (候选条数上限由 get_suggestions 自己控制)
+        self._items = list(self.get_suggestions(query))
         if not self._items:
             self._hide()
             return
@@ -313,17 +319,54 @@ class AutocompleteEntry(ctk.CTkFrame):
         top.wm_overrideredirect(True)
         top.attributes("-topmost", True)
         top.configure(bg=bd)
+        top.grid_columnconfigure(0, weight=1)
+        top.grid_rowconfigure(0, weight=1)
         lb = tk.Listbox(
             top, activestyle="none",
             bg=bg, fg=fg, selectbackground=sel, selectforeground="#ffffff",
             highlightthickness=0, borderwidth=0,
             font=(FONT_MONO, 12), exportselection=False)
-        lb.pack(fill="both", expand=True, padx=1, pady=1)
+        lb.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
+        sb = tk.Scrollbar(top, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        sb.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
+        sb.grid_remove()
         lb.bind("<Button-1>", self._on_lb_click)
         lb.bind("<Return>", self._on_return)
         lb.bind("<KP_Enter>", self._on_return)
         self._popup = top
         self._listbox = lb
+        self._scrollbar = sb
+        self._label_font = tkfont.Font(root=lb, font=(FONT_MONO, 12))
+
+    # 下拉宽度上限: 输入框的 3 倍, 但至少给 360px —— 输入框本身很窄时,
+    # 纯按倍数封顶会重新把候选截断, 等于没修
+    _MAX_WIDTH_RATIO = 3.0
+    _MIN_MAX_WIDTH = 360
+
+    def _popup_width(self, entry_width: int, x: int) -> int:
+        """下拉宽度取"最长候选文字"而不是输入框宽度.
+
+        代码后面跟的是中文简称 (可能还带 "(退市)" 这类后缀), 按输入框宽度开窗
+        会把名字齐刷刷截掉一半, 光看代码是认不出债的。
+        """
+        widest = 0
+        font = getattr(self, "_label_font", None)
+        if font is not None:
+            for _val, label in self._items:
+                widest = max(widest, font.measure(label))
+        # 8 = listbox 左右内边距 + 边框; 有滚动条时再让出滚动条宽度
+        needed = widest + 8
+        if self._scrollbar_needed():
+            needed += self._scrollbar.winfo_reqwidth()
+        w = max(entry_width, needed)
+        w = min(w, max(int(entry_width * self._MAX_WIDTH_RATIO), self._MIN_MAX_WIDTH))
+        # 不要越过屏幕右边缘
+        screen_w = self._popup.winfo_screenwidth()
+        return max(80, min(w, screen_w - x - 8))
+
+    def _scrollbar_needed(self) -> bool:
+        return len(self._items) > self.max_rows
 
     def _show(self):
         self._ensure_popup()
@@ -332,15 +375,20 @@ class AutocompleteEntry(ctk.CTkFrame):
         for _val, label in self._items:
             lb.insert("end", label)
         n = len(self._items)
-        lb.configure(height=n)
+        lb.configure(height=min(n, self.max_rows))
+        if self._scrollbar_needed():
+            self._scrollbar.grid()
+        else:
+            self._scrollbar.grid_remove()
         if n > 0:
             lb.selection_clear(0, "end")
             lb.selection_set(0)
+            lb.see(0)
         self.entry.update_idletasks()
         x = self.entry.winfo_rootx()
         y = self.entry.winfo_rooty() + self.entry.winfo_height() + 2
-        w = self.entry.winfo_width()
         self._popup.update_idletasks()
+        w = self._popup_width(self.entry.winfo_width(), x)
         h = self._popup.winfo_reqheight()
         self._popup.geometry(f"{w}x{h}+{x}+{y}")
         self._popup.deiconify()
@@ -354,6 +402,8 @@ class AutocompleteEntry(ctk.CTkFrame):
                 pass
             self._popup = None
             self._listbox = None
+            self._scrollbar = None
+            self._label_font = None
 
     def _cancel_hide(self):
         if self._hide_after is not None:
@@ -453,7 +503,7 @@ class DatePickerPopup(ctk.CTkToplevel):
         try:
             today = datetime.strptime(var.get(), "%Y-%m-%d").date()
         except (ValueError, AttributeError, TypeError):
-            today = date.today()
+            today = market_today()
         self._selected = today
         self._view = today.replace(day=1)
 
@@ -590,7 +640,7 @@ class DatePickerPopup(ctk.CTkToplevel):
         while len(weeks) < 6:
             weeks.append([0] * 7)
 
-        today = date.today()
+        today = market_today()
         for week in weeks:
             row = ctk.CTkFrame(self._grid, fg_color="transparent")
             row.pack(fill="x")

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import date
 from pathlib import Path
 
 from ..cache import TermsBundle, project_bundle_path
@@ -19,6 +18,7 @@ from ..cb_event_sync import apply_events_to_bundle, sync_cb_events
 from ..cb_events import CBEventStore, project_events_path
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
 from ..data_providers import DataProvider, WindDataProvider
+from ..market_time import market_today
 
 
 def _make_provider(name: str) -> DataProvider:
@@ -89,7 +89,7 @@ def main() -> int:
         codes,
         store,
         term_patch_store=patch_store,
-        end=date.today(),
+        end=market_today(),
         lookback_days=max(1, args.lookback_days),
         on_progress=progress,
         download_pdf=download_pdf,

@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import sys
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -28,6 +28,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
+from ..market_time import market_today
 from ..batch_pricing import DEFAULT_MIN_CREDIT_RATING, DEFAULT_MIN_OUTSTANDING_BALANCE
 from ..paths import asset_path, seed_data_files
 from ..pricing_api import (
@@ -227,7 +228,7 @@ class CBPricerApp(
         self.v_K         = ctk.StringVar(value="")
         self.v_face      = ctk.StringVar(value="100")
         self.v_redemp    = ctk.StringVar(value="")
-        self.v_cur_date  = ctk.StringVar(value=date.today().isoformat())
+        self.v_cur_date  = ctk.StringVar(value=market_today().isoformat())
         self.v_mat_date  = ctk.StringVar(value="")
         self.v_iss_date  = ctk.StringVar(value="")
         self.v_conv_date = ctk.StringVar(value="")
@@ -260,7 +261,7 @@ class CBPricerApp(
         self.v_vol_window  = ctk.StringVar(value=VOL_WINDOW_DEFAULT)
         self.v_theme       = ctk.StringVar(value="Dark")
 
-        today = date.today()
+        today = market_today()
         self.v_bt_start  = ctk.StringVar(value=(today - timedelta(days=180)).isoformat())
         self.v_bt_end    = ctk.StringVar(value=today.isoformat())
         self.v_bt_freq   = ctk.StringVar(value="周")
@@ -661,6 +662,8 @@ class CBPricerApp(
         strategy_tab.build(self, self._tab_frames[E("🎯 策略")])
         sensitivity_tab.build(self, self._tab_frames[E("🔥 敏感性")])
         batch_tab.build(self, self._tab_frames[E("📦 批量")])
+        # 关注池在批量页构建时才载入, 此时才能给定价页的 ⭐ 按钮定初始状态
+        self._refresh_watchlist_button()
         self._active_tab_name = E("📦 批量")
         self._sync_active_tab_frame()
 
@@ -740,6 +743,8 @@ class CBPricerApp(
         self._sync_active_tab_frame()
         if selected == E("⚡ 定价"):
             self.after_idle(self._place_pricing_sash)
+            # 关注池可能在批量页被增删过, 回到定价页时同步 ⭐ 按钮状态
+            self.after_idle(self._refresh_watchlist_button)
         elif selected == E("🎯 策略"):
             self.after_idle(self._refresh_strategy_after_show)
 
@@ -869,6 +874,7 @@ class CBPricerApp(
         if self._suppress_bond_autoload:
             return
         code = self._normalize_bond_code(self.v_bond_code.get())
+        self._refresh_watchlist_button()   # ⭐ 按钮要跟着代码切换显示已关注/未关注
         if not BOND_CODE_RE.match(code):
             self._last_auto_loaded_code = None
             if self._auto_fetch_after is not None:

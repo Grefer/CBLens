@@ -37,6 +37,7 @@ from ._helpers import (
     _wind_to_ak_stock,
     _wind_to_ak_stock_prefixed,
 )
+from ..market_time import market_today
 
 
 logger = logging.getLogger(__name__)
@@ -472,7 +473,7 @@ class AkshareDataProvider(DataProvider):
             11xxxx → SH (沪市), 其它 (12xxxx/13xxxx) → SZ (深市)
         返回 ``[(wind_code, sec_name), ...]``; akshare 的 '债券简称' 列充当 sec_name。
         """
-        if on_date is not None and on_date != date.today():
+        if on_date is not None and on_date != market_today():
             raise NotImplementedError("akshare 不支持历史可转债全市场成分")
         df = self._cb_list()
         if df is None or len(df) == 0:

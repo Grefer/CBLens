@@ -27,6 +27,7 @@ from datetime import date, datetime
 import requests
 
 from .data_providers import DataProvider, BondTerms, _retry
+from .market_time import EXCHANGE_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -350,12 +351,13 @@ def _parse_announcement_item(ann: dict) -> dict | None:
     if not title:
         return None
 
-    # 日期: announcementTime 是毫秒时间戳
+    # 日期: announcementTime 是北京时间口径的毫秒时间戳 —— 必须按交易所时区换算,
+    # 用本机时区解析的话非东八区机器 (例如美西 UTC-7) 会把公告整体记早一天。
     ts = ann.get("announcementTime")
     ann_date = None
     if ts is not None:
         try:
-            ann_date = datetime.fromtimestamp(int(ts) / 1000).date()
+            ann_date = datetime.fromtimestamp(int(ts) / 1000, tz=EXCHANGE_TZ).date()
         except (ValueError, OSError, OverflowError):
             pass
     # 退化: adjunctUrl 里可能带日期

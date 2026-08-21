@@ -62,6 +62,7 @@ from .batch_watchlist import (
     _render_watchlist_table,
     _show_events_banner_full,
 )
+from ...market_time import market_today
 
 if TYPE_CHECKING:
     from ..app import CBPricerApp
@@ -372,7 +373,7 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
             max_age_days=30,
         )
         try:
-            rf = provider.get_risk_free_rate(date.today())
+            rf = provider.get_risk_free_rate(market_today())
             if rf is not None:
                 params = dict(params, r=float(rf) / 100.0)
         except Exception:

@@ -17,6 +17,7 @@ from typing import Any
 
 from .data_providers import BondTerms, _add_months, to_date
 from .paths import data_path
+from .market_time import market_today
 
 
 EVENT_TYPES = (
@@ -641,7 +642,7 @@ def apply_events_to_terms(
     down_reset_cooldown_months: int = 6,
 ) -> BondTerms:
     """把事件层合并到 ``BondTerms`` 中, 供筛选和定价使用."""
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     active = [e for e in events if e.bond_code == bond_code and e.event_date <= val_date]
     if not active:
         return terms

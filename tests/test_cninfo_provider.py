@@ -1,6 +1,9 @@
 """CninfoAnnouncementProvider 与 cb_event_sync PDF 注入测试."""
+import time
 from datetime import date
 from unittest.mock import MagicMock
+
+import pytest
 
 from convertible_bond.cb_event_sync import (
     _needs_body,
@@ -87,7 +90,7 @@ def test_query_pages_raises_on_first_page_http_error():
 def test_parse_announcement_item_basic():
     ann = {
         "announcementTitle": "关于<em>不提前</em>赎回可转债的公告",
-        "announcementTime": 1714185600000,  # 2024-04-27 in ms
+        "announcementTime": 1714185600000,  # 2024-04-27 08:00 北京时间
         "adjunctUrl": "finalpage/2024-04-27/test.PDF",
     }
     row = _parse_announcement_item(ann)
@@ -96,6 +99,34 @@ def test_parse_announcement_item_basic():
     assert row["date"] == date(2024, 4, 27)
     assert "static.cninfo.com.cn" in row["url"]
     assert row["url"].endswith(".PDF")
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset 仅 POSIX 可用")
+@pytest.mark.parametrize("tz", [
+    "America/Los_Angeles",   # UTC-7: 按本机时区解析会早一天
+    "UTC",
+    "Asia/Shanghai",
+    "Pacific/Kiritimati",    # UTC+14: 反方向也不能晚一天
+])
+def test_parse_announcement_item_date_is_timezone_independent(monkeypatch, tz):
+    """公告日期按北京时间口径, 不随运行机器时区漂移.
+
+    巨潮的 announcementTime 是北京时间; 早年用本机时区解析, 美西用户拿到的
+    每条公告都早一天, 会连带把事件日期和回测防前视判断整体前移。
+    """
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+    try:
+        row = _parse_announcement_item({
+            "announcementTitle": "关于不提前赎回可转债的公告",
+            "announcementTime": 1714185600000,   # 2024-04-27 08:00 北京时间
+            "adjunctUrl": "",                    # 清空 URL, 排除日期从 URL 兜底的可能
+        })
+        assert row is not None
+        assert row["date"] == date(2024, 4, 27)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def test_parse_announcement_item_missing_title():

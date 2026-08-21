@@ -35,6 +35,7 @@ from ..theme import (
     ORANGE, TEXT, TEXT_DIM,
 )
 from ..widgets import Tooltip, create_card
+from ...market_time import market_today
 
 
 logger = logging.getLogger(__name__)
@@ -441,7 +442,7 @@ class EventsMixin:
             result = sync_cb_events(
                 provider, [code], store,
                 term_patch_store=patch_store,
-                end=date.today(), lookback_days=365,
+                end=market_today(), lookback_days=365,
                 download_pdf=True,
             )
             self.after(0, lambda: self._on_auto_sync_events_done(code, result, None))
@@ -515,7 +516,7 @@ class EventsMixin:
             result = sync_cb_events(
                 provider, [code], self.event_store,
                 term_patch_store=patch_store,
-                end=date.today(), lookback_days=365,
+                end=market_today(), lookback_days=365,
                 download_pdf=True,
             )
             scanned = result["scanned_announcements"]
@@ -548,7 +549,7 @@ class EventsMixin:
         projection = project_terms(
             code,
             terms,
-            date.today(),
+            market_today(),
             event_store=self.event_store,
         )
         projected = projection.terms

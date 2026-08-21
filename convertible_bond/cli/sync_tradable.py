@@ -19,12 +19,12 @@ import argparse
 import shutil
 import sys
 import time
-from datetime import date
 from pathlib import Path
 
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_data_sync import filter_listed_codes, sync_cb_terms
 from ..data_providers import DataProvider, WindDataProvider
+from ..market_time import market_today
 
 
 def _save_history_snapshot(bundle, bundle_path: Path) -> Path | None:
@@ -32,7 +32,7 @@ def _save_history_snapshot(bundle, bundle_path: Path) -> Path | None:
     from ..historical_terms import project_terms_history_dir
     history_dir = project_terms_history_dir()
     history_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_name = f"{date.today().isoformat()}.json"
+    snapshot_name = f"{market_today().isoformat()}.json"
     snapshot_path = history_dir / snapshot_name
     try:
         shutil.copy2(bundle_path, snapshot_path)
@@ -96,7 +96,7 @@ def main():
     else:
         print(f"通过 {provider.name} 拉取沪深可转债成分 ...")
         try:
-            items = provider.list_tradable_cbs(date.today())
+            items = provider.list_tradable_cbs(market_today())
         except NotImplementedError:
             print(f"❌ {provider.name} 不支持 list_tradable_cbs", file=sys.stderr)
             return 2

@@ -14,6 +14,7 @@ from .batch_pricing import (
     summarize_exclusions,
 )
 from .data_providers import BondTerms, DataProvider
+from .market_time import market_today
 
 
 ADMISSION_STATUS_FIELDS = (
@@ -79,7 +80,7 @@ def refresh_admission_status(
     ``store`` 建议传 ``TermsBundle``; 若 store 中没有某只债, 会先用 provider
     拉完整基础条款作为 base, 再合并状态字段。
     """
-    val_date = valuation_date or date.today()
+    val_date = valuation_date or market_today()
     codes = list(bond_codes)
     success: list[str] = []
     failed: list[tuple[str, str]] = []
