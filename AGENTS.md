@@ -124,6 +124,14 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 - `DataProvider` 新增方法时，先在 `data_providers/base.py` 的 ABC 里给兼容默认实现，避免打断
   provider 装饰器链。
 - akshare 网络调用一律走 `_retry()`，不要裸调。
+- **公告解析里"条款文字"与"当期状态"必须区分**。赎回/回售/停止交易条款会成段引用
+  "未转股余额少于 3,000 万元时公司有权赎回", 早期宽松正则把它当成真实余额, 让 546 条
+  余额 patch 里 528 条值恰为 0.3 亿、覆盖 103 只债 (96 只真实余额 ≥0.5 亿), 这些大盘券
+  随后被准入的 `min_outstanding_balance` 整批当成"余额过小"踢出主池 (主池 217 → 修复后
+  283)。判据必须是**措辞**而不是数值 —— 真实披露的"未转股余额为 3,000 万元"仍要正常解析。
+  见 `parse_outstanding_balance_change` 的两道语义闸 (gap 比较词 / 金额尾缀), 存量数据用
+  `cb-repair-balance-patches` 回洗。新增任何"从公告正文抽数值"的解析器时先想清楚:
+  这句话说的是**已经发生的状态**, 还是**触发条件**?
 - Wind 字段用"候选字段逐个尝试"的兼容模式，不要假设所有终端字段一致
   (例: `carrydate` → `issue_firstissue`)。
 
@@ -167,7 +175,8 @@ UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆�
 - `data/cb_data_history/` — 按日期归档的条款快照 (历史回测取数)
 - `data/cb_events.json` — 结构化事件表
 - `data/cb_terms_patches.json` — 历史条款 patch (回测防未来信息)
-- `data/cb_valuation_history.json` — 大类估值历史基线 (批量重算自动追加, 入版本库)
+- `data/cb_valuation_history.json` — 大类估值历史基线 (批量重算自动追加, 入版本库;
+  每条带 `caliber` 口径标记, 缺失视为 `v1`, 见 `market_valuation.CALIBER_CHANGES`)
 - `data/down_reset_overrides.json` — 人工下修覆盖 (可手动编辑)
 - `data/batch_pricing_cache.json` — 批量定价缓存 (运行态, gitignored)
 - `data/watchlist.json` — 关注池 (运行态, gitignored)
@@ -180,11 +189,12 @@ UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆�
 cb-gui                                      # GUI
 cb-screen-pool --min-rating AA-             # 准入筛选报告
 cb-sync-tradable                            # 全量同步基础条款
-cb-sync-admission-status --limit 50         # 刷新状态
+cb-sync-admission-status                    # 刷新状态 (全库 1058 只约 30min; --limit 仅调试用)
 cb-sync-events --apply                      # 同步公告事件并应用回 cb_data
 cb-valuation                                # 大类估值/择时信号 (--record 入基线)
 cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M  # 策略回测 (--cache-dir 复跑提速)
 cb-calibrate-down-reset                     # 从 cb_events 校准下修博弈常量
+cb-repair-balance-patches --apply           # 一次性存量迁移: 清洗被赎回门槛条款污染的余额 patch
 python CB.py 128009.SZ                      # 单只定价
 ```
 

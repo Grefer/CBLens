@@ -393,7 +393,7 @@ cb-sync-tradable --codes 113050.SH 128009.SZ       # 指定代码
 
 ```bash
 cb-sync-admission-status                           # 全量刷新
-cb-sync-admission-status --limit 50                # 限量刷新
+cb-sync-admission-status --limit 50                # 限量刷新 (仅调试; 摘牌日等字段需全库跑)
 cb-sync-admission-status --codes 113050.SH         # 指定代码
 ```
 
@@ -417,6 +417,20 @@ cb-screen-pool                                     # 默认参数
 cb-screen-pool --min-rating AA- --min-balance 1    # 严格筛选
 cb-screen-pool --min-turnover 10000000 --show-excluded 50
 ```
+
+### 修数据：清洗被门槛条款污染的余额 patch
+
+赎回/回售公告会成段引用「未转股余额少于 3,000 万元时公司有权赎回」这类**门槛条款**。
+解析器早期把它当成真实余额，写出一批 `outstanding_balance = 0.3` 的错误 patch，
+让真实余额几十亿的大盘券被准入过滤当成「余额过小」剔除（主池 217 → 修复后 283）。
+
+```bash
+cb-repair-balance-patches                  # 先看报告 (dry-run, 默认)
+cb-repair-balance-patches --apply          # 确认后回洗 (自动备份 .bak-<时间戳>)
+```
+
+解析侧已按**措辞**而非数值修复，真实披露的「未转股余额为 3,000 万元」仍会正常解析；
+本命令只清洗历史存量，日常同步不需要重复跑。
 
 ---
 
