@@ -94,7 +94,10 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 ### 关键设计模式
 
 - **Provider 装饰器链**: `Wind/Akshare → CachingDataProvider → CachedBondDataProvider → _BatchStockCache`
-- **保守过滤**: 准入筛选"字段明确才剔除"，避免因数据源缺字段误杀
+- **保守过滤**: 准入筛选"字段明确才剔除"，避免因数据源缺字段误杀。**连续量不做硬阈值**:
+  余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
+  "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用
+  是替缺失的 `delisting_date` 兜底, 全库回填后独立贡献实测为 0。摘牌该由摘牌判据管
 - **半开区间票息**: `(start, end]` 避免边界双计
 - **年化强度**: p_down 解释为年化事件强度，每步 `1-exp(-p·dt)`
 - **原子写**: JSON 先写 `.tmp` 再 `rename`，防半截文件

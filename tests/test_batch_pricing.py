@@ -9,6 +9,7 @@ from convertible_bond import batch_pricing
 from convertible_bond.batch_pricing import (
     AdmissionFilterConfig,
     BATCH_RESULT_COLUMNS,
+    HARD_REVIEW_TAGS,
     annotate_batch_result,
     filter_batch_results_by_view,
     sort_batch_results_for_review,
@@ -174,10 +175,18 @@ def test_batch_pricing_exclusion_reason_blocks_hard_risks():
         on_date=check_date,
         min_turnover_amount=1000.0,
     ) == "成交额过低"
+    # 余额默认不再硬剔除 (DEFAULT_MIN_OUTSTANDING_BALANCE=None), 显式给阈值才生效。
+    # 这里显式传值, 让用例测的是过滤逻辑本身而不是当期默认值。
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", outstanding_balance=0.3),
         on_date=check_date,
+    ) is None
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", outstanding_balance=0.3),
+        on_date=check_date,
+        min_outstanding_balance=0.5,
     ) == "余额过小"
     assert batch_pricing_exclusion_reason(
         "113050.SH",
@@ -662,3 +671,79 @@ def test_batch_results_cache_round_trips_dates_and_nan(tmp_path):
     assert math.isnan(loaded["results"][0]["deviation"])
     assert loaded["upcoming_results"][0]["tradable_date"] == "2026-09-09"
     assert loaded["upcoming_results"][0]["theoretical_price"] == 245.6
+
+
+# ── Step 1: 余额从硬过滤降级为标签 ──
+#
+# 全库回填摘牌元数据后实测: 关掉余额门槛主池 270 → 270, 独立贡献为 0。它此前 99% 的
+# 作用是替缺失的 delisting_date 兜底 (被它剔的 225 只里 223 只余额恰为 0 的已退市券),
+# 而那个职责已由日期判据接管。余额本身改由按 3,000 万法定线分档的风险标签表达。
+
+def test_balance_is_not_a_hard_filter_by_default():
+    """默认放行小余额; 传了阈值才剔除 —— 字段与语义保留, 只是默认不启用。"""
+    check_date = date(2026, 4, 28)
+    tiny = BondTerms(sec_name="南银转债", outstanding_balance=0.01)
+    assert batch_pricing_exclusion_reason("113050.SH", tiny, on_date=check_date) is None
+    assert batch_pricing_exclusion_reason(
+        "113050.SH", tiny, on_date=check_date, min_outstanding_balance=0.5) == "余额过小"
+    assert AdmissionFilterConfig().min_outstanding_balance is None
+
+
+def _annotated(**overrides):
+    row = dict(status="ok", S0=12.0, K=13.5, theoretical_price=110.0, market_price=99.0,
+               deviation=-0.10, sigma=0.30, T=3.0, credit_rating="AA",
+               outstanding_balance=4.25, valuation_date="2026-08-22")
+    row.update(overrides)
+    return annotate_batch_result(row)
+
+
+@pytest.mark.parametrize("balance, tag", [
+    (0.0, "余额清零"),        # 已转股完毕/已赎回, 是退市信号不是"数据异常"
+    (0.15, "触及摘牌线"),      # 低于 3,000 万法定线, 交易所将安排停止交易
+    (0.29, "触及摘牌线"),
+    (0.35, "临近摘牌线"),
+    (0.80, "小余额"),
+])
+def test_balance_tags_follow_statutory_delisting_line(balance, tag):
+    assert tag in _annotated(outstanding_balance=balance)["risk_tags"]
+
+
+def test_normal_balance_gets_no_balance_tag():
+    assert not ({"余额清零", "触及摘牌线", "临近摘牌线", "小余额"}
+                & set(_annotated(outstanding_balance=5.0)["risk_tags"]))
+
+
+def test_legacy_balance_tags_stay_hard_for_old_cached_rows():
+    """旧批量缓存与旧策略快照里存的是「极小余额/余额异常」, 保留以免旧数据静默失去硬标签。"""
+    assert {"极小余额", "余额异常"} <= HARD_REVIEW_TAGS
+
+
+@pytest.mark.parametrize("last_trading_date, expect_tag, days", [
+    ("2026-08-24", True, 2),      # 后天停止交易
+    ("2026-09-21", True, 30),     # 窗口边界内
+    ("2026-09-22", False, 31),    # 窗口外
+    ("2026-08-21", False, -1),    # 已过 (由准入层剔除, 不在这里打标签)
+])
+def test_near_delisting_tag_uses_announced_last_trading_date(last_trading_date, expect_tag, days):
+    """存续券的 delisting_date 多数等于到期日 (预定摘牌, 非事件), 所以只认 last_trading_date。"""
+    row = _annotated(last_trading_date=last_trading_date)
+    assert row["days_to_last_trading"] == days
+    assert ("临近摘牌" in row["risk_tags"]) is expect_tag
+
+
+def test_near_delisting_leaves_undervalued_view_but_not_strategy_defaults():
+    """两只其余完全相同的债: 后天停止交易的那只掉出「低估候选」进「需复核」。
+
+    但「临近摘牌」不进 HARD_REVIEW_TAGS —— 那是策略层 exclude_risk_tags 的默认值,
+    动它就是默认选债行为变更; 要不要因此不买由策略参数决定。
+    """
+    near = _annotated(bond_code="113697.SH", last_trading_date="2026-08-24")
+    norm = _annotated(bond_code="113000.SH")
+    assert near["review_bucket"] == "需复核"
+    assert norm["review_bucket"] == "低估候选"
+
+    rows = [near, norm]
+    assert [r["bond_code"] for r in filter_batch_results_by_view(rows, "低估候选")] == ["113000.SH"]
+    assert [r["bond_code"] for r in filter_batch_results_by_view(rows, "需复核")] == ["113697.SH"]
+    assert "临近摘牌" not in HARD_REVIEW_TAGS
+    assert any("最后交易日" in n for n in near["review_notes"])

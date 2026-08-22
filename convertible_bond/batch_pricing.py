@@ -57,6 +57,8 @@ BATCH_RESULT_COLUMNS = [
     "opportunity_score",
     "confidence",
     "risk_tags",
+    "outstanding_balance",
+    "days_to_last_trading",
     "model_signal_status",
     "no_down_price",
     "down_reset_uplift",
@@ -86,15 +88,32 @@ BATCH_RESULT_META_KEY = "_meta"
 LOW_RATING_PREFIXES = ("A", "BBB", "BB", "B", "CCC", "CC", "C")
 BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核")
 HARD_REVIEW_TAGS = {
-    "高HV", "极小余额", "小余额", "余额异常", "短久期",
+    "高HV", "余额清零", "触及摘牌线", "临近摘牌线", "小余额", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
     "正股风险", "正股停牌", "转债停牌", "正股跌停", "偏差异常",
+    # legacy: 旧批量缓存与旧策略快照里存的是这两个名字, 保留以免旧数据静默失去硬标签
+    "极小余额", "余额异常",
 }
+# 只影响批量页复核视图, **不进** HARD_REVIEW_TAGS —— 后者是策略层
+# ScoreStrategyConfig.exclude_risk_tags 的默认值, 动它就是默认选债行为变更。
+# 「临近摘牌」是确定性的退出安排, 属于人该看一眼的事; 但要不要因此不买, 由策略参数
+# 决定, 不在这里替用户决定。
+REVIEW_ONLY_TAGS = {"临近摘牌"}
+# 交易所停止交易的法定线: 未转股余额少于 3,000 万元 (0.3 亿) 触发停止交易安排。
+# 余额档按这条线划, 而不是按与法规无关的 0.5。
+BALANCE_DELISTING_LINE = 0.3
+# 已公告最后交易日且落在该窗口内 → 打「临近摘牌」提示标签 (非硬标签, 只提高可见度)
+DELISTING_WARNING_DAYS = 30
 # |偏差| 超过该阈值时打 "偏差异常" 标签 — 多数情况是市价/正股价不同日、
 # 强赎/停牌未应用、转股价未刷新等数据问题, 而非真正的低估机会
 DEVIATION_ANOMALY_THRESHOLD = 0.20
 DEFAULT_DELIST_WINDOW_DAYS = 0
-DEFAULT_MIN_OUTSTANDING_BALANCE: float | None = 0.5
+# 默认不再按余额硬剔除。全库回填摘牌元数据后实测: 关掉该门槛主池 270 → 270,
+# 独立贡献为 0 —— 它此前 99% 的作用是替缺失的 delisting_date 兜底 (被它剔除的 225 只
+# 里 223 只余额恰为 0 的已退市券), 而那个职责现在由 delisting_date / last_trading_date
+# 的日期判据接管, 剔除理由也从"余额过小"变成诚实的"已退市"。余额本身改由风险标签表达。
+# 字段与语义保留, 想恢复硬过滤填个数值即可。
+DEFAULT_MIN_OUTSTANDING_BALANCE: float | None = None
 DEFAULT_MIN_CREDIT_RATING: str | None = "A+"
 _UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "风险警示", "暂停上市", "终止上市", "退市")
 _UNDERLYING_SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "停止交易")
@@ -125,9 +144,11 @@ _RATING_SCORES = {
 class AdmissionFilterConfig:
     """批量定价主池公开交易过滤参数.
 
-    当前硬剔除优先保证转债本身能公开交易, 并默认剔除正股 ST/停牌、
-    低评级、小余额等普通 PDE 模型不适合作为买入信号的标的。高 HV
-    只有定价后才能识别, 由结果风险标签和复核视图承接。
+    当前硬剔除优先保证转债本身能公开交易 (退市/摘牌/停牌/到期/未上市/定向),
+    并默认剔除正股 ST/停牌与低评级。**余额默认不再硬剔除** (见
+    ``DEFAULT_MIN_OUTSTANDING_BALANCE``), 改由「余额清零 / 触及摘牌线 /
+    临近摘牌线 / 小余额」风险标签表达; 高 HV 同理只有定价后才能识别。
+    需要恢复余额硬过滤时给 ``min_outstanding_balance`` 填个数值即可。
     """
 
     delist_window_days: int = DEFAULT_DELIST_WINDOW_DAYS
@@ -302,7 +323,7 @@ def batch_pricing_exclusion_reason(
 
     这里只做进入主批量候选前的硬条件判断: 代码段/交易所、定向标识、
     是否已进入可交易窗口、转债自身停牌、最后交易/摘牌/到期日, 以及
-    默认不适合直接作为买入信号的正股 ST/停牌、小余额和低评级标的。
+    默认不适合直接作为买入信号的正股 ST/停牌与低评级标的 (余额默认不硬剔除)。
     """
     if admission_config is not None:
         min_outstanding_balance = admission_config.min_outstanding_balance
@@ -767,13 +788,19 @@ def annotate_batch_result(row: dict) -> dict:
 
     if balance is not None:
         if balance <= 0:
-            risk_tags.append("余额异常")
+            # 余额清零 = 已转股完毕/已赎回, 是退市信号而不是"数据异常"
+            risk_tags.append("余额清零")
             score -= 30.0
             confidence_points -= 35.0
-        elif balance < 0.5:
-            risk_tags.append("极小余额")
+        elif balance < BALANCE_DELISTING_LINE:
+            # 低于 3,000 万法定线, 交易所将安排停止交易 —— 可执行的判断, 不是笼统的"小"
+            risk_tags.append("触及摘牌线")
             score -= 22.0
             confidence_points -= 25.0
+        elif balance < 0.5:
+            risk_tags.append("临近摘牌线")
+            score -= 16.0
+            confidence_points -= 18.0
         elif balance < 1.0:
             risk_tags.append("小余额")
             score -= 12.0
@@ -783,6 +810,18 @@ def annotate_batch_result(row: dict) -> dict:
     else:
         risk_tags.append("无余额")
         confidence_points -= 8.0
+
+    # 已公告的最后交易日 = 确定性退出安排 (强赎或到期), 与余额推断出的摘牌风险互相独立。
+    # 存续券的 delisting_date 多数等于到期日 (预定摘牌), 不是事件, 因此这里只认
+    # last_trading_date。非硬标签: 只提高可见度, 不改变默认选债行为。
+    last_trade = _terms_date(out, "last_trading_date")
+    val_date = _terms_date(out, "valuation_date")
+    if last_trade is not None and val_date is not None:
+        days_left = (last_trade - val_date).days
+        out["days_to_last_trading"] = days_left
+        if 0 <= days_left <= DELISTING_WARNING_DAYS:
+            risk_tags.append("临近摘牌")
+            confidence_points -= 10.0
 
     if t_years is not None:
         if t_years < 0.5:
@@ -921,7 +960,7 @@ def filter_batch_results_by_view(
             and float(row["opportunity_score"]) >= threshold
             and row.get("confidence") in {"高", "中"}
             and "转股折价" not in (row.get("risk_tags") or [])
-            and not (set(row.get("risk_tags") or []) & HARD_REVIEW_TAGS)
+            and not (set(row.get("risk_tags") or []) & (HARD_REVIEW_TAGS | REVIEW_ONLY_TAGS))
         ]
     if view_name == "转股折价":
         return [
@@ -933,7 +972,7 @@ def filter_batch_results_by_view(
         return [
             row for row in rows
             if row.get("status") != "ok"
-            or bool(set(row.get("risk_tags") or []) & HARD_REVIEW_TAGS)
+            or bool(set(row.get("risk_tags") or []) & (HARD_REVIEW_TAGS | REVIEW_ONLY_TAGS))
             or row.get("confidence") == "低"
         ]
     return rows
@@ -1073,7 +1112,9 @@ def _sensitivity_status(tags: Sequence[str], confidence: str) -> str:
     tag_set = set(tags or [])
     if {"高HV", "模型溢价高"} & tag_set:
         return "波动率敏感"
-    if {"极小余额", "小余额", "余额异常", "短久期", "低评级", "正股风险", "正股停牌", "转债停牌"} & tag_set:
+    if {"余额清零", "触及摘牌线", "临近摘牌线", "小余额", "临近摘牌", "短久期",
+            "低评级", "正股风险", "正股停牌", "转债停牌",
+            "极小余额", "余额异常"} & tag_set:
         return "条款/流动性敏感"
     if confidence == "高":
         return "较稳健"
@@ -1086,7 +1127,7 @@ def _review_bucket(row: dict) -> str:
     tags = set(row.get("risk_tags") or [])
     if row.get("status") != "ok":
         return "需复核"
-    if tags & HARD_REVIEW_TAGS or row.get("confidence") == "低":
+    if tags & (HARD_REVIEW_TAGS | REVIEW_ONLY_TAGS) or row.get("confidence") == "低":
         return "需复核"
     if "转股折价" in tags:
         return "转股折价"
@@ -1105,8 +1146,12 @@ def _review_notes(row: dict) -> list[str]:
         notes.append("用 60/120 日 HV 或手工 sigma 重算, 防止短期波动抬高理论价")
     if "模型溢价高" in tags:
         notes.append("理论价主要来自期权/下修价值, 需要降低基础下修强度或 sigma 做压力测试")
-    if {"极小余额", "小余额", "余额异常"} & tags:
+    if {"余额清零", "触及摘牌线", "临近摘牌线", "小余额", "极小余额", "余额异常"} & tags:
         notes.append("核实剩余规模、流动性、强赎/退市安排")
+    if "临近摘牌" in tags:
+        days = finite_float(row.get("days_to_last_trading"))
+        when = f"仅剩 {int(days)} 天" if days is not None else "已公告"
+        notes.append(f"已公告最后交易日({when}), 到期后无法卖出; 确认退出安排与强赎条款")
     if "短久期" in tags or "近到期" in tags:
         notes.append("核实到期兑付、回售和强赎时间表")
     if "低评级" in tags:
