@@ -22,6 +22,7 @@ from ..market_valuation import (
     append_history,
     classify,
     compute_snapshot,
+    caliber_note,
     load_history,
 )
 from ..paths import data_path
@@ -85,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
             "snapshot": snapshot.to_record(),
             "signal": {"label": signal.label, "percentile": pct,
                        "n_history": signal.n_history},
+            "caliber_note": caliber_note(history, snapshot.caliber) or None,
             "recorded": bool(args.record),
         }, ensure_ascii=False, indent=2, allow_nan=False))
         return 0
@@ -98,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"分位区间 P25 / P75             : {snapshot.p25*100:+.1f}% / {snapshot.p75*100:+.1f}%")
     print("-" * 56)
     print(signal)
+    note = caliber_note(history, snapshot.caliber)
+    if note:
+        print(f"\n{note}")
     if args.record:
         print(f"\n已记录到历史基线: {history_path}")
     return 0

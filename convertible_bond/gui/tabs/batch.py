@@ -561,8 +561,8 @@ def _update_valuation_banner(app, base_results) -> None:
         return
     try:
         history = load_history(data_path("cb_valuation_history.json", seed=True))
-        medians = [s.median_deviation for s in history]
-        banner, detail = valuation_banner(base_results or [], medians)
+        # 传快照而不是裸 median: 详情里才能带上 v1/v2 口径断点说明
+        banner, detail = valuation_banner(base_results or [], history)
     except Exception:
         banner, detail = "", ""
     app._batch_valuation_detail = detail

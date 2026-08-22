@@ -1,10 +1,16 @@
 """market_valuation 转债大类估值/择时指标单测。"""
+import json
 import math
 
 import pytest
 
 from convertible_bond.market_valuation import (
+    CALIBER_CHANGES,
+    CALIBER_V1,
+    CALIBER_V2,
+    CURRENT_CALIBER,
     ValuationSnapshot,
+    caliber_note,
     append_history,
     classify,
     compute_snapshot,
@@ -150,3 +156,73 @@ def test_valuation_banner_empty_rows():
 def test_valuation_banner_insufficient_history():
     banner, _ = valuation_banner(_rows([0.1, 0.2, 0.3]), [0.1, 0.2])  # 历史<8
     assert "历史不足" in banner
+
+
+# ---------------- 口径分段 (caliber v1/v2) ----------------
+#
+# 修掉"赎回门槛条款被解析成未转股余额"的 bug 后, 主池补回约 74 只被误判余额过小的
+# 大盘券, 中位偏差整体下移约 0.7pp。序列前后不严格可比, 因此给每条快照打口径标记。
+
+def test_snapshot_defaults_to_current_caliber():
+    snap = compute_snapshot(_rows([0.1, 0.2, 0.3]))
+    assert snap.caliber == CURRENT_CALIBER == CALIBER_V2
+    assert snap.to_record()["caliber"] == CALIBER_V2
+
+
+def test_load_history_treats_unlabelled_records_as_v1(tmp_path):
+    """存量 18 条基线没有 caliber 字段, 必须归入 v1 而不是被当成当期口径。"""
+    path = tmp_path / "hist.json"
+    path.write_text(json.dumps({"records": [
+        {"date": "2024-09-30", "n": 400, "median_deviation": 0.004,
+         "mean_deviation": 0.01, "pct_overvalued": 0.74, "p25": -0.05, "p75": 0.12},
+    ]}, ensure_ascii=False), encoding="utf-8")
+    loaded = load_history(path)
+    assert [s.caliber for s in loaded] == [CALIBER_V1]
+
+
+def test_caliber_survives_history_roundtrip(tmp_path):
+    path = tmp_path / "hist.json"
+    old = ValuationSnapshot(date="2024-09-30", n=400, median_deviation=0.004,
+                            mean_deviation=0.01, pct_overvalued=0.74,
+                            p25=-0.05, p75=0.12, caliber=CALIBER_V1)
+    save_history(path, [old])
+    append_history(path, compute_snapshot(_rows([0.1, 0.2, 0.3])))
+    loaded = load_history(path)
+    assert [s.caliber for s in loaded] == [CALIBER_V1, CALIBER_V2]
+
+
+def test_caliber_note_silent_when_single_caliber():
+    same = [ValuationSnapshot(date=f"2026-0{i}-01", n=200, median_deviation=0.1,
+                              mean_deviation=0.1, pct_overvalued=0.9, p25=0.0,
+                              p75=0.2, caliber=CALIBER_V2) for i in range(1, 4)]
+    assert caliber_note(same, CALIBER_V2) == ""
+    # 裸 float 序列没有口径信息, 不应凭空造断点提示
+    assert caliber_note([0.1, 0.2, 0.3], CALIBER_V2) == ""
+
+
+def test_caliber_note_flags_mixed_history():
+    hist = [ValuationSnapshot(date=f"202{i}-06-30", n=200, median_deviation=0.13,
+                              mean_deviation=0.13, pct_overvalued=0.9, p25=0.0,
+                              p75=0.2, caliber=CALIBER_V1) for i in range(2, 6)]
+    note = caliber_note(hist, CALIBER_V2)
+    assert "口径" in note
+    assert f"{CALIBER_V1} 4 期" in note
+    assert CALIBER_CHANGES[CALIBER_V2]["since"] in note
+
+
+def test_valuation_banner_appends_caliber_note_for_mixed_history():
+    """跨口径时详情要说清断点; 横幅本身保持单行不变。"""
+    hist = [ValuationSnapshot(date=f"2025-{m:02d}-01", n=200, median_deviation=m / 100,
+                              mean_deviation=m / 100, pct_overvalued=0.9, p25=0.0,
+                              p75=0.2, caliber=CALIBER_V1) for m in range(1, 13)]
+    banner, detail = valuation_banner(_rows([0.10, 0.11, 0.12]), hist)
+    assert "市场估值" in banner and "\n" not in banner
+    assert "口径" in detail and CALIBER_V1 in detail
+
+
+def test_valuation_banner_accepts_plain_float_history():
+    """旧调用 (裸 median 序列) 仍可用, 只是详情里没有口径说明。"""
+    hist = [i / 100 for i in range(0, 21)]
+    banner, detail = valuation_banner(_rows([0.18, 0.20, 0.22]), hist)
+    assert "市场估值" in banner
+    assert "口径" not in detail

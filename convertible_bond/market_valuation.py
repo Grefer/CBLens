@@ -26,6 +26,31 @@ from typing import Any, Sequence
 
 import numpy as np
 
+# ---------------- 口径版本 (caliber) ----------------
+# 中位偏差是**全市场池**的聚合量, 池口径一变, 序列前后就不严格可比。这里给每条快照
+# 打口径标记, 让横幅与 CLI 能说清"哪一段是什么口径算出来的"。
+#
+#   v1: 2026-08 之前的历史基线。彼时赎回公告里的摘牌门槛条款
+#       ("未转股余额少于3,000万元时…") 被解析成真实余额写进 cb_terms_patches.json,
+#       导致约 74 只真实余额 ≥0.5 亿的大盘券被准入过滤当成"余额过小"剔除。
+#   v2: 修复该解析 bug 之后的口径 (见 cb_event_sync.parse_outstanding_balance_change
+#       与 cli/repair_balance_patches)。
+#
+# 为什么仍然合并计算分位而不是分段重算: 同一批定价结果下的对照实测显示, 补回这批券只
+# 让中位偏差下移约 0.7pp (14.5%→13.8%), 相对该指标 [+0.4%, +21.6%] 的历史摆幅属于小量;
+# 而分段会让 v2 序列在积满 8 个季度前完全失去分位信号。因此合并算分位、显式标注断点。
+CALIBER_V1 = "v1"
+CALIBER_V2 = "v2"
+CURRENT_CALIBER = CALIBER_V2
+
+CALIBER_CHANGES: dict[str, dict[str, str]] = {
+    CALIBER_V2: {
+        "since": "2026-08-21",
+        "summary": "修复赎回门槛条款被误解析成未转股余额的 bug",
+        "impact": "主池补回约 74 只被误判余额过小的大盘券; 同批对照实测中位偏差下移约 0.7pp",
+    },
+}
+
 # 分位阈值: 当期中位偏差在历史中的百分位
 _CHEAP_PCT = 25.0
 _RICH_PCT = 75.0
@@ -44,6 +69,7 @@ class ValuationSnapshot:
     pct_overvalued: float
     p25: float
     p75: float
+    caliber: str = CURRENT_CALIBER
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -168,13 +194,50 @@ _LABEL_ICON = {
 }
 
 
+def _history_medians(history: Sequence[Any]) -> list[float]:
+    """把历史序列归一成中位偏差列表 (接受 ValuationSnapshot 或裸 float)。"""
+    out: list[float] = []
+    for item in history:
+        value = item.median_deviation if isinstance(item, ValuationSnapshot) else item
+        if value is not None:
+            out.append(float(value))
+    return out
+
+
+def caliber_note(
+    history: Sequence[Any],
+    current: str = CURRENT_CALIBER,
+) -> str:
+    """历史序列跨口径时返回一句断点说明; 全同口径返回空串。
+
+    只接受 :class:`ValuationSnapshot` 序列 (裸 float 无口径信息, 返回空串)。
+    """
+    counts: dict[str, int] = {}
+    for snap in history:
+        if isinstance(snap, ValuationSnapshot):
+            counts[snap.caliber] = counts.get(snap.caliber, 0) + 1
+    if not counts:
+        return ""
+    if set(counts) | {current} == {current}:
+        return ""
+    change = CALIBER_CHANGES.get(current)
+    detail = ", ".join(f"{cal} {n} 期" for cal, n in sorted(counts.items()))
+    head = f"[口径] 历史序列跨口径合并计算分位 (历史 {detail}; 当期 {current})。"
+    if not change:
+        return head
+    return (f"{head}\n{current} 自 {change['since']} 起: {change['summary']}; "
+            f"{change['impact']}。分位仅供参考, 断点前后不严格可比。")
+
+
 def valuation_banner(
     rows: Sequence[dict[str, Any]],
-    history_medians: Sequence[float],
+    history: Sequence[Any],
     **snapshot_kwargs: Any,
 ) -> tuple[str, str]:
-    """供 GUI 用: 由已定价结果 + 历史中位偏差序列, 返回 (单行横幅, 悬浮详情)。
+    """供 GUI 用: 由已定价结果 + 历史序列, 返回 (单行横幅, 悬浮详情)。
 
+    *history* 可以是 :class:`ValuationSnapshot` 序列 (推荐, 详情里会附口径断点说明),
+    也可以是裸中位偏差 float 序列 (兼容旧调用, 无口径信息)。
     无可用数据时返回 ("", "")。横幅形如
     ``🔴 市场估值 偏贵 · 中位偏差 +13.8% · 历史分位 78%``。
     """
@@ -182,13 +245,16 @@ def valuation_banner(
         snap = compute_snapshot(rows, **snapshot_kwargs)
     except ValueError:
         return "", ""
-    sig = classify(snap.median_deviation, history_medians)
+    sig = classify(snap.median_deviation, _history_medians(history))
     icon = _LABEL_ICON.get(sig.label, "⚪")
     pct = "" if not np.isfinite(sig.percentile) else f" · 历史分位 {sig.percentile:.0f}%"
     banner = (f"{icon} 市场估值 {sig.label} · 中位偏差 "
               f"{snap.median_deviation*100:+.1f}%{pct}")
     detail = (f"全市场中位偏差 {snap.median_deviation*100:+.1f}% "
               f"(判高估 {snap.pct_overvalued*100:.0f}%, 样本 {snap.n} 只)\n{sig}")
+    note = caliber_note(history, snap.caliber)
+    if note:
+        detail = f"{detail}\n{note}"
     return banner, detail
 
 
@@ -208,6 +274,8 @@ def load_history(path: Path) -> list[ValuationSnapshot]:
             pct_overvalued=float(rec.get("pct_overvalued", float("nan"))),
             p25=float(rec.get("p25", float("nan"))),
             p75=float(rec.get("p75", float("nan"))),
+            # 旧基线没有这个字段, 一律归入 v1 口径
+            caliber=str(rec.get("caliber") or CALIBER_V1),
         ))
     out.sort(key=lambda s: (s.date is None, s.date))
     return out
