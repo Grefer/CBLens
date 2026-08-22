@@ -266,3 +266,19 @@ def test_unlisted_new_bond_keeps_issue_date_without_ipo_date(monkeypatch):
 
     assert terms.issue_date == date(2026, 8, 17)
     assert terms.listing_date is None
+
+
+def test_drop_sentinel_date_filters_wind_far_future_placeholder():
+    """Wind 对"最后交易日尚未确定"的存续券返回 2079-06-02 哨兵而非空值。
+
+    原样写回会给 1000+ 只券种上 2079 年的假日期, 让 last_trading_date 的覆盖率
+    看起来是满的却毫无意义; 而真实的摘牌安排 (含存续券的预定摘牌日=到期日) 必须保留。
+    """
+    from convertible_bond.data_providers.wind import _drop_sentinel_date
+
+    val = date(2026, 8, 21)
+    assert _drop_sentinel_date(date(2079, 6, 2), val) is None      # 哨兵
+    assert _drop_sentinel_date(date(2026, 7, 21), val) == date(2026, 7, 21)  # 已摘牌
+    assert _drop_sentinel_date(date(2032, 1, 16), val) == date(2032, 1, 16)  # 预定摘牌=到期
+    assert _drop_sentinel_date(None, val) is None
+    assert _drop_sentinel_date(date(2079, 6, 2), None) == date(2079, 6, 2)   # 无估值日不判

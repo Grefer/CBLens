@@ -184,6 +184,26 @@ def prepare_windpy_import_path() -> list[Path]:
     return prepared
 
 
+# Wind 对"尚未确定最后交易日"的存续券返回哨兵日期 (实测 2079-06-02), 而不是空值。
+# 转债最长期限 6 年, 因此远超估值日若干年的日期一定是哨兵而非真实摘牌安排 —— 原样写回
+# 会让 cb_data 里 1000+ 只券带上 2079 年的假日期, 也让 last_trading_date 的覆盖率看起来
+# 是满的却毫无意义。注意存续券的 delist_date = maturity_date (预定摘牌日, 非已摘牌),
+# 那是真实语义, 落在未来不触发准入剔除, 保留即可。
+_DATE_SENTINEL_YEARS_AHEAD = 25
+
+
+def _drop_sentinel_date(value, valuation_date):
+    """把远期哨兵日期归一成 None; 正常日期原样返回."""
+    if value is None or valuation_date is None:
+        return value
+    try:
+        if value.year - valuation_date.year > _DATE_SENTINEL_YEARS_AHEAD:
+            return None
+    except AttributeError:
+        return value
+    return value
+
+
 class WindDataProvider(DataProvider):
     """通过 WindPy 拉数据. 需要本机已安装 Wind 终端 + 插件."""
     name = "Wind"
@@ -474,8 +494,10 @@ class WindDataProvider(DataProvider):
             call_announce_date=_date_or_none(bond_data.get("call_announce_date")),
             call_redemption_date=_date_or_none(bond_data.get("call_redemption_date")),
             call_redemption_price=_float_or_none(bond_data.get("call_redemption_price")),
-            last_trading_date=_date_or_none(bond_data.get("last_trading_date")),
-            delisting_date=_date_or_none(bond_data.get("delisting_date")),
+            last_trading_date=_drop_sentinel_date(
+                _date_or_none(bond_data.get("last_trading_date")), valuation_date),
+            delisting_date=_drop_sentinel_date(
+                _date_or_none(bond_data.get("delisting_date")), valuation_date),
             underlying_name=_string_or_none(stock_data.get("underlying_name")),
             underlying_status=_string_or_none(stock_data.get("underlying_status")),
             underlying_trade_status=_string_or_none(stock_data.get("underlying_trade_status")),
