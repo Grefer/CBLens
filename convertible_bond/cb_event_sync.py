@@ -362,35 +362,86 @@ def parse_credit_rating_change(text: str | None, *, title: str = "") -> str | No
     return parse_credit_rating_terms(text, title=title).get("credit_rating")
 
 
+_BALANCE_AMOUNT_RE = r"(?P<amount>[0-9]+(?:\.[0-9]+)?)"
+_BALANCE_UNIT_RE = r"(?P<unit>亿元|万元|元)"
+_BALANCE_LABEL_RE = (
+    r"(?:未转股余额|未转股(?:可转债|债券|可转换公司债券)?余额|"
+    r"剩余(?:可转债|债券|可转换公司债券)?余额|"
+    r"未偿还(?:的)?(?:可转债|债券|可转换公司债券)?余额|"
+    r"可转债余额|债券余额)"
+)
+
+# 紧凑式 (余额为X) 优先于宽松式 (余额…X), 让同一段里的真实披露压过条款引用。
+_BALANCE_PATTERNS = tuple(re.compile(
+    _BALANCE_LABEL_RE + "(?P<gap>" + gap + ")" + _BALANCE_AMOUNT_RE + _BALANCE_UNIT_RE
+) for gap in (
+    r"(?:为|为人民币|是|:|：)?(?:人民币)?",
+    r".{0,24}?(?:人民币)?",
+))
+
+# 赎回/回售/摘牌条款会成段引用"未转股余额少于3,000万元时公司有权赎回"这类**门槛条款**。
+# 它是条款文字而非当期余额, 历史上被整段当成真实余额落库 (528/546 条余额 patch 值恰为
+# 0.3 亿 = 3,000 万元, 覆盖 103 只债, 其中 96 只真实余额 ≥0.5 亿)。
+# 判据是措辞而不是数值: 真实披露"未转股余额为3,000万元"仍应正常解析出 0.3。
+_BALANCE_THRESHOLD_GAP_RE = re.compile(
+    r"少于|低于|不足|小于|未达|达不到|不到|未满|超过|高于|大于|多于"
+)
+# 门槛也可以写在金额之后 ("未转股余额3,000万元以下时"), 此时 gap 为空, 只能靠尾缀识别。
+_BALANCE_THRESHOLD_TAIL_RE = re.compile(r"(?:以下|以上)|时(?:,|，|;|；|公司|发行人|本公司)")
+
+# 全角千分位: 只吃掉夹在数字之间的那种, 句读用的"，"必须保留 —— 它是 gap 窗口的天然边界。
+_FULLWIDTH_THOUSANDS_RE = re.compile(r"(?<=[0-9])，(?=[0-9])")
+
+# 一份公告可能同时覆盖同一发行人的两只转债 (如"关于晶瑞转债、晶瑞转2…的公告")。
+# 函数签名里没有 bond_code, 无从判断该取哪个余额, 因此宁可不解析也不要串号。
+# 注意前缀是贪婪的, 同一只债在不同上下文里可能被抽成不同字符串; 这只会让守卫更保守
+# (多判成歧义 → 不解析), 不会产生错值。但通用词"可转债"本身会命中, 必须排除。
+_BOND_NAME_RE = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9]{1,6}转(?:债|[2-9])")
+_GENERIC_BOND_WORDS = ("可转债",)
+
+
+def _bond_names(text: str) -> set[str]:
+    return {n for n in _BOND_NAME_RE.findall(text)
+            if not n.endswith(_GENERIC_BOND_WORDS)}
+
+# 必须用**除法**而不是乘 1e-4/1e-8: 两者在约 31% 的万元取值上位级不等, 而 patch 去重键
+# (TermsPatch.key) 含字段值 —— 换算方式一变, 重新同步同一条公告就会生成"新" patch 而非命中去重。
+_BALANCE_UNIT_DIVISOR = {"亿元": 1.0, "万元": 10000.0, "元": 100000000.0}
+
+
 def parse_outstanding_balance_change(text: str | None) -> float | None:
-    """解析公告中的剩余转债余额, 统一返回亿元口径."""
+    """解析公告中的剩余转债余额, 统一返回亿元口径.
+
+    匹配到的金额要再过两道语义闸, 避免把赎回条款的门槛表述当成余额:
+    label 与金额之间不得出现比较词 (少于/低于/不足…), 金额之后不得紧跟门槛尾缀
+    (…以下 / …时,公司有权…)。被拒的匹配不终止扫描, 同段后文的真实披露仍可命中。
+
+    同一档 pattern 命中多个值时取**第一个** (与历史实现一致)。不要改成取最后一个:
+    提前赎回公告惯用"截至本公告日余额为 X 亿元。本次赎回完成后余额为 0 元", 取最后
+    会把**未来态**当成当期余额, 而 0 余额在准入里是强杀值 —— 那正是本次要消灭的错值形态。
+    若正文同时出现多个转债简称且余额值互不相同, 则判为标的歧义直接返回 None,
+    避免把 A 债余额写进 B 债。
+    """
     if not text:
         return None
-    t = re.sub(r"\s+", "", str(text).replace(",", ""))
-    amount_re = r"([0-9]+(?:\.[0-9]+)?)"
-    unit_re = r"(亿元|万元|元)"
-    balance_label = (
-        r"(?:未转股余额|未转股(?:可转债|债券|可转换公司债券)?余额|"
-        r"剩余(?:可转债|债券|可转换公司债券)?余额|"
-        r"未偿还(?:的)?(?:可转债|债券|可转换公司债券)?余额|"
-        r"可转债余额|债券余额)"
-    )
-    patterns = (
-        balance_label + r"(?:为|为人民币|是|:|：)?(?:人民币)?" + amount_re + unit_re,
-        balance_label + r".{0,24}?(?:人民币)?" + amount_re + unit_re,
-    )
-    for pattern in patterns:
-        for match in re.finditer(pattern, t):
-            value = _safe_float(match.group(1))
+    t = _FULLWIDTH_THOUSANDS_RE.sub("", re.sub(r"\s+", "", str(text).replace(",", "")))
+    multi_bond = len(_bond_names(t)) > 1
+    for pattern in _BALANCE_PATTERNS:
+        values: list[float] = []
+        for match in pattern.finditer(t):
+            if _BALANCE_THRESHOLD_GAP_RE.search(match.group("gap")):
+                continue
+            if _BALANCE_THRESHOLD_TAIL_RE.match(t, match.end()):
+                continue
+            value = _safe_float(match.group("amount"))
             if value is None:
                 continue
-            unit = match.group(2)
-            if unit == "亿元":
-                return value
-            if unit == "万元":
-                return value / 10000.0
-            if unit == "元":
-                return value / 100000000.0
+            values.append(value / _BALANCE_UNIT_DIVISOR[match.group("unit")])
+        if not values:
+            continue
+        if multi_bond and len({round(v, 8) for v in values}) > 1:
+            return None
+        return values[0]
     return None
 
 

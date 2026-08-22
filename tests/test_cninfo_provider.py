@@ -353,6 +353,146 @@ def test_parse_outstanding_balance_change_handles_common_units():
     ) == 9.46
 
 
+# ── 余额解析: 门槛条款污染回归 ──
+#
+# 赎回/回售/停止交易条款会成段引用"未转股余额少于3,000万元时…", 早期宽松正则把它
+# 当成真实余额, 让 546 条余额 patch 里 528 条值恰为 0.3 亿、覆盖 103 只债, 其中 96 只
+# 真实余额 ≥0.5 亿 —— 这些大盘券随后被准入过滤当成"余额过小"整批踢出主池。
+
+@pytest.mark.parametrize("text", [
+    # 不提前赎回公告的标准段落 (存量脏数据最大来源)
+    "根据《募集说明书》的约定，当本次发行的可转换公司债券未转股余额少于3,000万元时，"
+    "公司有权按面值加当期应计利息的价格赎回全部未转股的可转债。",
+    "当本次发行的可转换公司债券未转股余额低于3,000万元时，公司有权决定赎回。",
+    "若“XX转债”未转股余额不足3,000万元，公司有权行使提前赎回权。",
+    "本次发行的可转换公司债券未转股余额小于3000万元时，公司有权提前赎回。",
+    "在转股期内，可转债未转股余额未达到3,000万元的，不触发本条款。",
+    "如果未转股余额达不到人民币3,000万元，公司董事会有权提议赎回。",
+    # 门槛写成亿元口径: 证明判据是措辞而不是"值恰为 0.3"
+    "未转股余额低于0.3亿元的，公司有权按面值加当期应计利息的价格赎回。",
+    # 门槛写在金额之后, gap 为空, 只能靠尾缀识别
+    "未转股余额3,000万元以下时，公司有权赎回。",
+    # 交易所停止交易规则引述
+    "根据《深圳证券交易所可转换公司债券业务实施细则》，当可转债未转股余额少于3,000万元时，"
+    "本所自公司发布相关公告三个交易日后停止其交易。",
+    # 门槛句不以"时/的"收尾
+    "本公司可转换公司债券未转股余额少于3,000万元后的三个交易日起，将对“XX转债”停止交易。",
+])
+def test_parse_outstanding_balance_rejects_threshold_clause(text):
+    assert parse_outstanding_balance_change(text) is None
+
+
+def test_parse_outstanding_balance_keeps_genuine_threshold_sized_value():
+    """真实披露的 3,000 万元余额必须照常解析 —— 判据是措辞, 不是数值。"""
+    assert parse_outstanding_balance_change(
+        "截至本公告日，“XX转债”未转股余额为3,000万元。"
+    ) == pytest.approx(0.3)
+    assert parse_outstanding_balance_change(
+        "截至2026年7月31日，“XX转债”未转股余额为2,850万元，已低于3,000万元，将停止交易。"
+    ) == pytest.approx(0.285)
+
+
+@pytest.mark.parametrize("text, expected", [
+    # 门槛在前、真实披露在后 (宽松档才能命中真实值)
+    ("根据《募集说明书》，当未转股余额少于3,000万元时，公司有权提前赎回。"
+     "截至本公告披露日，“和邦转债”未转股余额合计为46.02亿元。", 46.02),
+    # 真实披露在前、门槛在后
+    ("截至本公告日未转股余额为12,345.00万元；当未转股余额少于3,000万元时公司有权赎回。", 1.2345),
+    # 真实值本身贴近门槛
+    ("未转股余额少于3,000万元时公司有权赎回；截至本公告披露日，未转股余额为人民币0.31亿元。", 0.31),
+])
+def test_parse_outstanding_balance_prefers_real_disclosure_over_threshold(text, expected):
+    assert parse_outstanding_balance_change(text) == pytest.approx(expected)
+
+
+def test_parse_outstanding_balance_handles_fullwidth_thousands_separator():
+    """全角千分位曾被截断成 0.0 —— 比漏解析更危险 (余额 0 会让该债被当成已赎回踢出主池)。"""
+    assert parse_outstanding_balance_change(
+        "截至本公告日，“XX转债”未转股余额为3，000万元。"
+    ) == pytest.approx(0.3)
+
+
+def test_parse_outstanding_balance_takes_first_not_future_state():
+    """多值时取第一个。提前赎回公告惯用"当期 X 亿 → 赎回完成后 0 元", 取最后会把未来态
+    当成当期余额, 而 0 余额在准入里是强杀值 —— 那正是本次要消灭的错值形态。"""
+    assert parse_outstanding_balance_change(
+        "关于提前赎回“旺能转债”的公告。截至本公告日，“旺能转债”未转股余额为1.86亿元。"
+        "本次赎回完成后，“旺能转债”未转股余额为0元，并将在深交所摘牌。"
+    ) == pytest.approx(1.86)
+    # 赎回结果/摘牌公告里的零余额是当期真值, 仍要解析出来
+    assert parse_outstanding_balance_change(
+        "本次赎回完成后，剩余可转债余额为0元。"
+    ) == 0.0
+
+
+def test_parse_outstanding_balance_ignores_generic_word_as_bond_name():
+    """通用词"可转债"不是简称, 不能让单债公告被歧义闸误拦。"""
+    assert parse_outstanding_balance_change(
+        "公司可转债未转股余额为2.00亿元；截至本公告日，本次可转债余额为1.50亿元。"
+    ) == pytest.approx(2.00)
+
+
+def test_parse_outstanding_balance_unit_conversion_is_bit_stable():
+    """换算必须是除法: 乘 1e-4 在约 31% 的万元取值上位级不等, 会让同一条公告重新同步时
+    生成"新" patch 而不是命中 TermsPatch.key 去重 (key 含字段值)。"""
+    assert parse_outstanding_balance_change(
+        "截至本公告日，“XX转债”未转股余额为2,850万元。") == 2850 / 10000.0
+    assert parse_outstanding_balance_change(
+        "截至本公告披露日，“龙大转债”未转股余额为94591.26万元。") == 94591.26 / 10000.0
+    assert parse_outstanding_balance_change(
+        "未转股余额:50,000,000元") == 50000000 / 100000000.0
+
+
+def test_parse_outstanding_balance_rejects_two_bond_ambiguity():
+    """一份公告覆盖两只转债且余额不同时宁可不解析, 避免把 A 债余额写进 B 债 patch。"""
+    assert parse_outstanding_balance_change(
+        "“A转债”未转股余额为2.00亿元；“B转债”未转股余额为3.00亿元。"
+    ) is None
+
+
+def test_sync_does_not_write_balance_patch_from_threshold_clause(tmp_path):
+    """端到端防回流: 只含门槛条款的"不提前赎回"公告不得再生成余额 patch。
+
+    这条守的是回洗的持久性 —— sync 会重新解析窗口内的**每一条**公告并按
+    TermsPatch.key 去重, 若解析仍产出 0.3, cb-repair-balance-patches 的成果
+    会在下一次 cb-sync-events --apply 时被悄悄写回来。
+    """
+    body = (
+        "公司董事会决定本次不行使“和邦转债”的提前赎回权。根据《募集说明书》约定，"
+        "在本次发行的可转换公司债券转股期内，当本次发行的可转换公司债券未转股余额"
+        "少于人民币3,000万元时，公司有权按照债券面值加当期应计利息的价格赎回全部"
+        "未转股的可转债。"
+    )
+
+    class FakeProvider:
+        name = "fake_cninfo"
+
+        def list_bond_announcements(self, bond_code, start, end):
+            return [{
+                "title": "关于不提前赎回“和邦转债”的公告",
+                "date": date(2026, 5, 9),
+                "url": "http://example.com/n.PDF",
+                "pdf_url": "http://example.com/n.PDF",
+            }]
+
+        def download_announcement_text(self, pdf_url):
+            return body
+
+    store = CBEventStore(tmp_path / "events.json")
+    patch_store = TermsPatchStore(tmp_path / "patches.json")
+    result = sync_cb_events(
+        FakeProvider(), ["113691.SH"], store,
+        term_patch_store=patch_store,
+        start=date(2026, 5, 1), end=date(2026, 5, 20),
+    )
+
+    # 事件本身照常入库 (不提前赎回承诺仍要影响定价), 但不得带余额 patch
+    assert result["added"] == 1
+    assert store.list_events("113691.SH")[0].event_type == "call_no_redemption"
+    assert result["patches_added"] == 0
+    assert patch_store.list_patches("113691.SH") == []
+
+
 def test_sync_writes_terms_patch_for_conversion_price_adjustment(tmp_path):
     body = (
         "本次调整前转股价格为10.20元/股，调整后转股价格为9.80元/股。"
