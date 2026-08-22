@@ -633,9 +633,15 @@ class WindSyncMixin:
         if d.get("close") is not None:
             self._set_field(self.v_market_price, f"{float(d['close']):.2f}")
 
+        code_text = str(d.get("bond_code") or self.v_bond_code.get() or "").strip()
+        sec_name = str(d.get("sec_name") or "").strip()
+        if hasattr(self, "v_bond_title"):
+            self.v_bond_title.set(
+                "  ·  ".join(part for part in (sec_name, code_text) if part) or "未加载转债")
+
         ref_parts = []
-        if d.get("sec_name"):
-            ref_parts.append(str(d["sec_name"]))
+        if sec_name:
+            ref_parts.append(sec_name)
         if d.get("close") is not None:
             ref_parts.append(f"市价 {float(d['close']):.2f}")
         if d.get("credit"):

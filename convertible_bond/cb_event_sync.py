@@ -87,6 +87,29 @@ def _try_download_body(provider, pdf_url: str) -> str | None:
     return None
 
 
+def _bond_name_resolver(bond_names: dict[str, str] | None):
+    """返回 code → 转债简称 的查询函数。
+
+    显式传入优先; 否则best-effort 读项目 cb_data (读不到就返回 None, 退化成不做串号校验)。
+    """
+    if bond_names:
+        return lambda code: bond_names.get(code)
+    try:
+        from .cache import project_bundle_path
+        bundle = TermsBundle(project_bundle_path())
+    except Exception:
+        return lambda code: None
+
+    def resolve(code: str) -> str | None:
+        try:
+            terms = bundle.get(code)
+        except Exception:
+            return None
+        return getattr(terms, "sec_name", None) if terms is not None else None
+
+    return resolve
+
+
 def sync_cb_events(
     provider: DataProvider,
     bond_codes: Iterable[str],
@@ -98,6 +121,7 @@ def sync_cb_events(
     lookback_days: int = 180,
     on_progress=None,
     download_pdf: bool = True,
+    bond_names: dict[str, str] | None = None,
 ) -> dict:
     """从 provider 同步公告并解析为事件表.
 
@@ -111,6 +135,7 @@ def sync_cb_events(
     end_date = end or market_today()
     start_date = start or (end_date - timedelta(days=max(1, int(lookback_days))))
     codes = list(bond_codes)
+    name_of = _bond_name_resolver(bond_names)
     parsed_events: list[CBEvent] = []
     parsed_patches: list[TermsPatch] = []
     failed: list[tuple[str, str]] = []
@@ -167,6 +192,7 @@ def sync_cb_events(
                     source=provider.name,
                     body=body,
                     url=row.get("url"),
+                    bond_name=name_of(code),
                 )
                 if patch:
                     parsed_patches.append(patch)
@@ -193,6 +219,28 @@ def sync_cb_events(
     }
 
 
+# 同一发行人可以有两只转债 (上声/上26、聚合/合顺、恒逸转债/恒逸转2、金诚/金25…),
+# cninfo 按发行人返回公告, 于是另一只债的转股价调整公告会被归到当前查询的 code 上,
+# 实测污染 ≥11 条 patch / 5 只债 (如 123250.SZ 嘉益转债 被写进"精达转债"的调整价 3.26,
+# 把 K 从 79.66 改成 3.26, 转股价值算成 1035)。标题点名了具体转债就必须核对是不是本债。
+# 前缀是贪婪的, "关于嘉益转债…" 会抽成 "关于嘉益转债", 所以用双向 endswith 兜住。
+_BOND_NAME_IN_TITLE_RE = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9]{1,6}转(?:债|[0-9]{1,2})")
+
+
+def _title_names_other_bond(title: str | None, bond_name: str | None) -> bool:
+    """标题点名了具体转债、且没有一个是本债 → 判为标的串号。"""
+    if not title or not bond_name:
+        return False
+    names = {n for n in _BOND_NAME_IN_TITLE_RE.findall(str(title))
+             if not n.endswith("可转债")}
+    if not names:
+        return False
+    me = str(bond_name).replace("(退市)", "").strip()
+    if not me:
+        return False
+    return not any(n == me or me.endswith(n) or n.endswith(me) for n in names)
+
+
 def parse_terms_patch_from_announcement(
     bond_code: str,
     title: str,
@@ -202,6 +250,7 @@ def parse_terms_patch_from_announcement(
     source: str = "announcement",
     body: str | None = None,
     url: str | None = None,
+    bond_name: str | None = None,
 ) -> TermsPatch | None:
     """从公告正文解析会改变 ``BondTerms`` 的字段.
 
@@ -210,6 +259,9 @@ def parse_terms_patch_from_announcement(
     解析不到有效字段时返回 None, 留给 Wind 刷新或人工 patch。
     """
     event_type = event_type or classify_announcement_title(title)
+    if _title_names_other_bond(title, bond_name):
+        logger.debug("跳过标的串号公告: %s ← %s", bond_code, title)
+        return None
     source_key = f"{bond_code}|{event_date.isoformat()}|{event_type}|{title.strip()}"
     if event_type == "rating_change":
         rating_terms = parse_credit_rating_terms(body or title, title=title)
@@ -296,26 +348,38 @@ def parse_conversion_price_adjustment(text: str | None) -> dict | None:
     old_price = None
     new_price = None
 
+    # 转股价调整公告的惯例结构: 开头「特别提示」给一段**结构化摘要** (调整前/调整后各一个价),
+    # 正文中段再按时间顺序铺开**历次调整沿革**, 结尾用"综上"给出本次结果。
+    # 实测万孚转债 2026-05-25 那份: 叙述型 "由X调整为Y" 命中 11 次, 第一次是 2020 年的
+    # 93.55→93.57, 最后一次才是本次的 21.10→20.88。旧实现按 pattern 顺序 + re.search 取
+    # **首个**匹配, 于是 14 条 patch 跨两年恒为 93.57, 而真实 K 是 20.88。
+    # 因此按可靠性排序, 并逐 pattern 指定取首个还是最后一个:
+    #   结构化摘要只描述本次 → 取**首个** (它在文首, 后文的沿革不会命中这个句式);
+    #   叙述型沿革按时间排   → 取**最后一个** (最新的那次)。
     pair_patterns = (
-        r"转股价格.{0,30}?由([0-9]+(?:\.[0-9]+)?)元/股.{0,30}?(?:调整|修正)(?:为|至)([0-9]+(?:\.[0-9]+)?)元/股",
-        r"(?:调整前|修正前).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股.{0,80}?(?:调整后|修正后).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股",
-        r"(?:原|当前)转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股.{0,80}?(?:调整后|修正后|本次调整后).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股",
+        (r"(?:调整前|修正前).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股.{0,80}?(?:调整后|修正后).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股", "first"),
+        (r"(?:原|当前)转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股.{0,80}?(?:调整后|修正后|本次调整后).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股", "first"),
+        (r"转股价格.{0,30}?由([0-9]+(?:\.[0-9]+)?)元/股.{0,30}?(?:调整|修正)(?:为|至)([0-9]+(?:\.[0-9]+)?)元/股", "last"),
     )
-    for pattern in pair_patterns:
-        match = re.search(pattern, t)
-        if match:
+    for pattern, pick in pair_patterns:
+        matches = list(re.finditer(pattern, t))
+        if matches:
+            match = matches[0] if pick == "first" else matches[-1]
             old_price = _safe_float(match.group(1))
             new_price = _safe_float(match.group(2))
             break
 
     if new_price is None:
+        # 单价兜底同理: "调整后转股价格为X" 是摘要句式取首个; 光杆
+        # "转股价格调整为X" 会命中沿革里的每一次, 取最后一个。
         single_patterns = (
-            r"(?:调整后|修正后|本次调整后|本次修正后).{0,35}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股",
-            r"转股价格(?:调整|修正)(?:为|至)([0-9]+(?:\.[0-9]+)?)元/股",
+            (r"(?:调整后|修正后|本次调整后|本次修正后).{0,35}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股", "first"),
+            (r"转股价格(?:调整|修正)(?:为|至)([0-9]+(?:\.[0-9]+)?)元/股", "last"),
         )
-        for pattern in single_patterns:
-            match = re.search(pattern, t)
-            if match:
+        for pattern, pick in single_patterns:
+            matches = list(re.finditer(pattern, t))
+            if matches:
+                match = matches[0] if pick == "first" else matches[-1]
                 new_price = _safe_float(match.group(1))
                 break
 

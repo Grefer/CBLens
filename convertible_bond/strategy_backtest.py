@@ -221,6 +221,10 @@ class _BacktestCacheProvider(DataProvider):
     def cache_identity(self) -> str:
         return _provider_cache_identity(self.inner)
 
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """透传内层的条款截止日 —— 装饰器不改变条款来源, 就不能改变它的口径锚。"""
+        return self.inner.terms_as_of(bond_code, valuation_date)
+
     def get_bond_terms(self, bond_code: str, valuation_date: date):
         key = (bond_code, valuation_date)
         if key in self._terms:

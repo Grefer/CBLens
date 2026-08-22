@@ -115,6 +115,10 @@ class DiskCacheProvider(DataProvider):
         return f"{code}|{start.isoformat()}|{end.isoformat()}"
 
     # ---------------- terms ----------------
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """透传内层的条款截止日 —— 装饰器不改变条款来源, 就不能改变它的口径锚。"""
+        return self.inner.terms_as_of(bond_code, valuation_date)
+
     def get_bond_terms(self, bond_code: str, valuation_date: date):
         if valuation_date >= self._today:        # 当日/未来不缓存
             return self.inner.get_bond_terms(bond_code, valuation_date)

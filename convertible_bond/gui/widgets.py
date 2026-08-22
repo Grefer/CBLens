@@ -287,8 +287,10 @@ class AutocompleteEntry(ctk.CTkFrame):
         self._items = []
         self._hide_after = None
         self._suppress = False
+        self._focused = False
 
         self._trace = textvariable.trace_add("write", self._on_var_write)
+        self.entry.bind("<FocusIn>", self._on_focus_in)
         self.entry.bind("<Down>", self._on_down)
         self.entry.bind("<Up>", self._on_up)
         self.entry.bind("<Return>", self._on_return)
@@ -298,6 +300,13 @@ class AutocompleteEntry(ctk.CTkFrame):
 
     def _on_var_write(self, *_):
         if self._suppress:
+            return
+        # 只有用户在框里打字才弹候选。textvariable 是共享的, 批量页双击载入、
+        # 关注池载入、加载预设都会 set() 它; 那时输入框没有焦点, 弹出来的
+        # Toplevel 是 overrideredirect + topmost, 又永远等不到 <FocusOut>,
+        # 会一直悬在界面上盖住刚切过去的定价页。
+        if not self._focused:
+            self._hide()
             return
         query = self.var.get().strip()
         # 全量保留候选: 多出 max_rows 的部分靠滚动够得着, 截断会让"123009"这种
@@ -413,8 +422,13 @@ class AutocompleteEntry(ctk.CTkFrame):
                 pass
             self._hide_after = None
 
+    def _on_focus_in(self, _e):
+        self._focused = True
+        self._cancel_hide()
+
     def _on_focus_out(self, _e):
         # 给鼠标点击下拉留 150ms 时间; 若期间触发 _select 会主动 _hide
+        self._focused = False
         self._cancel_hide()
         self._hide_after = self.entry.after(150, self._hide)
 

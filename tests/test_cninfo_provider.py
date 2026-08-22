@@ -11,6 +11,7 @@ from convertible_bond.cb_event_sync import (
     parse_credit_rating_terms,
     parse_conversion_price_adjustment,
     parse_outstanding_balance_change,
+    parse_terms_patch_from_announcement,
     sync_cb_events,
 )
 from convertible_bond.cb_events import CBEventStore
@@ -630,3 +631,77 @@ def test_cninfo_provider_raises_on_non_announcement_methods():
         provider.get_bond_terms("128009.SZ", date(2026, 4, 28))
     with pytest.raises(NotImplementedError):
         provider.get_stock_close("000001.SZ", date(2026, 4, 28))
+
+
+# ── 转股价解析: 历次调整沿革导致取到最老的一次 ──
+#
+# 调整公告的惯例结构是「开头结构化摘要 → 中段历次调整沿革 → 结尾综上」。旧实现按
+# pattern 顺序 + re.search 取首个匹配, 于是抓到沿革里最早那次: 万孚转债 14 条 patch
+# 跨两年恒为 93.57 (2020 年的初始价附近), 而真实 K 是 20.88 —— 主池 60% 的 K 被写坏。
+
+def test_conversion_price_prefers_header_summary_over_history_recap():
+    """结构化摘要只描述本次调整, 优先级最高。"""
+    text = (
+        "特别提示：1、债券代码：123064，债券简称：万孚转债"
+        "3、调整前转股价格：21.10元/股4、调整后转股价格：20.88元/股"
+        "5、调整后转股价格生效日期：2026年6月2日。"
+        "本次发行的可转债初始转股价为93.55元/股。"
+        "“万孚转债”转股价格由93.55元/股调整为93.57元/股。"
+        "“万孚转债”转股价格由93.57元/股调整为71.64元/股。"
+    )
+    parsed = parse_conversion_price_adjustment(text)
+    assert parsed["new_price"] == pytest.approx(20.88)
+    assert parsed["old_price"] == pytest.approx(21.10)
+
+
+def test_conversion_price_takes_latest_of_history_recap():
+    """没有摘要时, 叙述型沿革按时间排 —— 取最后一次而不是第一次。"""
+    text = (
+        "本次发行的可转债初始转股价为93.55元/股。"
+        "“万孚转债”转股价格由93.55元/股调整为93.57元/股。"
+        "“万孚转债”转股价格由93.57元/股调整为71.64元/股。"
+        "综上，“万孚转债”转股价格由21.10元/股调整为20.88元/股。"
+    )
+    parsed = parse_conversion_price_adjustment(text)
+    assert parsed["new_price"] == pytest.approx(20.88)
+    assert parsed["old_price"] == pytest.approx(21.10)
+
+
+def test_conversion_price_single_price_fallback_takes_latest():
+    text = ("转股价格调整为93.57元/股。转股价格调整为71.64元/股。"
+            "转股价格调整为20.88元/股。")
+    assert parse_conversion_price_adjustment(text)["new_price"] == pytest.approx(20.88)
+
+
+# ── 标的串号: 同一发行人两只转债 ──
+
+def test_terms_patch_rejects_announcement_naming_another_bond():
+    """cninfo 按发行人返回公告, 另一只债的调整公告会被归到当前查询的 code 上。
+
+    实测污染 ≥11 条 patch / 5 只债 (嘉益转债被写进"精达转债"的 3.26, K 从 79.66 变 3.26)。
+    """
+    body = "本次调整前转股价格为10.20元/股，调整后转股价格为9.80元/股。"
+    common = dict(event_date=date(2026, 5, 9), body=body)
+
+    assert parse_terms_patch_from_announcement(
+        "123250.SZ", "精达股份关于因实施2025年年度权益分派调整“精达转债”转股价格的公告",
+        bond_name="嘉益转债", **common) is None
+
+    # 点名本债 → 保留
+    kept = parse_terms_patch_from_announcement(
+        "123250.SZ", "关于嘉益转债转股价格调整的公告", bond_name="嘉益转债", **common)
+    assert kept is not None and kept.fields["conversion_price"] == pytest.approx(9.8)
+
+    # 通用标题 (只说"可转债", 没点名) → 保留
+    assert parse_terms_patch_from_announcement(
+        "123250.SZ", "关于回购股份注销完成调整可转债转股价格的公告",
+        bond_name="嘉益转债", **common) is not None
+
+    # 一份公告覆盖同发行人两只债且含本债 → 保留
+    assert parse_terms_patch_from_announcement(
+        "123124.SZ", "关于晶瑞转债、晶瑞转2转股价格调整的公告",
+        bond_name="晶瑞转债", **common) is not None
+
+    # 不知道本债简称时不做校验 (退化成旧行为)
+    assert parse_terms_patch_from_announcement(
+        "123250.SZ", "关于“精达转债”转股价格调整的公告", **common) is not None

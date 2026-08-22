@@ -295,6 +295,15 @@ class DataProvider(ABC):
         """完整付息计划. 默认 None, 让调用方回退到 BondTerms.coupon_rates."""
         return None
 
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """``get_bond_terms`` 返回的那份条款快照的截止日。
+
+        条款 patch 只有在这一天**之后**生效才带来新信息 —— 更早的已经含在快照里了。
+        返回 None 表示"未知", 此时上层不做裁剪 (保持旧行为)。
+        实时 provider 应返回条款的抓取日, 历史 provider 应返回所用快照的日期。
+        """
+        return None
+
     def get_risk_free_rate(self, on_date: date) -> float | None:
         """无风险利率参考值 (%). 默认 None."""
         return None

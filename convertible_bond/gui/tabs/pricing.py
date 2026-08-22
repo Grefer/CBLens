@@ -186,6 +186,12 @@ def build(app, tab):
     left_hero = ctk.CTkFrame(rc, fg_color="transparent")
     left_hero.grid(row=0, column=0, sticky="nw", padx=30, pady=25)
 
+    # 身份行: 债券简称 + 代码。状态栏那份会被右侧状态挤掉, 这里常驻不裁剪。
+    app.lbl_bond_title = ctk.CTkLabel(
+        left_hero, textvariable=app.v_bond_title,
+        font=(FONT_FAMILY, 16, "bold"), text_color=TEXT, anchor="w")
+    app.lbl_bond_title.pack(anchor="w", pady=(0, 10))
+
     app.btn_calc = ctk.CTkButton(
         left_hero, text="✨ 开始计算 (Ctrl+Enter)", command=app._run_pricing,
         font=(FONT_FAMILY, 15, "bold"), width=200, height=50, corner_radius=10,
@@ -207,12 +213,30 @@ def build(app, tab):
     app.lbl_result = ctk.CTkLabel(right_hero, textvariable=app.v_result,
                                    font=(FONT_FAMILY, 56, "bold"), text_color=TEXT)
     app.lbl_result.pack(anchor="e")
-    # 市价偏差 (vs market price)
-    ctk.CTkLabel(right_hero, text="vs 市价", font=(FONT_FAMILY, 10),
-                 text_color=TEXT_DIM).pack(anchor="e", pady=(4, 0))
-    app.lbl_deviation = ctk.CTkLabel(right_hero, textvariable=app.v_deviation,
-                                      font=(FONT_MONO, 14, "bold"), text_color=TEXT_DIM)
-    app.lbl_deviation.pack(anchor="e")
+    # 市价与偏差并排。偏差百分比单看不出锚在哪个价位上, 所以市价按同等字号
+    # 和理论价放在一起, 不再是理论价下面那行小字。
+    hero_sub = ctk.CTkFrame(right_hero, fg_color="transparent")
+    hero_sub.pack(anchor="e", pady=(10, 0))
+
+    mkt_box = ctk.CTkFrame(hero_sub, fg_color="transparent")
+    mkt_box.pack(side="left")
+    ctk.CTkLabel(mkt_box, text="最新市价 (¥)", font=(FONT_FAMILY, 11),
+                 text_color=TEXT_DIM).pack()
+    app.lbl_market_price = ctk.CTkLabel(
+        mkt_box, textvariable=app.v_market_display,
+        font=(FONT_MONO, 26, "bold"), text_color=TEXT)
+    app.lbl_market_price.pack(pady=(2, 0))
+
+    ctk.CTkFrame(hero_sub, fg_color=BORDER, width=1, height=44).pack(
+        side="left", padx=20, pady=(6, 0))
+
+    dev_box = ctk.CTkFrame(hero_sub, fg_color="transparent")
+    dev_box.pack(side="left")
+    ctk.CTkLabel(dev_box, text="vs 市价", font=(FONT_FAMILY, 11),
+                 text_color=TEXT_DIM).pack()
+    app.lbl_deviation = ctk.CTkLabel(dev_box, textvariable=app.v_deviation,
+                                      font=(FONT_MONO, 26, "bold"), text_color=TEXT_DIM)
+    app.lbl_deviation.pack(pady=(2, 0))
 
     # IV 工具栏
     tb = ctk.CTkFrame(rc, fg_color="transparent")

@@ -10,6 +10,7 @@ from convertible_bond.batch_pricing import (
     AdmissionFilterConfig,
     BATCH_RESULT_COLUMNS,
     HARD_REVIEW_TAGS,
+    REVIEW_ONLY_TAGS,
     annotate_batch_result,
     filter_batch_results_by_view,
     sort_batch_results_for_review,
@@ -747,3 +748,50 @@ def test_near_delisting_leaves_undervalued_view_but_not_strategy_defaults():
     assert [r["bond_code"] for r in filter_batch_results_by_view(rows, "需复核")] == ["113697.SH"]
     assert "临近摘牌" not in HARD_REVIEW_TAGS
     assert any("最后交易日" in n for n in near["review_notes"])
+
+
+# ── 下修减值 ──
+#
+# 同网格求解后 uplift 理应 >= 0 (下修降 K 对持有人是额外期权)。这个标签是**安全网**:
+# 预期命中数≈0, 一旦亮起就是模型或数值出了需要人看的事。
+# 历史教训: 混网格时代 282 只里 55 只 uplift 为负, 曾被误判为"真实减值", 实测其值恰等于
+# "粗网格价 − 细网格价"的相反数 (118064.SH +1.325 vs -1.325) —— 全部是伪信号。
+
+def _uplift_row(theo, no_down, **kw):
+    row = dict(status="ok", S0=85.0, K=55.13, theoretical_price=theo, market_price=200.0,
+               deviation=0.07, sigma=0.35, T=3.0, credit_rating="AA",
+               outstanding_balance=5.0, valuation_date="2026-08-22", no_down_price=no_down)
+    row.update(kw)
+    return annotate_batch_result(row)
+
+
+@pytest.mark.parametrize("theo, no_down, expected", [
+    (186.47, 191.55, "下修减值"),      # -5.08 = -2.7%, 远超阈值
+    (100.0, 100.6, "下修减值"),        # 恰好 -0.6%, 超阈值
+    (100.0, 100.4, None),              # -0.4%, 阈值内, 不标
+    (100.0, 100.0, None),
+    (108.0, 100.0, "下修贡献高"),      # +7.4%... 未达 8%
+])
+def test_down_reset_drag_and_boost_tags(theo, no_down, expected):
+    tags = [t for t in _uplift_row(theo, no_down)["risk_tags"] if t.startswith("下修")]
+    if expected == "下修贡献高" and (theo - no_down) / theo < 0.08:
+        assert tags == []                      # 正向阈值仍是 8%, 没到就不标
+    elif expected is None:
+        assert tags == []
+    else:
+        assert tags == [expected]
+
+
+def test_down_reset_boost_tag_still_fires_above_8pct():
+    assert "下修贡献高" in _uplift_row(110.0, 100.0)["risk_tags"]
+
+
+def test_down_reset_drag_is_visibility_only_not_a_selection_change():
+    """标签只提高可见度: 不进 HARD_REVIEW_TAGS (= 策略 exclude_risk_tags 默认值),
+    也不进 REVIEW_ONLY_TAGS —— 它是"这里有反常, 去看一眼"的提示, 不是买入禁令。"""
+    assert "下修减值" not in HARD_REVIEW_TAGS
+    assert "下修减值" not in REVIEW_ONLY_TAGS
+    assert "下修贡献高" not in HARD_REVIEW_TAGS      # 与正向标签对称处理
+    row = _uplift_row(186.47, 191.55)
+    assert row["review_bucket"] != "需复核"          # 仅凭这个标签不改分桶
+    assert any("下修" in n for n in row["review_notes"])

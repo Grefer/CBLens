@@ -11,7 +11,7 @@ import site
 import sys
 import threading
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -422,6 +422,17 @@ class WindDataProvider(DataProvider):
             if "invalid indicators" in data_str:
                 bad.add(field)
         return bad
+
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """Wind 的 ``get_bond_terms`` 是**真 as-of** 查询, 锚就是估值日本身。
+
+        实测 123064.SZ 万孚转债: as-of 2024-06-30 → K=49.32, 2025-06-30 → 26.60,
+        2026-03-31 → 21.10, 与公告沿革逐条吻合。既然当日条款已经正确, 再套用 effective_date
+        <= 估值日的历史 patch 只会把它盖回旧值 —— 实测 2025-06-30 的 K 被 patch 从正确的
+        26.60 盖成 93.57。条款 patch 存在的意义是给**没有 as-of 能力**的数据源 (akshare/CSV)
+        重建历史条款, 不是给 Wind 用的。
+        """
+        return valuation_date
 
     def get_admission_status(self, bond_code, valuation_date, base_terms=None):
         """增量刷新主池交易状态与风险字段.

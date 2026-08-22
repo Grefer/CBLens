@@ -94,6 +94,11 @@ HARD_REVIEW_TAGS = {
     # legacy: 旧批量缓存与旧策略快照里存的是这两个名字, 保留以免旧数据静默失去硬标签
     "极小余额", "余额异常",
 }
+# 负 uplift 的告警阈值。定位是**安全网**而不是常规标签: 同网格后预期命中数≈0,
+# 一旦亮起就说明模型或数值出了需要人看的事。取 0.5% 是为了压住残余数值噪声,
+# 与正向 8% 不对称 —— 正向是"下修贡献大到影响估值", 负向是"出现了不该出现的东西"。
+DOWN_RESET_DRAG_THRESHOLD = 0.005
+
 # 只影响批量页复核视图, **不进** HARD_REVIEW_TAGS —— 后者是策略层
 # ScoreStrategyConfig.exclude_risk_tags 的默认值, 动它就是默认选债行为变更。
 # 「临近摘牌」是确定性的退出安排, 属于人该看一眼的事; 但要不要因此不买, 由策略参数
@@ -233,6 +238,7 @@ def list_batch_codes_from_cache(
                 check_date,
                 patch_store=patch_store,
                 event_store=event_store,
+                terms_as_of=_terms_cache_as_of(terms_cache, code),
             ),
             on_date=check_date,
             admission_config=admission_config,
@@ -260,6 +266,7 @@ def split_batch_codes_from_cache(
             check_date,
             patch_store=patch_store,
             event_store=event_store,
+            terms_as_of=_terms_cache_as_of(terms_cache, code),
         )
         reason = batch_pricing_exclusion_reason(
             code,
@@ -645,6 +652,18 @@ def _admission_projection_stores():
         return None, None
 
 
+def _terms_cache_as_of(terms_cache, code: str) -> date | None:
+    """条款缓存里这只债的抓取日 —— 快照已含该日之前生效的全部条款变更。"""
+    getter = getattr(terms_cache, "fetched_at", None)
+    if getter is None:
+        return None
+    try:
+        ts = getter(code)
+    except Exception:
+        return None
+    return ts.date() if ts is not None else None
+
+
 def _project_terms_for_admission(
     code: str,
     terms: Any,
@@ -652,6 +671,7 @@ def _project_terms_for_admission(
     *,
     patch_store: TermsPatchStore | None = None,
     event_store: CBEventStore | None = None,
+    terms_as_of: date | None = None,
 ):
     if terms is None or isinstance(terms, dict):
         return terms
@@ -662,6 +682,7 @@ def _project_terms_for_admission(
             on_date,
             patch_store=patch_store,
             event_store=event_store,
+            terms_as_of=terms_as_of,
         ).terms
     except Exception:
         return terms
@@ -872,9 +893,22 @@ def annotate_batch_result(row: dict) -> dict:
         if theo is not None and no_down is not None:
             down_uplift = theo - no_down
             out["down_reset_uplift"] = down_uplift
-    if down_uplift is not None and theo and theo > 0 and down_uplift / theo >= 0.08:
-        risk_tags.append("下修贡献高")
-        confidence_points -= 8.0
+    if down_uplift is not None and theo and theo > 0:
+        uplift_pct = down_uplift / theo
+        if uplift_pct >= 0.08:
+            risk_tags.append("下修贡献高")
+            confidence_points -= 8.0
+        elif uplift_pct <= -DOWN_RESET_DRAG_THRESHOLD:
+            # 同网格求解后 uplift 理应 >= 0 (下修降 K 对持有人是额外期权)。仍然为负只有两种
+            # 可能, 两种都必须可见而不是静默:
+            #   ① 真实的减值 —— 下修降 K 后反弹更快撞上强赎上限, 理论上存在但尚未在本库
+            #      构造出算例复现;
+            #   ② 新的数值问题 —— 历史上正是这样: 混网格时代 55 只负 uplift 全部是伪信号,
+            #      实测其值恰等于"粗网格价 − 细网格价"的相反数 (118064.SH +1.325 vs -1.325,
+            #      118058.SH +1.188 vs -1.188)。根因是 S_max 在高 σ 下顶到 50·K 上限,
+            #      粗网格 M=150 只剩 4 个格点落在 S0 以下 (细网格 15 个)。
+            risk_tags.append("下修减值")
+            confidence_points -= 8.0
 
     if market is None or market <= 0:
         risk_tags.append("无市价")
@@ -1148,6 +1182,9 @@ def _review_notes(row: dict) -> list[str]:
         notes.append("理论价主要来自期权/下修价值, 需要降低基础下修强度或 sigma 做压力测试")
     if {"余额清零", "触及摘牌线", "临近摘牌线", "小余额", "极小余额", "余额异常"} & tags:
         notes.append("核实剩余规模、流动性、强赎/退市安排")
+    if "下修减值" in tags:
+        notes.append("下修权算出负价值 —— 同网格下不应出现; 优先怀疑数值问题 "
+                     "(高 σ 时 S_max 顶到 50×K, 格点过疏), 其次才是强赎加速导致的真实减值")
     if "临近摘牌" in tags:
         days = finite_float(row.get("days_to_last_trading"))
         when = f"仅剩 {int(days)} 天" if days is not None else "已公告"

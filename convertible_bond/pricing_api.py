@@ -255,7 +255,23 @@ _UPLIFT_GRID: tuple[int, int] = (150, 400)
 
 
 def _uplift_grid(M: int, N: int) -> tuple[int, int]:
-    """no_down 价求解用的粗网格, 但不超过调用方请求的精度 (M/N 已较小时不反向加密)。"""
+    """下修诊断信号 (隐含 p_down 反解 + 4 个扰动角点) 专用的粗网格。
+
+    ⚠️ 已知不足, 保留现状是**实测后的选择**而非疏忽:
+    S_max = min(max(4, exp(3σ√T)), 50)·K 在 σ 稍大时就顶到 50K, 格点绝大部分落在 S0 以上的
+    无关区域 —— M=150 时落在 S0 **以下**的格点, σ=0.44 的债只有 12 个、σ=1.08 的只有 4 个。
+    隐含下修强度是**反解**, 价格误差被显著放大: 相对细网格的相对差中位 1.2%、P90 37%,
+    且约 9% 的债**可解性直接翻转** (implied 为 NaN 即被 strategy_backtest 剔出候选池)。
+
+    试过两条路, 实测都不划算, 别再重复:
+      - 只把 N 随 T 加密 (dt ≤ 2/3 日): 翻转 8→7、相对误差中位 1.19%→1.05%, 而诊断求解
+        慢 4~8 倍。误差主要来自 M/S_max 而不是 N。
+      - 自适应 M (保证 S0 以下 N 个格点): 对 σ>1 的券**更差** —— 强赎宽限期 cap 是障碍式
+        约束, 加密会改变它落在哪个格点上, 产生振幅达 3.5 元的周期性锯齿; 现行 M=500 恰好
+        落在锯齿零点附近 (dS=0.1K 让 K/1.2K/1.3K 都落到格点上)。
+    正解应是先收窄 S_max (需先修上边界 V[-1]=parity 与内点 cap 的不一致) 或把关键触发价
+    对齐到格点, 两者都动定价核心, 需要单独立项验证。
+    """
     mu, nu = _UPLIFT_GRID
     return min(M, mu), min(N, nu)
 
@@ -453,6 +469,10 @@ def price_from_provider(provider: DataProvider, bond_code,
     provider_event_store = _provider_event_store(provider)
     effective_patch_store = term_patch_store or _provider_patch_store(provider)
     terms = provider.get_bond_terms(bond_code, val_date)
+    try:
+        terms_as_of = provider.terms_as_of(bond_code, val_date)
+    except Exception:
+        terms_as_of = None
     projection = project_terms(
         bond_code,
         terms,
@@ -460,6 +480,7 @@ def price_from_provider(provider: DataProvider, bond_code,
         patch_store=effective_patch_store,
         event_store=provider_event_store,
         apply_events=apply_term_events,
+        terms_as_of=terms_as_of,
     )
     terms = projection.terms
 
@@ -641,14 +662,15 @@ def price_from_provider(provider: DataProvider, bond_code,
         no_down_kwargs.pop("scheduled_reset_target_k", None)
         no_down_kwargs["scheduled_reset_prob"] = 0.0
         no_down_pricer = UniversalCBPricer(**no_down_kwargs)  # type: ignore[arg-type]
-        # no_down_price 只用于 down_reset_uplift 诊断 (8% 阈值标签 + 展示列), 精度需求远低于
-        # headline 理论价。普通无下修转债价在粗网格上已收敛, 故第二次求解走 _uplift_grid,
-        # 把"每债两次细网格"降到"一次细 + 一次粗"。headline theo 仍走细网格 M/N, 不受影响。
-        mu, nu = _uplift_grid(M, N)
+        # **必须与 headline theo 同网格**。down_reset_uplift 是两个价的**差**, 跨网格相减
+        # 等于把离散化误差混进信号: 实测同债同参数、仅 (150,400) vs (500,2000) 之差,
+        # 中位 0.005 / P90 0.13 / 最大 0.47 元, 而 |uplift| 中位只有 0.69 —— 于是 282 只里
+        # 33 只出现**伪负号**, 而下修权只会增加价值, 负值在数学上不可能。
+        # 省下的那次粗网格求解 (约 40ms/债, 全池约 11s) 换不来一个符号都不可信的诊断量。
         no_down_price = no_down_pricer.price(
             sigma=sigma, r=r, base_spread=effective_base_spread,
             distress_k=distress_k, p_down=0.0,
-            M=mu, N=nu, q=effective_q,
+            M=M, N=N, q=effective_q,
         )
     else:
         no_down_price = theo
@@ -958,6 +980,10 @@ class _BatchStockCache(DataProvider):
         raise RuntimeError("hist_vol: unreachable")
 
     # ── 直接透传的接口 ────────────────────────────────────
+    def terms_as_of(self, bond_code, valuation_date):
+        """透传内层的条款截止日 —— 装饰器不改变条款来源, 就不能改变它的口径锚。"""
+        return self._inner.terms_as_of(bond_code, valuation_date)
+
     def get_bond_terms(self, bond_code, valuation_date):
         return self._inner.get_bond_terms(bond_code, valuation_date)
 

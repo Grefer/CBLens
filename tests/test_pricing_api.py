@@ -760,3 +760,42 @@ def test_accrued_interest_caps_at_maturity_and_matches_pricer():
     capped = 100 * 0.03 * (maturity - _date(2022, 1, 1)).days / 365
     assert beyond == pytest.approx(capped)
     assert beyond == pytest.approx(pricer.accrued_interest(_date(2023, 1, 1)))
+
+
+def test_no_down_price_uses_the_same_grid_as_theoretical(monkeypatch):
+    """down_reset_uplift 是两个价的**差**, 跨网格相减会把离散化误差混进信号。
+
+    实测同债同参数、仅 (150,400) vs (500,2000) 之差中位 0.005 / P90 0.13 / 最大 0.47 元,
+    而 |uplift| 中位只有 0.69 —— 曾让 282 只里 33 只出现伪负号, 而下修权只会增加价值。
+    """
+    calls: list[tuple[int, int, float]] = []
+
+    class FakePricer:
+        def __init__(self, **kwargs):
+            self.K = kwargs["K"]
+            self.S0 = kwargs["S0"]
+            self.T = 1.0
+            self.ratio = kwargs["face_value"] / self.K
+
+        def price(self, **kwargs):
+            calls.append((kwargs["M"], kwargs["N"], kwargs["p_down"]))
+            return 108.0 if kwargs["p_down"] > 0 else 100.0
+
+    monkeypatch.setattr(pricing_api, "UniversalCBPricer", FakePricer)
+    pricing_api.price_from_provider(
+        SimplePricingProvider(_base_terms()),
+        "113001.SH",
+        valuation_date=date(2026, 5, 20),
+        p_down=0.15,
+        M=500,
+        N=2000,
+    )
+
+    theo_calls = [c for c in calls if c[2] > 0]
+    no_down_calls = [c for c in calls if c[2] == 0]
+    assert theo_calls and no_down_calls
+    assert theo_calls[0][:2] == (500, 2000)
+    assert no_down_calls[0][:2] == theo_calls[0][:2], (
+        f"no_down 价用了 {no_down_calls[0][:2]}, headline 用了 {theo_calls[0][:2]} —— "
+        f"两价之差必须同网格, 否则 uplift 的符号不可信"
+    )

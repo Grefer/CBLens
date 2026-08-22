@@ -255,6 +255,10 @@ class CBPricerApp(
         self.v_M           = ctk.StringVar(value="500")
         self.v_N           = ctk.StringVar(value="2000")
         self.v_result      = ctk.StringVar(value="—")
+        # 定价页英雄卡的身份行与市价行: 状态栏的 v_ref_info 会被右侧状态挤到裁剪,
+        # 债名和最新市价属于"看一眼就要认出是哪只债", 单独在主区域常驻一份。
+        self.v_bond_title  = ctk.StringVar(value="未加载转债")
+        self.v_market_display = ctk.StringVar(value="—")
         self.v_status      = ctk.StringVar(value="就绪")
         self.v_ref_info    = ctk.StringVar(value="尚未拉取数据")
         self.v_ref_detail  = ctk.StringVar(value="")
@@ -433,6 +437,22 @@ class CBPricerApp(
         self.v_p_down.trace_add("write", lambda *_: self._refresh_p_down_hint())
         self._refresh_p_down_hint()
         self._bond_code_trace = self.v_bond_code.trace_add("write", self._on_bond_code_write)
+        self.v_market_price.trace_add("write", lambda *_: self._refresh_market_display())
+        self._refresh_market_display()
+
+    def _refresh_market_display(self) -> None:
+        """把 IV 输入框里的市价同步到英雄卡的"最新市价"读数.
+
+        偏差百分比单独看不出锚在哪个价位上, 所以市价要和偏差同等醒目地摆在
+        理论价旁边; 用户手改市价时读数跟着走, 免得两处对不上。
+        """
+        raw = self.v_market_price.get().strip()
+        try:
+            price = float(raw)
+        except (TypeError, ValueError):
+            self.v_market_display.set("—")
+            return
+        self.v_market_display.set(f"{price:,.2f}")
 
     def _refresh_p_down_hint(self) -> None:
         """把用户输入的 hazard λ 换算成 P(1 年内至少 1 次)。
@@ -996,6 +1016,7 @@ class CBPricerApp(
         self.v_status.set(E(f"❌ {msg}"))
         if show_dialog:
             self.v_ref_info.set("❌ 获取失败")
+            self.v_bond_title.set("未加载转债")
             self.v_result.set("—")
             self.lbl_result.configure(text_color=RED)
             messagebox.showerror("错误", str(msg))

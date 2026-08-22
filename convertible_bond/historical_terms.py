@@ -129,17 +129,23 @@ class TermsPatchStore:
         self,
         bond_code: str | None = None,
         through_date: date | None = None,
+        after: date | None = None,
     ) -> list[TermsPatch]:
+        """列出 patch。*after* 排除生效日 <= 该日的条目 —— 基础条款快照已经包含它们。"""
         patches = list(self._patches)
         if bond_code:
             patches = [p for p in patches if p.bond_code == bond_code]
         if through_date:
             patches = [p for p in patches if p.effective_date <= through_date]
+        if after is not None:
+            patches = [p for p in patches if p.effective_date > after]
         return sorted(patches, key=_patch_sort_key)
 
-    def apply(self, bond_code: str, terms: BondTerms, valuation_date: date) -> BondTerms:
+    def apply(self, bond_code: str, terms: BondTerms, valuation_date: date,
+              *, after: date | None = None) -> BondTerms:
         updates: dict[str, Any] = {}
-        for patch in self.list_patches(bond_code=bond_code, through_date=valuation_date):
+        for patch in self.list_patches(
+                bond_code=bond_code, through_date=valuation_date, after=after):
             for key, value in patch.fields.items():
                 if key not in _BOND_FIELD_NAMES:
                     continue
@@ -207,14 +213,23 @@ def project_terms(
     patch_store: TermsPatchStore | None = None,
     event_store: CBEventStore | None = None,
     apply_events: bool = True,
+    terms_as_of: date | None = None,
 ) -> TermsProjection:
     """生成估值日视角的条款.
 
     顺序固定为: 基础条款 -> 条款 patch -> 公告事件状态。这样下修后的 K、
     不强赎承诺、不下修冻结等都会在定价和 GUI 使用同一个视图。
+
+    *terms_as_of* = 基础条款这份快照的截止日。**一条 patch 只有在快照拍摄之后才生效,
+    才带来新信息**; 生效日更早的那些, 快照里已经含着了。不传这个锚会让今日估值把两年前
+    的下修 patch 重新盖回 Wind 的当前转股价 —— 实测 282 只有 patch 的债里 209 只的
+    最新 patch 值与 cb_data 当前 K 不一致, 主池 60% 的 K 因此被写坏 (万孚转债
+    20.88 → 93.57)。cb_data 的 conversion_price 是 Wind ``clause_conversion2_swapshareprice``
+    即**当前 K**, 已内含全部已生效下修; 两个源冲突时它才是权威。
     """
     store = patch_store or default_terms_patch_store()
-    patches = store.list_patches(bond_code=bond_code, through_date=valuation_date)
+    patches = store.list_patches(
+        bond_code=bond_code, through_date=valuation_date, after=terms_as_of)
     projected = terms
     patch_fields: set[str] = set()
     for patch in patches:
@@ -301,13 +316,44 @@ class HistoricalBondDataProvider(DataProvider):
         self.provider_history_terms = provider_history_terms
         self.name = f"{inner.name}+history"
 
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """用到快照时返回快照日期; 回落到 inner 的当前条款时返回 None。
+
+        None 意味着"基础条款是今天的口径", 此时**要**套用全部历史 patch 才能把 K 拉回
+        当时的值 —— 这正是回测 current_fallback 分支需要的。有快照时相反: 快照已经含着
+        它拍摄之前的全部变更, 只有之后生效的 patch 才是新信息。
+        """
+        if self.history_store is None:
+            try:
+                return self.inner.terms_as_of(bond_code, valuation_date)
+            except Exception:
+                return None
+        try:
+            terms, snapshot_date = self.history_store.get_terms(bond_code, valuation_date)
+        except Exception:
+            return None
+        if terms is not None:
+            return snapshot_date
+        try:
+            return self.inner.terms_as_of(bond_code, valuation_date)
+        except Exception:
+            return None
+
     def get_bond_terms(self, bond_code: str, valuation_date: date) -> BondTerms:
         terms = None
         snapshot_date = None
         if self.history_store is not None:
             terms, snapshot_date = self.history_store.get_terms(bond_code, valuation_date)
         if terms is None:
+            # 回落到 inner。锚改问 inner 自己: Wind 的 get_bond_terms 是**真 as-of**
+            # (实测 123064.SZ as-of 2025-06-30 → K=26.60, 与公告沿革吻合), 此时锚就是估值日,
+            # 再套历史 patch 只会把正确值盖回旧值 (实测被盖成 93.57)。
+            # akshare/CSV 没有 as-of 能力, 返回 None, 仍走"套用全部 patch 重建历史"的老路。
             terms = self.inner.get_bond_terms(bond_code, valuation_date)
+            try:
+                snapshot_date = self.inner.terms_as_of(bond_code, valuation_date)
+            except Exception:
+                snapshot_date = None
             if self.strip_fallback_status:
                 terms = strip_current_status_fields(terms)
 
@@ -319,7 +365,8 @@ class HistoricalBondDataProvider(DataProvider):
                 terms,
             )
 
-        terms = self.patch_store.apply(bond_code, terms, valuation_date)
+        terms = self.patch_store.apply(
+            bond_code, terms, valuation_date, after=snapshot_date)
         terms = apply_events_to_terms(
             bond_code,
             terms,

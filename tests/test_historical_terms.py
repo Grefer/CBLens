@@ -532,3 +532,105 @@ def test_terms_patch_store_rewrite_edits_and_drops(tmp_path):
     assert reloaded.list_patches("113003.SH")[0].fields == {"conversion_price": 8.0}
     # 幂等: 再跑一次没有可改的
     assert reloaded.rewrite(drop_balance) == (0, 0)
+
+
+def test_project_terms_skips_patches_already_baked_into_the_snapshot(tmp_path):
+    """terms_as_of = 基础条款快照的截止日; 更早生效的 patch 不再重复套用。
+
+    cb_data 的 conversion_price 是 Wind 的**当前 K**, 已内含全部已生效下修。不带这个锚,
+    今日估值会把两年前的下修 patch 重新盖回去 —— 实测主池 60% 的 K 因此被写坏
+    (万孚转债 20.88 → 93.57, 转股价值随之算错)。
+    """
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="123064.SZ", effective_date=date(2024, 8, 22),
+                   fields={"conversion_price": 93.57}),
+        TermsPatch(bond_code="123064.SZ", effective_date=date(2026, 6, 2),
+                   fields={"conversion_price": 93.57}),
+    ])
+    events = CBEventStore(tmp_path / "events.json")
+    terms = BondTerms(sec_name="万孚转债", conversion_price=20.88)
+    val = date(2026, 8, 22)
+
+    # 无锚: 旧行为, 历史 patch 把当前 K 盖掉
+    stale = project_terms("123064.SZ", terms, val,
+                          patch_store=store, event_store=events).terms
+    assert stale.conversion_price == pytest.approx(93.57)
+
+    # 有锚 (快照抓于 2026-08-22): 两条 patch 都在快照之前生效 → 全部跳过
+    fixed = project_terms("123064.SZ", terms, val, patch_store=store,
+                          event_store=events, terms_as_of=date(2026, 8, 22)).terms
+    assert fixed.conversion_price == pytest.approx(20.88)
+    assert not fixed.conversion_price == stale.conversion_price
+
+
+def test_project_terms_still_applies_patches_effective_after_the_snapshot(tmp_path):
+    """回测口径: 快照之后生效的 patch 仍然要套用, 否则历史条款就停在快照那天。"""
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="123064.SZ", effective_date=date(2026, 3, 1),
+                   fields={"conversion_price": 27.00}),
+        TermsPatch(bond_code="123064.SZ", effective_date=date(2026, 6, 2),
+                   fields={"conversion_price": 20.88}),
+    ])
+    events = CBEventStore(tmp_path / "events.json")
+    terms = BondTerms(sec_name="万孚转债", conversion_price=27.00)
+    got = project_terms("123064.SZ", terms, date(2026, 8, 22), patch_store=store,
+                        event_store=events, terms_as_of=date(2026, 3, 1)).terms
+    assert got.conversion_price == pytest.approx(20.88)
+
+
+def test_terms_patch_store_list_patches_after_filter(tmp_path):
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="X.SZ", effective_date=date(2025, 1, 1), fields={"conversion_price": 1.0}),
+        TermsPatch(bond_code="X.SZ", effective_date=date(2026, 1, 1), fields={"conversion_price": 2.0}),
+    ])
+    assert len(store.list_patches("X.SZ")) == 2
+    assert [p.effective_date for p in store.list_patches("X.SZ", after=date(2025, 6, 1))] == [date(2026, 1, 1)]
+    assert store.list_patches("X.SZ", after=date(2026, 1, 1)) == []
+
+
+def test_historical_provider_trusts_inner_as_of_over_patches(tmp_path):
+    """inner 若是真 as-of 数据源 (Wind), 就不该再用历史 patch 盖它的当日条款。
+
+    实测 123064.SZ 万孚转债: Wind as-of 2025-06-30 → K=26.60 (与公告沿革吻合),
+    而套用 effective_date <= 该日的 patch 后被盖成 93.57。条款 patch 是给**没有 as-of
+    能力**的数据源 (akshare/CSV) 重建历史用的, 不是给 Wind 用的。
+    """
+    patches = TermsPatchStore(tmp_path / "patches.json")
+    patches.add_many([
+        TermsPatch(bond_code="123064.SZ", effective_date=date(2024, 8, 22),
+                   fields={"conversion_price": 93.57}),
+    ])
+    events = CBEventStore(tmp_path / "events.json")
+    val = date(2025, 6, 30)
+
+    class AsOfInner(DataProvider):
+        name = "asof"
+        def get_bond_terms(self, bond_code, valuation_date):
+            return BondTerms(sec_name="万孚转债", conversion_price=26.60)
+        def terms_as_of(self, bond_code, valuation_date):
+            return valuation_date          # 真 as-of
+        def get_stock_close(self, c, d): return 1.0
+        def get_stock_history(self, c, s, e): return []
+        def get_bond_history(self, c, s, e): return []
+
+    class TodayOnlyInner(AsOfInner):
+        name = "today_only"
+        def terms_as_of(self, bond_code, valuation_date):
+            return None                    # 没有 as-of 能力
+
+    def k_for(inner):
+        provider = HistoricalBondDataProvider(
+            inner, history_store=None, patch_store=patches, event_store=events)
+        return provider.get_bond_terms("123064.SZ", val).conversion_price
+
+    assert k_for(AsOfInner()) == pytest.approx(26.60)      # patch 被跳过
+    assert k_for(TodayOnlyInner()) == pytest.approx(93.57)  # 老路: 套 patch 重建历史
+
+
+def test_wind_provider_reports_valuation_date_as_terms_anchor():
+    from convertible_bond.data_providers.wind import WindDataProvider
+    assert WindDataProvider.terms_as_of(
+        object(), "123064.SZ", date(2025, 6, 30)) == date(2025, 6, 30)

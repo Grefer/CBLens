@@ -325,6 +325,14 @@ class CachingDataProvider(DataProvider):
         self.name = f"{inner.name}+cache"
         self._write_lock = threading.Lock()
 
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """条款来自本装饰器的缓存, 锚是缓存的抓取日。"""
+        try:
+            ts = self.cache.fetched_at(bond_code) if self.cache is not None else None
+        except Exception:
+            return None
+        return ts.date() if ts is not None else None
+
     def get_bond_terms(self, bond_code, valuation_date):
         cached = self.cache.get(bond_code)
         stale = self.cache.is_stale(bond_code, self.max_age_days) if cached else True
@@ -410,6 +418,14 @@ class CachedBondDataProvider(DataProvider):
         self.name = f"cb_data+{market.name}"
         self._write_lock = threading.Lock()
         self._risk_free_cache: dict[date, float | None] = {}
+
+    def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
+        """cb_data 里这只债的抓取日 —— 快照已含该日之前生效的全部条款变更。"""
+        try:
+            ts = self.cache.fetched_at(bond_code) if self.cache is not None else None
+        except Exception:
+            return None
+        return ts.date() if ts is not None else None
 
     def _merge_cashflow(self, bond_code: str, terms: BondTerms) -> BondTerms:
         if not self.with_cashflow:

@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-08-21T07:10:30"
+    "updated_at": "2026-08-22T05:34:36"
   },
   "patches": [
     {
@@ -26394,6 +26394,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 11.11
+      },
+      "bond_code": "123118.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-04-10",
+      "event_date": "2026-04-07",
+      "fields": {
+        "conversion_price": 14.59
+      },
+      "note": "转股价 11.11->14.59 | https://static.cninfo.com.cn/finalpage/2026-04-07/1225082242.PDF",
+      "raw_title": "关于调整惠城转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123118.SZ|2026-04-07|conversion_price_adjusted|关于调整惠城转债转股价格的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 96.67
       },
       "bond_code": "110081.SH",
@@ -27407,6 +27423,33 @@
       "raw_title": "关于提前赎回“家联转债”的第十一次提示性公告",
       "source": "cninfo",
       "source_event_key": "123236.SZ|2026-05-08|call_redemption|关于提前赎回“家联转债”的第十一次提示性公告"
+    },
+    {
+      "bond_code": "123250.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-08",
+      "event_date": "2026-05-08",
+      "fields": {
+        "credit_rating": "AA",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-08/1225281482.PDF",
+      "raw_title": "铜陵精达特种电磁线股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123250.SZ|2026-05-08|rating_change|铜陵精达特种电磁线股份有限公司公开发行可转换公司债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "123250.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-08",
+      "event_date": "2026-05-08",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-08/1225281477.PDF",
+      "raw_title": "精达股份关于“精达转债”2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "123250.SZ|2026-05-08|rating_change|精达股份关于“精达转债”2026年跟踪评级结果的公告"
     },
     {
       "bond_code": "127024.SZ",
@@ -31069,6 +31112,22 @@
       "source_event_key": "127084.SZ|2026-05-27|conversion_price_adjusted|关于柳工转2转股价格调整的公告"
     },
     {
+      "before_fields": {
+        "conversion_price": 14.59
+      },
+      "bond_code": "123118.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-12",
+      "event_date": "2026-06-04",
+      "fields": {
+        "conversion_price": 10.33
+      },
+      "note": "转股价 14.59->10.33 | https://static.cninfo.com.cn/finalpage/2026-06-04/1225349477.PDF",
+      "raw_title": "关于调整惠城转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123118.SZ|2026-06-04|conversion_price_adjusted|关于调整惠城转债转股价格的公告"
+    },
+    {
       "bond_code": "123064.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-16",
@@ -31108,6 +31167,21 @@
       "source_event_key": "111000.SH|2026-06-23|rating_change|起帆电缆关于起帆转债2026年跟踪评级结果的公告"
     },
     {
+      "bond_code": "123118.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定",
+        "credit_watch_status": "列入观察名单"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382767.PDF",
+      "raw_title": "青岛惠城环保科技集团股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123118.SZ|2026-06-23|rating_change|青岛惠城环保科技集团股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告"
+    },
+    {
       "before_fields": {
         "conversion_price": 17.35
       },
@@ -31122,6 +31196,88 @@
       "raw_title": "起帆电缆关于“起帆转债”转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "111000.SH|2026-06-17|conversion_price_adjusted|起帆电缆关于“起帆转债”转股价格调整的公告"
+    },
+    {
+      "bond_code": "123250.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-25",
+      "event_date": "2026-06-25",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225387216.PDF",
+      "raw_title": "浙江嘉益保温科技股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123250.SZ|2026-06-25|rating_change|浙江嘉益保温科技股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "113699.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-27",
+      "event_date": "2026-06-27",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391146.PDF",
+      "raw_title": "金诚信关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113699.SH|2026-06-27|rating_change|金诚信关于可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "113699.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-27",
+      "event_date": "2026-06-27",
+      "fields": {
+        "credit_rating_outlook": "稳定",
+        "credit_watch_status": "列入观察名单"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391147.PDF",
+      "raw_title": "金诚信矿业管理股份有限公司可转换公司债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113699.SH|2026-06-27|rating_change|金诚信矿业管理股份有限公司可转换公司债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225394293.PDF",
+      "raw_title": "山西美锦能源股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2026-06-30|rating_change|山西美锦能源股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225394292.PDF",
+      "raw_title": "关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2026-06-30|rating_change|关于可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 5.26
+      },
+      "bond_code": "127061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-17",
+      "event_date": "2026-07-17",
+      "fields": {
+        "conversion_price": 3.47
+      },
+      "note": "转股价 5.26->3.47 | https://static.cninfo.com.cn/finalpage/2026-07-17/1225428696.PDF",
+      "raw_title": "关于向下修正美锦转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "127061.SZ|2026-07-17|down_reset_approved|关于向下修正美锦转债转股价格的公告"
     }
   ]
 }
