@@ -171,7 +171,16 @@ python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
 3. 最后应用 `cb_events.json` 中 `event_date <= 估值日` 的公告事件。
 
 `cb_terms_patches.json` 用于记录会直接改变模型参数的字段，尤其是下修后的
-`conversion_price`、评级、余额等。示例：
+`conversion_price`、评级、余额等。
+
+> [!WARNING]
+> **余额 patch 的门槛条款陷阱**：赎回/回售/停止交易条款会成段引用"未转股余额少于
+> 3,000 万元时公司有权赎回"。早期解析把这句门槛条款当成真实余额，写出 528 条
+> `outstanding_balance = 0.3` 的错误 patch，覆盖 103 只债（其中 96 只真实余额
+> ≥0.5 亿），使它们被准入过滤当成"余额过小"整批剔除。解析已按措辞而非数值修复；
+> 存量用 `cb-repair-balance-patches --dry-run` 查看、`--apply` 回洗（自动备份）。
+
+示例：
 
 ```json
 {

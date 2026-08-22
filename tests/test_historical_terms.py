@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -500,3 +501,34 @@ def test_resolve_down_reset_intensity_passes_announced_new_k():
         announce_date=None, proposal_date=date(2025, 8, 1),
     )
     assert resolve_down_reset_intensity(0.15, without_k).scheduled_reset_target_k is None
+
+
+def test_terms_patch_store_rewrite_edits_and_drops(tmp_path):
+    """rewrite: 逐条改写已有 patch (修数据用), 返回 None 即删除该条。"""
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="113001.SH", effective_date=date(2025, 2, 10),
+                   fields={"outstanding_balance": 0.3, "call_redemption_price": 100.5}),
+        TermsPatch(bond_code="113002.SH", effective_date=date(2025, 2, 11),
+                   fields={"outstanding_balance": 0.3}),
+        TermsPatch(bond_code="113003.SH", effective_date=date(2025, 2, 12),
+                   fields={"conversion_price": 8.0}),
+    ])
+
+    def drop_balance(patch):
+        if "outstanding_balance" not in patch.fields:
+            return patch
+        fields = {k: v for k, v in patch.fields.items() if k != "outstanding_balance"}
+        return replace(patch, fields=fields) if fields else None
+
+    # dry_run 只统计不落盘
+    assert store.rewrite(drop_balance, dry_run=True) == (1, 1)
+    assert len(TermsPatchStore(tmp_path / "patches.json").list_patches()) == 3
+
+    assert store.rewrite(drop_balance) == (1, 1)
+    reloaded = TermsPatchStore(tmp_path / "patches.json")
+    assert reloaded.list_patches("113001.SH")[0].fields == {"call_redemption_price": 100.5}
+    assert reloaded.list_patches("113002.SH") == []
+    assert reloaded.list_patches("113003.SH")[0].fields == {"conversion_price": 8.0}
+    # 幂等: 再跑一次没有可改的
+    assert reloaded.rewrite(drop_balance) == (0, 0)

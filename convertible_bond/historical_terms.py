@@ -159,6 +159,29 @@ class TermsPatchStore:
             self._save()
         return added
 
+    def rewrite(self, transform, *, dry_run: bool = False) -> tuple[int, int]:
+        """按 *transform* 逐条重写已有 patch, 返回 ``(改写数, 删除数)``.
+
+        *transform* 接受一条 :class:`TermsPatch`, 返回改写后的 patch, 或返回 None
+        表示删除该条。用于修数据 (例如剔除误解析出来的字段); 新增走 :meth:`add_many`。
+        ``dry_run`` 时只统计不落盘。
+        """
+        kept: list[TermsPatch] = []
+        changed = 0
+        removed = 0
+        for patch in self._patches:
+            new_patch = transform(patch)
+            if new_patch is None:
+                removed += 1
+                continue
+            if new_patch != patch:
+                changed += 1
+            kept.append(new_patch)
+        if not dry_run and (changed or removed):
+            self._patches = kept
+            self._save()
+        return changed, removed
+
 
 _default_terms_patch_store: TermsPatchStore | None = None
 

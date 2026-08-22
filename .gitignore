@@ -32,6 +32,8 @@ data/watchlist.json
 # 策略回测运行态产物 (结果快照 + 跨运行磁盘缓存), 随回测增删/prune, 不入版本库
 data/strategy_backtest_snapshot.json
 data/strategy_backtest_snapshot.bak.json
+# cb-repair-balance-patches 的时间戳备份 (本地留档, 不入库)
+data/cb_terms_patches.json.bak-*
 data/strategy_backtest_snapshots/
 data/strategy_backtest_cache/
 
