@@ -809,6 +809,16 @@ class FakeProvider(DataProvider):
     """直接实现 DataProvider 接口的最小桩, 给回测/批量定价测试用."""
     name = "fake"
 
+    def terms_as_of(self, bond_code, valuation_date):
+        """桩返回的条款按定义就是估值日当天的, 因此锚是估值日本身。
+
+        不声明这个锚, price_from_provider 会回落到**真实项目 patch 库**
+        (default_terms_patch_store), 于是用例的合成条款被真实数据覆盖 —— 测试结果
+        随 data/cb_terms_patches.json 的内容漂移。曾实测: 转股价 patch 重建后
+        123001.SZ 多了 5 条 patch, 把 K 改成 4.28, 理论价从合理区间跳到 1280。
+        """
+        return valuation_date
+
     def __init__(self, bond_code, stock_code, terms: BondTerms,
                  bond_close, stock_close):
         self.bond_code = bond_code
