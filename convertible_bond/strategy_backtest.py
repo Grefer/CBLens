@@ -36,8 +36,8 @@ from . import backtest_stats
 from .batch_pricing import (
     AdmissionFilterConfig,
     BATCH_REVIEW_VIEWS,
-    DEFAULT_UNDERVALUED_SCORE_THRESHOLD,
-    HARD_REVIEW_TAGS,
+    LEGACY_STRATEGY_EXCLUDE_TAGS,
+    view_exclusion_reason,
     batch_pricing_exclusion_reason,
     filter_batch_results_by_view,
 )
@@ -90,7 +90,8 @@ class ScoreStrategyConfig:
     selection_view: str = "综合机会"
     min_score: float | None = 0.0
     min_confidence: tuple[str, ...] | None = ("高", "中")
-    exclude_risk_tags: tuple[str, ...] = tuple(sorted(HARD_REVIEW_TAGS))
+    # 冻结集合, 不随批量页标签体系演化 —— 见 batch_pricing.LEGACY_STRATEGY_EXCLUDE_TAGS。
+    exclude_risk_tags: tuple[str, ...] = tuple(sorted(LEGACY_STRATEGY_EXCLUDE_TAGS))
     min_market_price: float | None = None
     max_market_price: float | None = None
     min_conversion_premium: float | None = None
@@ -1908,24 +1909,11 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
     score = finite_float(row.get("opportunity_score"))
     rank_signal = _normalize_rank_signal(cfg.rank_signal)
     view = cfg.selection_view if cfg.selection_view in BATCH_REVIEW_VIEWS else "综合机会"
-    if view == "低估候选":
-        if score is None:
-            return "低估候选视图: 缺少机会分"
-        if score < DEFAULT_UNDERVALUED_SCORE_THRESHOLD:
-            return f"低估候选视图: 机会分 {score:.1f} < {DEFAULT_UNDERVALUED_SCORE_THRESHOLD:.1f}"
-        if row.get("confidence") not in {"高", "中"}:
-            return "低估候选视图: 置信度不足"
-        if "转股折价" in tags:
-            return "低估候选视图: 转股折价单独归类"
-        hard = tags & HARD_REVIEW_TAGS
-        if hard:
-            return "低估候选视图: 硬复核标签 " + "/".join(sorted(hard))
-    elif view == "转股折价" and "转股折价" not in tags:
-        return "转股折价视图: 未出现转股折价标签"
-    elif view == "需复核" and not (
-        tags & HARD_REVIEW_TAGS or row.get("confidence") == "低"
-    ):
-        return "需复核视图: 不属于复核池"
+    # 视图归属只有一个事实源 (batch_pricing.view_exclusion_reason)。这里曾复制一份实现,
+    # 在标签体系重构后与视图口径悄悄分叉 —— 视图已改读维度拦截集, 这里还在读 HARD_REVIEW_TAGS。
+    view_reason = view_exclusion_reason(row, view)
+    if view_reason is not None:
+        return f"{view}视图: {view_reason}"
 
     if rank_signal in _DOWN_RESET_RANK_SIGNALS:
         edge = _rank_signal_value(row, rank_signal)

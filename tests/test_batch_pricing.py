@@ -9,8 +9,13 @@ from convertible_bond import batch_pricing
 from convertible_bond.batch_pricing import (
     AdmissionFilterConfig,
     BATCH_RESULT_COLUMNS,
+    BATCH_REVIEW_VIEWS,
     HARD_REVIEW_TAGS,
+    LEGACY_STRATEGY_EXCLUDE_TAGS,
     REVIEW_ONLY_TAGS,
+    RISK_TAG_DIMENSION,
+    tags_in,
+    view_exclusion_reason,
     annotate_batch_result,
     filter_batch_results_by_view,
     sort_batch_results_for_review,
@@ -28,6 +33,7 @@ from convertible_bond.batch_pricing import (
     write_batch_results_csv,
 )
 from convertible_bond.data_providers import BondTerms
+import convertible_bond.batch_pricing as batch_pricing_module
 
 
 def test_parse_bond_codes_dedupes_and_skips_headers():
@@ -496,7 +502,10 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
     assert row["confidence"] in {"中", "低"}
     assert row["model_signal_status"] == "不适合作为买入信号"
     assert row["sensitivity_status"] == "波动率敏感"
-    assert row["review_bucket"] == "需复核"
+    # 「高HV」属模型适用性维度 —— 模型在这只债上不可靠, 但那是**永久属性**, 不是
+    # "去做点什么就能解决"的事, 所以单列「模型存疑」而不是塞进需复核。
+    # 需复核只留数据质量 + 可交易性 (这一行现在不能用, 得先去拉数据/确认能不能交易)。
+    assert row["review_bucket"] == "模型存疑"
     assert row["review_notes"]
     assert math.isfinite(row["opportunity_score"])
 
@@ -795,3 +804,105 @@ def test_down_reset_drag_is_visibility_only_not_a_selection_change():
     row = _uplift_row(186.47, 191.55)
     assert row["review_bucket"] != "需复核"          # 仅凭这个标签不改分桶
     assert any("下修" in n for n in row["review_notes"])
+
+
+# ── 标签维度体系 ──────────────────────────────────────────────────────────
+#
+# 28+ 个标签曾挤在一个扁平集合里驱动四个消费者 (展示 / 置信度 / 批量页视图 /
+# 策略 exclude_risk_tags), 调一个阈值会同时穿透四层。现在按维度归类, 各消费者按需取子集。
+
+def test_every_emitted_tag_is_registered_in_a_dimension():
+    """凡是 annotate_batch_result 会打出的标签, 都必须登记维度。
+
+    漏登记不会报错, 只会让该标签在所有按维度取子集的消费者那里**静默消失** ——
+    既不拦路也不显示分组, 而 ruff 和现有测试都查不出来。
+    """
+    import re
+    from pathlib import Path
+    source = Path(batch_pricing_module.__file__).read_text(encoding="utf-8")
+    emitted = set(re.findall(r'risk_tags\.append\("([^"]+)"\)', source))
+    assert emitted, "没扫到任何 risk_tags.append —— 扫描逻辑坏了, 后面的断言会假通过"
+    missing = emitted - set(RISK_TAG_DIMENSION)
+    assert not missing, f"这些标签没登记维度: {sorted(missing)}"
+
+
+def test_dimensions_partition_the_tag_space():
+    """每个标签恰好属于一个维度, 且五个维度都非空。"""
+    dims = set(RISK_TAG_DIMENSION.values())
+    assert dims == {"数据质量", "模型适用性", "标的风险", "可交易性", "机会信号"}
+    for dim in dims:
+        assert tags_in(dim), f"{dim} 维度为空"
+    # tags_in 取并集时不重不漏
+    assert sum(len(tags_in(d)) for d in dims) == len(RISK_TAG_DIMENSION)
+
+
+def test_strategy_exclude_set_is_frozen_independently_of_display_tags():
+    """策略默认排除集与批量页展示用的 HARD_REVIEW_TAGS **必须解耦**。
+
+    它曾写成 tuple(sorted(HARD_REVIEW_TAGS)) —— 那样任何为了改展示而增删标签的动作都会
+    自动变成默认选债行为变更 (实测该集合极敏感: 改成只排数据+可交易, 候选池 59 → 262)。
+    """
+    from convertible_bond.strategy_backtest import ScoreStrategyConfig
+    assert set(ScoreStrategyConfig().exclude_risk_tags) == set(LEGACY_STRATEGY_EXCLUDE_TAGS)
+    # 拦截集只含数据质量 + 可交易性; 冻结集是历史快照, 两者本就不同
+    assert set(LEGACY_STRATEGY_EXCLUDE_TAGS) != tags_in("数据质量", "可交易性")
+
+
+def test_view_membership_has_a_single_source_of_truth():
+    """filter_batch_results_by_view 与策略页落选解释必须用同一个判据。
+
+    二者曾各自实现一份, 在标签体系重构后悄悄分叉: 视图改读维度拦截集, 而
+    strategy_backtest._candidate_filter_reason 还硬编码 HARD_REVIEW_TAGS。
+    """
+    rows = [
+        _annotated(bond_code="A.SZ", outstanding_balance=5.0),
+        _annotated(bond_code="B.SZ", sigma=1.5),
+        _annotated(bond_code="C.SZ", status="error"),
+    ]
+    for view in BATCH_REVIEW_VIEWS:
+        kept = {r["bond_code"] for r in filter_batch_results_by_view(rows, view)}
+        by_reason = {r["bond_code"] for r in rows
+                     if view_exclusion_reason(r, view) is None}
+        assert kept == by_reason, f"{view} 两条路径不一致"
+
+
+def test_deviation_outlier_tags_split_by_direction():
+    """贵侧与便宜侧的后验含义相反, 不能用一个对称的「异常」标签。
+
+    对称处理会把唯一的假设来源删掉 —— 实测唯一一只机会分 ≥8 的债 (dev −0.158)
+    被自己标成异常踢出低估候选。
+    """
+    med = 0.19
+    rich = annotate_batch_result(
+        dict(status="ok", S0=12.0, K=13.5, theoretical_price=100.0, market_price=145.0,
+             deviation=med + 0.25, sigma=0.3, T=3.0, credit_rating="AA",
+             outstanding_balance=5.0, valuation_date="2026-08-23"),
+        market_median_deviation=med)
+    cheap = annotate_batch_result(
+        dict(status="ok", S0=12.0, K=13.5, theoretical_price=100.0, market_price=90.0,
+             deviation=med - 0.25, sigma=0.3, T=3.0, credit_rating="AA",
+             outstanding_balance=5.0, valuation_date="2026-08-23"),
+        market_median_deviation=med)
+
+    assert "模型高估离群" in rich["risk_tags"]
+    assert "深度低估待核" in cheap["risk_tags"]
+    # 便宜侧不扣置信度、不进任何拦截集 —— 它是待检验的假设, 不是要剔除的噪声
+    assert "深度低估待核" not in LEGACY_STRATEGY_EXCLUDE_TAGS
+    assert RISK_TAG_DIMENSION["深度低估待核"] == "机会信号"
+    assert RISK_TAG_DIMENSION["模型高估离群"] == "模型适用性"
+    assert any("待检验" in n or "低于模型" in n for n in cheap["review_notes"])
+
+
+def test_review_bucket_is_a_real_partition():
+    """四个分桶互斥且覆盖全部 —— 而不是 79% 挤在需复核里。"""
+    rows = [
+        _annotated(bond_code="ok.SZ", outstanding_balance=5.0),
+        _annotated(bond_code="hv.SZ", sigma=1.5),
+        _annotated(bond_code="bad.SZ", status="error"),
+    ]
+    buckets = [r["review_bucket"] for r in rows]
+    assert len(buckets) == len(rows)                    # 每行恰好一个桶
+    assert set(buckets) <= {"综合机会", "低估候选", "转股折价", "需复核", "模型存疑"}
+    # 高 σ = 模型适用性 → 模型存疑, 不该占用需复核
+    assert dict(zip([r["bond_code"] for r in rows], buckets))["hv.SZ"] == "模型存疑"
+    assert dict(zip([r["bond_code"] for r in rows], buckets))["bad.SZ"] == "需复核"

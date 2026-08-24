@@ -94,6 +94,16 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 ### 关键设计模式
 
 - **Provider 装饰器链**: `Wind/Akshare → CachingDataProvider → CachedBondDataProvider → _BatchStockCache`
+- **标签按维度归类, 消费者各取所需**: `RISK_TAG_DIMENSION` 把标签分成 数据质量 /
+  模型适用性 / 标的风险 / 可交易性 / 机会信号 五维。新增标签**必须同时登记维度**
+  (有守护测试扫 `risk_tags.append` 字面量比对)。批量页视图只拿"数据质量+可交易性"
+  当拦截集 —— 模型适用性是永久属性, 塞进需复核会让它变成 79% 的垃圾桶。
+  视图归属的单一事实源是 `view_exclusion_reason`, 策略页的落选解释也走它;
+  两边曾各自实现一份并在重构后悄悄分叉。
+- **`LEGACY_STRATEGY_EXCLUDE_TAGS` 是冻结集, 不要跟着标签体系演化**: 它是
+  `ScoreStrategyConfig.exclude_risk_tags` 的默认值。曾写成 `tuple(sorted(HARD_REVIEW_TAGS))`,
+  于是任何为改展示而增删标签的动作都自动变成**默认选债行为变更**。实测该集合极敏感:
+  改成只排"数据质量+可交易性"候选池 59 → 262, 单去掉「偏差异常」→ 125。要改它单独立项。
 - **保守过滤**: 准入筛选"字段明确才剔除"，避免因数据源缺字段误杀。**连续量不做硬阈值**:
   余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
   "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用

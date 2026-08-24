@@ -21,6 +21,23 @@ from convertible_bond.data_providers import DataProvider
 _WRAPPER_PARAMS = {"inner", "market"}
 
 
+def _is_provider_subclass(obj: object) -> bool:
+    """``issubclass(obj, DataProvider)``, 但不信任 ``inspect.isclass``。
+
+    Python < 3.11 的 ``types.GenericAlias`` 会把 ``__class__`` 代理到 origin, 于是
+    模块级别名 (如 ``signal_eval.Observation = dict[str, Any]``) 的
+    ``isinstance(obj, type)`` / ``inspect.isclass(obj)`` 都会返回 True, 而 ABCMeta 的
+    ``__subclasscheck__`` 仍按真类型判定并抛
+    ``TypeError: issubclass() arg 1 must be a class`` —— 只在 3.10 CI 上炸整份收集。
+    """
+    if not inspect.isclass(obj):
+        return False
+    try:
+        return issubclass(obj, DataProvider)
+    except TypeError:                    # 见上: 3.10 的伪装成类的 GenericAlias
+        return False
+
+
 def _all_provider_classes() -> dict[str, type]:
     found: dict[str, type] = {}
     modules = [pkg]
@@ -33,9 +50,9 @@ def _all_provider_classes() -> dict[str, type]:
             continue
     for module in modules:
         for obj in vars(module).values():
-            if (inspect.isclass(obj) and issubclass(obj, DataProvider)
-                    and obj is not DataProvider):
-                found[f"{obj.__module__}.{obj.__qualname__}"] = obj
+            if not _is_provider_subclass(obj) or obj is DataProvider:
+                continue
+            found[f"{obj.__module__}.{obj.__qualname__}"] = obj
     return found
 
 

@@ -596,8 +596,9 @@ def _refresh_watchlist_summary(app, rows):
 
     rating_label = average_rating_label(r.get("credit_rating") for r in priced) or "—"
 
+    _ANOMALY_TAGS = {"模型高估离群", "深度低估待核", "偏差异常"}   # 含 legacy 名
     anomaly_count = sum(1 for r in priced
-                        if "偏差异常" in (r.get("risk_tags") or []))
+                        if _ANOMALY_TAGS & set(r.get("risk_tags") or []))
 
     parts = [f"持仓 {n}"]
     if priced:

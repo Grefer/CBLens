@@ -111,7 +111,7 @@ def _is_new_bond(row) -> bool:
 
 
 def _resolve_row_tag(row) -> str | None:
-    """决定 Treeview 行染色: 新债 > failed > 偏差异常 > underpriced/overpriced.
+    """决定 Treeview 行染色: 新债 > failed > 偏离离群 > underpriced/overpriced.
 
     新债优先级最高, 让"扫新债"加入的标的即使尚未定价 (status=None) 也能醒目标识.
     """
@@ -123,7 +123,9 @@ def _resolve_row_tag(row) -> str | None:
     if status != "ok":
         return None  # 关注池未定价行 (无 status), 不染色
     risk_tags = set(row.get("risk_tags") or [])
-    if "偏差异常" in risk_tags:
+    # 标签名从对称的「偏差异常」拆成了方向明确的两个; 这里是**字面量直读**,
+    # 漏改不会报错也不会红测试, 只会永远不亮 —— 见 batch_pricing.RISK_TAG_DIMENSION。
+    if risk_tags & {"模型高估离群", "深度低估待核", "偏差异常"}:
         return "anomaly"
     dev = row.get("deviation")
     if _is_finite(dev):

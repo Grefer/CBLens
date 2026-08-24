@@ -87,13 +87,86 @@ _HEADER_TOKENS = {"code", "bond_code", "证券代码", "转债代码", "代码"}
 BATCH_RESULT_META_KEY = "_meta"
 LOW_RATING_PREFIXES = ("A", "BBB", "BB", "B", "CCC", "CC", "C")
 BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核")
+# ── 标签维度 ──────────────────────────────────────────────────────────────
+# 标签混了四类**性质不同**的关切, 却挤在一个扁平集合里驱动四个消费者 (展示 / 置信度 /
+# 批量页视图 / 策略 exclude_risk_tags), 于是调一个阈值会同时穿透四层。先给每个标签
+# 归维, 后续每个消费者才能各取所需。
+#
+#   数据质量   这个数算不出来或输入缺失      → "别信这一行"
+#   模型适用性 数算得出来, 但超出模型能力边界 → "别信这个价"
+#   标的风险   数是对的, 债本身有风险        → "看清楚再买"
+#   可交易性   买不到 / 拿不住              → 结构性排除
+#   机会信号   不是风险, 是提示             → 本就不该混在 risk_tags 里
+#
+# 实测今日主池 280 只的维度分布: 数据质量 1 只(0%) / 模型适用性 202(72%) /
+# 标的风险 99(35%) / 可交易性 3(1%) / 机会信号 5(2%)。数据质量维度几乎空了 —— 那是
+# 条款与事件层清理干净之后的结果; 而"一个在 72% 的债上都亮的标签描述的是市场, 不是这只债"。
+DIM_DATA = "数据质量"
+DIM_MODEL = "模型适用性"
+DIM_ISSUER = "标的风险"
+DIM_TRADABILITY = "可交易性"
+DIM_OPPORTUNITY = "机会信号"
+
+RISK_TAG_DIMENSION: dict[str, str] = {
+    "数据缺口": DIM_DATA, "无偏差": DIM_DATA, "无HV": DIM_DATA, "无余额": DIM_DATA,
+    "无评级": DIM_DATA, "无市价": DIM_DATA, "理论价异常": DIM_DATA,
+
+    "高HV": DIM_MODEL, "较高HV": DIM_MODEL, "模型溢价高": DIM_MODEL,
+    "模型高估离群": DIM_MODEL, "下修贡献高": DIM_MODEL, "下修减值": DIM_MODEL,
+    "偏差异常": DIM_MODEL,                      # legacy 名, 旧缓存里还有
+
+    "低评级": DIM_ISSUER, "小余额": DIM_ISSUER, "临近摘牌线": DIM_ISSUER,
+    "触及摘牌线": DIM_ISSUER, "短久期": DIM_ISSUER, "近到期": DIM_ISSUER,
+    "极小余额": DIM_ISSUER,                     # legacy 名
+
+    "余额清零": DIM_TRADABILITY, "正股风险": DIM_TRADABILITY, "正股停牌": DIM_TRADABILITY,
+    "转债停牌": DIM_TRADABILITY, "正股跌停": DIM_TRADABILITY, "临近摘牌": DIM_TRADABILITY,
+    "余额异常": DIM_TRADABILITY,                # legacy 名
+
+    "转股折价": DIM_OPPORTUNITY, "贴近转股价值": DIM_OPPORTUNITY,
+    "模型低估": DIM_OPPORTUNITY, "深度低估待核": DIM_OPPORTUNITY,
+}
+
+
+# 批量页视图/分桶用的"拦截集": **只有这两个维度**才是"这一行现在不能用, 得先去做点什么"。
+# 模型适用性 (M) 与标的风险 (R) 不在内 —— 它们是永久属性, 查完还是那样, 属于该看见但
+# 不该拦路的信息。实测: 用旧的扁平硬标签集时需复核 79%, 换成本集合后 6 只, M 单列 142 只。
+#
+# ⚠️ 与 LEGACY_STRATEGY_EXCLUDE_TAGS 是**两回事**: 那个是策略层默认排除集 (冻结),
+# 这个是批量页展示口径。默认 selection_view="综合机会" 不过滤, 所以改这里不动策略默认行为;
+# 但用户显式选「低估候选/需复核」作为 selection_view 时口径会变。
+def tags_in(*dimensions: str) -> frozenset[str]:
+    """取这些维度下的全部标签名。消费者按维度取子集, 而不是各自硬编码一份清单。"""
+    wanted = set(dimensions)
+    return frozenset(t for t, d in RISK_TAG_DIMENSION.items() if d in wanted)
+
+
+_BLOCKING_TAGS = tags_in(DIM_DATA, DIM_TRADABILITY)
+
+
 HARD_REVIEW_TAGS = {
     "高HV", "余额清零", "触及摘牌线", "临近摘牌线", "小余额", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
-    "正股风险", "正股停牌", "转债停牌", "正股跌停", "偏差异常",
+    "正股风险", "正股停牌", "转债停牌", "正股跌停", "偏差异常", "模型高估离群",
     # legacy: 旧批量缓存与旧策略快照里存的是这两个名字, 保留以免旧数据静默失去硬标签
     "极小余额", "余额异常",
 }
+
+# 策略层 ScoreStrategyConfig.exclude_risk_tags 的默认值, **逐字冻结**。
+#
+# 它曾经写成 tuple(sorted(HARD_REVIEW_TAGS)) —— 那是整个标签整合的死结: 只要这个引用
+# 成立, 任何为了改批量页展示而增删 HARD_REVIEW_TAGS 的动作都自动变成**默认选债行为变更**,
+# 要过 docs/research 的治理三条 (机制 / 跨 regime / 跨频率)。而这个集合极其敏感, 实测
+# 今日截面: 默认候选池 59 只; 改成只排"数据质量+可交易性" → 262 只; 单去掉「偏差异常」
+# → 125 只; 去掉「模型溢价高」→ 94 只。量级变更, 绝不能作为展示层重构的副作用发生。
+#
+# 因此把它冻结在这里, 与 HARD_REVIEW_TAGS 解耦。要改它请单独立项并走完治理三条。
+LEGACY_STRATEGY_EXCLUDE_TAGS = frozenset({
+    "高HV", "余额清零", "触及摘牌线", "临近摘牌线", "小余额", "短久期",
+    "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
+    "正股风险", "正股停牌", "转债停牌", "正股跌停", "偏差异常", "模型高估离群",
+    "极小余额", "余额异常",
+})
 # 负 uplift 的告警阈值。定位是**安全网**而不是常规标签: 同网格后预期命中数≈0,
 # 一旦亮起就说明模型或数值出了需要人看的事。取 0.5% 是为了压住残余数值噪声,
 # 与正向 8% 不对称 —— 正向是"下修贡献大到影响估值", 负向是"出现了不该出现的东西"。
@@ -109,9 +182,16 @@ REVIEW_ONLY_TAGS = {"临近摘牌"}
 BALANCE_DELISTING_LINE = 0.3
 # 已公告最后交易日且落在该窗口内 → 打「临近摘牌」提示标签 (非硬标签, 只提高可见度)
 DELISTING_WARNING_DAYS = 30
-# |偏差| 超过该阈值时打 "偏差异常" 标签 — 多数情况是市价/正股价不同日、
-# 强赎/停牌未应用、转股价未刷新等数据问题, 而非真正的低估机会
+# 偏离**本期市场中位**超过该阈值时打 "偏差异常" 标签 —— 多数情况是市价/正股价不同日、
+# 强赎/停牌未应用、转股价未刷新等数据问题, 而非真正的低估机会。
+#
+# 判据锚在中位数而不是 0, 是因为模型对全市场有一个**系统性水平偏移**: 干净数据下实测
+# 中位偏差 +18.8%、92% 的券市价高于理论价 (这是模型的已知缺口, 不是数据问题)。用绝对
+# 阈值等于把中位数附近的券也判成异常 —— 实测命中 45% (126/280), 早已丧失识别离群的能力;
+# 锚到中位后命中 12%, 才回到这个标签自己声明的用途。
 DEVIATION_ANOMALY_THRESHOLD = 0.20
+# 样本太少时中位数本身不稳 (关注池/新债往往只有个位数行), 退回绝对阈值。
+_DEVIATION_MEDIAN_MIN_SAMPLE = 30
 DEFAULT_DELIST_WINDOW_DAYS = 0
 # 默认不再按余额硬剔除。全库回填摘牌元数据后实测: 关掉该门槛主池 270 → 270,
 # 独立贡献为 0 —— 它此前 99% 的作用是替缺失的 delisting_date 兜底 (被它剔除的 225 只
@@ -723,7 +803,24 @@ def summarize_batch_results(results: Sequence[dict]) -> dict:
     }
 
 
-def annotate_batch_result(row: dict) -> dict:
+def median_deviation_of(results: Sequence[dict]) -> float | None:
+    """一批定价结果的 deviation 中位数; 样本不足或无有效值时返回 None。
+
+    "偏差异常" 的判据锚在它上面 —— 见 ``DEVIATION_ANOMALY_THRESHOLD``。
+    """
+    values = sorted(
+        v for v in (finite_float(r.get("deviation")) for r in results
+                    if r.get("status") == "ok")
+        if v is not None
+    )
+    if len(values) < _DEVIATION_MEDIAN_MIN_SAMPLE:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2.0
+
+
+def annotate_batch_result(row: dict, *,
+                          market_median_deviation: float | None = None) -> dict:
     """给单只批量结果补研究筛选字段.
 
     这些字段不改变模型定价, 只帮助排序和人工复核:
@@ -738,6 +835,10 @@ def annotate_batch_result(row: dict) -> dict:
         out.setdefault("confidence", "低")
         out.setdefault("opportunity_score", float("nan"))
         out.setdefault("model_signal_status", "不可用")
+        # 定价失败的行也要有分桶, 否则分桶不是全覆盖的划分 (GUI 分桶列会空白),
+        # 而视图侧的"需复核"是包含它们的 —— 两边口径必须一致。
+        out.setdefault("review_bucket", "需复核")
+        out.setdefault("review_notes", [str(out.get("status") or "定价失败")])
         return out
 
     s0 = finite_float(out.get("S0"))
@@ -786,9 +887,19 @@ def annotate_batch_result(row: dict) -> dict:
             risk_tags.append("模型低估")
         if deviation > 0.08:
             score -= min(20.0, deviation * 60.0)
-        if abs(deviation) >= DEVIATION_ANOMALY_THRESHOLD:
-            risk_tags.append("偏差异常")
+        # **按方向拆成两个标签, 而不是一个对称的"异常"**。贵侧与便宜侧的后验含义相反:
+        #   贵侧  市价远高于模型对同期市场的一般水平 → 模型解释不了这个价, 属模型适用性;
+        #   便宜侧 市价远低于模型 → 这正是本工具存在的理由, 是**待检验的假设**而不是噪声。
+        # 曾用对称判据, 结果是唯一一只机会分 ≥8 的债 (美锦转债 dev −0.158) 被自己标成
+        # "异常"踢出低估候选 —— 等于系统性删掉唯一的假设来源。
+        anchor = market_median_deviation if market_median_deviation is not None else 0.0
+        gap = deviation - anchor
+        if gap >= DEVIATION_ANOMALY_THRESHOLD:
+            risk_tags.append("模型高估离群")
             confidence_points -= 25
+        elif gap <= -DEVIATION_ANOMALY_THRESHOLD:
+            # 只提示核查, 不扣置信度、不进任何排除集。
+            risk_tags.append("深度低估待核")
     else:
         risk_tags.append("无偏差")
         confidence_points -= 20
@@ -945,9 +1056,17 @@ def annotate_batch_result(row: dict) -> dict:
     return out
 
 
-def annotate_batch_results(results: Sequence[dict]) -> list[dict]:
-    """补齐批量研究字段, 不改变输入列表."""
-    return [annotate_batch_result(row) for row in results]
+def annotate_batch_results(results: Sequence[dict], *,
+                           market_median_deviation: float | None = None) -> list[dict]:
+    """补齐批量研究字段, 不改变输入列表.
+
+    *market_median_deviation* 缺省时从这批结果自算 (样本 <30 则退回绝对阈值)。
+    给关注池/新债这类小批量标注时, 应显式传主池的中位数, 否则自算出来的中位没有代表性。
+    """
+    if market_median_deviation is None:
+        market_median_deviation = median_deviation_of(results)
+    return [annotate_batch_result(row, market_median_deviation=market_median_deviation)
+            for row in results]
 
 
 def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
@@ -968,6 +1087,53 @@ def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
 DEFAULT_UNDERVALUED_SCORE_THRESHOLD = 8.0
 
 
+def view_exclusion_reason(
+    row: dict,
+    view: str | None,
+    *,
+    undervalued_score_threshold: float | None = None,
+) -> str | None:
+    """这一行**不属于**该视图的原因; 属于则返回 None。
+
+    视图归属的**单一事实源**: ``filter_batch_results_by_view`` 与策略页的落选解释
+    (strategy_backtest._candidate_filter_reason) 都走这里。二者曾各自实现一份, 结果在
+    标签体系重构后悄悄分叉 —— 一个已改读维度拦截集, 另一个还硬编码 HARD_REVIEW_TAGS。
+    """
+    view_name = view if view in BATCH_REVIEW_VIEWS else "综合机会"
+    tags = set(row.get("risk_tags") or [])
+    ok = row.get("status") == "ok"
+    if view_name == "综合机会":
+        return None
+    if view_name == "低估候选":
+        threshold = (DEFAULT_UNDERVALUED_SCORE_THRESHOLD
+                     if undervalued_score_threshold is None
+                     else float(undervalued_score_threshold))
+        if not ok:
+            return "定价未成功"
+        score = finite_float(row.get("opportunity_score"))
+        if score is None:
+            return "缺少机会分"
+        if score < threshold:
+            return f"机会分 {score:.1f} < {threshold:.1f}"
+        if row.get("confidence") not in {"高", "中"}:
+            return "置信度不足"
+        if "转股折价" in tags:
+            return "转股折价单独归类"
+        blocking = tags & _BLOCKING_TAGS
+        if blocking:
+            return "拦截标签 " + "/".join(sorted(blocking))
+        return None
+    if view_name == "转股折价":
+        if not ok:
+            return "定价未成功"
+        return None if "转股折价" in tags else "未出现转股折价标签"
+    if view_name == "需复核":
+        if not ok or (tags & _BLOCKING_TAGS) or row.get("confidence") == "低":
+            return None
+        return "不属于复核池"
+    return None
+
+
 def filter_batch_results_by_view(
     results: Sequence[dict],
     view: str | None,
@@ -980,36 +1146,11 @@ def filter_batch_results_by_view(
     ``DEFAULT_UNDERVALUED_SCORE_THRESHOLD``。
     """
     rows = sort_batch_results_for_review(results)
-    view_name = view if view in BATCH_REVIEW_VIEWS else "综合机会"
-    if view_name == "综合机会":
-        return rows
-    if view_name == "低估候选":
-        threshold = (DEFAULT_UNDERVALUED_SCORE_THRESHOLD
-                     if undervalued_score_threshold is None
-                     else float(undervalued_score_threshold))
-        return [
-            row for row in rows
-            if row.get("status") == "ok"
-            and finite_float(row.get("opportunity_score")) is not None
-            and float(row["opportunity_score"]) >= threshold
-            and row.get("confidence") in {"高", "中"}
-            and "转股折价" not in (row.get("risk_tags") or [])
-            and not (set(row.get("risk_tags") or []) & (HARD_REVIEW_TAGS | REVIEW_ONLY_TAGS))
-        ]
-    if view_name == "转股折价":
-        return [
-            row for row in rows
-            if row.get("status") == "ok"
-            and "转股折价" in (row.get("risk_tags") or [])
-        ]
-    if view_name == "需复核":
-        return [
-            row for row in rows
-            if row.get("status") != "ok"
-            or bool(set(row.get("risk_tags") or []) & (HARD_REVIEW_TAGS | REVIEW_ONLY_TAGS))
-            or row.get("confidence") == "低"
-        ]
-    return rows
+    return [
+        row for row in rows
+        if view_exclusion_reason(
+            row, view, undervalued_score_threshold=undervalued_score_threshold) is None
+    ]
 
 
 def save_batch_results_cache(
@@ -1161,8 +1302,12 @@ def _review_bucket(row: dict) -> str:
     tags = set(row.get("risk_tags") or [])
     if row.get("status") != "ok":
         return "需复核"
-    if tags & (HARD_REVIEW_TAGS | REVIEW_ONLY_TAGS) or row.get("confidence") == "低":
+    if tags & _BLOCKING_TAGS or row.get("confidence") == "低":
         return "需复核"
+    if tags & tags_in(DIM_MODEL):
+        # 模型在这只债上不可靠, 但不是"去做点什么"就能解决的 —— 它是永久属性, 该单列
+        # 一档而不是塞进需复核。实测这一档 142 只, 塞进需复核会让后者占到 61%。
+        return "模型存疑"
     if "转股折价" in tags:
         return "转股折价"
     score = finite_float(row.get("opportunity_score"))
@@ -1185,6 +1330,12 @@ def _review_notes(row: dict) -> list[str]:
     if "下修减值" in tags:
         notes.append("下修权算出负价值 —— 同网格下不应出现; 优先怀疑数值问题 "
                      "(高 σ 时 S_max 顶到 50×K, 格点过疏), 其次才是强赎加速导致的真实减值")
+    if "模型高估离群" in tags or "偏差异常" in tags:
+        notes.append("市价显著高于模型对同期市场的一般水平; 先核实行情与正股价是否同日、"
+                     "K 是否最新、强赎/停牌是否已应用, 再考虑是不是真的贵")
+    if "深度低估待核" in tags:
+        notes.append("市价显著低于模型 —— 这是待检验的假设不是结论; 核实行情同日性、"
+                     "转股价是否已刷新、是否已进入强赎/回售或停牌")
     if "临近摘牌" in tags:
         days = finite_float(row.get("days_to_last_trading"))
         when = f"仅剩 {int(days)} 天" if days is not None else "已公告"
