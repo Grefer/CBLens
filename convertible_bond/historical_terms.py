@@ -39,6 +39,34 @@ def project_terms_history_dir() -> Path:
     return data_dir("cb_data_history")
 
 
+# 权威源: 直接来自数据终端的 as-of 序列, 不经公告正文解析。
+# 同一 (债, 字段) 上只要存在权威源 patch, 就完全忽略解析源的 —— 二者按生效日混排会让一条
+# 日期更晚的解析错值盖掉正确值。实测: cb-sync-events 会为 127112.SZ 尚太转债 写入
+# 2026-07-03 K=84.72, 而 Wind as-of 的真值是 60.02; 按日期取最后一条就取到了错的。
+_AUTHORITATIVE_PATCH_SOURCES = frozenset({"wind_asof"})
+
+
+def _drop_shadowed_patches(patches: list["TermsPatch"]) -> list["TermsPatch"]:
+    """逐字段: 有权威源就丢掉该字段的解析源 patch。"""
+    authoritative_fields = {
+        key
+        for patch in patches if patch.source in _AUTHORITATIVE_PATCH_SOURCES
+        for key in (patch.fields or {})
+    }
+    if not authoritative_fields:
+        return patches
+    kept: list[TermsPatch] = []
+    for patch in patches:
+        if patch.source in _AUTHORITATIVE_PATCH_SOURCES:
+            kept.append(patch)
+            continue
+        fields = {k: v for k, v in (patch.fields or {}).items()
+                  if k not in authoritative_fields}
+        if fields:
+            kept.append(replace(patch, fields=fields))
+    return kept
+
+
 @dataclass(frozen=True)
 class TermsPatch:
     """一条或一组从某日起生效的条款字段更新."""
@@ -139,7 +167,7 @@ class TermsPatchStore:
             patches = [p for p in patches if p.effective_date <= through_date]
         if after is not None:
             patches = [p for p in patches if p.effective_date > after]
-        return sorted(patches, key=_patch_sort_key)
+        return _drop_shadowed_patches(sorted(patches, key=_patch_sort_key))
 
     def apply(self, bond_code: str, terms: BondTerms, valuation_date: date,
               *, after: date | None = None) -> BondTerms:

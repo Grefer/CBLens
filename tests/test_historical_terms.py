@@ -634,3 +634,38 @@ def test_wind_provider_reports_valuation_date_as_terms_anchor():
     from convertible_bond.data_providers.wind import WindDataProvider
     assert WindDataProvider.terms_as_of(
         object(), "123064.SZ", date(2025, 6, 30)) == date(2025, 6, 30)
+
+
+def test_authoritative_patches_shadow_parsed_ones_per_field(tmp_path):
+    """同一字段有权威源 (Wind as-of) 时, 完全忽略公告解析源 —— 否则一条日期更晚的
+    解析错值会盖掉正确值。
+
+    实测: cb-sync-events 为 127112.SZ 尚太转债 写入 2026-07-03 K=84.72,
+    而 Wind as-of 的真值是 60.02; 按生效日取最后一条就取到了错的那条。
+    """
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="127112.SZ", effective_date=date(2026, 6, 30),
+                   fields={"conversion_price": 60.02}, source="wind_asof"),
+        TermsPatch(bond_code="127112.SZ", effective_date=date(2026, 7, 3),
+                   fields={"conversion_price": 84.72}, source="cninfo"),
+        # 权威源没覆盖的字段, 解析源照常生效
+        TermsPatch(bond_code="127112.SZ", effective_date=date(2026, 7, 5),
+                   fields={"credit_rating": "AA"}, source="cninfo"),
+    ])
+
+    terms = store.apply("127112.SZ", BondTerms(conversion_price=99.0),
+                        date(2026, 8, 22))
+    assert terms.conversion_price == pytest.approx(60.02)   # 权威值胜出
+    assert terms.credit_rating == "AA"                      # 未被权威源覆盖的字段保留
+
+
+def test_parsed_patches_still_apply_without_authoritative_source(tmp_path):
+    """没有 Wind 权威源时 (akshare/CSV 口径), 解析源仍是唯一的历史条款来源。"""
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="127112.SZ", effective_date=date(2026, 7, 3),
+                   fields={"conversion_price": 84.72}, source="cninfo"),
+    ])
+    terms = store.apply("127112.SZ", BondTerms(conversion_price=99.0), date(2026, 8, 22))
+    assert terms.conversion_price == pytest.approx(84.72)
