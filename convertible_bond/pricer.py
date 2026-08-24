@@ -532,18 +532,17 @@ class UniversalCBPricer:
             return theo
 
         S0 = self.S0
-        S_max = float(S_grid[-1])
-        dS = max(0.01 * S0, 0.001 * self.K)
 
-        if S0 - dS > 0 and S0 + dS < S_max:
-            v_up = float(np.interp(S0 + dS, S_grid, V))
-            v_dn = float(np.interp(S0 - dS, S_grid, V))
-            v_mid = float(np.interp(S0, S_grid, V))
-            delta = (v_up - v_dn) / (2 * dS)
-            gamma = (v_up - 2 * v_mid + v_dn) / (dS * dS)
-        else:
-            delta = float("nan")
-            gamma = float("nan")
+        # Δ/Γ: 先在 PDE 网格上求导数场, 再插值到 S0; 不要对 np.interp 的结果做差分。
+        # 原因: np.interp 是分段线性的, 而扰动步长 (~0.01*S0) 往往远小于网格步长
+        # h = S_max/M —— 高 σ 或长久期时 S_max = exp(3σ√T)*K 会把 h 撑到 10 元以上,
+        # 三个取值点落进同一线性段, 二阶差分恒为 0, Γ 直接变成 0.000000;
+        # 即使跨段, 得到的也只是折点位置的伪影而非曲率 (实测相邻久期可差 4 倍)。
+        h = float(S_grid[1] - S_grid[0])
+        delta_grid = np.gradient(V, h)
+        gamma_grid = np.gradient(delta_grid, h)
+        delta = float(np.interp(S0, S_grid, delta_grid))
+        gamma = float(np.interp(S0, S_grid, gamma_grid))
 
         # Vega: σ +1pp 整局重算; 单位为 "理论价 / 1pp σ"
         d_sigma = 0.01

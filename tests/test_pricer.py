@@ -724,6 +724,37 @@ class TestGreeks:
         assert abs(result["price"] - reconstructed) < 0.01, \
             f"价值分解不一致: price={result['price']:.3f}, reconstructed={reconstructed:.3f}"
 
+    def test_gamma_positive_under_coarse_grid(self):
+        """回归: 高 σ + 长久期把 S_max = exp(3σ√T)·K 撑大, 网格步长远超希腊值扰动步长。
+
+        旧实现对 np.interp (分段线性) 的结果做二阶差分, 三个取值点落进同一线性段时
+        Γ 恒等于 0。可转债对正股是凸的, Γ 必须严格为正。
+        """
+        pricer = UniversalCBPricer(
+            S0=97.66, K=104.85,
+            current_date=date(2026, 8, 24),
+            maturity_date=date(2031, 3, 1),
+        )
+        result = pricer.price(sigma=0.65, r=0.015, q=0.002, base_spread=0.035,
+                              return_greeks=True)
+        assert result["gamma"] > 0, f"Γ={result['gamma']:.8f} 不应退化为 0"
+
+    def test_gamma_stable_across_grid_refinement(self):
+        """Γ 应随网格加密收敛, 而不是随网格步长跳变 (旧实现相邻久期可差 4 倍)."""
+        pricer = UniversalCBPricer(
+            S0=97.66, K=104.85,
+            current_date=date(2026, 8, 24),
+            maturity_date=date(2031, 3, 1),
+        )
+        gammas = [
+            pricer.price(sigma=0.65, r=0.015, q=0.002, base_spread=0.035,
+                         M=M, N=1000, return_greeks=True)["gamma"]
+            for M in (500, 1000, 2000)
+        ]
+        assert all(g > 0 for g in gammas), f"Γ 出现非正值: {gammas}"
+        drift = (max(gammas) - min(gammas)) / max(gammas)
+        assert drift < 0.10, f"Γ 随网格步长漂移过大: {gammas} (相对极差 {drift:.1%})"
+
     def test_return_greeks_false_returns_float(self, greeks_pricer):
         """return_greeks=False 应返回 float."""
         result = greeks_pricer.price(sigma=0.28, r=0.022, base_spread=0.03,
