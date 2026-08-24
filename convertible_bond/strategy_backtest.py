@@ -1302,21 +1302,14 @@ def _slice_history(history, start: date, end: date):
 
 
 def _provider_cache_identity(provider: DataProvider) -> str:
-    parts = [getattr(provider, "name", provider.__class__.__name__)]
-    inner = getattr(provider, "inner", None)
-    if inner is not None:
-        parts.append(_provider_cache_identity(inner))
-    for attr in ("history_store", "patch_store", "event_store"):
-        obj = getattr(provider, attr, None)
-        path = getattr(obj, "root", None) or getattr(obj, "path", None)
-        if path is not None:
-            p = Path(path)
-            try:
-                stat = p.stat()
-                parts.append(f"{attr}:{p}:{stat.st_mtime_ns}")
-            except OSError:
-                parts.append(f"{attr}:{p}:missing")
-    return "|".join(str(part) for part in parts)
+    """provider 身份 = 缓存键的一部分。单一实现在 backtest_disk_cache。
+
+    这里曾复制一份, 并在演化中分叉 —— 那份漏了 path/bundle/cache 三个属性,
+    于是同一条 provider 链在两处算出不同身份。缓存身份漏字段不会报错, 只会让缓存
+    **该失效时不失效**, 数据修完再跑回测原样复现修复前的数字。
+    """
+    from .backtest_disk_cache import _provider_identity
+    return _provider_identity(provider)
 
 
 def _batch_price_with_snapshot_cache(

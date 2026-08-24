@@ -194,3 +194,47 @@ def test_auto_identity_tracks_store_mtime(tmp_path):
     os.utime(store, (time.time() + 10, time.time() + 10))   # 改 mtime
     p2 = DiskCacheProvider(WithStore(store), tmp_path / "c", today=date(2025, 1, 1))
     assert p1._identity != p2._identity                      # 身份随文件变化
+
+
+def test_cache_identity_covers_every_terms_source_file(tmp_path):
+    """provider 链上任一数据文件变化, 缓存身份都必须跟着变。
+
+    漏一个字段不会报错, 只会让缓存**该失效时不失效** —— 数据修完再跑回测, 原样复现
+    修复前的数字。实测踩过: 扫描列表写的是 ``bundle``, 而 CachedBondDataProvider 把
+    TermsBundle 挂在 ``cache`` 上, 且它没有 ``inner`` (是 market/static_source),
+    递归与文件扫描在这里同时断掉, cb_data.json 改了缓存也不失效。
+    """
+    import os
+    from convertible_bond.backtest_disk_cache import _provider_identity
+    from convertible_bond.cache import CachedBondDataProvider, TermsBundle
+    from convertible_bond.cb_events import CBEventStore
+    from convertible_bond.historical_terms import HistoricalBondDataProvider, TermsPatchStore
+
+    bundle_path = tmp_path / "cb_data.json"
+    patch_path = tmp_path / "patches.json"
+    event_path = tmp_path / "events.json"
+    bundle = TermsBundle(bundle_path)
+    bundle.set("113001.SH", BondTerms(conversion_price=10.0), source="unit")
+    patches = TermsPatchStore(patch_path)
+    events = CBEventStore(event_path)
+    for store in (patches, events):
+        store._save()
+
+    chain = HistoricalBondDataProvider(
+        CachedBondDataProvider(FakeProvider(), bundle, static_source=FakeProvider()),
+        history_store=None, patch_store=patches, event_store=events)
+
+    for path in (bundle_path, patch_path, event_path):
+        before = _provider_identity(chain)
+        st = path.stat()
+        os.utime(path, (st.st_atime, st.st_mtime + 1000))
+        assert _provider_identity(chain) != before, f"{path.name} 变化没有让缓存身份改变"
+        os.utime(path, (st.st_atime, st.st_mtime))
+
+
+def test_cache_identity_has_a_single_implementation():
+    """strategy_backtest 与 backtest_disk_cache 曾各自实现一份并分叉 (前者漏了三个属性)。"""
+    from convertible_bond.backtest_disk_cache import _provider_identity
+    from convertible_bond.strategy_backtest import _provider_cache_identity
+    provider = FakeProvider()
+    assert _provider_cache_identity(provider) == _provider_identity(provider)

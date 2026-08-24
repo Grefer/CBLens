@@ -41,14 +41,20 @@ def _sanitize(name: str) -> str:
 
 def _provider_identity(provider: Any) -> str:
     """递归汇总 provider 身份: 名称 + 内层 + 条款来源文件 (bundle/patch/event/history)
-    的路径与 mtime。patch/events/bundle 一更新, 身份即变, 缓存随之失效。
-    与 ``strategy_backtest._provider_cache_identity`` 同口径 (此处本地实现避免对重量级
-    模块的导入耦合)。"""
+    的路径与 mtime。任一数据文件更新, 身份即变, 缓存随之失效。
+
+    ⚠️ 属性名必须与真实 provider 对齐, 漏一个不会报错 —— 只会让缓存**该失效时不失效**,
+    于是数据修复完再跑回测, 原样复现修复前的数字。实测踩过: 扫描列表里写的是 ``bundle``,
+    而 ``CachedBondDataProvider`` 把 TermsBundle 挂在 ``cache`` 上, 且它没有 ``inner``
+    (是 ``market`` / ``static_source``) —— 递归与文件扫描在这里同时断掉, cb_data.json
+    改了缓存也不失效。
+    """
     parts = [str(getattr(provider, "name", type(provider).__name__))]
-    inner = getattr(provider, "inner", None)
-    if inner is not None and inner is not provider:
-        parts.append(_provider_identity(inner))
-    for attr in ("history_store", "patch_store", "event_store", "path", "bundle"):
+    for nested in ("inner", "market", "static_source", "_inner"):
+        obj = getattr(provider, nested, None)
+        if obj is not None and obj is not provider and hasattr(obj, "get_bond_terms"):
+            parts.append(_provider_identity(obj))
+    for attr in ("history_store", "patch_store", "event_store", "path", "bundle", "cache"):
         obj = getattr(provider, attr, None)
         if obj is None:
             continue
