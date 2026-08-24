@@ -177,3 +177,40 @@ def test_repair_refuses_to_write_when_patch_file_changed_underneath(store_paths)
 
     # 拒写之后原始脏 patch 仍在, 没有被半途改坏
     assert TermsPatchStore(patches).list_patches("113691.SH")
+
+
+# ── Wind 重建的重大变化过滤 ──
+
+def test_rebuild_keeps_every_conversion_price_change():
+    """转股价是离散的调整事件, 每次变化都是一次公告、都直接改变转股价值 —— 全留。"""
+    from convertible_bond.cli.rebuild_terms_patches import _change_points
+    series = [(date(2026, 1, d), v) for d, v in
+              [(1, 20.90), (2, 20.88), (3, 20.88), (4, 20.87)]]
+    got = _change_points(series, "conversion_price")
+    assert [(p[1], p[2]) for p in got] == [(20.88, 20.90), (20.87, 20.88)]
+
+
+def test_rebuild_filters_immaterial_balance_drift():
+    """余额随转股进度逐日微动, 照单全收会生成十万条无决策含义的 patch。
+
+    实测 127110.SZ 广核转债 274 个交易日变化 105 次, 全程 49.0000 → 48.9923 (0.016%);
+    而 123118.SZ 惠城转债 3.200 → 0.654 的真实缩量必须一步不落。
+    """
+    from convertible_bond.cli.rebuild_terms_patches import _change_points
+    drift = [(date(2026, 1, d), 49.0 - d * 0.001) for d in range(1, 20)]
+    assert _change_points(drift, "outstanding_balance") == []
+
+    # 跨过档位边界 (1.0 / 0.5 / 0.3) 必须留下
+    collapse = [(date(2026, 1, d), v) for d, v in
+                [(1, 1.20), (2, 1.19), (3, 0.95), (4, 0.45), (5, 0.25)]]
+    kept = [p[1] for p in _change_points(collapse, "outstanding_balance")]
+    assert 0.95 in kept and 0.45 in kept and 0.25 in kept
+
+
+def test_rebuild_materiality_compares_against_last_stored_value():
+    """比较基准是**上次落库值**而不是前一日 —— 否则连续微动会被逐段吞掉而累积成大偏移。"""
+    from convertible_bond.cli.rebuild_terms_patches import _change_points
+    # 每日 -0.4% (单看相邻都低于 1% 阈值), 20 天累计 -8%
+    creeping = [(date(2026, 1, d), 10.0 * (0.996 ** d)) for d in range(1, 21)]
+    kept = _change_points(creeping, "outstanding_balance")
+    assert kept, "累计漂移必须被记录, 否则余额会静默走偏"

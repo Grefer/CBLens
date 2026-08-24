@@ -45,6 +45,22 @@ from ..market_time import market_today
 # 评级 patch 却一条不补 —— 静默数据丢失。评级历史目前没有可靠重建源。
 REBUILDABLE_FIELDS: dict[str, str] = {
     "conversion_price": "clause_conversion2_swapshareprice",
+    "outstanding_balance": "outstandingbalance",
+}
+
+# 数值字段的"重大变化"规则: 只有跨过决策边界、或相对上次落库值变动超过 rel_tol 才落一条 patch。
+#
+# 转股价是**离散的调整事件**, 每次变化都是一次公告、都直接改变转股价值, 因此全留 (rel_tol=0)。
+# 未转股余额则随转股进度逐日微动 —— 实测 127110.SZ 广核转债 274 个交易日变化 105 次, 全程
+# 49.0000 → 48.9923 (0.016%)。照单全收会生成十万条 patch 去追踪毫无决策含义的漂移。
+# 余额真正影响的只有档位边界 (余额清零 / 触及摘牌线 0.3 / 临近摘牌线 0.5 / 小余额 1.0 /
+# 大余额加分 10) 与排序量级, 所以按边界 + 1% 相对变动过滤: 实测压缩 92%, 而
+# 123118.SZ 惠城转债 3.200 → 0.654 的 55 步真实缩量一步不落。
+_NUMERIC_FIELDS = frozenset(REBUILDABLE_FIELDS)
+_MATERIALITY: dict[str, tuple[float, tuple[float, ...]]] = {
+    # field: (相对变动阈值, 决策边界)
+    "conversion_price": (0.0, ()),
+    "outstanding_balance": (0.01, (0.0, 0.3, 0.5, 1.0, 10.0)),
 }
 # 扫描规模达到该只数时, 若某字段一条 patch 都没重建出来, 判为"数据源不可用"而拒绝删存量。
 # 这是上面那个教训的通用守卫: 一个字段能被删, 前提是确实有东西替换它。
@@ -88,13 +104,35 @@ def _window(terms: Any, on_date: date, start_floor: date) -> tuple[date, date] |
     return (begin, end) if begin < end else None
 
 
-def _change_points(series: list[tuple[date, Any]]) -> list[tuple[date, Any, Any]]:
-    """从日序列提取 (生效日, 新值, 旧值)。首个观测是初始状态, 不算变更。"""
+def _band(value: float, bounds: tuple[float, ...]) -> int:
+    return sum(1 for b in bounds if value > b)
+
+
+def _change_points(series: list[tuple[date, Any]],
+                   field: str = "") -> list[tuple[date, Any, Any]]:
+    """从日序列提取 (生效日, 新值, 旧值)。首个观测是初始状态, 不算变更。
+
+    数值字段按 ``_MATERIALITY`` 过滤掉无决策含义的微动 —— 见该常量的说明。
+    比较基准是**上次落库的值**而不是前一日, 否则连续微动会被逐段吞掉而累积成大偏移。
+    """
     out: list[tuple[date, Any, Any]] = []
-    prev = series[0][1] if series else None
+    if not series:
+        return out
+    rel_tol, bounds = _MATERIALITY.get(field, (0.0, ()))
+    prev = series[0][1]
     for day, value in series[1:]:
         if value is None or value == prev:
             continue
+        if rel_tol > 0 or bounds:
+            try:
+                new_v, old_v = float(value), float(prev)
+            except (TypeError, ValueError):
+                new_v = old_v = None
+            if new_v is not None:
+                crossed = _band(new_v, bounds) != _band(old_v, bounds) if bounds else False
+                moved = bool(old_v) and abs(new_v - old_v) / abs(old_v) >= rel_tol
+                if not (crossed or moved):
+                    continue
         out.append((day, value, prev))
         prev = value
     return out
@@ -115,7 +153,7 @@ def _fetch_series(wind, code: str, wind_field: str,
 
 
 def _normalize(field: str, value: Any) -> Any:
-    if field == "conversion_price":
+    if field in _NUMERIC_FIELDS:
         try:
             v = float(value)
         except (TypeError, ValueError):
@@ -181,7 +219,7 @@ def rebuild(
             got_any = True
             norm = [(d, _normalize(field, v)) for d, v in series]
             norm = [(d, v) for d, v in norm if v is not None]
-            for eff, new, old in _change_points(norm):
+            for eff, new, old in _change_points(norm, field):
                 built.append(TermsPatch(
                     bond_code=code,
                     effective_date=eff,

@@ -137,6 +137,25 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 - `DataProvider` 新增方法时，先在 `data_providers/base.py` 的 ABC 里给兼容默认实现，避免打断
   provider 装饰器链。
 - akshare 网络调用一律走 `_retry()`，不要裸调。
+- **Wind 的能力边界是实测过的, 不要凭印象扩大**:
+
+  | 字段 | Wind wsd 日序列 | 能否重建历史 |
+  | --- | --- | --- |
+  | 转股价 `clause_conversion2_swapshareprice` | 真 as-of, 有变化点 | ✅ |
+  | 未转股余额 `outstandingbalance` | 真 as-of | ✅ |
+  | 债项评级 `creditrating` | **恒定 = 当前值** (实测 881 天一个值) | ❌ 无源 |
+  | 摘牌日 `delist_date` | 恒定 | ❌ |
+  | 强赎状态 / 最后交易日 | wsd 取不到 | ❌ |
+  | 公告事件 | `list_bond_announcements` 实测返回 **0 条** (cninfo 同期 28 条) | ❌ |
+
+  所以转股价与余额已由 `cb-rebuild-terms-patches` 从 Wind 重建 (链自洽 100%), 解析结果
+  被 `_drop_shadowed_patches` 逐字段屏蔽、只作无 Wind 口径的兜底; 而**评级历史、承诺期
+  (不下修/不强赎)、下修提议、强赎公告只能靠 cninfo + 正文解析** —— 那里才是数据体检该盯的地方。
+- **数值字段重建要区分"事件"与"漂移"**: 转股价每次变化都是一次公告 (全留);
+  未转股余额随转股进度逐日微动 (实测广核转债 274 个交易日变 105 次、全程只动 0.016%),
+  照单全收会生成十万条无决策含义的 patch。按决策边界 (0/0.3/0.5/1.0/10 亿) + 1% 相对变动
+  过滤, 压缩 92% 而真实缩量一步不落。比较基准取**上次落库值**而非前一日, 否则连续微动
+  会被逐段吞掉、累积成大偏移。
 - **公告解析里"条款文字"与"当期状态"必须区分**。赎回/回售/停止交易条款会成段引用
   "未转股余额少于 3,000 万元时公司有权赎回", 早期宽松正则把它当成真实余额, 让 546 条
   余额 patch 里 528 条值恰为 0.3 亿、覆盖 103 只债 (96 只真实余额 ≥0.5 亿), 这些大盘券
