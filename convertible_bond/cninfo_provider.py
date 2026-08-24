@@ -394,41 +394,50 @@ def _parse_announcement_item(ann: dict) -> dict | None:
 def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str | None:
     """从 PDF 字节流提取纯文本.
 
-    依赖 ``pdfplumber``; 未安装时回退到 ``PyPDF2``; 都没有则返回 None.
+    依次尝试 ``pdfplumber`` → ``pypdf`` → ``PyPDF2``; 都取不到文本则返回 None.
+
+    区分"没装库"和"装了但这份 PDF 提不出文本"很重要: 后者多半是扫描件/图片版公告,
+    装再多库也没用, 而旧实现在这种情况下会打出"pdfplumber 和 PyPDF2 均未安装"的
+    误导性提示 (实测 pdfplumber 装着且对多数公告工作正常, 只是对扫描件返回空)。
     """
-    # 尝试 pdfplumber (推荐, 效果最好)
+    available: list[str] = []
+    pages_text: list[str] = []
+
+    def _extract(reader_pages) -> list[str]:
+        out = []
+        for page in reader_pages:
+            text = page.extract_text()
+            if text:
+                out.append(text)
+        return out
+
     try:
         import pdfplumber  # type: ignore[import-not-found]
+        available.append("pdfplumber")
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            pages_text = []
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    pages_text.append(text)
+            pages_text = _extract(pdf.pages)
             if pages_text:
                 return "\n".join(pages_text)
     except ImportError:
-        logger.info("pdfplumber 未安装, 尝试 PyPDF2 兜底; 推荐: pip install pdfplumber")
+        pass
     except Exception as exc:
         logger.warning("pdfplumber 提取失败: %s", exc)
 
-    # 兜底: PyPDF2
-    try:
-        from PyPDF2 import PdfReader  # type: ignore[import-not-found]
-        reader = PdfReader(io.BytesIO(pdf_bytes))
-        pages_text = []
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                pages_text.append(text)
-        if pages_text:
-            return "\n".join(pages_text)
-    except ImportError:
-        logger.warning(
-            "pdfplumber 和 PyPDF2 均未安装, 无法提取 PDF 文本. "
-            "请运行: pip install pdfplumber"
-        )
-    except Exception as exc:
-        logger.warning("PyPDF2 提取失败: %s", exc)
+    for module_name in ("pypdf", "PyPDF2"):
+        try:
+            reader_cls = __import__(module_name, fromlist=["PdfReader"]).PdfReader
+        except ImportError:
+            continue
+        available.append(module_name)
+        try:
+            pages_text = _extract(reader_cls(io.BytesIO(pdf_bytes)).pages)
+            if pages_text:
+                return "\n".join(pages_text)
+        except Exception as exc:
+            logger.warning("%s 提取失败: %s", module_name, exc)
 
+    if not available:
+        logger.warning("未安装任何 PDF 解析库, 无法提取正文. 请运行: pip install pdfplumber")
+    else:
+        logger.info("PDF 无可提取文本 (可能是扫描件/图片版), 已试: %s", ", ".join(available))
     return None

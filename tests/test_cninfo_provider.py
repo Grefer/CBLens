@@ -705,3 +705,17 @@ def test_terms_patch_rejects_announcement_naming_another_bond():
     # 不知道本债简称时不做校验 (退化成旧行为)
     assert parse_terms_patch_from_announcement(
         "123250.SZ", "关于“精达转债”转股价格调整的公告", **common) is not None
+
+
+def test_extract_text_from_pdf_bytes_falls_through_without_crashing(caplog):
+    """坏字节流要安静地返回 None, 并按 pdfplumber → pypdf → PyPDF2 依次尝试。
+
+    旧实现只在 PyPDF2 缺失时打"pdfplumber 和 PyPDF2 均未安装" —— 而 pdfplumber 装着、
+    只是对扫描件返回空文本时也会走到这句, 给出完全错误的诊断 (实测同步日志里出现 5 次,
+    误导成"要装依赖")。现在区分"没装库"与"装了但提不出文本"。
+    """
+    from convertible_bond.cninfo_provider import extract_text_from_pdf_bytes
+
+    assert extract_text_from_pdf_bytes(b"not a pdf at all") is None
+    # 不应该再声称库没装 —— 本机 pdfplumber/pypdf 都在
+    assert "均未安装" not in caplog.text
