@@ -525,6 +525,61 @@ def check_dead_but_trading(ctx: dict) -> Check:
         "外部对照", extra=ghosts[:10])
 
 
+def check_pool_without_quotes(ctx: dict) -> Check:
+    """反过来问: 主池里的债, 市场上**存在**吗?
+
+    「判死但今日有成交」查的是**误杀**; 这条查**误留** —— 一只从来不成交、甚至现货表里
+    根本没有的债躺在主池里, 库内每一项自洽性检查都看不见它 (它的条款、评级、到期日一应
+    俱全, 只是那个市场从未存在过)。
+
+    实测抓出 123095.SZ 日升转债: 2021-01 发行申购, 2021-02 东方日升业绩预告大幅亏损后
+    **撤销发行**、申购资金退回, 从未上市。Wind 里仍留着代码、到期日 2027-01-22 和一个
+    99.994 的陈旧价, 于是它带着 AA 评级被定出 −14% 低估躺在主池里三年。
+
+    今天才挂牌的新债不算 —— 它们的第一个交易时段还没开始 (实测 118076.SH 先锋转债
+    2026-08-26 上市, 当天现货表自然查无)。
+    """
+    if not ctx.get("online"):
+        return Check("主池却查无行情", WARN, "需要 --online (查 akshare 实时行情)",
+                     "库内自洽性检查看不见「这只债的市场从未存在过」", "外部对照")
+    try:
+        import akshare as ak
+        quote = {}
+        for _, row in ak.bond_zh_hs_cov_spot().iterrows():
+            sym = str(row.get("symbol") or "")
+            if len(sym) <= 2:
+                continue
+            code = sym[2:].upper() + ("." + ("SZ" if sym.startswith("sz") else "SH"))
+            try:
+                quote[code] = float(row.get("volume") or 0)
+            except (TypeError, ValueError):
+                continue
+    except Exception as exc:
+        return Check("主池却查无行情", WARN, f"取行情失败: {exc}",
+                     "外部对照不可用时不阻断体检", "外部对照")
+
+    bundle, today = ctx["bundle"], ctx["today"]
+    ghosts, just_listed = [], 0
+    for code in ctx["pool"]:
+        vol = quote.get(code)
+        if vol:                                   # 有成交 = 确实存在
+            continue
+        terms = bundle.get(code)
+        listing = getattr(terms, "listing_date", None) if terms else None
+        if listing is not None and (today - listing).days <= _RECENT_STOP_GRACE_DAYS:
+            just_listed += 1                      # 第一个交易时段还没开始
+            continue
+        ghosts.append(f"{code} {getattr(terms, 'sec_name', '')} "
+                      + ("现货表查无此券" if vol is None else "今日零成交"))
+    return Check(
+        "主池却查无行情", FAIL if ghosts else OK,
+        f"{len(ghosts)} 只主池债今日既无成交也无报价"
+        + (f"; 另有 {just_listed} 只刚挂牌" if just_listed else ""),
+        "抓出 123095.SZ 日升转债: 2021 年撤销发行、从未上市, 却带着完整条款和 AA 评级 "
+        "在主池里被定出 −14% 低估 —— 库内每一项自洽性指标都正常",
+        "外部对照", extra=ghosts[:10])
+
+
 def check_rating_sync_drift(ctx: dict) -> Check:
     """cb_data 的评级与第三方**当前**值是否还对得上 —— 即距上次 ``cb-sync-ratings`` 漂了多少。
 
@@ -621,6 +676,7 @@ CHECKS: list[Callable[[dict], Any]] = [
     check_events_predate_listing,
     check_events_match_current_parser,
     check_dead_but_trading,
+    check_pool_without_quotes,
     check_rating_sync_drift,
     check_batch_invariants,
 ]

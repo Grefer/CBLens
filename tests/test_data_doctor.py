@@ -152,3 +152,34 @@ def test_looks_delisted_needs_the_date_to_have_passed():
         BondTerms(sec_name="春23转债", last_trading_date=date(2026, 8, 24)), today)
     assert not mod._looks_delisted(
         BondTerms(sec_name="春23转债", last_trading_date=today), today)  # 今天还能交易
+
+
+# ── 反向的外部对照: 在池却查无行情 ──────────────────────────────────────────
+
+def test_pool_without_quotes_catches_a_bond_that_never_listed(monkeypatch):
+    """「判死但今日有成交」查误杀; 这条查**误留**。
+
+    实测抓出 123095.SZ 日升转债: 2021 年撤销发行、从未上市, 却带着完整条款和 AA 评级
+    在主池里被定出 −14% 低估 —— 库内每一项自洽性指标都正常, 因为它的条款确实一应俱全,
+    只是那个市场从未存在过。
+    """
+    import pandas as pd
+    monkeypatch.setattr("akshare.bond_zh_hs_cov_spot", lambda *a, **k: pd.DataFrame({
+        "symbol": ["sh113052", "sz123096"],
+        "volume": [1_000_000, 0],
+    }))
+    terms = {
+        "113052.SH": BondTerms(sec_name="兴业转债", listing_date=date(2022, 1, 7)),
+        "123095.SZ": BondTerms(sec_name="日升转债", listing_date=None),
+        "118076.SH": BondTerms(sec_name="先锋转债", listing_date=date(2026, 8, 26)),
+    }
+    bundle = TermsBundle.__new__(TermsBundle)
+    bundle.get = terms.get
+
+    check = mod.check_pool_without_quotes({
+        "online": True, "bundle": bundle, "today": date(2026, 8, 26),
+        "pool": ["113052.SH", "123095.SZ", "118076.SH"],
+    })
+    assert check.status == mod.FAIL
+    assert len(check.extra) == 1 and "123095.SZ" in check.extra[0]
+    assert "另有 1 只刚挂牌" in check.detail      # 今天上市的不算

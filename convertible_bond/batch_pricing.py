@@ -452,6 +452,8 @@ def batch_pricing_exclusion_reason(
     if is_issued_pending_listing(raw_code, terms, check_date):
         # 已发行但还没挂牌: 买不到, 也没有市价可比 —— 归"扫新债"关注池而不是主池
         return "已发行未上市"
+    if _never_entered_market(terms):
+        return "无发行与上市日期"
     if is_tradable is False:
         return "不可交易"
     if _underlying_has_st_risk(terms):
@@ -505,6 +507,36 @@ def batch_pricing_exclusion_reason(
 # 上市首日标着"盘中停牌"、当天成交 2.57 亿, 却被这条判据整只踢出主池。这类词必须先于
 # 通用的"停牌"关键词识别, 否则子串匹配会先命中。
 _INTRADAY_HALT_KEYWORDS = ("盘中停牌", "临时停牌", "盘中临停")
+
+
+def _never_entered_market(terms: Any) -> bool:
+    """起息日与上市日**同时**缺失 = 没有任何证据表明这只债进过市场。
+
+    与「字段明确才剔除」不冲突: 这里缺的不是一个字段, 而是**两个互为兜底**的字段, 而它们
+    的缺失模式本身是确定的 —— 实测全库 1058 只里"有上市日却没有起息日"的 **0 只**,
+    "有起息日却没有上市日"的 35 只 (那是已发行未上市 / 老债数据缺口, 由
+    :func:`is_issued_pending_listing` 与后面的保守规则分别处理)。两个都没有只命中 10 只,
+    其中 9 只是私募/非标代码段 (余额全为 0, 本就被别的判据剔除)。
+
+    唯一漏进主池的那只是 **123095.SZ 日升转债**: 2021-01 发行申购, 2021-02 东方日升业绩
+    预告大幅亏损后**撤销发行**、申购资金退回, 从未上市交易。Wind 里仍留着代码与到期日
+    (2027-01-22) 和一个 99.994 的陈旧价, 于是它带着 AA 评级被定出 −14% 低估躺在主池里。
+    三个独立来源都说它不在市: akshare 现货表查无、akshare 发行表查无、Wind
+    ``list_tradable_cbs`` 也不返回它 (它是主池里唯一没有 Wind 条款戳的债)。
+
+    ``infer_cb_trading_metadata`` 兜不住这一档: 两个日期都没有时 ``tradable_date`` 为 None,
+    而那里的 ``inferred_is_tradable = tradable_date is None or ...`` 把"没有日期"读成了
+    "随时可交易" —— 那个默认对定向债是对的 (它们本就没有明确可交易日), 对撤销发行的
+    公募债则恰好反了。
+
+    **必须同时要求有到期日**, 判据才是"条款齐备却从未进入市场"这个语义, 而不是泛泛的
+    "字段缺失": 到期日是发行时就定下的条款, 有它说明这份记录是一只被**设计出来**的债;
+    再配上两个入市日期都没有, 才构成"设计了但没发出去"。少了这一条, 判据会退化成对任何
+    信息不全的记录都开火 —— 与「字段明确才剔除」直接冲突。
+    """
+    return (_terms_date(terms, "maturity_date") is not None
+            and _terms_date(terms, "issue_date") is None
+            and _terms_date(terms, "listing_date") is None)
 
 
 def _public_trading_status_reason(terms: Any) -> str | None:

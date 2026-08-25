@@ -430,6 +430,48 @@ def test_intraday_halt_is_not_a_suspension():
         "111026.SH", halted, on_date=date(2026, 8, 25)) == "停牌/暂停交易"
 
 
+def test_never_entered_market_is_excluded():
+    """起息日与上市日同时缺失 = 没有任何证据表明这只债进过市场。
+
+    实测 123095.SZ 日升转债: 2021-01 发行申购, 2021-02 东方日升业绩预告大幅亏损后**撤销
+    发行**、申购资金退回, 从未上市交易。Wind 里仍留着代码、到期日 2027-01-22 和一个
+    99.994 的陈旧价, 于是它带着 AA 评级被定出 −14% 低估躺在主池里。
+
+    ``infer_cb_trading_metadata`` 兜不住: 两个日期都没有时 tradable_date 为 None, 而那里的
+    ``inferred_is_tradable = tradable_date is None or ...`` 把"没有日期"读成"随时可交易" ——
+    那个默认对定向债是对的, 对撤销发行的公募债恰好反了。
+    """
+    terms = BondTerms(
+        sec_name="日升转债",
+        issue_date=None,
+        listing_date=None,
+        maturity_date=date(2027, 1, 22),
+        conversion_price=28.01,
+        credit_rating="AA",
+        outstanding_balance=None,
+    )
+    assert batch_pricing_exclusion_reason(
+        "123095.SZ", terms, on_date=date(2026, 8, 26)) == "无发行与上市日期"
+
+
+def test_missing_listing_date_alone_is_not_enough_to_exclude():
+    """只缺上市日不算 —— 那是"已发行未上市"或老债数据缺口, 各有各的判据。
+
+    实测全库"有起息日却没上市日"的 35 只, 而"有上市日却没起息日"的 **0 只**: 两个都缺
+    才是确定的信号, 缺一个不是。
+    """
+    fresh = BondTerms(sec_name="强达转债", issue_date=date(2026, 8, 19),
+                      listing_date=None, maturity_date=date(2032, 8, 19))
+    assert batch_pricing_exclusion_reason(
+        "123284.SZ", fresh, on_date=date(2026, 8, 20)) == "已发行未上市"
+
+    old = BondTerms(sec_name="岭南转债", issue_date=date(2018, 8, 14), listing_date=None,
+                    maturity_date=date(2030, 1, 1), conversion_price=10.0,
+                    credit_rating="AA", underlying_status="否", underlying_trade_status="交易")
+    assert batch_pricing_exclusion_reason(
+        "128044.SZ", old, on_date=date(2026, 8, 20)) != "无发行与上市日期"
+
+
 def test_infer_trading_metadata_keeps_old_missing_listing_date_tradable():
     """起息日已久却仍缺上市日 → 数据缺口, 保持旧的保守判定, 不误杀老债."""
     from convertible_bond.data_providers import infer_cb_trading_metadata
