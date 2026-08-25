@@ -128,7 +128,10 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `conversion_price_adjusted`: 权益分派等导致的转股价格调整
 - `call_redemption`: 公告强赎
 - `call_no_redemption`: 公告不强赎
-- `putback`: 回售
+- `putback`: 回售。**注意这个类型混着三种公告**：申报窗口的「提示性公告」(843 条)、
+  律所/券商出的「法律意见书 / 核查意见」等配套文件 (177 条)、以及「回售申报情况 /
+  结果公告」(3 条)。只有第一种带申报窗口，后两种解析不出 `effective_start` /
+  `effective_end` 是正常的，不是解析失败。
 - `rating_change`: 评级调整
 - `delisting`: 摘牌 / 最后交易日
 - `suspension`: 停牌
@@ -188,6 +191,15 @@ python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
 > `outstanding_balance = 0.3` 的错误 patch，覆盖 103 只债（其中 96 只真实余额
 > ≥0.5 亿），使它们被准入过滤当成"余额过小"整批剔除。解析已按措辞而非数值修复；
 > 存量用 `cb-repair-balance-patches --dry-run` 查看、`--apply` 回洗（自动备份）。
+
+> [!WARNING]
+> **回售窗口"从公告日开始、永不结束"的假象**：解析不到申报期时，`effective_start`
+> 会回落成**公告日本身**，于是每一条配套文件都变成一个假窗口。实测主池 28 只债的
+> `putback_start_date` 就是这么来的（美锦转债真实窗口 2025-12-01~12-05，却按第三次
+> 提示性公告的日期存成 2025-12-11 且无截止日）。解析侧已改为"解析不到就是 None"；
+> 存量用 `cb-repair-putback-windows --download` 查看、加 `--apply` 回洗（自动备份，
+> 正文按 URL 落盘缓存可续跑）。这与上面余额 patch 是同一类错误：把**解析残缺**
+> 当成**当期状态**。
 
 示例：
 

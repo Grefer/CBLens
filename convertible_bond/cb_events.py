@@ -221,12 +221,20 @@ def parse_event_from_announcement(
             effective_end = redemption_dates["delisting_date"]
         if redemption_dates.get("redemption_price") is not None:
             event_price = float(redemption_dates["redemption_price"])
-    elif body and event_type == "putback":
-        putback = parse_putback_terms(body)
-        if putback.get("start"):
-            effective_start = putback["start"]
-        if putback.get("end"):
-            effective_end = putback["end"]
+    elif event_type == "putback":
+        # 回售窗口**只认正文里解析到的**, 解析不到就是 None —— 不许回落成公告日。
+        #
+        # 与上面 call_redemption 的 last_trading_date 是同一条教训 (见
+        # apply_events_to_terms 里那段注释): effective_start 的通用回落值是公告日本身,
+        # 而"申报期从公告当天开始"几乎恒为解析失败的信号。实测这条回落把主池 28 只债的
+        # putback_start_date 写成了公告日期 (美锦转债真实窗口 12-01~12-05, 却按第三次
+        # 提示性公告的日期存成 12-11 且无截止日)。
+        #
+        # 更要命的是 177 条**法律意见书/核查意见**也被分类成 putback, 它们本来就没有
+        # 申报窗口 —— 回落让每一条都变成一个"从公告日开始、永不结束"的假窗口。
+        putback = parse_putback_terms(body) if body else {}
+        effective_start = putback.get("start")
+        effective_end = putback.get("end")
         if putback.get("price") is not None:
             event_price = float(putback["price"])
     elif body and event_type in {"conversion_suspension", "conversion_resume"}:
@@ -399,28 +407,45 @@ def parse_call_redemption_dates(text: str) -> dict[str, date | float | None]:
     }
 
 
+# 回售申报期的日期区间。三处容错都是实测公告逼出来的, 少一个就整条不匹配:
+#   ``(?:起|始)?``  亿田转债写 "2025年8月7日**起至**2025年8月13日" —— 旧正则要求 "日"
+#                   后紧跟分隔符, 中间多一个"起"就全不匹配 (该公告其余部分完全正常,
+#                   价格 100.314 都解析出来了, 只有窗口丢了)。
+#   分隔符字符类     除 至/到/- 外还有 –—~～ 等全半角变体。
+#   第二个年份可省    "12月29日起至1月5日" 这类跨年窗口。
+_PUTBACK_RANGE_RE = re.compile(
+    r"(\d{4})年(\d{1,2})月(\d{1,2})日"
+    r"(?:起|始)?"
+    r"(?:至|到|[-–—~～])"
+    r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日"
+)
+
+
 def parse_putback_terms(text: str) -> dict[str, date | float | None]:
     """从回售公告正文中解析申报期和回售价格.
 
     返回 ``start`` / ``end`` / ``price``。只接受明确锚定在回售申报期、
     回售期、回售价格附近的文本, 避免把触发观察期误当成行权窗口。
+
+    **法律意见书/核查意见这类配套文件本来就没有申报窗口**, 解析不出是正常的
+    (实测 177 条配套文件里 89% 无窗口), 不要为了提高"解析成功率"去放宽锚定词 ——
+    那只会把募集说明书里引用的条款期误当成本次窗口。
     """
     if not text:
         return {"start": None, "end": None, "price": None}
     t = re.sub(r"\s+", "", text.replace("（", "(").replace("）", ")"))
-    range_re = (
-        r"(\d{4})年(\d{1,2})月(\d{1,2})日"
-        r"(?:至|到|-)"
-        r"(\d{4})年(\d{1,2})月(\d{1,2})日"
-    )
     start = None
     end = None
-    for m in re.finditer(range_re, t):
+    for m in _PUTBACK_RANGE_RE.finditer(t):
         head = t[max(0, m.start() - 40): m.start()]
         if not re.search(r"回售(?:申报)?期|申报期间|回售登记期", head):
             continue
-        start = _safe_date(*m.groups()[:3])
-        end = _safe_date(*m.groups()[3:])
+        y1, m1, d1, y2, m2, d2 = m.groups()
+        start = _safe_date(y1, m1, d1)
+        end = _safe_date(y2 or y1, m2, d2)
+        # 省略年份的跨年窗口 ("2025年12月29日起至1月5日"): 补年后若倒挂则跨到次年
+        if start and end and end < start and y2 is None:
+            end = _safe_date(int(y1) + 1, m2, d2)
         if start and end:
             break
     price = _extract_labeled_price(
@@ -431,6 +456,28 @@ def parse_putback_terms(text: str) -> dict[str, date | float | None]:
         ),
     )
     return {"start": start, "end": end, "price": price}
+
+
+def putback_window_is_complete(event: "CBEvent") -> bool:
+    """这条 putback 记录是否带着**完整可用**的申报窗口 (起止俱全)。
+
+    解析侧与回洗 CLI 共用同一个判据 —— 两边各写一份正是本仓库反复踩过的坑。
+    """
+    return (event.event_type == "putback"
+            and event.effective_start is not None
+            and event.effective_end is not None)
+
+
+def putback_start_is_degraded(event: "CBEvent") -> bool:
+    """``effective_start`` 是不是解析失败回落出来的公告日 (而非真实窗口起始日)。
+
+    存量数据里的谎言长这样: start == 公告日 且没有 end。新解析已经不会再产生它
+    (见 parse_event_from_announcement 的 putback 分支), 但落库的还得回洗掉。
+    """
+    return (event.event_type == "putback"
+            and event.effective_end is None
+            and event.effective_start is not None
+            and event.effective_start == event.event_date)
 
 
 def parse_conversion_suspension_terms(text: str) -> dict[str, date | None]:
@@ -547,8 +594,11 @@ def _extract_labeled_date(
 
 
 def _extract_labeled_price(text: str, prefixes: tuple[str, ...]) -> float | None:
+    # 单位允许 "元/张" 与 "元人民币/张": 天23转债写 "回售价格：100.05元**人民币**/张",
+    # 旧正则要求字面 "元/张", 于是价格整条丢失 (窗口反而解析正常)。
     for prefix in prefixes:
-        match = re.search(prefix + r".{0,16}?([0-9]+(?:\.[0-9]+)?)元/张", text)
+        match = re.search(
+            prefix + r".{0,16}?([0-9]+(?:\.[0-9]+)?)元(?:人民币)?/张", text)
         if match:
             try:
                 return float(match.group(1))
@@ -741,7 +791,13 @@ def apply_events_to_terms(
     if latest_delist:
         updates["delisting_date"] = latest_delist.effective_end or latest_delist.effective_start
 
-    latest_putback = _latest_event(active, "putback")
+    # 一只债常有几十条 putback 记录 (鸿路转债 33 条), 其中大量是法律意见书/核查意见,
+    # 本来就没有申报窗口。取"最新一条"会让一份晚出的配套文件盖掉真正的窗口公告 ——
+    # 所以先在**带完整窗口**的记录里取最新, 取不到再退回最新一条 (它可能只带回售价)。
+    latest_putback = (
+        _latest_event([e for e in active if putback_window_is_complete(e)], "putback")
+        or _latest_event(active, "putback")
+    )
     if latest_putback:
         if latest_putback.effective_start:
             updates["putback_start_date"] = latest_putback.effective_start
@@ -861,6 +917,106 @@ def _transient_long_expired(event: CBEvent, val_date: date) -> bool:
     避免上一轮事件刚过期就把当天 admission 同步到的真实"停牌"擦掉。
     """
     return (val_date - _transient_event_end(event)).days > _TRANSIENT_CLEAR_GRACE_DAYS
+
+
+# ── 事件类型的展示词表与可操作性次序 ────────────────────────────────────────
+#
+# 与下面的 ``_event_status`` **是两回事, 不要合并**: 那个的返回值会被写进
+# BondTerms 的状态字段 (``call_status == "已公告强赎"`` 之类, batch_pricing 的事件
+# 旗标就依赖这些字面量), 属于**数据**; 这里是**展示**用的短标签。
+#
+# 收在这里是因为它此前只存在于 gui/controllers/events.py 的一个私有 staticmethod 里,
+# 且漏了 4 个类型 —— 缺的会 fallback 成 ``event_type[:4]``, 于是事件页 badge 渲染出
+# "bala" / "conv" / "unkn"; 更糟的是 conversion_suspension 与 conversion_resume
+# **两个相反的意思都渲染成 "conv"** (合计 817 条事件)。有守护测试比对 EVENT_TYPES 全覆盖。
+EVENT_TYPE_SHORT_LABEL: dict[str, str] = {
+    "down_reset_proposed": "提议下修",
+    "down_reset_approved": "已下修",
+    "down_reset_rejected": "不下修",
+    "down_reset_trigger_notice": "触发提示",
+    "conversion_price_adjusted": "调转股价",
+    "balance_change": "余额变化",
+    "call_redemption": "强赎",
+    "call_no_redemption": "不强赎",
+    "putback": "回售",
+    "conversion_suspension": "暂停转股",
+    "conversion_resume": "恢复转股",
+    "rating_change": "评级",
+    "delisting": "摘牌",
+    "suspension": "停牌",
+    "underlying_suspension": "正股停牌",
+    "underlying_st_risk": "正股ST",
+    "underlying_st_clear": "撤销ST",
+    "unknown": "其他",
+}
+
+# 可操作性次序 (小 = 更该先看见)。横幅只放得下几条, 这个顺序直接决定用户看见什么,
+# 所以按"错过它的代价"排, 不按字母序也不按发生频率:
+#   0  有硬期限, 错过就被动接受结果 (强赎不转股 = 按赎回价被赎走; 摘牌后卖不掉)
+#   1  在途下修 —— 本工具的核心 thesis, 结果未定, 是**可以据此下注**的窗口
+#   2  回售 / 触发提示 —— 有可执行的价格下限或即将成立的条件
+#   3  转股通道与承诺状态变化 —— 影响怎么估值, 但不逼你今天动手
+#   4  已经落定的事实 —— 记录价值为主
+EVENT_ACTIONABILITY: dict[str, int] = {
+    "call_redemption": 0, "delisting": 0, "suspension": 0,
+    "down_reset_proposed": 1, "down_reset_approved": 1,
+    "putback": 2, "down_reset_trigger_notice": 2,
+    "conversion_suspension": 3, "conversion_resume": 3,
+    "call_no_redemption": 3, "underlying_suspension": 3, "underlying_st_risk": 3,
+    "down_reset_rejected": 4, "conversion_price_adjusted": 4, "balance_change": 4,
+    "rating_change": 4, "underlying_st_clear": 4, "unknown": 4,
+}
+_DEFAULT_ACTIONABILITY = 4
+
+
+# 区间事件的**结束日**是否可信、以及结束时该怎么称呼。不在表里的类型, 其
+# effective_end 一律不用于"未来窗口"提示。
+#
+# 逐类型实测 (全库 7794 条) 后才敢用:
+#   call_no_redemption 94% 有 end / down_reset_rejected 66% / suspension 86% /
+#   putback 60% / call_redemption 38%  —— 这几类的 end 就是承诺期满或申报截止, 可信。
+#   其余类型 (调转股价 / 评级 / 余额变化 / 提议下修 / 触发提示 / 摘牌) end 覆盖率≈0, 无从谈起。
+#
+# **conversion_suspension / conversion_resume 刻意排除**, 尽管它们 70%/98% 有 end:
+# 那个 end 被公告正文里的**回售期区间**污染了。实测宝莱转债 (123065.SZ) 的
+# "关于回售期间宝莱转债暂停转股的提示性公告" 解析出 start=2021-03-11 end=2026-09-03
+# —— 那是回售期的起止, 不是停牌窗口; 用它做提示会渲染出"恢复转股到期"这种胡话。
+# 又一次的"条款文字 vs 当期状态"。
+EVENT_END_LABEL: dict[str, str] = {
+    "call_redemption": "截止",          # 赎回登记截止 —— 过了就按赎回价被赎走
+    "putback": "截止",                  # 回售申报截止
+    "call_no_redemption": "到期",       # 不强赎承诺期满 → 强赎上限恢复
+    "down_reset_rejected": "到期",      # 不下修承诺期满 → 下修博弈解冻
+    "suspension": "结束",
+    "underlying_suspension": "结束",
+}
+
+# 承诺**期满**的可操作性与承诺公告本身不同 —— 公告当天是"这事没了", 期满那天是
+# "这事又可能了"。对一个以下修博弈为核心的工具, 不下修承诺解冻恰恰是故事重新开始。
+EVENT_END_ACTIONABILITY: dict[str, int] = {
+    "down_reset_rejected": 1,           # 下修博弈解冻, 与在途下修同档
+    "call_no_redemption": 2,            # 强赎上限恢复
+}
+
+
+def event_end_label(event_type: str) -> str | None:
+    """区间事件结束时的后缀词; 返回 None 表示该类型的 effective_end 不可信/无意义。"""
+    return EVENT_END_LABEL.get(event_type)
+
+
+def event_short_label(event_type: str) -> str:
+    """事件类型 → 展示用短标签; 未知类型退回原串而不是切前 4 个字符。"""
+    return EVENT_TYPE_SHORT_LABEL.get(event_type, event_type or "其他")
+
+
+def event_actionability(event_type: str, *, is_end: bool = False) -> int:
+    """事件类型 → 可操作性次序 (小 = 更该先看见)。
+
+    *is_end* 表示这是区间事件的**结束**, 次序另有一张覆盖表 (见 EVENT_END_ACTIONABILITY)。
+    """
+    if is_end and event_type in EVENT_END_ACTIONABILITY:
+        return EVENT_END_ACTIONABILITY[event_type]
+    return EVENT_ACTIONABILITY.get(event_type, _DEFAULT_ACTIONABILITY)
 
 
 def _event_status(event_type: str) -> str:

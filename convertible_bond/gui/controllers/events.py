@@ -17,6 +17,7 @@ from ...cb_event_sync import sync_cb_events
 from ...cb_events import (
     CBEvent,
     CBEventStore,
+    event_short_label,
     project_events_path,
     reload_default_event_store,
 )
@@ -252,22 +253,10 @@ class EventsMixin:
 
     @staticmethod
     def _event_type_short(event_type: str) -> str:
-        return {
-            "down_reset_proposed": "提议下修",
-            "down_reset_approved": "已下修",
-            "down_reset_trigger_notice": "触发提示",
-            "conversion_price_adjusted": "调转股价",
-            "down_reset_rejected": "不下修",
-            "call_redemption":     "强赎",
-            "call_no_redemption":  "不强赎",
-            "putback":             "回售",
-            "rating_change":       "评级",
-            "delisting":           "摘牌",
-            "suspension":          "停牌",
-            "underlying_suspension": "正股停牌",
-            "underlying_st_risk":    "正股ST",
-            "underlying_st_clear":   "撤销ST",
-        }.get(event_type, event_type[:4])
+        # 词表已收到 cb_events.EVENT_TYPE_SHORT_LABEL (单一事实源)。这里曾自带一份,
+        # 漏了 balance_change / conversion_suspension / conversion_resume / unknown,
+        # badge 渲染成 "bala"/"conv"/"unkn", 且暂停转股与恢复转股同显 "conv"。
+        return event_short_label(event_type)
 
     def _open_announcement_preview(self, event: CBEvent) -> None:
         """点击事件行 → 在 APP 内开新窗口预览 PDF.
