@@ -24,6 +24,7 @@ venv/
 
 # 公告 PDF 本地缓存 (按需下载, 不入版本库)
 data/announcement_pdfs/
+data/announcement_text_cache/
 
 # GUI / CLI 运行态缓存和个人关注池, 公开发布不入版本库
 data/batch_pricing_cache.json
@@ -33,6 +34,10 @@ data/watchlist.json
 data/strategy_backtest_snapshot.json
 data/strategy_backtest_snapshot.bak.json
 # cb-repair-balance-patches 的时间戳备份 (本地留档, 不入库)
+# 回洗工具的一次性备份快照 (单份可达 9MB, 磁盘保留即可, 不入版本库)。
+# 注意工具用 Path.with_suffix 生成文件名, 产出的是 cb_data.bak-xxx.json 这种形态,
+# 早先写成 cb_terms_patches.json.bak-* 的规则匹配不到, 于是 4 份备份被误提交进库。
+data/*.bak-*.json
 data/cb_terms_patches.json.bak-*
 data/strategy_backtest_snapshots/
 data/strategy_backtest_cache/
