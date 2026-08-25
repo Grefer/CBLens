@@ -266,6 +266,35 @@ class TestRegression:
         ).price(**price_kw)
         assert same_k == pytest.approx(no_node, abs=0.05)
 
+    def test_scheduled_reset_target_k_above_current_k_falls_back_to_estimate(self):
+        """公告新 K 高于现 K = 上游解析错了: 丢掉它回落 premium/floor 估算, 而不是留着
+        让节点静默退化成 no-op。
+
+        pricer 的节点是 max(V, reset_value); 偏高的 target_k 只会让 reset_value 低于 V,
+        于是"已提议下修"这件事在价格上完全消失。实测主池当时仅有的两个在途下修节点
+        (晶能转债 target_k=13.7 vs K=6.35、强力转债 18.94 vs 12.70) uplift 只剩 0.02%/0.04%。
+        """
+        kwargs = dict(
+            S0=40.0, K=52.77,
+            current_date=date(2025, 1, 1),
+            maturity_date=date(2026, 7, 30),
+            issue_date=date(2020, 7, 30),
+            conversion_start_date=date(2021, 2, 6),
+            redemption_price=107.0,
+        )
+        node = dict(scheduled_reset_date=date(2025, 6, 1), scheduled_reset_prob=1.0)
+        price_kw = dict(sigma=0.28, r=0.022, base_spread=0.03,
+                        distress_k=0.05, p_down=0.0, M=300, N=800)
+
+        bogus = UniversalCBPricer(**kwargs, **node, scheduled_reset_target_k=80.0)
+        assert bogus.scheduled_reset_target_k is None
+        estimated = UniversalCBPricer(**kwargs, **node)
+        assert bogus.price(**price_kw) == pytest.approx(estimated.price(**price_kw), abs=1e-9)
+
+        # 而 no-op 那一档 (target_k == 现 K) 的价格明显更低 —— 两者不能被混为一谈
+        noop = UniversalCBPricer(**kwargs, **node, scheduled_reset_target_k=52.77)
+        assert bogus.price(**price_kw) > noop.price(**price_kw) + 0.5
+
     def test_scheduled_reset_target_k_lower_raises_value(self):
         """公告新 K 更低时, 已公告节点应抬升 OTM 价值 (优于无节点)."""
         kwargs = dict(

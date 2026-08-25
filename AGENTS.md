@@ -108,6 +108,16 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
   "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用
   是替缺失的 `delisting_date` 兜底, 全库回填后独立贡献实测为 0。摘牌该由摘牌判据管
+- **`is_tradable` / `trading_status` 是派生字段, 不能拿缓存值当独立证据**。公募转债这三个
+  字段数据源根本不提供 (Wind `get_admission_status` 对它们显式返回 None), 缓存里读到的只可能是
+  `infer_cb_trading_metadata` 自己上一次的输出。`is_issued_pending_listing` 的文档早就点名了
+  这个自我确认陷阱, 但当时只堵了**判定侧**、没堵回填侧: 上市日到了之后, "已发行未上市"那一档
+  留下的 `pending`/`False` 会覆盖新推断, 永远翻不回来 —— 实测派克转债 / 中仑转债两只上市首日
+  分别成交 2.57 亿 / 12.95 亿的新债被准入判成"不可交易"。库内判据: **成交额 > 0 却
+  `is_tradable=False`** 是自相矛盾, 全库正好只命中这两只。
+- **「盘中停牌」不是停牌**。新债上市首日触发涨跌幅熔断时 Wind 的 `trade_status` 就返回
+  "盘中停牌", 那是几分钟到半小时的机制性临停, 收盘照样有巨额成交。子串匹配会先命中"停牌",
+  所以这类词必须在通用关键词**之前**识别 (`_INTRADAY_HALT_KEYWORDS`)。
 - **横截面口径 vs 绝对阈值**: 凡是判据架在"模型偏差"这类**水平时变**的量上, 一律锚当期
   横截面 (相对全市场中位), 不要用绝对阈值。实测 `cb_valuation_history` 20 期季度基线:
   中位偏差水平摆幅 21.2pp (+0.4%↔+21.6%), 而便宜尾形状 (p25−中位) 摆幅只有 4.2pp ——
@@ -231,6 +241,14 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   `ak.bond_zh_cov()` 批量刷新 (一次调用拿全市场, 评级按年变动, 每月跑一次即可)。
   首次建档仍由 Wind `get_bond_terms` 兜底覆盖率。**实测落地: 136 只评级变化 (下调 120 /
   上调 16), 主池 298 → 284。**
+  **全量 `cb-sync-tradable` 这条路也要堵**: `get_bond_terms` 照常返回冻结值, 一次全量重建
+  就把第三方刷来的值整批盖回去 —— 实测 15 只已下调到 A-/A/BBB 的债被还原, 主池 285 → 301,
+  那 15 只全是刚被"评级过低"正确剔除的 (中装转2 CC→AA、宏图转债 CC→A)。
+  `cb_data_sync._LOCALLY_AUTHORITATIVE_FIELDS` 让本地非空值胜出, 空值仍由 Wind 兜底。
+  **另一个副作用是良性的**: `get_bond_terms` 不取 `delisting_date` (只有
+  `get_admission_status` 取), 所以全量同步会把它清成 None —— 但存续券的 `delist_date`
+  恒等于 `maturity_date` (零信息量, 且是未来日期不触发剔除), 跑一次每日状态刷新即恢复。
+  实测丢失的 314 只里**过去日期 0 只**, 死券混不进池。
 - **判断评级对错不能用库内自洽**。评级没有任何库内裁判: Wind 冻结、公告解析无自校验。
   曾按"末条 patch 必须等于 cb_data"判 patch 脏, 据此删了 18 条又剥掉 330 条 —— 方向是反的
   (灵康转债第三方 `A-`、cb_data `AA-`、patch `A-`, patch 才对)。实测对第三方的精确命中率:
@@ -239,11 +257,46 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   的方向完全重合, 任何架在数值上的启发式都分不开二者。
   `_parse_bond_credit_rating` 的 `rating_re` 带 `(?<![A-C])` 左界 —— 少了它 `.{0,10}` 回溯会让
   评级"尽量晚开始", 从 AA- 抠出 A-。这个正则 bug 是真的, 但**不能反推哪条存量 patch 是它造成的**。
-  同理, 体检里拿 cb_data 跟 akshare 比是**自证**的 (前者就是从后者同步来的), 那条只量同步水位;
-  真正的独立判据是「cb_data 评级新鲜度」—— 比的是公告, 与第三方彼此独立。
+  同理, 体检里拿 cb_data 跟 akshare 比是**自证**的 (前者就是从后者同步来的), 那条只量同步水位。
+  **但"分歧 = cb_data 落后"这个方向在 `cb-sync-ratings` 落地后已经反过来了**: cb_data 现在
+  是第三方当前值, 拿第三方逐条当裁判, 体检标记的 17 条分歧里 **15 条是公告 patch 错、
+  cb_data 对**, 只有 1 条 (科蓝转债) 是真落后。所以那条检查改名「公告评级 vs cb_data 分歧」,
+  只报分歧率、不断言谁错 —— 判谁对要靠与两边都独立的第三方 (`--online` 的「评级同步水位」)。
+- **存量评级 patch 可以重放, 但不能靠数值猜**。"不能用启发式反推哪条是 bug 造成的"依然成立
+  (偏低的方向与真实下调重合); 但**把公告正文重新取回来、用当前解析器重新推导**是换了独立
+  证据源, 不是在旧数值上做判断。实测当前解析器在样本上从不产生错值: 要么解析对 (直接纠正
+  存量错值), 要么返回 None (安全失败)。走 `cb-repair-rating-patches`, 三档处置不对称 ——
+  解析出新值→改写 / 解析不出→删该字段 (无源之水) / **正文取不到→原样保留** (取不到证据
+  ≠ 证据为否; 扫描件公告正文 0 字, 按"删"处理会销毁正确数据)。
+- **评级报告末尾的「评级符号设置及含义」附录是词表, 不是状态**。跟踪评级报告会成段解释
+  "列入评级观察是对于…评级观察分为'列入正面观察名单'…", 早期正则全文搜关键词就命中了它 ——
+  实测主池 51 只带观察状态的债里 **47 只**的值来自那段附录 (皓元/国检/花园/鸿路四份 2026
+  跟踪评级报告原句一字不差), 真正来自专项公告的只有 4 只。与 `parse_outstanding_balance_change`
+  踩过的"赎回门槛条款被当成当期余额"是同一类陷阱。两道闸: `_strip_rating_legend` 按附录标题
+  锚点截掉正文尾部 (鸿路那份 21342 字, 附录起于第 20662 字), 加 `_RE_WATCH_DEFINITION`
+  排除系词/枚举句式 (有些机构把释义混排进正文)。
 - **`credit_rating_outlook` / `credit_watch_status` 只有公告一个来源**: Wind 侧有候选字段
-  (`ratingoutlook`/`creditratingoutlook`) 但实测取不到, cb_data 里 0/1058。取值分布合理
-  (稳定 924 / 负面 31), 迁移方向与信用承压名单吻合。
+  (`ratingoutlook`/`creditratingoutlook`) 但实测取不到, cb_data 里 0/1058, `CBEvent` 里也不带
+  这两个字段 —— 所以 `apply_events_to_terms` 那条路走不通, **唯一通道是 patch 投影**。
+  它们因此登记在 `historical_terms._SNAPSHOT_UNCOVERED_FIELDS` 里: `terms_as_of` 的裁剪
+  **逐字段**判, 快照覆盖不到的字段不裁 (对它们"快照已含更早的变更"根本不成立, 快照里是空的)。
+  `credit_rating` **不在**这个集合里也不能加 —— 快照覆盖得到的字段就该由快照说了算。
+- **`_meta.fetched_at` 不等于"条款抓取日"**。写它的有四条路径, 只有全量 `cb-sync-tradable`
+  (source=`Wind`) 真抓条款; 每日 `Wind:admission_status`、每月 `akshare:ratings`、每日
+  `cb_events` 都只刷各自那几个状态字段, 却一样把它推到今天 (实测 875/128/49 vs 6)。
+  两个消费者按原意读它, 于是双双静默失效: `cb-sync-tradable --incremental` 把 **1052/1058**
+  判成"7 天内已更新"而跳过 (还照常打印"已在 N 天内更新"); `terms_as_of` 把整段条款 patch
+  按 `after=今天` 裁掉, live 定价路径上**一条 patch 都不生效** —— 两次全量同步之间的条款变更
+  完全没有兜底 (实测晶瑞转2 K 差 19.5%、强力转债 16.5% 就掉在这个窗口里)。
+  修法是 `_meta.fetched_at_by_source` 按来源分桶, `is_stale(..., source=)` /
+  `fetched_at(..., source=)` 查对应那一格。**两个方向的兜底不对称**: 同步侧缺戳按"陈旧"处理
+  (顶多多刷一次), 而 `terms_as_of` 缺戳必须回落到全局值 —— 返回 None 在投影层表示"不裁剪",
+  会把整条 patch 链从发行日回放上来、拿陈旧值盖掉正确的 cb_data。
+- **信用评级的 `sti` 后缀**: akshare 对部分券 (科创板 118xxx 段居多) 返回 `AA+sti` / `A-sti`,
+  档位标准、后缀只是上游口径标记。早期按"值必须精确落在 `_RANK` 里"过滤, 于是这一整类券
+  **每次同步都被静默跳过** —— 实测 26 只 (主池 21 只) 从未刷新过, 其中科蓝转债本地 `AA-` /
+  第三方 `A-`, 差 3 档 (信用利差下限 3.50% vs 8.00%)。`sync_ratings.normalize_rating` 只剥
+  已知后缀, 剥完必须精确命中 `_RANK`, 否则宁可返回 None 也不猜。
 - Wind 字段用"候选字段逐个尝试"的兼容模式，不要假设所有终端字段一致
   (例: `carrydate` → `issue_firstissue`)。
 
@@ -294,6 +347,17 @@ patch 自洽 / 交叉校验 / 不变量, 外加 `--online` 的**外部对照**�
 改解析器或分类器之后必跑 `cb-data-doctor`: "代码修好了"和"存量数据是对的"是两回事,
 存量事件不会被任何流程重新审视。
 
+**体检自己的判据也会被别处的改动悄悄弄坏, 而且同样是静默的**:
+
+- `_looks_delisted` 曾写成 `delisting_date is not None`。当时全库只有 17 只有摘牌日, 没问题;
+  2026-08-22 全库回填 (17 → 1041) 之后, 几乎每只在市债都带着一个**未来的**到期摘牌日, 于是
+  「末条 patch == 当前值」跳过 **952/958 (99%)** 条链、只真检查 6 只, 藏着 30 只不符。判据
+  必须是**日期已过**, 不是"有没有这个字段"。
+- 「判死但今日有成交」的 `dead` 集曾只列 `{已退市, 已过最后交易日}`, 于是上市首日被判成
+  "不可交易"/"停牌"的新债从底下整只漏过去 (派克转债当天成交 2.57 亿、中仑转债 12.95 亿,
+  检查还报 0)。判据要按**语义**收全所有"断言这只债不能交易"的剔除原因; 反过来评级过低 /
+  正股 ST / 成交额过低这些是**策略口径**, 收进来会天天误报几十只。
+
 ## 数据文件
 
 - `data/cb_data.json` — 全部转债静态条款，不要手动编辑
@@ -324,6 +388,7 @@ cb-data-doctor                              # 数据体检 (每天跑批**前**�
 cb-repair-events --apply                    # 存量迁移: 用当前解析器重放事件表与 patch 库
 cb-repair-balance-patches --apply           # 一次性存量迁移: 清洗被赎回门槛条款污染的余额 patch
 cb-repair-putback-windows --download --apply # 一次性存量迁移: 重取正文补回售申报窗口, 清掉退化的公告日起始日
+cb-repair-rating-patches --download --apply # 一次性存量迁移: 重取正文重放评级/展望/观察状态 patch
 python CB.py 128009.SZ                      # 单只定价
 ```
 
@@ -336,6 +401,16 @@ python CB.py 128009.SZ                      # 单只定价
   - `kind="proposed"` 待股东会: 生效日 = 提议日+`PROPOSED_EFFECTIVE_LAG_DAYS`, 概率 `PROPOSED_PASS_PROB`。
   - `kind="approved"` 已通过待生效: 生效日 = 公告生效日 (缺失按 `APPROVED_EFFECTIVE_LAG_DAYS` 兜底), 概率 `APPROVED_PASS_PROB`≈1; **仅当生效日 > 估值日才建节点 (防与条款刷新双计)**。
   - `target_k` = 公告解析到的下修后新 K (`parse_down_reset_new_price` 填 `CBEvent.event_price`); 缺失时 pricer 回落 premium/floor 估算。`target_k==现 K` 时节点自动成 no-op, 天然防双计。
+  - **`target_k` 严格高于现 K 一定是解析错了, 必须丢掉**。下修公告正文开头会成段引用"历次
+    转股价格调整情况", 而 `parse_down_reset_new_price` 取的是**第一个**"由 A 元/股 修正为
+    B 元/股" —— 抓到的是几年前那次调整的 B。实测全库 147 条带 `event_price` 的下修事件里
+    **106 条 (72%)** 方向不可能 (强力转债 2026-08-07 提议公告正文依次出现
+    18.98/18.98/18.94/18.90/12.70, 解析结果 18.94 = 2021 年的值, 而当时 K 已是 12.70)。
+    这个错值**不会算出错价** —— 节点是 `max(V, reset_value)`, 偏高的 target_k 只让 reset_value
+    低于 V, 节点静默变 no-op —— 代价是下修价值被整只抹平: 实测晶能转债 uplift 0.024% →
+    丢掉错值改用 premium/floor 估算后恢复到 **+11.28% (12.99 元)**。闸在
+    `resolve_down_reset_intensity(current_k=)` 与 pricer `__init__` 各一道, **是 `>` 不是 `>=`**
+    (等于现 K 是"下修已落地"的正常状态, 拦掉反而会让它被再算一遍)。
 - **冻结** (强制为 0): `down_reset_block_until` 屏蔽下修价值至冷静期满。
 - 常量经 `cb-calibrate-down-reset` 从历史事件校准; 改这些值或下修结构前先重跑校准。
 

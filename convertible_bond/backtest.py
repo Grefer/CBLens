@@ -166,6 +166,7 @@ def backtest_theoretical_price(
             point_kwargs.update(pricer_overrides)
             down_intensity = resolve_down_reset_intensity(
                 p_down, resolved_down_reset,
+                current_k=getattr(terms, "conversion_price", None),
             )
             effective_p_down = down_intensity.effective_p_down
             if (

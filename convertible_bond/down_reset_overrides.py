@@ -95,6 +95,7 @@ def resolve_down_reset_intensity(
     *,
     p_scale_override: float | None = None,
     redemption_mode: bool = False,
+    current_k: float | None = None,
 ) -> DownResetIntensity:
     """把基础 p_down 与公告事件合成为模型实际强度.
 
@@ -106,6 +107,11 @@ def resolve_down_reset_intensity(
       - approved (已通过待生效): 生效日 = resolved.approved_effective_date,
         概率 = APPROVED_PASS_PROB (≈1); 已通过优先于已提议。
     强赎模式: 背景强度与已公告节点都归零 (终点已是赎回/转股二择一)。
+
+    ``current_k`` 给定时对公告解析到的新 K 做**方向校验**: 下修不可能抬高转股价,
+    所以 ``announced_new_k > current_k`` 恒为解析失败的信号, 此时丢弃它、回落到
+    pricer 的 premium/floor 估算 (见下方注释里的实测)。等于现 K 的照留 —— 那是
+    "下修已落地"的正常状态, pricer 靠它把节点变 no-op 防双计。
     """
     base = max(0.0, float(base_p_down))
     p = base
@@ -133,6 +139,25 @@ def resolve_down_reset_intensity(
             scheduled_reset_kind = "proposed"
         if scheduled_reset_kind is not None and announced_new_k is not None:
             scheduled_reset_target_k = float(announced_new_k)
+            # 方向校验: 下修只会**降低**转股价, 解析出严格高于现 K 的新 K 一定是解析错了。
+            #
+            # 实测全库 147 条带 event_price 的下修提议/通过事件里 106 条 (72%) 方向不可能:
+            # 下修公告正文开头会成段引用"历次转股价格调整情况", 而
+            # ``parse_down_reset_new_price`` 取的是**第一个**"由 A 元/股 修正为 B 元/股",
+            # 于是抓到的是几年前那次调整的 B。例: 强力转债 2026-08-07 提议公告正文里依次
+            # 出现 18.98/18.98/18.94/18.94/18.90/12.70, 解析结果 18.94 (2021 年的值),
+            # 而当时 K 已经是 12.70。
+            #
+            # 这个错值**不会算出错价** —— pricer 的节点是 max(V, reset_value), target_k
+            # 偏高只会让 reset_value 低于 V, 节点静默变 no-op。代价是"下修价值"被抹平:
+            # 实测主池当时仅有的 2 个在途下修节点 (晶能转债 target_k=13.7 vs K=6.35、
+            # 强力转债 18.94 vs 12.70) uplift 都只剩 0.02%/0.04%。丢掉这个值改用
+            # premium/floor 估算, 反而能把下修价值还原回来。
+            #
+            # 闸是 **>** 不是 >=: ``target_k == 现 K`` 是"下修已落地、条款已刷新"的正常状态,
+            # pricer 靠它把节点变 no-op 来防双计, 拦掉反而会让已落地的下修再算一遍。
+            if current_k is not None and scheduled_reset_target_k > float(current_k):
+                scheduled_reset_target_k = None
 
     if redemption_mode:
         p = 0.0

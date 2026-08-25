@@ -240,6 +240,18 @@ def infer_cb_trading_metadata(
                 trading_status="pending",
             )
         tradable_date = tradable_date or listing_anchor
+        if tradable_date is not None and tradable_date <= val_date:
+            # 已挂牌: 缓存里的 is_tradable / trading_status 是**本函数自己上一次的派生产物**
+            # (Wind ``get_admission_status`` 对这两个字段显式返回 None, 公募转债数据源根本
+            # 不提供), 不能当独立证据 —— 否则新债在"已发行未上市"那一档留下的
+            # pending/False 会被自己确认下来, 永远翻不回。这正是
+            # :func:`is_issued_pending_listing` 文档里点名的自我确认陷阱, 只是那时只堵了
+            # 判定侧、没堵回填侧。实测让派克转债 / 中仑转债两只上市首日分别成交 2.57 亿 /
+            # 12.95 亿的新债被准入判成"不可交易"。
+            if explicit_status == "pending":
+                explicit_status = None
+            if explicit_is_tradable is False:
+                explicit_is_tradable = None
         status = explicit_status or ("tradable" if tradable_date is None or tradable_date <= val_date else "pending")
     else:
         if tradable_date is None and listing_anchor is not None:

@@ -291,6 +291,7 @@ class PricingMixin:
             base_p_down, resolved_down_reset,
             p_scale_override=p_scale,
             redemption_mode=redemption_mode,
+            current_k=getattr(terms, "conversion_price", None),
         )
         p_down = down_intensity.effective_p_down
         p_scale = down_intensity.p_scale if down_intensity.p_scale is not None else p_scale
@@ -487,6 +488,7 @@ class PricingMixin:
                 resolved_down_reset,
                 p_scale_override=scale,
                 redemption_mode=redemption_mode,
+                current_k=getattr(terms, "conversion_price", None),
             )
             if base_p is not None
             else None

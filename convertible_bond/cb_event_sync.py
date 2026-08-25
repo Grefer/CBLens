@@ -409,6 +409,37 @@ def parse_conversion_price_adjustment(text: str | None) -> dict | None:
     }
 
 
+# 跟踪评级报告的末尾**附录**会成段解释评级符号的含义, 里面把"列入正面观察名单"、
+# "评级展望通常分为正面、负面、稳定、发展中"这些词逐个列一遍。那是**术语词表**, 不是这家
+# 发行人的状态 —— 与 ``parse_outstanding_balance_change`` 踩过的"赎回门槛条款被当成当期
+# 余额"是同一类陷阱: 关键词命中了, 主语却不是本债。
+#
+# 实测: 主池 51 只带"评级观察"的债里 47 只的值来自这段附录 (皓元/国检/花园/鸿路四份
+# 2026 跟踪评级报告的原句一字不差: "列入评级观察是对于已对受评主体给出了评级结果…评级
+# 观察分为'列入正面观察名单'…"), 真正来自专项公告的只有 4 只。附录通常在正文最后 3%
+# (鸿路那份 21342 字, 附录起于第 20662 字)。
+_RATING_LEGEND_ANCHORS = (
+    "设置及含义", "符号及含义", "符号及定义", "等级符号及定义",
+    "评级结果释义", "信用等级释义",
+    "列入评级观察是", "评级展望是对",
+)
+# 附录之前至少要留下这么多正文, 否则说明锚点命中的不是附录标题 (例如一份专讲评级符号的
+# 短文档), 此时宁可不截。
+_MIN_BODY_BEFORE_LEGEND = 200
+
+
+def _strip_rating_legend(text: str) -> str:
+    """截掉评级报告末尾的"评级符号设置及含义"附录, 只把正文交给解析器。"""
+    cut = len(text)
+    for anchor in _RATING_LEGEND_ANCHORS:
+        idx = text.find(anchor)
+        if 0 <= idx < cut:
+            cut = idx
+    if cut >= len(text) or cut < _MIN_BODY_BEFORE_LEGEND:
+        return text
+    return text[:cut]
+
+
 def parse_credit_rating_terms(text: str | None, *, title: str = "") -> dict[str, str | None]:
     """解析债项评级、评级展望和评级观察状态.
 
@@ -424,7 +455,7 @@ def parse_credit_rating_terms(text: str | None, *, title: str = "") -> dict[str,
         return empty
     if re.search(r"变更.{0,12}评级机构|终止评级", title):
         return empty
-    t = re.sub(r"\s+", "", str(text).upper())
+    t = _strip_rating_legend(re.sub(r"\s+", "", str(text).upper()))
     return {
         "credit_rating": _parse_bond_credit_rating(t),
         "credit_rating_outlook": _parse_credit_rating_outlook(t),
@@ -531,7 +562,10 @@ def _parse_bond_credit_rating(t: str) -> str | None:
                  r"(AAA|AA\+|AA-|AA|A\+|A-|A|BBB\+|BBB-|BBB|BB\+|BB-|BB|B\+|B-|B|CCC|CC|C)")
     bond_rating_label = (
         r"(?:债项信用等级|本期债券信用等级|可转债信用等级|转债信用等级|债券信用等级|"
-        r"[“\"'《]?[^，。；：]{0,20}转债[”\"'》]?(?:债项)?信用等级)"
+        # ``的`` 是可选助词: 「"鸿路转债"**的**信用等级为AA」是真实措辞, 少了它整条解析不出来。
+        # 漏解析在存量回洗里等于删数据 (重放不出来 → 该字段被判成无源), 所以宁可把这类
+        # 无歧义的助词补全, 也不要靠"解析不出就丢掉"来兜。
+        r"[“\"'《]?[^，。；：]{0,20}转债[”\"'》]?的?(?:债项)?信用等级)"
     )
     patterns = (
         bond_rating_label + r"(?:为|维持为|调整为)" + rating_re,
@@ -566,12 +600,37 @@ def _parse_credit_rating_outlook(t: str) -> str | None:
     return None
 
 
+_RE_WATCH_LISTED = re.compile(
+    r"(?:继续)?(?:列入|纳入)[^。；;]{0,12}?(?:信用)?(?:评级)?观察名单")
+_RE_WATCH_REMOVED = re.compile(
+    r"(?:撤出|移出|调出|取消)[^。；;]{0,16}?(?:信用)?(?:评级)?观察名单")
+# 词表句式: "列入评级观察**是**对于…" (系词) 与 "评级观察**分为**「列入正面观察名单」" (枚举)。
+# 这是 _strip_rating_legend 之外的第二道网 —— 有些机构把释义混排进正文而不是放附录。
+_RE_WATCH_DEFINITION = re.compile(
+    r"评级观察分为|列入评级观察是|观察名单[是指]|分为[^。；;]{0,10}观察名单")
+_WATCH_DEFINITION_WINDOW = 60
+
+
+def _watch_match_is_definition(t: str, match: re.Match) -> bool:
+    lo = max(0, match.start() - _WATCH_DEFINITION_WINDOW)
+    return bool(_RE_WATCH_DEFINITION.search(t[lo: match.end() + _WATCH_DEFINITION_WINDOW]))
+
+
 def _parse_credit_watch_status(t: str) -> str | None:
-    if re.search(r"(?:撤出|移出|调出|取消).{0,12}(?:评级)?观察名单", t):
+    """评级观察状态。命中关键词还不够 —— 必须确认这句话在**陈述一次评级行动**。
+
+    跟踪评级报告末尾成段解释评级符号含义, 里面把"列入正面观察名单"逐个列一遍。实测主池
+    51 只带观察状态的债里 47 只的值来自那段词表 (见 _strip_rating_legend 的注释)。
+    """
+    removed = _RE_WATCH_REMOVED.search(t)
+    if removed and not _watch_match_is_definition(t, removed):
         return "撤出观察名单"
-    if re.search(r"(?:继续)?(?:列入|纳入).{0,12}(?:评级)?观察名单", t):
+    listed = _RE_WATCH_LISTED.search(t)
+    if listed and not _watch_match_is_definition(t, listed):
         return "列入观察名单"
-    if re.search(r"评级关注|关注公告", t):
+    # "关注公告"是评级机构就某一具体事项 (业绩预亏/监管函/诉讼) 出的专项公告, 判据落在
+    # 标题式措辞上; 光有"评级关注"四个字散落在正文里不算。
+    if re.search(r"评级关注公告|的关注公告|关于[^。；;]{0,40}的关注", t):
         return "评级关注"
     return None
 

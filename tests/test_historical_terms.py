@@ -503,6 +503,56 @@ def test_resolve_down_reset_intensity_passes_announced_new_k():
     assert resolve_down_reset_intensity(0.15, without_k).scheduled_reset_target_k is None
 
 
+def test_resolve_down_reset_intensity_rejects_upward_target_k():
+    """公告解析出的新 K 高于现 K → 方向不可能, 必须丢掉而不是原样透传。
+
+    下修公告正文开头会成段引用"历次转股价格调整情况", 而 parse_down_reset_new_price 取的是
+    **第一个**"由 A 元/股 修正为 B 元/股", 于是抓到几年前那次调整的 B。实测全库 147 条带
+    event_price 的下修事件里 106 条 (72%) 新 K 严格高于当时的 K —— 例如强力转债 2026-08-07
+    提议公告正文依次出现 18.98/18.98/18.94/18.94/18.90/12.70, 解析结果 18.94 (2021 年的值),
+    而当时 K 已经是 12.70。
+
+    这个错值不会算出错价 (pricer 的节点是 max(V, reset_value), 偏高的 target_k 只会让
+    reset_value 低于 V), 但会让节点**静默变 no-op** —— 下修价值被整只抹平。
+    """
+    from datetime import date
+
+    resolved = ResolvedDownReset(
+        block_until=None, p_scale=None, note=None, cooldown_months=None,
+        announce_date=None, proposal_date=date(2026, 8, 7), announced_new_k=18.94,
+    )
+    bogus = resolve_down_reset_intensity(0.15, resolved, current_k=12.70)
+    assert bogus.scheduled_reset_target_k is None      # 丢掉 → pricer 回落 premium/floor 估算
+    assert bogus.scheduled_reset_date is not None      # 但节点本身还在: 下修确实被提议了
+    assert bogus.scheduled_reset_kind == "proposed"
+
+    # 不给 current_k 时不做校验 (老调用方保持原行为)
+    assert resolve_down_reset_intensity(0.15, resolved).scheduled_reset_target_k == pytest.approx(18.94)
+
+
+def test_resolve_down_reset_intensity_keeps_target_k_equal_to_current():
+    """等于现 K 的必须留着: 那是"下修已落地、条款已刷新"的正常状态。
+
+    pricer 靠 target_k == K 让节点退化成恒等映射 (no-op) 来防双计。把它一起拦掉会改用
+    premium/floor 估算, 反而把已经落地的下修**再算一遍**。
+    """
+    from datetime import date
+
+    landed = ResolvedDownReset(
+        block_until=None, p_scale=None, note=None, cooldown_months=None,
+        announce_date=None, proposal_date=date(2026, 8, 7), announced_new_k=12.70,
+    )
+    assert resolve_down_reset_intensity(
+        0.15, landed, current_k=12.70).scheduled_reset_target_k == pytest.approx(12.70)
+
+    lower = ResolvedDownReset(
+        block_until=None, p_scale=None, note=None, cooldown_months=None,
+        announce_date=None, proposal_date=date(2026, 8, 7), announced_new_k=10.60,
+    )
+    assert resolve_down_reset_intensity(
+        0.15, lower, current_k=12.70).scheduled_reset_target_k == pytest.approx(10.60)
+
+
 def test_terms_patch_store_rewrite_edits_and_drops(tmp_path):
     """rewrite: 逐条改写已有 patch (修数据用), 返回 None 即删除该条。"""
     store = TermsPatchStore(tmp_path / "patches.json")
@@ -669,3 +719,59 @@ def test_parsed_patches_still_apply_without_authoritative_source(tmp_path):
     ])
     terms = store.apply("127112.SZ", BondTerms(conversion_price=99.0), date(2026, 8, 22))
     assert terms.conversion_price == pytest.approx(84.72)
+
+
+def test_project_terms_cuts_per_field_not_wholesale(tmp_path):
+    """``terms_as_of`` 的裁剪要**逐字段**判 —— 快照覆盖不到的字段不能裁。
+
+    cb_data 里 credit_rating_outlook / credit_watch_status 永远是空的 (Wind 的
+    ratingoutlook 实测取不到, CBEvent 也不带这两个字段), 公告解析写进 patch 库是唯一来源。
+    对它们"快照已含更早的变更"根本不成立, 照常裁剪的后果是字段永远进不了定价视图 ——
+    实测 patch 库里躺着 986 条展望, 而主池 265/285 只债的展望在 live 路径上被整段丢掉。
+
+    而 conversion_price 必须继续裁: cb_data 的 K 是 Wind 当前值, 是两者冲突时的权威。
+    """
+    from datetime import date
+
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.historical_terms import TermsPatch, TermsPatchStore, project_terms
+
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="113001.SH", effective_date=date(2026, 6, 13),
+                   fields={"credit_rating_outlook": "负面",
+                           "conversion_price": 99.9},   # ← 陈旧的解析值, 必须被裁掉
+                   source="cninfo"),
+    ])
+    terms = BondTerms(sec_name="测试转债", conversion_price=12.34)
+    projected = project_terms(
+        "113001.SH", terms, date(2026, 8, 25),
+        patch_store=store, apply_events=False,
+        terms_as_of=date(2026, 8, 20),      # patch 生效日更早 → 常规字段要被裁
+    ).terms
+
+    assert projected.conversion_price == 12.34        # 快照说了算
+    assert projected.credit_rating_outlook == "负面"   # 快照里没有, 不能裁
+
+
+def test_project_terms_still_lets_snapshot_win_on_rating(tmp_path):
+    """credit_rating **不在**豁免集: cb_data 的评级由第三方同步驱动, 比公告解析准。
+
+    实测拿 akshare 当裁判, 体检标记的 17 条分歧里 15 条是公告 patch 错、cb_data 对。
+    """
+    from datetime import date
+
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.historical_terms import TermsPatch, TermsPatchStore, project_terms
+
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="113001.SH", effective_date=date(2026, 5, 19),
+                   fields={"credit_rating": "A"}, source="cninfo"),
+    ])
+    projected = project_terms(
+        "113001.SH", BondTerms(sec_name="精工转债", credit_rating="AA"),
+        date(2026, 8, 25), patch_store=store, apply_events=False,
+        terms_as_of=date(2026, 8, 20),
+    ).terms
+    assert projected.credit_rating == "AA"

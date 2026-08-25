@@ -79,3 +79,70 @@ def test_missing_rating_column_is_an_error(monkeypatch):
                         lambda *a, **k: pd.DataFrame({"债券代码": ["128100"]}))
     with pytest.raises(RuntimeError):
         mod.fetch_third_party_ratings()
+
+
+# ── 上游的 "sti" 后缀 ────────────────────────────────────────────────────────
+#
+# akshare 对部分券 (科创板 118xxx 段居多) 返回 "AA+sti" / "A-sti" 这类带口径后缀的值。
+# 早期实现要求值精确落在 _RANK 里, 于是这一整类券**每次同步都被静默跳过**, 继续挂着
+# Wind 的发行时冻结值 —— 实测 26 只 (主池 21 只) 从未刷新过, 其中科蓝转债本地 AA- /
+# 第三方 A-, 差 3 档, 信用利差下限 3.50% vs 8.00%。
+
+@pytest.mark.parametrize("raw,expected", [
+    ("AA+", "AA+"),
+    ("AA+sti", "AA+"),
+    ("A-STI", "A-"),
+    ("AAAsti", "AAA"),
+    ("BBB+sti", "BBB+"),
+    ("  AA sti ", "AA"),   # 前后空白与后缀之间的空格都不影响读数
+    ("-", None),           # 退市券的占位符
+    ("sti", None),
+    ("XX", None),
+    ("", None),
+    (None, None),
+])
+def test_normalize_rating_strips_only_known_suffix(raw, expected):
+    got = mod.normalize_rating(raw)
+    assert got == expected
+    # 不变量: 输出要么是标准档位, 要么是 None —— 永远不猜一个 _RANK 之外的值出来
+    assert got is None or got in mod._RANK
+
+
+def test_suffixed_third_party_value_is_not_silently_dropped(monkeypatch):
+    import pandas as pd
+    monkeypatch.setattr("akshare.bond_zh_cov", lambda *a, **k: pd.DataFrame({
+        "债券代码": ["123157", "111025", "999999"],
+        "信用评级": ["A-sti", "AA+sti", "无评级"],
+    }))
+    assert mod.fetch_third_party_ratings() == {"123157": "A-", "111025": "AA+"}
+
+
+def test_suffixed_local_value_gets_downgrade_applied(bundle_path, monkeypatch):
+    """本地存着 "AA-"、第三方是 "A-sti": 归一化后是实打实的 3 档下调, 必须落库。"""
+    bundle = TermsBundle(bundle_path)
+    bundle.set("123157.SZ", BondTerms(sec_name="科蓝转债", underlying_code="000001.SZ",
+                                      conversion_price=10.0, maturity_date=date(2030, 1, 1),
+                                      credit_rating="AA-"), source="unit")
+    monkeypatch.setattr(mod, "fetch_third_party_ratings", lambda: {"123157": "A-"})
+
+    row = next(r for r in mod.sync_ratings(bundle_path, dry_run=False)["changes"]
+               if r["bond_code"] == "123157.SZ")
+    assert row["notches"] == -3 and not row["normalize_only"]
+    assert TermsBundle(bundle_path).get("123157.SZ").credit_rating == "A-"
+
+
+def test_suffixed_local_value_is_rewritten_to_canonical_grade(bundle_path, monkeypatch):
+    """档位没变、只是写法不规范: 也要洗成标准档位, 否则所有按 _RANK 精确查表的消费者
+    (体检的评级检查、sync 自身的档位差) 会静默跳过这几只。"""
+    bundle = TermsBundle(bundle_path)
+    bundle.set("111025.SH", BondTerms(sec_name="圣泉转债", underlying_code="000001.SZ",
+                                      conversion_price=10.0, maturity_date=date(2030, 1, 1),
+                                      credit_rating="AA+sti"), source="unit")
+    monkeypatch.setattr(mod, "fetch_third_party_ratings", lambda: {"111025": "AA+"})
+
+    row = next(r for r in mod.sync_ratings(bundle_path, dry_run=False)["changes"]
+               if r["bond_code"] == "111025.SH")
+    assert row["normalize_only"] is True and row["notches"] == 0
+    assert TermsBundle(bundle_path).get("111025.SH").credit_rating == "AA+"
+    # 洗过一遍之后就该稳定下来, 不能每次同步都报一次"变更"
+    assert mod.sync_ratings(bundle_path, dry_run=False)["changes"] == []

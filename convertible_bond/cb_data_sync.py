@@ -85,6 +85,35 @@ def is_terminal_terms(terms: BondTerms, on_date: date) -> str | None:
     return None
 
 
+# Wind **不是权威源**、但 get_bond_terms 仍会返回值的字段: 全量重建时必须让本地已有值胜出,
+# 否则一次 cb-sync-tradable 就把别的同步刚拉来的正确值整批盖回去。
+#
+# 目前只有 credit_rating 一个。Wind 的 ``creditrating`` 是**发行时值** (cb_data 跨 17 个版本、
+# 约 4000 次逐债重取零变化), 当前值由 ``cb-sync-ratings`` 从 akshare 刷新。日常状态刷新那条路
+# 早就堵上了 (``get_admission_status`` 显式返回 ``credit_rating=None``), 全量这条却漏了 ——
+# 实测一次全量同步把 15 只已下调到 A-/A/BBB 的债的评级盖回 Wind 冻结值, 主池 285 → 301,
+# 那 15 只全是刚被"评级过低"正确剔除的。
+#
+# Wind 仍然**兜底首次建档**: 本地为空时照常写入 (见 AGENTS.md「信用评级的当前值走第三方」)。
+_LOCALLY_AUTHORITATIVE_FIELDS = ("credit_rating",)
+
+
+def _keep_locally_authoritative(store, code: str, terms: BondTerms) -> BondTerms:
+    """本地已有值的"非 Wind 权威"字段不被全量同步覆盖。"""
+    try:
+        existing = store.get(code) if hasattr(store, "get") else None
+    except Exception:
+        existing = None
+    if existing is None:
+        return terms
+    keep = {
+        name: getattr(existing, name)
+        for name in _LOCALLY_AUTHORITATIVE_FIELDS
+        if getattr(existing, name, None) not in (None, "")
+    }
+    return replace(terms, **keep) if keep else terms
+
+
 def _fetch_one(
     provider: DataProvider,
     code: str,
@@ -151,11 +180,20 @@ def sync_cb_terms(
     fresh_items: list[tuple[str, BondTerms]] = []
     codes = list(bond_codes)
 
-    # 增量过滤: store 提供 is_stale 时按时效跳过, 否则忽略 incremental 标志
+    # 增量过滤: store 提供 is_stale 时按时效跳过, 否则忽略 incremental 标志。
+    #
+    # 时效必须按**本 provider 这个来源**算, 不能用全局 fetched_at —— 每日的
+    # admission_status 刷新、每月的 ratings 同步、每日的 cb_events 回写都会把全局值推到
+    # 今天, 却一个条款字段都不抓。用全局值判定时实测 1052/1058 只被判成"7 天内已更新"
+    # 而跳过, 且照常打印"已在 N 天内更新" —— 增量同步永久空转且完全静默。
     if incremental and hasattr(store, "is_stale"):
         to_fetch: list[str] = []
         for code in codes:
-            if store.is_stale(code, max_age_days):
+            try:
+                stale = store.is_stale(code, max_age_days, source=provider.name)
+            except TypeError:      # 旧式 store 没有 source 形参
+                stale = store.is_stale(code, max_age_days)
+            if stale:
                 to_fetch.append(code)
             else:
                 skipped.append((code, f"已在 {max_age_days} 天内更新"))
@@ -174,7 +212,7 @@ def sync_cb_terms(
             if reason:
                 dropped.append((code, reason))
                 continue
-        fresh_items.append((code, terms))
+        fresh_items.append((code, _keep_locally_authoritative(store, code, terms)))
         success.append(code)
 
     if fresh_items:

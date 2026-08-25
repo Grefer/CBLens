@@ -129,9 +129,19 @@ class UniversalCBPricer:
         # scheduled_reset_target_k: 公告解析到的新转股价; None 时回落 premium/floor 估算。
         self.scheduled_reset_date = scheduled_reset_date
         self.scheduled_reset_prob = max(0.0, float(scheduled_reset_prob))
+        # 方向兜底: 下修不会**抬高**转股价, target_k 严格大于现 K 一定是上游解析错了 ——
+        # 丢掉它回落 premium/floor 估算, 而不是留着让节点静默变 no-op
+        # (max(V, reset_value) 的后果)。上游 resolve_down_reset_intensity 有同一道闸,
+        # 这里防直接构造 pricer 的调用方。
+        #
+        # 注意闸是 **>** 不是 >=: ``target_k == 现 K`` 是有意义的状态 —— 下修已经落地、
+        # 条款刷新已经把 K 改成新值, 此时节点该成 no-op 来防双计 (见 _down_reset_value)。
+        # 把它一起拦掉会让 pricer 改用 premium/floor 估算, 反而把已落地的下修**再算一遍**。
         self.scheduled_reset_target_k = (
             float(scheduled_reset_target_k)
-            if scheduled_reset_target_k is not None and scheduled_reset_target_k > 0
+            if scheduled_reset_target_k is not None
+            and scheduled_reset_target_k > 0
+            and scheduled_reset_target_k <= self.K
             else None
         )
         self.coupon_rates = tuple(coupon_rates or DEFAULT_COUPON_RATES)

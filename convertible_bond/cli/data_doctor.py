@@ -187,7 +187,7 @@ def check_patch_chain(ctx: dict) -> list[Check]:
 
 def check_patch_tail_matches_current(ctx: dict) -> Check:
     """末条 patch 应等于 cb_data 当前值 —— 仅对未走重大变化过滤的字段有意义。"""
-    bundle, store = ctx["bundle"], ctx["patch_store"]
+    bundle, store, today = ctx["bundle"], ctx["patch_store"], ctx["today"]
     fname = "conversion_price"
     chains = _patches_by_field(store, fname)
     same = 0
@@ -200,7 +200,7 @@ def check_patch_tail_matches_current(ctx: dict) -> Check:
         tail = float(seq[-1].fields[fname])
         if abs(float(cur) - tail) <= max(1e-6, abs(float(cur)) * 1e-6):
             same += 1
-        elif not _looks_delisted(terms):
+        elif not _looks_delisted(terms, today):
             live_bad.append(f"{code} 当前={cur} 末patch={tail}")
     in_pool = [row for row in live_bad if row.split()[0] in ctx["pool"]]
     return Check(
@@ -212,11 +212,22 @@ def check_patch_tail_matches_current(ctx: dict) -> Check:
         extra=live_bad[:6])
 
 
-def _looks_delisted(terms: Any) -> bool:
-    name = str(getattr(terms, "sec_name", "") or "")
-    return ("退市" in name
-            or getattr(terms, "delisting_date", None) is not None
-            or getattr(terms, "last_trading_date", None) is not None)
+def _looks_delisted(terms: Any, on_date: date | None = None) -> bool:
+    """真的已经摘牌了吗 —— 判据是**日期已过**, 不是"有没有这个字段"。
+
+    曾写成 ``delisting_date is not None``。当时全库只有 17 只有摘牌日, 这么写没问题;
+    2026-08-22 全库回填 (17 → 1041 只) 之后, 几乎每只在市债都带着一个**未来的**到期摘牌日,
+    于是「末条 patch == 当前值」这条检查跳过 952/958 (99%) 条链、只真检查 6 只, 藏着
+    30 只不符。回填一个字段把另一条检查悄悄变成恒真 —— 这正是体检本身要防的那类事故。
+    """
+    day = on_date or market_today()
+    if "退市" in str(getattr(terms, "sec_name", "") or ""):
+        return True
+    delisting = getattr(terms, "delisting_date", None)
+    if delisting is not None and delisting <= day:
+        return True
+    last_trading = getattr(terms, "last_trading_date", None)
+    return last_trading is not None and last_trading < day
 
 
 def check_patch_authority(ctx: dict) -> Check:
@@ -309,36 +320,48 @@ _RATING_ORDER = ("C", "CC", "CCC", "B-", "B", "B+", "BB-", "BB", "BB+", "BBB-", 
 _RATING_RANK = {grade: i for i, grade in enumerate(_RATING_ORDER)}
 
 
-def check_rating_freshness(ctx: dict) -> Check:
-    """cb_data 的评级是**发行时值**, 不会随跟踪评级变动 —— 这条检查盯的是它有多陈旧。
+def check_rating_divergence(ctx: dict) -> Check:
+    """公告解析出的评级与 cb_data 的分歧率 —— **方向随 cb_data 的来源而变, 别硬读**。
 
-    判据方向曾经搞反过: 一度按"末条 patch 必须等于 cb_data 当前值"来判 patch 脏, 据此删了
-    18 条、又把 330 条全剥掉。实测证明反了 —— cb_data.json 的 17 个版本、约 4000 次逐债
-    Wind 重取里 ``credit_rating`` 变化 **0 次**, 而同批刷新中 ``conversion_price`` 变了 287 次;
-    字段在被真实刷新却一格不动, 是发行时冻结值的特征。对 akshare 第三方评级的精确命中率
-    cb_data 79.5% < patch 末条 88.4% (平均档位误差 0.534 vs 0.260)。
+    这条检查的判据方向翻过两次, 两次都是因为"cb_data 的评级从哪来"变了:
 
-    所以 patch 才是较新的那个, 分歧要读成"cb_data 落后了几档", 不是"patch 错了"。
+    ① 最早按"末条 patch 必须等于 cb_data"判 patch 脏, 据此删了 18 条、又剥掉 330 条。
+       方向是反的 —— 当时 cb_data 装的是 Wind ``creditrating`` 即**发行时冻结值**
+       (17 个版本、约 4000 次逐债重取零变化, 同批 ``conversion_price`` 变了 287 次),
+       公告 patch 才是较新的那个。
+    ② ``cb-sync-ratings`` 落地后, cb_data 改由 akshare 第三方**当前值**驱动, 于是①的
+       前提整个失效。实测拿第三方给这 17 条分歧逐条当裁判: **15 条是公告 patch 错、
+       cb_data 对**, 只有 1 条是 cb_data 真落后 (科蓝转债, 且成因是同步侧的 sti 后缀
+       被丢弃, 不是"没跑同步")。公告侧错得如此一边倒是有具体成因的 —— 
+       ``_parse_bond_credit_rating`` 的 ``rating_re`` 左界回溯会把 AA 抠成 A、AA+ 抠成 A+,
+       方向恒为**偏低**, 与真实下调的方向完全重合。
+
+    所以这里**只报分歧率、不断言谁错**: 它现在是一条公告解析质量的粗指标。判"谁对"要靠
+    与两边都独立的第三方 —— 即 ``--online`` 的「评级同步水位」。要按这条去改库之前,
+    先跑 ``cb-sync-ratings`` 看第三方站哪边。
     """
     bundle, store = ctx["bundle"], ctx["patch_store"]
     chains = _patches_by_field(store, "credit_rating")
-    stale, ahead = [], 0
+    lower, higher = [], []
     for code, seq in chains.items():
         current = str(getattr(bundle.get(code), "credit_rating", "") or "")
         tail = str(seq[-1].fields["credit_rating"])
         if not current or tail == current:
             continue
+        row = f"{code} cb_data={current} 最新公告={tail} @{seq[-1].effective_date}"
         if _RATING_RANK.get(tail, 99) < _RATING_RANK.get(current, -1):
-            stale.append(f"{code} cb_data={current} 最新公告={tail} @{seq[-1].effective_date}")
+            lower.append(row)
         else:
-            ahead += 1
+            higher.append(row)
     total = len(chains)
+    n = len(lower) + len(higher)
     return Check(
-        "cb_data 评级新鲜度", _grade(1 - len(stale) / total if total else 1.0, 0.90, 0.75),
-        f"公告已下调但 cb_data 未跟进 {_pct(len(stale), total)}; 反向 {ahead} 只",
-        "Wind 的 creditrating 是发行时值, 全库跨 17 个版本零变化。这里分歧越多, "
-        "说明 cb_data 越落后 —— 不要反过来当成 patch 脏 (那个方向曾导致误删 348 条较准的数据)",
-        "交叉校验", extra=stale[:6])
+        "公告评级 vs cb_data 分歧", _grade(1 - n / total if total else 1.0, 0.80, 0.60),
+        f"分歧 {_pct(n, total)} (公告更低 {len(lower)}, 公告更高 {len(higher)})",
+        "只报分歧率, 不断言谁错: cb_data 现在走 akshare 第三方当前值, 公告侧的 rating_re "
+        "左界 bug 会系统性把评级抠低 —— 实测 17 条分歧里 15 条是公告错。裁判是 --online "
+        "的「评级同步水位」, 别照这条去改库",
+        "交叉校验", extra=(lower + higher)[:6])
 
 
 def check_pool_terms_projection(ctx: dict) -> Check:
@@ -415,6 +438,47 @@ def check_events_match_current_parser(ctx: dict) -> Check:
         "交叉校验")
 
 
+# 断言"这只债现在不能交易"的剔除原因 —— 只有这些才会与"今日有成交"直接矛盾。
+#
+# 判据必须按**语义**分类, 不能只列前两条: 早期版本的 dead 集只有 {已退市, 已过最后交易日},
+# 于是派克转债 / 中仑转债两只上市首日成交 2.57 亿 / 12.95 亿的新债 (剔除原因分别是
+# "停牌/暂停交易" 与 "不可交易") 从这条检查底下整只漏过去, 检查还报 0。
+#
+# 反过来, 评级过低 / 正股 ST / 成交额过低 / 余额过小 / 定向转债 这些是**策略口径**的剔除:
+# 它们从不声称这只债不能交易, 放进来只会让检查天天误报几十只。
+_NOT_TRADING_REASONS = frozenset({
+    "已退市", "已过最后交易日", "已到期", "暂停上市",
+    "停牌/暂停交易", "不可交易", "已发行未上市", "违约/异常状态",
+})
+
+
+def _asserts_not_trading(reason: str) -> bool:
+    if reason in _NOT_TRADING_REASONS:
+        return True
+    # "N 日后可交易" 是动态串, 同样断言"今天买不到"
+    return bool(reason) and reason.endswith("日后可交易")
+
+
+# 交易时段边界的假阳性: akshare 现货表在收盘后仍留着**上一交易日**的行情 (``ticktime``
+# 只有时分秒、没有日期), 而 ``market_today()`` 按 Asia/Shanghai 走 —— 在美西运行时本机
+# 上午就已经是上海的次日凌晨。于是"最后交易日恰好是上一交易日"的债会被判成"判死却仍在
+# 成交", 而那笔成交正是它自己最后一个交易日的。实测春23转债 (最后交易日 2026-08-25 当天
+# 成交 453 万手, 08-31 摘牌) 就是这么被误报的。
+#
+# 判据: 停止交易的日期离今天不足这么多天时, 那笔成交无法归属到"今天", 不算证据。原始事故
+# 里的 19 只已经死了几个月, 加这道闸不影响检出能力。取 3 天覆盖周五收盘 → 周一开盘。
+_RECENT_STOP_GRACE_DAYS = 3
+
+
+def _stopped_recently(terms: Any, today: date) -> bool:
+    """这只债的停止交易/摘牌日近到无法与"上一交易日的残留行情"区分。"""
+    for name in ("last_trading_date", "delisting_date"):
+        day = getattr(terms, name, None)
+        if day is not None and (today - day).days <= _RECENT_STOP_GRACE_DAYS:
+            return True
+    return False
+
+
 def check_dead_but_trading(ctx: dict) -> Check:
     """**最强的一条**: 被准入判死、但今日实际有成交。
 
@@ -440,18 +504,24 @@ def check_dead_but_trading(ctx: dict) -> Check:
         return Check("判死但今日有成交", WARN, f"取行情失败: {exc}",
                      "外部对照不可用时不阻断体检", "外部对照")
 
-    dead = {"已退市", "已过最后交易日"}
-    ghosts = []
+    ghosts, boundary = [], 0
     for code, reason in ctx["excluded"].items():
         px, vol = quote.get(code, (0.0, 0.0))
-        if reason in dead and vol > 0:      # 零成交的陈旧行不算 —— 判据是成交, 不是有没有报价
-            ghosts.append(f"{code} {getattr(ctx['bundle'].get(code), 'sec_name', '')} "
-                          f"{px}元 量={vol:.0f} ({reason})")
+        # 零成交的陈旧行不算 —— 判据是成交, 不是有没有报价
+        if not (_asserts_not_trading(reason) and vol > 0):
+            continue
+        if _stopped_recently(ctx["bundle"].get(code), ctx["today"]):
+            boundary += 1
+            continue
+        ghosts.append(f"{code} {getattr(ctx['bundle'].get(code), 'sec_name', '')} "
+                      f"{px}元 量={vol:.0f} ({reason})")
     return Check(
         "判死但今日有成交", FAIL if ghosts else OK,
-        f"{len(ghosts)} 只被判死的债今日仍在成交",
+        f"{len(ghosts)} 只被判死的债今日仍在成交"
+        + (f"; 另有 {boundary} 只刚停止交易, 行情无法与上一交易日残留区分" if boundary else ""),
         "曾一次抓出 19 只 (精测转2 431 元、胜蓝转02 326 元), 占主池 6.8%, "
-        "而当时库内每一项自洽性指标都正常",
+        "而当时库内每一项自洽性指标都正常; 覆盖所有断言'不能交易'的剔除原因, "
+        "只查已退市/已过最后交易日会漏掉上市首日被判成'不可交易'的新债",
         "外部对照", extra=ghosts[:10])
 
 
@@ -546,7 +616,7 @@ CHECKS: list[Callable[[dict], Any]] = [
     check_frozen_value_signature,
     check_cross_bond_patches,
     check_statutory_line_clustering,
-    check_rating_freshness,
+    check_rating_divergence,
     check_pool_terms_projection,
     check_events_predate_listing,
     check_events_match_current_parser,

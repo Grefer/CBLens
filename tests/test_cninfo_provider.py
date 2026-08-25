@@ -719,3 +719,58 @@ def test_extract_text_from_pdf_bytes_falls_through_without_crashing(caplog):
     assert extract_text_from_pdf_bytes(b"not a pdf at all") is None
     # 不应该再声称库没装 —— 本机 pdfplumber/pypdf 都在
     assert "均未安装" not in caplog.text
+
+
+# ── 评级报告附录词表 ────────────────────────────────────────────────────────
+#
+# 跟踪评级报告末尾成段解释评级符号含义, 把"列入正面观察名单"逐个列一遍。早期正则全文搜
+# 关键词就命中了词表 —— 实测主池 51 只带观察状态的债里 47 只的值来自那段附录 (皓元/国检/
+# 花园/鸿路四份 2026 跟踪评级报告原句一字不差), 真正来自专项公告的只有 4 只。
+# 与 ``parse_outstanding_balance_change`` 踩过的"赎回门槛条款被当成当期余额"是同一类陷阱。
+
+_LEGEND = (
+    "附件4-1主体长期信用等级设置及含义联合资信主体长期信用等级划分为三等九级，"
+    "符号表示为：AAA、AA、A、BBB、BB、B、CCC、CC、C。"
+    "附件4-2评级观察设置及含义列入评级观察是对于已对受评主体给出了评级结果，"
+    "由于突发事件，且对突发事件暂时没有结论时，采取的一种评级行动。"
+    "评级观察分为“列入正面观察名单”、“列入负面观察名单”和“列入发展中观察名单”。"
+    "附件4-3评级展望设置及含义评级展望是对信用等级未来一年左右变化方向的评价，"
+    "评级展望通常分为正面、负面、稳定、发展中等四种。"
+)
+
+
+def test_rating_legend_appendix_does_not_fabricate_watch_status():
+    body = (
+        "联合资信评估股份有限公司出具跟踪评级报告。经过跟踪评级，联合资信确定维持安徽鸿路"
+        "钢结构（集团）股份有限公司主体长期信用等级为AA，维持“鸿路转债”的信用等级为AA，"
+        "评级展望为稳定。" + "补充分析。" * 40 + _LEGEND
+    )
+    parsed = parse_credit_rating_terms(body, title="安徽鸿路钢结构公开发行可转换公司债券2026年跟踪评级报告")
+    assert parsed["credit_watch_status"] is None      # ← 词表不是状态
+    assert parsed["credit_rating"] == "AA"
+    assert parsed["credit_rating_outlook"] == "稳定"
+
+
+def test_real_watch_listing_still_parses():
+    """真实专项公告: 有施动者、点名发行人与债项。"""
+    body = (
+        "中证鹏元决定维持公司主体信用等级为A+，“声迅转债”信用等级维持为A+，"
+        "并将公司主体信用等级及“声迅转债”信用等级列入信用评级观察名单。"
+    )
+    parsed = parse_credit_rating_terms(
+        body, title="中证鹏元关于将北京声迅电子股份有限公司主体信用等级和声迅转债信用等级列入信用评级观察名单的公告")
+    assert parsed["credit_watch_status"] == "列入观察名单"
+
+
+def test_watch_removal_still_parses():
+    body = "经跟踪评级，中证鹏元决定将公司主体信用等级及“欧晶转债”信用等级撤出信用评级观察名单。"
+    assert parse_credit_rating_terms(body, title="关于撤出信用评级观察名单的公告")[
+        "credit_watch_status"] == "撤出观察名单"
+
+
+def test_strip_rating_legend_keeps_short_documents_intact():
+    """锚点出现在很靠前的位置 → 不是附录标题, 不能整篇截掉。"""
+    from convertible_bond.cb_event_sync import _strip_rating_legend
+
+    short = "评级符号及含义说明。" + "尾部。" * 5
+    assert _strip_rating_legend(short) == short

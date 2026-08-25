@@ -622,6 +622,7 @@ def price_from_provider(provider: DataProvider, bond_code,
 
     down_intensity = resolve_down_reset_intensity(
         p_down, resolved, redemption_mode=redemption_mode,
+        current_k=float(terms.conversion_price),
     )
     effective_p_down = down_intensity.effective_p_down
     # 已公告下修: 把一次性下修节点传入 pricer (regime ②); 显式 override 优先。

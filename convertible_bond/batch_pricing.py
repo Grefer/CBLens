@@ -500,6 +500,13 @@ def batch_pricing_exclusion_reason(
     return None
 
 
+# 日内临停 ≠ 停牌。新债上市首日触发涨跌幅熔断时 Wind 的 ``trade_status`` 就返回
+# "盘中停牌", 但那是当日内几分钟到半小时的机制性熔断, 收盘照样有巨额成交 —— 派克转债
+# 上市首日标着"盘中停牌"、当天成交 2.57 亿, 却被这条判据整只踢出主池。这类词必须先于
+# 通用的"停牌"关键词识别, 否则子串匹配会先命中。
+_INTRADAY_HALT_KEYWORDS = ("盘中停牌", "临时停牌", "盘中临停")
+
+
 def _public_trading_status_reason(terms: Any) -> str | None:
     status = " ".join(
         str(_terms_value(terms, key) or "")
@@ -511,6 +518,8 @@ def _public_trading_status_reason(terms: Any) -> str | None:
         return "已退市"
     if "暂停上市" in status:
         return "暂停上市"
+    for keyword in _INTRADAY_HALT_KEYWORDS:
+        status = status.replace(keyword, "")
     if any(keyword in status for keyword in ("停牌", "暂停交易", "停止交易")):
         return "停牌/暂停交易"
     if "违约" in status:

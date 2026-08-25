@@ -45,6 +45,19 @@ def project_terms_history_dir() -> Path:
 # 2026-07-03 K=84.72, 而 Wind as-of 的真值是 60.02; 按日期取最后一条就取到了错的。
 _AUTHORITATIVE_PATCH_SOURCES = frozenset({"wind_asof"})
 
+# **快照覆盖不到的字段**: cb_data 里这两个字段永远是空的 —— Wind 的 ``ratingoutlook`` /
+# ``creditratingoutlook`` 实测取不到 (0/1058), CBEvent 里也不带它们, 公告正文解析写进
+# patch 库是唯一来源。
+#
+# 对它们, ``terms_as_of`` 那条"快照已含更早的变更、所以更早的 patch 不带来新信息"的推理
+# **不成立** —— 快照里根本是空的。照常裁剪的后果是这两个字段永远进不了定价视图: patch 库
+# 里躺着 986 条展望 + 84 条观察, 而主池 265/285 只债的展望在 live 路径上被整段丢掉。
+#
+# 反过来 ``credit_rating`` **不在**这个集合里, 而且不能加进来: cb_data 的评级由
+# ``cb-sync-ratings`` 从 akshare 第三方刷新 (实测与第三方 100% 一致), 而公告解析的评级
+# 拿第三方当裁判时 17 条分歧里 15 条是公告错。快照覆盖得到的字段, 就该由快照说了算。
+_SNAPSHOT_UNCOVERED_FIELDS = frozenset({"credit_rating_outlook", "credit_watch_status"})
+
 
 def _drop_shadowed_patches(patches: list["TermsPatch"]) -> list["TermsPatch"]:
     """逐字段: 有权威源就丢掉该字段的解析源 patch。"""
@@ -263,19 +276,25 @@ def project_terms(
     即**当前 K**, 已内含全部已生效下修; 两个源冲突时它才是权威。
     """
     store = patch_store or default_terms_patch_store()
-    patches = store.list_patches(
-        bond_code=bond_code, through_date=valuation_date, after=terms_as_of)
+    # 全量取出后**逐字段**决定要不要按 terms_as_of 裁剪 —— 快照覆盖不到的字段不能裁
+    # (见 _SNAPSHOT_UNCOVERED_FIELDS)。用 after= 一刀切会把它们连同别的字段一起丢掉。
+    patches = store.list_patches(bond_code=bond_code, through_date=valuation_date)
     projected = terms
     patch_fields: set[str] = set()
+    applied: list[TermsPatch] = []
     for patch in patches:
+        cut = terms_as_of is not None and patch.effective_date <= terms_as_of
         updates = {
             key: _coerce_bond_field_value(key, value)
             for key, value in patch.fields.items()
             if key in _BOND_FIELD_NAMES
+            and not (cut and key not in _SNAPSHOT_UNCOVERED_FIELDS)
         }
         if updates:
             projected = replace(projected, **updates)
             patch_fields.update(updates)
+            applied.append(patch)
+    patches = applied
     if apply_events:
         events = (event_store or CBEventStore(project_events_path())).list_events(
             bond_code=bond_code,

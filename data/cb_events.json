@@ -1,13 +1,13 @@
 {
   "_meta": {
-    "last_sync_at": "2026-08-25T07:11:09",
+    "last_sync_at": "2026-08-25T08:00:47",
     "synced_at_by_code": {
       "110025.SH": "2026-05-07T22:40:05",
       "110073.SH": "2026-05-27T06:12:45",
       "110074.SH": "2026-05-27T06:12:45",
       "110075.SH": "2026-08-22T10:38:03",
       "110076.SH": "2026-08-22T10:38:03",
-      "110077.SH": "2026-05-27T06:12:45",
+      "110077.SH": "2026-08-25T07:59:38",
       "110081.SH": "2026-05-27T06:12:45",
       "110084.SH": "2026-08-22T10:38:03",
       "110085.SH": "2026-08-22T10:38:03",
@@ -19,7 +19,7 @@
       "110095.SH": "2026-08-22T10:38:03",
       "110097.SH": "2026-08-22T10:38:03",
       "110098.SH": "2026-08-22T10:38:03",
-      "110099.SH": "2026-05-27T06:12:45",
+      "110099.SH": "2026-08-25T07:59:38",
       "110100.SH": "2026-08-22T10:38:03",
       "110101.SH": "2026-08-22T10:38:03",
       "110102.SH": "2026-08-22T10:38:03",
@@ -44,15 +44,16 @@
       "111023.SH": "2026-05-27T06:12:45",
       "111024.SH": "2026-08-22T10:38:03",
       "111025.SH": "2026-08-22T10:38:03",
+      "111026.SH": "2026-08-25T08:00:47",
       "113037.SH": "2026-05-27T06:12:45",
       "113039.SH": "2026-05-27T06:12:45",
-      "113042.SH": "2026-05-27T06:12:45",
+      "113042.SH": "2026-08-25T07:59:38",
       "113043.SH": "2026-08-22T10:38:03",
-      "113046.SH": "2026-05-27T06:12:45",
+      "113046.SH": "2026-08-25T07:59:38",
       "113048.SH": "2026-08-22T10:38:03",
       "113049.SH": "2026-08-22T10:38:03",
-      "113051.SH": "2026-05-27T06:12:45",
-      "113052.SH": "2026-05-27T06:12:45",
+      "113051.SH": "2026-08-25T07:59:38",
+      "113052.SH": "2026-08-25T07:59:38",
       "113053.SH": "2026-08-22T10:38:03",
       "113054.SH": "2026-08-22T10:38:03",
       "113056.SH": "2026-08-24T09:26:49",
@@ -89,7 +90,7 @@
       "113648.SH": "2026-08-22T10:38:03",
       "113649.SH": "2026-08-22T10:38:03",
       "113650.SH": "2026-08-22T10:38:03",
-      "113652.SH": "2026-05-27T06:12:45",
+      "113652.SH": "2026-08-25T07:59:38",
       "113654.SH": "2026-05-27T06:12:45",
       "113655.SH": "2026-08-22T10:38:03",
       "113656.SH": "2026-08-22T10:38:03",
@@ -99,7 +100,7 @@
       "113661.SH": "2026-08-22T10:38:03",
       "113665.SH": "2026-08-22T10:38:03",
       "113666.SH": "2026-08-22T10:38:03",
-      "113667.SH": "2026-05-27T06:12:45",
+      "113667.SH": "2026-08-25T07:59:38",
       "113670.SH": "2026-08-22T10:38:03",
       "113671.SH": "2026-08-22T10:38:03",
       "113673.SH": "2026-08-22T10:38:03",
@@ -214,7 +215,7 @@
       "123119.SZ": "2026-08-22T10:38:03",
       "123121.SZ": "2026-05-27T06:12:45",
       "123122.SZ": "2026-08-22T10:38:03",
-      "123124.SZ": "2026-05-27T06:12:45",
+      "123124.SZ": "2026-08-25T07:59:38",
       "123126.SZ": "2026-05-27T06:12:45",
       "123129.SZ": "2026-05-27T06:12:45",
       "123131.SZ": "2026-08-22T10:38:03",
@@ -236,11 +237,11 @@
       "123172.SZ": "2026-08-22T10:38:03",
       "123173.SZ": "2026-05-27T06:12:45",
       "123175.SZ": "2026-08-22T10:38:03",
-      "123176.SZ": "2026-05-27T06:12:45",
+      "123176.SZ": "2026-08-25T07:59:38",
       "123178.SZ": "2026-08-22T10:38:03",
       "123179.SZ": "2026-08-22T10:38:03",
       "123180.SZ": "2026-08-22T10:38:03",
-      "123183.SZ": "2026-05-27T06:12:45",
+      "123183.SZ": "2026-08-25T07:59:38",
       "123187.SZ": "2026-05-27T06:12:45",
       "123188.SZ": "2026-05-27T06:12:45",
       "123189.SZ": "2026-08-22T10:38:03",
@@ -279,7 +280,7 @@
       "123255.SZ": "2026-08-22T10:38:03",
       "123256.SZ": "2026-05-27T06:12:45",
       "123257.SZ": "2026-08-22T10:38:03",
-      "123258.SZ": "2026-05-27T06:12:45",
+      "123258.SZ": "2026-08-25T07:59:38",
       "123259.SZ": "2026-08-22T10:38:03",
       "123260.SZ": "2026-08-22T10:38:03",
       "123261.SZ": "2026-08-22T10:38:03",
@@ -323,7 +324,7 @@
       "127045.SZ": "2026-08-22T10:38:03",
       "127046.SZ": "2026-08-22T10:38:03",
       "127047.SZ": "2026-08-22T10:38:03",
-      "127049.SZ": "2026-05-27T06:12:45",
+      "127049.SZ": "2026-08-25T07:59:38",
       "127050.SZ": "2026-08-22T10:38:03",
       "127053.SZ": "2026-08-22T10:38:03",
       "127054.SZ": "2026-08-22T10:38:03",
@@ -335,7 +336,7 @@
       "127062.SZ": "2026-08-22T10:38:03",
       "127064.SZ": "2026-08-22T10:38:03",
       "127066.SZ": "2026-05-27T06:12:45",
-      "127067.SZ": "2026-05-27T06:12:45",
+      "127067.SZ": "2026-08-25T07:59:38",
       "127068.SZ": "2026-08-22T10:38:03",
       "127069.SZ": "2026-08-22T10:38:03",
       "127070.SZ": "2026-08-22T10:38:03",
@@ -344,7 +345,7 @@
       "127079.SZ": "2026-05-27T06:12:45",
       "127080.SZ": "2026-08-22T10:38:03",
       "127082.SZ": "2026-08-22T10:38:03",
-      "127083.SZ": "2026-05-27T06:12:45",
+      "127083.SZ": "2026-08-25T07:59:38",
       "127084.SZ": "2026-08-22T10:38:03",
       "127085.SZ": "2026-08-22T10:38:03",
       "127088.SZ": "2026-08-22T10:38:03",
@@ -356,7 +357,7 @@
       "127096.SZ": "2026-05-27T06:12:45",
       "127098.SZ": "2026-08-22T10:38:03",
       "127099.SZ": "2026-08-22T10:38:03",
-      "127102.SZ": "2026-05-27T06:12:45",
+      "127102.SZ": "2026-08-25T07:59:38",
       "127103.SZ": "2026-08-22T10:38:03",
       "127104.SZ": "2026-08-22T10:38:03",
       "127105.SZ": "2026-08-22T10:38:03",
@@ -383,10 +384,10 @@
       "128137.SZ": "2026-05-27T06:12:45",
       "128138.SZ": "2026-08-22T10:38:03",
       "128141.SZ": "2026-05-27T06:12:45",
-      "128142.SZ": "2026-05-27T06:12:45",
+      "128142.SZ": "2026-08-25T07:59:38",
       "145905.SH": "2026-06-12T14:25:55"
     },
-    "updated_at": "2026-08-25T07:11:09"
+    "updated_at": "2026-08-25T08:00:47"
   },
   "events": [
     {
@@ -89836,6 +89837,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-05-27/1225332020.PDF"
     },
     {
+      "bond_code": "123258.SZ",
+      "commitment_months": null,
+      "effective_end": "2031-08-27",
+      "effective_start": "2026-05-21",
+      "event_date": "2026-05-27",
+      "event_price": null,
+      "event_type": "conversion_resume",
+      "note": null,
+      "parsed_status": "恢复转股",
+      "raw_title": "关于胜蓝转02恢复转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-05-27/1225332706.PDF"
+    },
+    {
       "bond_code": "123259.SZ",
       "commitment_months": null,
       "effective_end": "2026-05-28",
@@ -90354,6 +90369,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-05-28/1225333273.PDF"
     },
     {
+      "bond_code": "113046.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-05-29",
+      "event_date": "2026-05-29",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "金田股份关于实施2025年年度权益分派调整“金田转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-05-29/1225335881.PDF"
+    },
+    {
       "bond_code": "113070.SH",
       "commitment_months": null,
       "effective_end": "2026-06-04",
@@ -90604,6 +90633,20 @@
       "raw_title": "关于富瀚转债恢复转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-05-29/1225337668.PDF"
+    },
+    {
+      "bond_code": "123124.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-05-29",
+      "event_date": "2026-05-29",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "关于 晶瑞转2 转股价格调整的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-05-29/1225339313.PDF"
     },
     {
       "bond_code": "123199.SZ",
@@ -91026,6 +91069,48 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-02/1225343291.PDF"
     },
     {
+      "bond_code": "113042.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-02",
+      "event_date": "2026-06-02",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "上海银行关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-02/1225343748.PDF"
+    },
+    {
+      "bond_code": "113051.SH",
+      "commitment_months": null,
+      "effective_end": "2025-12-31",
+      "effective_start": "2026-06-05",
+      "event_date": "2026-06-02",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "中节能风力发电股份有限公司实施2025年度权益分派时“节能转债”停止转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-02/1225342603.PDF"
+    },
+    {
+      "bond_code": "113052.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-02",
+      "event_date": "2026-06-02",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "兴业银行关于实施2025年年度A股权益分派时“兴业转债”停止转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-02/1225342514.PDF"
+    },
+    {
       "bond_code": "113665.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -91276,6 +91361,20 @@
       "raw_title": "关于预计触发鸿路转债转股价格向下修正条件的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-02/1225341617.PDF"
+    },
+    {
+      "bond_code": "128142.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-02",
+      "event_date": "2026-06-02",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "关于新乳转债转股价格调整的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-02/1225343726.PDF"
     },
     {
       "bond_code": "110084.SH",
@@ -91628,6 +91727,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-04/1225349814.PDF"
     },
     {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-09",
+      "event_date": "2026-06-04",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "关于实施2025年度权益分派时停止转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-04/1225349308.PDF"
+    },
+    {
       "bond_code": "113671.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -91880,6 +91993,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-04/1225349169.PDF"
     },
     {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-06-05",
+      "effective_start": "2026-06-05",
+      "event_date": "2026-06-04",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "关于实施权益分派期间“恒逸转2”暂停转股的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-04/1225349915.PDF"
+    },
+    {
       "bond_code": "127104.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -91948,6 +92075,20 @@
       "raw_title": "珀莱雅化妆品股份有限公司关于不向下修正“珀莱转债”转股价格的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-05/1225351524.PDF"
+    },
+    {
+      "bond_code": "113652.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-05",
+      "event_date": "2026-06-05",
+      "event_price": 32.71,
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "伟明环保关于向下修正“伟22转债”转股价格暨转股停复牌的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-05/1225352052.PDF"
     },
     {
       "bond_code": "118022.SH",
@@ -92104,6 +92245,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-05/1225353069.PDF"
     },
     {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-05",
+      "event_date": "2026-06-05",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "山东高速路桥集团股份有限公司2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-05/1225354239.PDF"
+    },
+    {
       "bond_code": "127109.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -92144,6 +92299,20 @@
       "raw_title": "浙江华海药业股份有限公司关于实施2025年度权益分派时“华海转债”停止转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-06/1225354541.PDF"
+    },
+    {
+      "bond_code": "113051.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-06",
+      "event_date": "2026-06-06",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "中节能风力发电股份有限公司关于权益分派实施后不调整“节能转债”转股价格暨转股复牌的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-06/1225354654.PDF"
     },
     {
       "bond_code": "113059.SH",
@@ -92286,6 +92455,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-06/1225356064.PDF"
     },
     {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-06",
+      "event_date": "2026-06-06",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "关于山路转债2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-06/1225354843.PDF"
+    },
+    {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-06",
+      "event_date": "2026-06-06",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "山东高速路桥集团股份有限公司2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-06/1225354844.PDF"
+    },
+    {
       "bond_code": "127092.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -92340,6 +92537,20 @@
       "raw_title": "奥锐特药业股份有限公司关于因实施权益分派调整“奥锐转债”转股价格的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-08/1225356359.PDF"
+    },
+    {
+      "bond_code": "113052.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-08",
+      "event_date": "2026-06-08",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "兴业银行关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-08/1225356354.PDF"
     },
     {
       "bond_code": "113665.SH",
@@ -92480,6 +92691,20 @@
       "raw_title": "关于“垒知转债”回售的第一次提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-08/1225353535.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-08",
+      "event_date": "2026-06-08",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "关于“恒逸转2”转股价格调整的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-08/1225355631.PDF"
     },
     {
       "bond_code": "110084.SH",
@@ -93014,6 +93239,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-10/1225360087.PDF"
     },
     {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-10",
+      "event_date": "2026-06-10",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "关于因利润分配调整“春23转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-10/1225360285.PDF"
+    },
+    {
       "bond_code": "113682.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -93306,6 +93545,20 @@
       "raw_title": "关于“垒知转债”回售的第三次提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-10/1225359363.PDF"
+    },
+    {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-10",
+      "event_date": "2026-06-10",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "山东路桥山东高速路桥集团股份有限公司2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-10/1225362040.PDF"
     },
     {
       "bond_code": "111000.SH",
@@ -93714,6 +93967,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365678.PDF"
     },
     {
+      "bond_code": "110099.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-12",
+      "event_date": "2026-06-12",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "福建福能股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365217.PDF"
+    },
+    {
+      "bond_code": "110099.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-12",
+      "event_date": "2026-06-12",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "福能股份关于可转换公司债券跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365209.PDF"
+    },
+    {
       "bond_code": "110100.SH",
       "commitment_months": 2,
       "effective_end": "2026-08-11",
@@ -93952,6 +94233,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225364922.PDF"
     },
     {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-13",
+      "event_date": "2026-06-13",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "江西洪城环境股份有限公司主体及洪城转债2026年度跟踪评级报告（东方金诚债跟踪评字【2026】0072号）",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225368347.PDF"
+    },
+    {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-13",
+      "event_date": "2026-06-13",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "江西洪城环境股份有限公司关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225368332.PDF"
+    },
+    {
       "bond_code": "111014.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -94076,6 +94385,34 @@
       "raw_title": "湖南湘佳牧业股份有限公司2026年跟踪评级报告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225367027.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-06-15",
+      "effective_start": "2026-06-05",
+      "event_date": "2026-06-13",
+      "event_price": null,
+      "event_type": "conversion_resume",
+      "note": null,
+      "parsed_status": "恢复转股",
+      "raw_title": "关于“恒逸转2”恢复转股的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225369009.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-13",
+      "event_date": "2026-06-13",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "2022年恒逸石化股份有限公司公开发行可转换公司债券跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225369010.PDF"
     },
     {
       "bond_code": "127068.SZ",
@@ -94314,6 +94651,34 @@
       "raw_title": "江苏苏博特新材料股份有限公司2026年度跟踪评级报告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225371855.PDF"
+    },
+    {
+      "bond_code": "113652.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-16",
+      "event_date": "2026-06-16",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "伟明环保关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225371175.PDF"
+    },
+    {
+      "bond_code": "113652.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-16",
+      "event_date": "2026-06-16",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "浙江伟明环保股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225371174.PDF"
     },
     {
       "bond_code": "113674.SH",
@@ -96136,6 +96501,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382089.PDF"
     },
     {
+      "bond_code": "113042.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "上海银行关于A股可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380640.PDF"
+    },
+    {
+      "bond_code": "113042.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "上海银行股份有限公司公开发行A股可转换公司债券定期跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380641.PDF"
+    },
+    {
       "bond_code": "113043.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -96148,6 +96541,34 @@
       "raw_title": "关于实施2025年年度权益分派时“财通转债”停止转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225381347.PDF"
+    },
+    {
+      "bond_code": "113051.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "中节能风力发电股份有限公司主体与相关债项2026年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380668.PDF"
+    },
+    {
+      "bond_code": "113051.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "中节能风力发电股份有限公司关于“节能转债”评级调整公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380646.PDF"
     },
     {
       "bond_code": "113633.SH",
@@ -96430,6 +96851,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382718.PDF"
     },
     {
+      "bond_code": "123183.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-23",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "上海海顺新型药用包装材料股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382544.PDF"
+    },
+    {
       "bond_code": "123195.SZ",
       "commitment_months": null,
       "effective_end": "2029-04-16",
@@ -96570,6 +97005,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382167.PDF"
     },
     {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": "2029-03-23",
+      "effective_start": "2023-10-09",
+      "event_date": "2026-06-23",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "关于实施权益分派期间山路转债暂停转股的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380942.PDF"
+    },
+    {
       "bond_code": "127103.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -96708,6 +97157,34 @@
       "raw_title": "明新旭腾关于实施2025年度权益分派时“明新转债”停止转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382664.PDF"
+    },
+    {
+      "bond_code": "113046.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-24",
+      "event_date": "2026-06-24",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "2021年宁波金田铜业（集团）股份有限公司可转换公司债券定期跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382789.PDF"
+    },
+    {
+      "bond_code": "113046.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-24",
+      "event_date": "2026-06-24",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "金田股份关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382802.PDF"
     },
     {
       "bond_code": "113058.SH",
@@ -97844,6 +98321,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225385813.PDF"
     },
     {
+      "bond_code": "127102.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-25",
+      "event_date": "2026-06-25",
+      "event_price": null,
+      "event_type": "down_reset_trigger_notice",
+      "note": null,
+      "parsed_status": "触发提示",
+      "raw_title": "关于预计触发可转债转股价格向下修正条件的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225385421.PDF"
+    },
+    {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-26",
+      "event_date": "2026-06-26",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "江西洪城环境股份有限公司关于“洪城转债”转股价格调整暨转股复牌的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225387366.PDF"
+    },
+    {
       "bond_code": "110090.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -98150,6 +98655,20 @@
       "raw_title": "关于天壕转债暂停转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225388323.PDF"
+    },
+    {
+      "bond_code": "123124.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-26",
+      "event_date": "2026-06-26",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "晶瑞电子材料股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225387147.PDF"
     },
     {
       "bond_code": "123142.SZ",
@@ -99272,6 +99791,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225390444.PDF"
     },
     {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-27",
+      "event_date": "2026-06-27",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "新希望六和股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225392377.PDF"
+    },
+    {
       "bond_code": "127050.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -99720,6 +100253,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225397340.PDF"
     },
     {
+      "bond_code": "123258.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-29",
+      "event_date": "2026-06-29",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "胜蓝科技股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225396660.PDF"
+    },
+    {
       "bond_code": "123259.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -99788,6 +100335,20 @@
       "raw_title": "石家庄通合电子科技股份有限公司主体及通合转债2026年度跟踪评级报告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225394960.PDF"
+    },
+    {
+      "bond_code": "127102.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-29",
+      "event_date": "2026-06-29",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "2023年浙江省建设投资集团股份有限公司向不特定对象发行可转换公司债券2026年度跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225393975.PDF"
     },
     {
       "bond_code": "110085.SH",
@@ -99958,6 +100519,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225394110.PDF"
     },
     {
+      "bond_code": "113652.SH",
+      "commitment_months": 3,
+      "effective_end": "2026-09-29",
+      "effective_start": "2026-06-30",
+      "event_date": "2026-06-30",
+      "event_price": null,
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "伟明环保关于不向下修正“伟22转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395287.PDF"
+    },
+    {
       "bond_code": "113659.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -100012,6 +100587,34 @@
       "raw_title": "爱玛科技集团股份有限公司相关债券2026年跟踪评级报告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225394833.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-30",
+      "event_date": "2026-06-30",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395200.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-30",
+      "event_date": "2026-06-30",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "苏州春秋电子科技股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395206.PDF"
     },
     {
       "bond_code": "113670.SH",
@@ -100572,6 +101175,20 @@
       "raw_title": "关于因2025年年度权益分派调整可转债转股价格的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395260.PDF"
+    },
+    {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-06-30",
+      "event_date": "2026-06-30",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "关于2025年年度权益分派调整可转债转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225397430.PDF"
     },
     {
       "bond_code": "127098.SZ",
@@ -101204,6 +101821,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402852.PDF"
     },
     {
+      "bond_code": "110099.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "福能股份可转债转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402767.PDF"
+    },
+    {
       "bond_code": "110100.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -101428,6 +102059,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225403131.PDF"
     },
     {
+      "bond_code": "113042.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "上海银行关于可转债转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225404011.PDF"
+    },
+    {
+      "bond_code": "113046.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "金田股份关于季度可转债转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402449.PDF"
+    },
+    {
       "bond_code": "113048.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -101440,6 +102099,34 @@
       "raw_title": "关于可转债转股结果暨股份变动公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402641.PDF"
+    },
+    {
+      "bond_code": "113051.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "中节能风力发电股份有限公司可转债转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402779.PDF"
+    },
+    {
+      "bond_code": "113052.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "兴业银行关于可转债转股结果暨股份变动的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402844.PDF"
     },
     {
       "bond_code": "113053.SH",
@@ -101862,6 +102549,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402487.PDF"
     },
     {
+      "bond_code": "113652.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "伟明环保可转债转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402717.PDF"
+    },
+    {
       "bond_code": "113655.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -101944,6 +102645,20 @@
       "raw_title": "爱玛科技关于“爱玛转债”转股结果暨股份变动公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225402534.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "关于可转债转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225403115.PDF"
     },
     {
       "bond_code": "113670.SH",
@@ -102716,6 +103431,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225403509.PDF"
     },
     {
+      "bond_code": "127083.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-07-06",
+      "effective_start": "2026-06-24",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "conversion_resume",
+      "note": null,
+      "parsed_status": "恢复转股",
+      "raw_title": "关于山路转债恢复转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225403546.PDF"
+    },
+    {
+      "bond_code": "127102.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-02",
+      "event_date": "2026-07-02",
+      "event_price": null,
+      "event_type": "down_reset_rejected",
+      "note": null,
+      "parsed_status": "不下修",
+      "raw_title": "关于不向下修正可转换公司债券转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-02/1225403850.PDF"
+    },
+    {
       "bond_code": "127109.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -103220,6 +103963,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-04/1225409297.PDF"
     },
     {
+      "bond_code": "110099.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-09",
+      "event_date": "2026-07-06",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "福能股份关于实施2025年度权益分派时“福能转债”停止转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-06/1225410304.PDF"
+    },
+    {
       "bond_code": "113697.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -103696,6 +104453,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-09/1225414869.PDF"
     },
     {
+      "bond_code": "113652.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-09",
+      "event_date": "2026-07-09",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "伟明环保关于股权激励限制性股票回购注销完成暨调整“伟22转债”转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-09/1225414802.PDF"
+    },
+    {
       "bond_code": "113697.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -103764,6 +104535,20 @@
       "raw_title": "关于天壕转债恢复转股的提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-09/1225415764.PDF"
+    },
+    {
+      "bond_code": "123176.SZ",
+      "commitment_months": null,
+      "effective_end": "2029-03-01",
+      "effective_start": "2026-07-09",
+      "event_date": "2026-07-09",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "武汉精测电子集团股份有限公司关于精测转2暂停转股的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-09/1225415890.PDF"
     },
     {
       "bond_code": "123213.SZ",
@@ -103848,6 +104633,20 @@
       "raw_title": "关于2025年年度权益分派调整可转债转股价格的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-09/1225415704.PDF"
+    },
+    {
+      "bond_code": "110099.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-10",
+      "event_date": "2026-07-10",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "福能股份关于利润分配调整福能转债转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-10/1225417209.PDF"
     },
     {
       "bond_code": "110102.SH",
@@ -104102,6 +104901,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-11/1225419134.PDF"
     },
     {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-11",
+      "event_date": "2026-07-11",
+      "event_price": null,
+      "event_type": "balance_change",
+      "note": null,
+      "parsed_status": "余额变化",
+      "raw_title": "江西洪城环境股份有限公司关于“洪城转债”转股结果暨股份变动公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-11/1225419711.PDF"
+    },
+    {
       "bond_code": "111012.SH",
       "commitment_months": 3,
       "effective_end": "2026-10-10",
@@ -104268,6 +105081,20 @@
       "raw_title": "可转债暂停转股的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-11/1225418951.PDF"
+    },
+    {
+      "bond_code": "127102.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-11",
+      "event_date": "2026-07-11",
+      "event_price": null,
+      "event_type": "conversion_price_adjusted",
+      "note": null,
+      "parsed_status": "转股价调整",
+      "raw_title": "浙江省建设投资集团股份有限公司关于可转债转股价格调整的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-11/1225420032.PDF"
     },
     {
       "bond_code": "128136.SZ",
@@ -104786,6 +105613,20 @@
       "raw_title": "中信建投证券股份有限公司关于火星人厨具股份有限公司可转换公司债券回售有关事项的核查意见",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-16/1225427633.PDF"
+    },
+    {
+      "bond_code": "123176.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-07-15",
+      "effective_start": "2026-07-09",
+      "event_date": "2026-07-16",
+      "event_price": null,
+      "event_type": "conversion_resume",
+      "note": null,
+      "parsed_status": "恢复转股",
+      "raw_title": "武汉精测电子集团股份有限公司关于精测转2恢复转股的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-16/1225426990.PDF"
     },
     {
       "bond_code": "123267.SZ",
@@ -106832,6 +107673,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-30/1225447617.PDF"
     },
     {
+      "bond_code": "123124.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-07-30",
+      "event_date": "2026-07-30",
+      "event_price": null,
+      "event_type": "down_reset_trigger_notice",
+      "note": null,
+      "parsed_status": "触发提示",
+      "raw_title": "关于 晶瑞转2 预计触发转股价格向下修正的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-07-30/1225447677.PDF"
+    },
+    {
       "bond_code": "123189.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -107154,6 +108009,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-07-31/1225448871.PDF"
     },
     {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-01",
+      "event_date": "2026-08-01",
+      "event_price": null,
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "江西洪城环境股份有限公司关于不提前赎回“洪城转债”的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-01/1225451617.PDF"
+    },
+    {
+      "bond_code": "110077.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-01",
+      "event_date": "2026-08-01",
+      "event_price": null,
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "申万宏源证券承销保荐有限责任公司关于江西洪城环境股份有限公司不行使“洪城转债”提前赎回权利的核查意见",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-01/1225451615.PDF"
+    },
+    {
       "bond_code": "113053.SH",
       "commitment_months": 1,
       "effective_end": "2026-08-31",
@@ -107432,6 +108315,20 @@
       "raw_title": "澳弘电子关于不向下修正“澳弘转债”转股价格的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-04/1225453655.PDF"
+    },
+    {
+      "bond_code": "111026.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-04",
+      "event_date": "2026-08-04",
+      "event_price": null,
+      "event_type": "rating_change",
+      "note": null,
+      "parsed_status": "评级调整",
+      "raw_title": "派克新材向不特定对象发行可转换公司债券信用评级报告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-04/1225454515.PDF"
     },
     {
       "bond_code": "113049.SH",
@@ -107868,6 +108765,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-06/1225462001.PDF"
     },
     {
+      "bond_code": "123176.SZ",
+      "commitment_months": 6,
+      "effective_end": "2027-02-05",
+      "effective_start": "2026-08-06",
+      "event_date": "2026-08-06",
+      "event_price": null,
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "广发证券股份有限公司关于武汉精测电子集团股份有限公司不提前赎回“精测转2”的核查意见",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-06/1225460534.PDF"
+    },
+    {
+      "bond_code": "123176.SZ",
+      "commitment_months": 6,
+      "effective_end": "2027-02-05",
+      "effective_start": "2026-08-06",
+      "event_date": "2026-08-06",
+      "event_price": null,
+      "event_type": "call_no_redemption",
+      "note": null,
+      "parsed_status": "不强赎",
+      "raw_title": "武汉精测电子集团股份有限公司关于公司不提前赎回精测转2的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-06/1225460533.PDF"
+    },
+    {
       "bond_code": "123271.SZ",
       "commitment_months": 3,
       "effective_end": "2026-11-06",
@@ -107966,6 +108891,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-07/1225461371.PDF"
     },
     {
+      "bond_code": "123124.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-07",
+      "event_date": "2026-08-07",
+      "event_price": 50.16,
+      "event_type": "down_reset_proposed",
+      "note": null,
+      "parsed_status": "提议下修",
+      "raw_title": "关于董事会提议向下修正 晶瑞转2 转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-07/1225461116.PDF"
+    },
+    {
       "bond_code": "123138.SZ",
       "commitment_months": null,
       "effective_end": "2026-08-14",
@@ -108020,6 +108959,34 @@
       "raw_title": "长城汽车股份有限公司关于“长汽转债”转股价格调整暨转股停牌的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-08/1225463754.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-08",
+      "event_date": "2026-08-08",
+      "event_price": null,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“春23转债”的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-08/1225463209.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-08",
+      "event_date": "2026-08-08",
+      "event_price": null,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "国联民生证券承销保荐有限公司关于苏州春秋电子科技股份有限公司提前赎回“春23转债”的核查意见",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-08/1225463210.PDF"
     },
     {
       "bond_code": "113694.SH",
@@ -108974,6 +109941,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225476372.PDF"
     },
     {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": "2026-08-28",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-18",
+      "event_price": 100.686,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225477508.PDF"
+    },
+    {
       "bond_code": "113697.SH",
       "commitment_months": null,
       "effective_end": "2026-08-27",
@@ -109072,6 +110053,48 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225478149.PDF"
     },
     {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-18",
+      "event_date": "2026-08-18",
+      "event_price": null,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "中信证券股份有限公司关于恒逸石化股份有限公司提前赎回“恒逸转2”的核查意见",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225478797.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-09",
+      "effective_start": "2026-08-18",
+      "event_date": "2026-08-18",
+      "event_price": 100.25,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“恒逸转2”的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225478796.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-18",
+      "event_date": "2026-08-18",
+      "event_price": null,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "浙江天册律师事务所关于恒逸石化股份有限公司提前赎回可转换公司债券的法律意见书",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-18/1225478798.PDF"
+    },
+    {
       "bond_code": "113650.SH",
       "commitment_months": null,
       "effective_end": "2026-08-25",
@@ -109084,6 +110107,20 @@
       "raw_title": "关于“博22转债”可选择回售的第五次提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479081.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": "2026-08-28",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-19",
+      "event_price": 100.686,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第一次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479934.PDF"
     },
     {
       "bond_code": "113697.SH",
@@ -109156,6 +110193,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225481181.PDF"
     },
     {
+      "bond_code": "123183.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-19",
+      "event_date": "2026-08-19",
+      "event_price": null,
+      "event_type": "down_reset_trigger_notice",
+      "note": null,
+      "parsed_status": "触发提示",
+      "raw_title": "关于海顺转债预计触发转股价格向下修正条件的提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225481261.PDF"
+    },
+    {
       "bond_code": "123272.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -109182,6 +110233,76 @@
       "raw_title": "关于可转债转股价格调整的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479872.PDF"
+    },
+    {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-02",
+      "effective_start": "2021-11-08",
+      "event_date": "2026-08-19",
+      "event_price": null,
+      "event_type": "conversion_suspension",
+      "note": null,
+      "parsed_status": "暂停转股",
+      "raw_title": "关于希望转2回售期间暂停转股的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479806.PDF"
+    },
+    {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-01",
+      "effective_start": "2026-08-26",
+      "event_date": "2026-08-19",
+      "event_price": 101.267,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "关于希望转2可选择回售的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479807.PDF"
+    },
+    {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": null,
+      "event_date": "2026-08-19",
+      "event_price": null,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "北京中伦（成都）律师事务所关于新希望六和股份有限公司可转换公司债券回售的法律意见书",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479809.PDF"
+    },
+    {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": null,
+      "event_date": "2026-08-19",
+      "event_price": null,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "招商证券股份有限公司关于新希望六和股份有限公司可转换公司债券回售事项的核查意见",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479808.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-09",
+      "effective_start": "2026-08-19",
+      "event_date": "2026-08-19",
+      "event_price": 100.25,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“恒逸转2”的第一次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-19/1225479083.PDF"
     },
     {
       "bond_code": "111025.SH",
@@ -109224,6 +110345,20 @@
       "raw_title": "欧派家居关于因回购股份注销调整可转债转股价格暨转股停复牌的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-20/1225482326.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": "2026-08-28",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-20",
+      "event_price": 100.686,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第二次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-20/1225482201.PDF"
     },
     {
       "bond_code": "113697.SH",
@@ -109310,6 +110445,20 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-20/1225482798.PDF"
     },
     {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-01",
+      "effective_start": "2026-08-26",
+      "event_date": "2026-08-20",
+      "event_price": 101.267,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "关于希望转2可选择回售的第一次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-20/1225481931.PDF"
+    },
+    {
       "bond_code": "127062.SZ",
       "commitment_months": null,
       "effective_end": null,
@@ -109322,6 +110471,20 @@
       "raw_title": "关于不向下修正垒知转债转股价格的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-20/1225482785.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-09",
+      "effective_start": "2026-08-20",
+      "event_date": "2026-08-20",
+      "event_price": 100.25,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“恒逸转2”的第二次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-20/1225481616.PDF"
     },
     {
       "bond_code": "111014.SH",
@@ -109364,6 +110527,20 @@
       "raw_title": "关于“博22转债”可选择回售的第七次提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-21/1225485067.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": "2026-08-28",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-21",
+      "event_price": 100.686,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第三次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-21/1225485085.PDF"
     },
     {
       "bond_code": "113697.SH",
@@ -109422,6 +110599,34 @@
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-21/1225489908.PDF"
     },
     {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-01",
+      "effective_start": "2026-08-26",
+      "event_date": "2026-08-21",
+      "event_price": 101.267,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "关于希望转2可选择回售的第二次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-21/1225484237.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-09",
+      "effective_start": "2026-08-21",
+      "event_date": "2026-08-21",
+      "event_price": 100.25,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“恒逸转2”的第三次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-21/1225484803.PDF"
+    },
+    {
       "bond_code": "113049.SH",
       "commitment_months": null,
       "effective_end": null,
@@ -109448,6 +110653,20 @@
       "raw_title": "关于“博22转债”可选择回售的第八次提示性公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-22/1225488506.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": "2026-08-28",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-22",
+      "event_price": 100.686,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第四次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-22/1225489249.PDF"
     },
     {
       "bond_code": "113707.SH",
@@ -109504,6 +110723,90 @@
       "raw_title": "关于“洋丰转债”恢复转股的公告",
       "source": "cninfo",
       "url": "https://static.cninfo.com.cn/finalpage/2026-08-22/1225491978.PDF"
+    },
+    {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-01",
+      "effective_start": "2026-08-26",
+      "event_date": "2026-08-22",
+      "event_price": 101.267,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "关于希望转2可选择回售的第三次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-22/1225488103.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-09",
+      "effective_start": "2026-08-22",
+      "event_date": "2026-08-22",
+      "event_price": 100.25,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“恒逸转2”的第四次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-22/1225488278.PDF"
+    },
+    {
+      "bond_code": "113667.SH",
+      "commitment_months": null,
+      "effective_end": "2026-08-28",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-25",
+      "event_price": 100.686,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第五次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-25/1225494465.PDF"
+    },
+    {
+      "bond_code": "123124.SZ",
+      "commitment_months": null,
+      "effective_end": null,
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-25",
+      "event_price": 50.16,
+      "event_type": "down_reset_approved",
+      "note": null,
+      "parsed_status": "已下修",
+      "raw_title": "关于向下修正 晶瑞转2 转股价格的公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-25/1225496882.PDF"
+    },
+    {
+      "bond_code": "127049.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-01",
+      "effective_start": "2026-08-26",
+      "event_date": "2026-08-25",
+      "event_price": 101.267,
+      "event_type": "putback",
+      "note": null,
+      "parsed_status": "回售",
+      "raw_title": "关于希望转2可选择回售的第四次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-25/1225499259.PDF"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "commitment_months": null,
+      "effective_end": "2026-09-09",
+      "effective_start": "2026-08-25",
+      "event_date": "2026-08-25",
+      "event_price": 100.25,
+      "event_type": "call_redemption",
+      "note": null,
+      "parsed_status": "已公告强赎",
+      "raw_title": "关于提前赎回“恒逸转2”的第五次提示性公告",
+      "source": "cninfo",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-08-25/1225494803.PDF"
     }
   ]
 }

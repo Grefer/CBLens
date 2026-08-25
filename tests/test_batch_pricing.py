@@ -374,6 +374,62 @@ def test_infer_trading_metadata_ignores_stale_derived_status():
     assert out.is_tradable is False
 
 
+def test_infer_trading_metadata_flips_pending_back_once_listed():
+    """上市日到了, 上一轮留下的 pending/False 必须翻回来 —— 否则自我确认永远翻不了身。
+
+    ``is_issued_pending_listing`` 的文档早就点名了这个陷阱, 但当时只堵了**判定侧**:
+    判定不看缓存值, 回填侧却仍让缓存里的 ``trading_status="pending"`` /
+    ``is_tradable=False`` 覆盖新推断。这两个字段公募转债的数据源根本不提供
+    (Wind ``get_admission_status`` 对它们显式返回 None), 所以缓存里读到的只可能是本函数
+    自己上一次的输出。实测让派克转债 / 中仑转债两只上市首日分别成交 2.57 亿 / 12.95 亿
+    的新债被准入判成"不可交易"。
+    """
+    from convertible_bond.data_providers import infer_cb_trading_metadata
+
+    terms = BondTerms(
+        sec_name="中仑转债",
+        issue_date=date(2026, 8, 6),
+        listing_date=date(2026, 8, 24),    # 挂牌了
+        tradable_date=date(2026, 8, 24),
+        is_tradable=False,                 # 上一轮"已发行未上市"那一档的残留
+        trading_status="pending",
+        bond_turnover_amount=1_295_018_009.9,
+    )
+    out = infer_cb_trading_metadata("123281.SZ", terms, date(2026, 8, 25))
+
+    assert out.trading_status == "tradable"
+    assert out.is_tradable is True
+    assert batch_pricing_exclusion_reason(
+        "123281.SZ", out, on_date=date(2026, 8, 25)) is None
+
+
+def test_intraday_halt_is_not_a_suspension():
+    """"盘中停牌"是上市首日的涨跌幅熔断, 几分钟到半小时, 收盘照样有巨额成交。
+
+    它与"停牌/暂停交易"是两件事, 但子串匹配会先命中"停牌" —— 派克转债上市首日标着
+    "盘中停牌"、当天成交 2.57 亿, 却被整只踢出主池。
+    """
+    terms = BondTerms(
+        sec_name="派克转债",
+        issue_date=date(2026, 8, 7),
+        listing_date=date(2026, 8, 25),
+        maturity_date=date(2032, 8, 6),
+        conversion_price=10.0,
+        credit_rating="AA",
+        suspension_status="盘中停牌",
+        underlying_status="否",
+        underlying_trade_status="交易",
+        bond_turnover_amount=257_450_679.0,
+    )
+    assert batch_pricing_exclusion_reason(
+        "111026.SH", terms, on_date=date(2026, 8, 25)) is None
+
+    # 真停牌仍然要拦住
+    halted = replace(terms, suspension_status="停牌")
+    assert batch_pricing_exclusion_reason(
+        "111026.SH", halted, on_date=date(2026, 8, 25)) == "停牌/暂停交易"
+
+
 def test_infer_trading_metadata_keeps_old_missing_listing_date_tradable():
     """起息日已久却仍缺上市日 → 数据缺口, 保持旧的保守判定, 不误杀老债."""
     from convertible_bond.data_providers import infer_cb_trading_metadata

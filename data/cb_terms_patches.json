@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-08-25T07:11:09"
+    "updated_at": "2026-08-25T09:35:33"
   },
   "patches": [
     {
@@ -181672,7 +181672,7 @@
       "effective_date": "2024-06-13",
       "event_date": "2024-06-13",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2024-06-13/1220336588.PDF",
@@ -182500,7 +182500,7 @@
       "effective_date": "2024-06-18",
       "event_date": "2024-06-18",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2024-06-18/1220377452.PDF",
       "raw_title": "伟明环保关于可转换公司债券2024年跟踪评级结果的公告",
@@ -184318,7 +184318,7 @@
       "effective_date": "2024-06-25",
       "event_date": "2024-06-25",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2024-06-25/1220443040.PDF",
@@ -185616,8 +185616,7 @@
       "event_date": "2024-06-28",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "评级关注"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2024-06-28/1220496058.PDF",
       "raw_title": "2021年健帆生物科技集团股份有限公司创业板向不特定对象发行可转换公司债券2024年跟踪评级报告",
@@ -185860,7 +185859,7 @@
       "effective_date": "2024-06-29",
       "event_date": "2024-06-29",
       "fields": {
-        "credit_rating": "A-"
+        "credit_rating": "AA-"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2024-06-29/1220494904.PDF",
       "raw_title": "关于“嘉诚转债”跟踪信用评级结果的公告",
@@ -231577,7 +231576,7 @@
       "effective_date": "2025-05-08",
       "event_date": "2025-05-08",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-05-08/1223488394.PDF",
@@ -232666,7 +232665,7 @@
       "effective_date": "2025-05-16",
       "event_date": "2025-05-16",
       "fields": {
-        "credit_rating": "A-"
+        "credit_rating": "AA-"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-05-16/1223557382.PDF",
       "raw_title": "关于“嘉诚转债”跟踪信用评级结果的公告",
@@ -233125,7 +233124,7 @@
       "effective_date": "2025-05-20",
       "event_date": "2025-05-20",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "AA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-05-20/1223588388.PDF",
@@ -234677,7 +234676,7 @@
       "effective_date": "2025-05-28",
       "event_date": "2025-05-28",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-05-28/1223695918.PDF",
       "raw_title": "立昂微关于“立昂转债”2025年跟踪评级结果的公告",
@@ -237121,7 +237120,7 @@
       "effective_date": "2025-06-05",
       "event_date": "2025-06-05",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "AAA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-05/1223767217.PDF",
@@ -237593,7 +237592,7 @@
       "effective_date": "2025-06-07",
       "event_date": "2025-06-07",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-07/1223800315.PDF",
@@ -239257,7 +239256,7 @@
       "effective_date": "2025-06-13",
       "event_date": "2025-06-13",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-13/1223858883.PDF",
       "raw_title": "伟明环保关于可转换公司债券2025年跟踪评级结果的公告",
@@ -240403,6 +240402,20 @@
       "raw_title": "关于可转换公司债券2025年跟踪评级结果的公告",
       "source": "cninfo",
       "source_event_key": "113048.SH|2025-06-18|rating_change|关于可转换公司债券2025年跟踪评级结果的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 3.44
+      },
+      "bond_code": "113051.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2025-06-18",
+      "event_date": "2025-06-18",
+      "fields": {
+        "conversion_price": 3.37
+      },
+      "note": "conversion_price 3.44->3.37 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
     },
     {
       "bond_code": "113610.SH",
@@ -241864,19 +241877,6 @@
       "source_event_key": "127082.SZ|2025-06-21|rating_change|公开发行可转换公司债券2025年跟踪评级报告"
     },
     {
-      "bond_code": "127095.SZ",
-      "confidence": "parsed",
-      "effective_date": "2025-06-21",
-      "event_date": "2025-06-21",
-      "fields": {
-        "credit_rating_outlook": "稳定"
-      },
-      "note": "https://static.cninfo.com.cn/finalpage/2025-06-21/1223951370.PDF",
-      "raw_title": "关于广泰转债跟踪信用评级结果的公告",
-      "source": "cninfo",
-      "source_event_key": "127095.SZ|2025-06-21|rating_change|关于广泰转债跟踪信用评级结果的公告"
-    },
-    {
       "bond_code": "127103.SZ",
       "confidence": "parsed",
       "effective_date": "2025-06-21",
@@ -242139,6 +242139,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 17.74
+      },
+      "bond_code": "123183.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2025-06-23",
+      "event_date": "2025-06-23",
+      "fields": {
+        "conversion_price": 17.48
+      },
+      "note": "conversion_price 17.74->17.48 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 2.136333
       },
       "bond_code": "123184.SZ",
@@ -242390,7 +242404,7 @@
       "effective_date": "2025-06-24",
       "event_date": "2025-06-24",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-24/1223955533.PDF",
@@ -242595,7 +242609,7 @@
       "effective_date": "2025-06-24",
       "event_date": "2025-06-24",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-24/1223955920.PDF",
       "raw_title": "道通科技关于“道通转债”跟踪信用评级结果的公告",
@@ -242675,7 +242689,7 @@
       "effective_date": "2025-06-24",
       "event_date": "2025-06-24",
       "fields": {
-        "credit_rating": "A+"
+        "credit_rating": "AA+"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-24/1223956857.PDF",
       "raw_title": "晶科能源关于“晶能转债”跟踪信用评级结果的公告",
@@ -243677,7 +243691,7 @@
       "effective_date": "2025-06-25",
       "event_date": "2025-06-25",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-06-25/1223972351.PDF",
@@ -244484,6 +244498,20 @@
         "outstanding_balance": 9.354382
       },
       "note": "outstanding_balance 9.5->9.354382 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 18.2
+      },
+      "bond_code": "128142.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2025-06-26",
+      "event_date": "2025-06-26",
+      "fields": {
+        "conversion_price": 17.95
+      },
+      "note": "conversion_price 18.2->17.95 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -246197,19 +246225,6 @@
       },
       "note": "outstanding_balance 0.143609->0.078203 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
-    },
-    {
-      "bond_code": "110095.SH",
-      "confidence": "parsed",
-      "effective_date": "2025-07-02",
-      "event_date": "2025-07-02",
-      "fields": {
-        "credit_rating_outlook": "稳定"
-      },
-      "note": "https://static.cninfo.com.cn/finalpage/2025-07-02/1224056792.PDF",
-      "raw_title": "双良节能系统股份有限公司关于“双良转债”跟踪信用评级结果的公告",
-      "source": "cninfo",
-      "source_event_key": "110095.SH|2025-07-02|rating_change|双良节能系统股份有限公司关于“双良转债”跟踪信用评级结果的公告"
     },
     {
       "bond_code": "110095.SH",
@@ -263133,7 +263148,7 @@
       "effective_date": "2025-09-09",
       "event_date": "2025-09-09",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AAA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2025-09-09/1224644403.PDF",
       "raw_title": "关于“广核转债”2025年跟踪信用评级结果的公告",
@@ -270378,6 +270393,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 16.7
+      },
+      "bond_code": "123124.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2025-10-20",
+      "event_date": "2025-10-20",
+      "fields": {
+        "conversion_price": 16.69
+      },
+      "note": "conversion_price 16.7->16.69 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 6.848403
       },
       "bond_code": "123146.SZ",
@@ -271101,6 +271130,20 @@
         "outstanding_balance": 7.88506
       },
       "note": "outstanding_balance 8.08506->7.88506 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 3.37
+      },
+      "bond_code": "113051.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2025-10-23",
+      "event_date": "2025-10-23",
+      "fields": {
+        "conversion_price": 3.33
+      },
+      "note": "conversion_price 3.37->3.33 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -279481,6 +279524,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 17.48
+      },
+      "bond_code": "123183.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2025-12-12",
+      "event_date": "2025-12-12",
+      "fields": {
+        "conversion_price": 17.29
+      },
+      "note": "conversion_price 17.48->17.29 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 0.793502
       },
       "bond_code": "123185.SZ",
@@ -281101,6 +281158,20 @@
       "raw_title": "关于评级机构维持公司主体及美锦转债信用等级的公告",
       "source": "cninfo",
       "source_event_key": "127061.SZ|2025-12-24|rating_change|关于评级机构维持公司主体及美锦转债信用等级的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 7.62
+      },
+      "bond_code": "127083.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2025-12-24",
+      "event_date": "2025-12-24",
+      "fields": {
+        "conversion_price": 7.61
+      },
+      "note": "conversion_price 7.62->7.61 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
     },
     {
       "before_fields": {
@@ -283301,6 +283372,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 17.95
+      },
+      "bond_code": "128142.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-01-16",
+      "event_date": "2026-01-16",
+      "fields": {
+        "conversion_price": 17.88
+      },
+      "note": "conversion_price 17.95->17.88 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 2.216164
       },
       "bond_code": "113672.SH",
@@ -284617,6 +284702,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 10.91
+      },
+      "bond_code": "127102.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-01-27",
+      "event_date": "2026-01-27",
+      "fields": {
+        "conversion_price": 10.22
+      },
+      "note": "conversion_price 10.91->10.22 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "conversion_price": 9.5
       },
       "bond_code": "128108.SZ",
@@ -285927,6 +286026,20 @@
         "outstanding_balance": 0.97481
       },
       "note": "outstanding_balance 1.439237->0.97481 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 21.19
+      },
+      "bond_code": "113052.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-02-06",
+      "event_date": "2026-02-06",
+      "fields": {
+        "conversion_price": 20.63
+      },
+      "note": "conversion_price 21.19->20.63 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -295082,7 +295195,7 @@
       "effective_date": "2026-04-14",
       "event_date": "2026-04-14",
       "fields": {
-        "credit_rating": "C",
+        "credit_rating": "CC",
         "credit_rating_outlook": "负面"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-04-14/1225099946.PDF",
@@ -295319,7 +295432,7 @@
       "effective_date": "2026-04-14",
       "event_date": "2026-04-14",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "A+",
         "credit_rating_outlook": "稳定",
         "credit_watch_status": "撤出观察名单"
       },
@@ -297445,6 +297558,20 @@
       "raw_title": "深圳新宙邦科技股份有限公司相关债券2026年跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "123158.SZ|2026-04-28|rating_change|深圳新宙邦科技股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 17.29
+      },
+      "bond_code": "123183.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-04-28",
+      "event_date": "2026-04-28",
+      "fields": {
+        "conversion_price": 11.63
+      },
+      "note": "conversion_price 17.29->11.63 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
     },
     {
       "before_fields": {
@@ -300442,7 +300569,7 @@
       "effective_date": "2026-05-19",
       "event_date": "2026-05-19",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "AA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-05-19/1225314236.PDF",
@@ -301898,7 +302025,7 @@
       "effective_date": "2026-05-23",
       "event_date": "2026-05-23",
       "fields": {
-        "credit_rating": "A+"
+        "credit_rating": "AA+"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-05-23/1225325520.PDF",
       "raw_title": "关于可转换公司债券2026年度跟踪评级结果的公告",
@@ -302627,6 +302754,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 27.27
+      },
+      "bond_code": "113652.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-05-26",
+      "event_date": "2026-05-26",
+      "fields": {
+        "conversion_price": 22.23
+      },
+      "note": "conversion_price 27.27->22.23 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 3.65276
       },
       "bond_code": "118033.SH",
@@ -303107,7 +303248,7 @@
       "effective_date": "2026-05-27",
       "event_date": "2026-05-27",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-05-27/1225331842.PDF",
       "raw_title": "道通科技关于“道通转债”跟踪信用评级结果的公告",
@@ -303819,6 +303960,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-29",
+      "event_date": "2026-05-21",
+      "fields": {
+        "conversion_price": 54.36
+      },
+      "note": "转股价 ->54.36 | https://static.cninfo.com.cn/finalpage/2026-05-21/1225324203.PDF",
+      "raw_title": "关于胜蓝转02调整转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2026-05-21|conversion_price_adjusted|关于胜蓝转02调整转股价格的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 21.529108
       },
@@ -303970,6 +304124,20 @@
         "conversion_price": 11.6
       },
       "note": "conversion_price 12.3->11.6 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 64.71
+      },
+      "bond_code": "123176.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-05-29",
+      "event_date": "2026-05-29",
+      "fields": {
+        "conversion_price": 64.51
+      },
+      "note": "conversion_price 64.71->64.51 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -304159,7 +304327,7 @@
       "effective_date": "2026-05-30",
       "event_date": "2026-05-30",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "AA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-05-30/1225338977.PDF",
@@ -304565,7 +304733,7 @@
       "effective_date": "2026-06-03",
       "event_date": "2026-06-03",
       "fields": {
-        "credit_rating": "A+"
+        "credit_rating": "AA+"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-03/1225345932.PDF",
       "raw_title": "南京医药关于可转换公司债券2026年度跟踪评级结果的公告",
@@ -305408,6 +305576,20 @@
       "source": "wind_asof"
     },
     {
+      "before_fields": {
+        "conversion_price": 16.69
+      },
+      "bond_code": "123124.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-05",
+      "event_date": "2026-06-05",
+      "fields": {
+        "conversion_price": 15.88
+      },
+      "note": "conversion_price 16.69->15.88 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
       "bond_code": "123192.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-05",
@@ -305478,6 +305660,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127083.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-05",
+      "event_date": "2026-06-05",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-05/1225354239.PDF",
+      "raw_title": "山东高速路桥集团股份有限公司2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127083.SZ|2026-06-05|rating_change|山东高速路桥集团股份有限公司2026年跟踪评级报告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.93804
       },
@@ -305533,6 +305728,19 @@
       "source_event_key": "123112.SZ|2026-06-06|rating_change|深圳万讯自控股份有限公司相关债券2026年跟踪评级报告"
     },
     {
+      "bond_code": "127083.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-06",
+      "event_date": "2026-06-06",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-06/1225354844.PDF",
+      "raw_title": "山东高速路桥集团股份有限公司2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127083.SZ|2026-06-06|rating_change|山东高速路桥集团股份有限公司2026年跟踪评级报告"
+    },
+    {
       "bond_code": "127092.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-06",
@@ -305586,6 +305794,48 @@
         "outstanding_balance": 10.65864
       },
       "note": "outstanding_balance 15.354941->10.65864 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 8.57
+      },
+      "bond_code": "113042.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-08",
+      "event_date": "2026-06-08",
+      "fields": {
+        "conversion_price": 8.35
+      },
+      "note": "conversion_price 8.57->8.35 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 10.32
+      },
+      "bond_code": "113046.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-08",
+      "event_date": "2026-06-08",
+      "fields": {
+        "conversion_price": 10.18
+      },
+      "note": "conversion_price 10.32->10.18 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 22.23
+      },
+      "bond_code": "113652.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-08",
+      "event_date": "2026-06-08",
+      "fields": {
+        "conversion_price": 19.0
+      },
+      "note": "conversion_price 22.23->19.0 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -305774,7 +306024,7 @@
       "effective_date": "2026-06-09",
       "event_date": "2026-06-09",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-09/1225358202.PDF",
@@ -306019,6 +306269,20 @@
     },
     {
       "before_fields": {
+        "conversion_price": 17.88
+      },
+      "bond_code": "128142.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-09",
+      "event_date": "2026-06-09",
+      "fields": {
+        "conversion_price": 17.5
+      },
+      "note": "conversion_price 17.88->17.5 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 9.842512
       },
       "bond_code": "111010.SH",
@@ -306240,6 +306504,19 @@
       },
       "note": "outstanding_balance 0.759366->0.400157 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127083.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-10",
+      "event_date": "2026-06-10",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-10/1225362040.PDF",
+      "raw_title": "山东路桥山东高速路桥集团股份有限公司2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127083.SZ|2026-06-10|rating_change|山东路桥山东高速路桥集团股份有限公司2026年跟踪评级报告"
     },
     {
       "before_fields": {
@@ -306575,6 +306852,33 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "110099.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-12",
+      "event_date": "2026-06-12",
+      "fields": {
+        "credit_rating": "AA+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365209.PDF",
+      "raw_title": "福能股份关于可转换公司债券跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "110099.SH|2026-06-12|rating_change|福能股份关于可转换公司债券跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "110099.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-12",
+      "event_date": "2026-06-12",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-12/1225365217.PDF",
+      "raw_title": "福建福能股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "110099.SH|2026-06-12|rating_change|福建福能股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.15213
       },
@@ -306600,6 +306904,20 @@
         "conversion_price": 11.07
       },
       "note": "conversion_price 11.22->11.07 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 20.63
+      },
+      "bond_code": "113052.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-12",
+      "event_date": "2026-06-12",
+      "fields": {
+        "conversion_price": 20.13
+      },
+      "note": "conversion_price 20.63->20.13 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -306783,6 +307101,33 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "110077.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-13",
+      "event_date": "2026-06-13",
+      "fields": {
+        "credit_rating": "AA+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225368347.PDF",
+      "raw_title": "江西洪城环境股份有限公司主体及洪城转债2026年度跟踪评级报告（东方金诚债跟踪评字【2026】0072号）",
+      "source": "cninfo",
+      "source_event_key": "110077.SH|2026-06-13|rating_change|江西洪城环境股份有限公司主体及洪城转债2026年度跟踪评级报告（东方金诚债跟踪评字【2026】0072号）"
+    },
+    {
+      "bond_code": "110077.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-13",
+      "event_date": "2026-06-13",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225368332.PDF",
+      "raw_title": "江西洪城环境股份有限公司关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "110077.SH|2026-06-13|rating_change|江西洪城环境股份有限公司关于可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
       "bond_code": "127037.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-13",
@@ -306802,13 +307147,25 @@
       "event_date": "2026-06-13",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225367027.PDF",
       "raw_title": "湖南湘佳牧业股份有限公司2026年跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "127060.SZ|2026-06-13|rating_change|湖南湘佳牧业股份有限公司2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-13",
+      "event_date": "2026-06-13",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225369010.PDF",
+      "raw_title": "2022年恒逸石化股份有限公司公开发行可转换公司债券跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-06-13|rating_change|2022年恒逸石化股份有限公司公开发行可转换公司债券跟踪评级报告"
     },
     {
       "bond_code": "127104.SZ",
@@ -306817,8 +307174,7 @@
       "event_date": "2026-06-13",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-13/1225366601.PDF",
       "raw_title": "上海姚记科技股份有限公司2026年跟踪评级报告",
@@ -307000,8 +307356,7 @@
       "event_date": "2026-06-15",
       "fields": {
         "credit_rating": "A",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-15/1225370540.PDF",
       "raw_title": "宁夏晓鸣农牧股份有限公司2026年跟踪评级报告",
@@ -307035,6 +307390,20 @@
       "raw_title": "金三江(肇庆)硅材料股份有限公司向不特定对象发行可转换公司债券信用评级报告",
       "source": "cninfo",
       "source_event_key": "123273.SZ|2026-06-15|rating_change|金三江(肇庆)硅材料股份有限公司向不特定对象发行可转换公司债券信用评级报告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 10.37
+      },
+      "bond_code": "127067.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-15",
+      "event_date": "2026-06-15",
+      "fields": {
+        "conversion_price": 10.32
+      },
+      "note": "conversion_price 10.37->10.32 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
     },
     {
       "before_fields": {
@@ -307174,6 +307543,32 @@
       "source_event_key": "113650.SH|2026-06-16|rating_change|关于公开发行可转换公司债券2026年跟踪评级结果的公告"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-16",
+      "event_date": "2026-06-16",
+      "fields": {
+        "credit_rating": "AA"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225371175.PDF",
+      "raw_title": "伟明环保关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2026-06-16|rating_change|伟明环保关于可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-16",
+      "event_date": "2026-06-16",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225371174.PDF",
+      "raw_title": "浙江伟明环保股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2026-06-16|rating_change|浙江伟明环保股份有限公司2026年度跟踪评级报告"
+    },
+    {
       "before_fields": {
         "conversion_price": 33.74
       },
@@ -307236,8 +307631,7 @@
       "event_date": "2026-06-16",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-16/1225371055.PDF",
       "raw_title": "上海皓元医药股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -307674,8 +308068,7 @@
       "event_date": "2026-06-17",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-17/1225375757.PDF",
       "raw_title": "银邦金属复合材料股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -307823,14 +308216,27 @@
       "source": "wind_asof"
     },
     {
+      "before_fields": {
+        "conversion_price": 10.15
+      },
+      "bond_code": "113667.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-06-18",
+      "event_date": "2026-06-18",
+      "fields": {
+        "conversion_price": 9.95
+      },
+      "note": "conversion_price 10.15->9.95 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
       "bond_code": "113688.SH",
       "confidence": "parsed",
       "effective_date": "2026-06-18",
       "event_date": "2026-06-18",
       "fields": {
         "credit_rating": "AA+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-18/1225375685.PDF",
       "raw_title": "中国国检测试控股集团股份有限公司2026年跟踪评级报告",
@@ -307925,8 +308331,7 @@
       "event_date": "2026-06-18",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-18/1225377690.PDF",
       "raw_title": "浙江花园生物医药股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -308051,8 +308456,7 @@
       "event_date": "2026-06-18",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-18/1225376027.PDF",
       "raw_title": "安徽鸿路钢结构（集团）股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -308066,8 +308470,7 @@
       "event_date": "2026-06-18",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-18/1225374999.PDF",
       "raw_title": "洽洽食品股份有限公司2026年跟踪评级报告",
@@ -308175,8 +308578,7 @@
       "event_date": "2026-06-19",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-19/1225378906.PDF",
       "raw_title": "上海风语筑文化科技股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -308395,8 +308797,7 @@
       "event_date": "2026-06-22",
       "fields": {
         "credit_rating": "AAA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-22/1225381490.PDF",
       "raw_title": "温氏食品集团股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -308424,8 +308825,7 @@
       "event_date": "2026-06-22",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-22/1225377546.PDF",
       "raw_title": "公开发行可转换公司债券2026年跟踪评级报告",
@@ -308438,7 +308838,7 @@
       "effective_date": "2026-06-22",
       "event_date": "2026-06-22",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-22/1225377897.PDF",
@@ -308485,6 +308885,47 @@
       },
       "note": "outstanding_balance 2.401001->2.246345 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113042.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating": "AAA",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380641.PDF",
+      "raw_title": "上海银行股份有限公司公开发行A股可转换公司债券定期跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113042.SH|2026-06-23|rating_change|上海银行股份有限公司公开发行A股可转换公司债券定期跟踪评级报告"
+    },
+    {
+      "bond_code": "113042.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380640.PDF",
+      "raw_title": "上海银行关于A股可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113042.SH|2026-06-23|rating_change|上海银行关于A股可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "113051.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating": "AAA",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225380668.PDF",
+      "raw_title": "中节能风力发电股份有限公司主体与相关债项2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113051.SH|2026-06-23|rating_change|中节能风力发电股份有限公司主体与相关债项2026年度跟踪评级报告"
     },
     {
       "before_fields": {
@@ -308560,8 +309001,7 @@
       "event_date": "2026-06-23",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225381833.PDF",
       "raw_title": "益丰大药房连锁股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -308698,13 +309138,25 @@
       "event_date": "2026-06-23",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382767.PDF",
       "raw_title": "青岛惠城环保科技集团股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "123118.SZ|2026-06-23|rating_change|青岛惠城环保科技集团股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "123183.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-23",
+      "event_date": "2026-06-23",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382544.PDF",
+      "raw_title": "上海海顺新型药用包装材料股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123183.SZ|2026-06-23|rating_change|上海海顺新型药用包装材料股份有限公司相关债券2026年跟踪评级报告"
     },
     {
       "bond_code": "123195.SZ",
@@ -308725,8 +309177,7 @@
       "effective_date": "2026-06-23",
       "event_date": "2026-06-23",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-23/1225382721.PDF",
       "raw_title": "科顺防水科技股份有限公司可转换公司债券2026年跟踪评级报告",
@@ -308869,14 +309320,39 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-24",
+      "event_date": "2026-06-24",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382802.PDF",
+      "raw_title": "金田股份关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2026-06-24|rating_change|金田股份关于可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-24",
+      "event_date": "2026-06-24",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382789.PDF",
+      "raw_title": "2021年宁波金田铜业（集团）股份有限公司可转换公司债券定期跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2026-06-24|rating_change|2021年宁波金田铜业（集团）股份有限公司可转换公司债券定期跟踪评级报告"
+    },
+    {
       "bond_code": "113058.SH",
       "confidence": "parsed",
       "effective_date": "2026-06-24",
       "event_date": "2026-06-24",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382841.PDF",
       "raw_title": "天津友发钢管集团股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -309039,8 +309515,7 @@
       "event_date": "2026-06-24",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225385208.PDF",
       "raw_title": "乐歌人体工学科技股份有限公司2026年跟踪评级报告",
@@ -309188,8 +309663,7 @@
       "event_date": "2026-06-24",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225382432.PDF",
       "raw_title": "哈尔滨博实自动化股份有限公司2026年跟踪评级报告",
@@ -309433,8 +309907,7 @@
       "event_date": "2026-06-25",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225384735.PDF",
       "raw_title": "江苏华辰变压器股份有限公司2026年跟踪评级报告",
@@ -309502,7 +309975,7 @@
       "effective_date": "2026-06-25",
       "event_date": "2026-06-25",
       "fields": {
-        "credit_rating": "A+"
+        "credit_rating": "AA+"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225386393.PDF",
       "raw_title": "晶科能源关于“晶能转债”跟踪信用评级结果的公告",
@@ -309582,8 +310055,7 @@
       "event_date": "2026-06-25",
       "fields": {
         "credit_rating": "A-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225387731.PDF",
       "raw_title": "丝路视觉科技股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -309678,8 +310150,7 @@
       "event_date": "2026-06-25",
       "fields": {
         "credit_rating": "AA+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225384701.PDF",
       "raw_title": "江苏国泰国际集团股份有限公司2026年跟踪评级报告",
@@ -310006,8 +310477,7 @@
       "event_date": "2026-06-26",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225387014.PDF",
       "raw_title": "北京浩瀚深度信息技术股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -310063,8 +310533,7 @@
       "event_date": "2026-06-26",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225390926.PDF",
       "raw_title": "康泰医学系统（秦皇岛）股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -310184,8 +310653,7 @@
       "effective_date": "2026-06-26",
       "event_date": "2026-06-26",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225389545.PDF",
       "raw_title": "武汉天源集团股份有限公司2026年跟踪评级报告",
@@ -310372,8 +310840,7 @@
       "event_date": "2026-06-26",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-26/1225387508.PDF",
       "raw_title": "龙星科技集团股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -310427,8 +310894,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225392689.PDF",
       "raw_title": "盛泰智造集团股份有限公司2026年跟踪评级报告",
@@ -310521,8 +310987,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225392499.PDF",
       "raw_title": "晶科电力科技股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -310589,8 +311054,7 @@
       "effective_date": "2026-06-27",
       "event_date": "2026-06-27",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391147.PDF",
       "raw_title": "金诚信矿业管理股份有限公司可转换公司债券2026年跟踪评级报告",
@@ -310616,7 +311080,7 @@
       "effective_date": "2026-06-27",
       "event_date": "2026-06-27",
       "fields": {
-        "credit_rating": "A+"
+        "credit_rating": "AA-"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225393201.PDF",
       "raw_title": "关于“嘉诚转债”跟踪信用评级结果的公告",
@@ -310681,8 +311145,7 @@
       "effective_date": "2026-06-27",
       "event_date": "2026-06-27",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391147.PDF",
       "raw_title": "金诚信矿业管理股份有限公司可转换公司债券2026年跟踪评级报告",
@@ -310736,8 +311199,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391419.PDF",
       "raw_title": "天合光能股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -310790,8 +311252,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225389976.PDF",
       "raw_title": "向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -310804,7 +311265,6 @@
       "effective_date": "2026-06-27",
       "event_date": "2026-06-27",
       "fields": {
-        "credit_rating": "AA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225392042.PDF",
@@ -310845,8 +311305,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225390178.PDF",
       "raw_title": "上海百润投资控股集团股份有限公司2026年跟踪评级报告",
@@ -310880,6 +311339,19 @@
       "source_event_key": "127047.SZ|2026-06-27|rating_change|关于可转换公司债券2026年跟踪评级结果的公告"
     },
     {
+      "bond_code": "127049.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-27",
+      "event_date": "2026-06-27",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225392377.PDF",
+      "raw_title": "新希望六和股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127049.SZ|2026-06-27|rating_change|新希望六和股份有限公司公开发行可转换公司债券2026年跟踪评级报告"
+    },
+    {
       "bond_code": "127054.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-27",
@@ -310898,8 +311370,7 @@
       "effective_date": "2026-06-27",
       "event_date": "2026-06-27",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225390018.PDF",
       "raw_title": "山西永东化工股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -310913,8 +311384,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225390737.PDF",
       "raw_title": "垒知控股集团股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -310941,8 +311411,7 @@
       "event_date": "2026-06-27",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391586.PDF",
       "raw_title": "山东赫达集团股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -310963,25 +311432,12 @@
       "source_event_key": "127095.SZ|2026-06-27|rating_change|威海广泰空港设备股份有限公司主体及广泰转债2026年度跟踪评级报告"
     },
     {
-      "bond_code": "127095.SZ",
-      "confidence": "parsed",
-      "effective_date": "2026-06-27",
-      "event_date": "2026-06-27",
-      "fields": {
-        "credit_rating_outlook": "稳定"
-      },
-      "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391030.PDF",
-      "raw_title": "关于广泰转债跟踪信用评级结果的公告",
-      "source": "cninfo",
-      "source_event_key": "127095.SZ|2026-06-27|rating_change|关于广泰转债跟踪信用评级结果的公告"
-    },
-    {
       "bond_code": "127110.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-27",
       "event_date": "2026-06-27",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AAA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225390313.PDF",
       "raw_title": "关于“广核转债”2026年跟踪信用评级结果的公告",
@@ -311265,8 +311721,7 @@
       "event_date": "2026-06-29",
       "fields": {
         "credit_rating": "A",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225394145.PDF",
       "raw_title": "上海艾录包装股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -311298,6 +311753,19 @@
       "raw_title": "2025年安克创新科技股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "123257.SZ|2026-06-29|rating_change|2025年安克创新科技股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-29",
+      "event_date": "2026-06-29",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225396660.PDF",
+      "raw_title": "胜蓝科技股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2026-06-29|rating_change|胜蓝科技股份有限公司相关债券2026年跟踪评级报告"
     },
     {
       "bond_code": "123259.SZ",
@@ -311367,6 +311835,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127102.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-29",
+      "event_date": "2026-06-29",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-29/1225393975.PDF",
+      "raw_title": "2023年浙江省建设投资集团股份有限公司向不特定对象发行可转换公司债券2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127102.SZ|2026-06-29|rating_change|2023年浙江省建设投资集团股份有限公司向不特定对象发行可转换公司债券2026年度跟踪评级报告"
+    },
+    {
       "bond_code": "110085.SH",
       "confidence": "parsed",
       "effective_date": "2026-06-30",
@@ -311386,8 +311867,7 @@
       "effective_date": "2026-06-30",
       "event_date": "2026-06-30",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225396166.PDF",
       "raw_title": "通威股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -311401,20 +311881,6 @@
       "event_date": "2026-06-30",
       "fields": {
         "credit_rating_outlook": "稳定"
-      },
-      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395550.PDF",
-      "raw_title": "双良节能系统股份有限公司关于“双良转债”跟踪信用评级结果的公告",
-      "source": "cninfo",
-      "source_event_key": "110095.SH|2026-06-30|rating_change|双良节能系统股份有限公司关于“双良转债”跟踪信用评级结果的公告"
-    },
-    {
-      "bond_code": "110095.SH",
-      "confidence": "parsed",
-      "effective_date": "2026-06-30",
-      "event_date": "2026-06-30",
-      "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395539.PDF",
       "raw_title": "双良节能系统股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -311484,8 +311950,7 @@
       "event_date": "2026-06-30",
       "fields": {
         "credit_rating": "AAA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395188.PDF",
       "raw_title": "隆基绿能科技股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -311541,8 +312006,7 @@
       "event_date": "2026-06-30",
       "fields": {
         "credit_rating": "AA",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225396437.PDF",
       "raw_title": "禾丰食品股份有限公司公开发行可转换公司债券2026年跟踪评级报告",
@@ -311587,6 +312051,32 @@
       "raw_title": "爱玛科技集团股份有限公司相关债券2026年跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "113666.SH|2026-06-30|rating_change|爱玛科技集团股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395206.PDF",
+      "raw_title": "苏州春秋电子科技股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-06-30|rating_change|苏州春秋电子科技股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225395200.PDF",
+      "raw_title": "关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-06-30|rating_change|关于可转换公司债券2026年跟踪评级结果的公告"
     },
     {
       "bond_code": "113670.SH",
@@ -311672,8 +312162,7 @@
       "effective_date": "2026-06-30",
       "event_date": "2026-06-30",
       "fields": {
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225394726.PDF",
       "raw_title": "上海保隆汽车科技股份有限公司2026年跟踪评级报告",
@@ -311919,7 +312408,7 @@
       "effective_date": "2026-06-30",
       "event_date": "2026-06-30",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "AA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225399621.PDF",
@@ -311960,8 +312449,7 @@
       "event_date": "2026-06-30",
       "fields": {
         "credit_rating": "AA+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225397606.PDF",
       "raw_title": "公开发行可转换公司债券2026年跟踪评级报告",
@@ -312157,19 +312645,6 @@
       },
       "note": "conversion_price 21.99->17.77 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
-    },
-    {
-      "bond_code": "128138.SZ",
-      "confidence": "parsed",
-      "effective_date": "2026-06-30",
-      "event_date": "2026-06-30",
-      "fields": {
-        "credit_watch_status": "列入观察名单"
-      },
-      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225394547.PDF",
-      "raw_title": "侨银城市管理股份有限公司相关债券2026年跟踪评级报告",
-      "source": "cninfo",
-      "source_event_key": "128138.SZ|2026-06-30|rating_change|侨银城市管理股份有限公司相关债券2026年跟踪评级报告"
     },
     {
       "before_fields": {
@@ -312395,7 +312870,7 @@
       "effective_date": "2026-07-01",
       "event_date": "2026-07-01",
       "fields": {
-        "credit_rating": "A-"
+        "credit_rating": "AA-"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-07-01/1225399900.PDF",
       "raw_title": "关于“统联转债”跟踪信用评级结果的公告",
@@ -312409,8 +312884,7 @@
       "event_date": "2026-07-01",
       "fields": {
         "credit_rating": "AA-",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-07-01/1225399894.PDF",
       "raw_title": "深圳市泛海统联精密制造股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -312722,6 +313196,20 @@
         "conversion_price": 55.86
       },
       "note": "conversion_price 55.97->55.86 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 4.88
+      },
+      "bond_code": "110077.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-07-03",
+      "event_date": "2026-07-03",
+      "fields": {
+        "conversion_price": 4.41
+      },
+      "note": "conversion_price 4.88->4.41 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -313100,6 +313588,20 @@
         "conversion_price": 5.21
       },
       "note": "conversion_price 5.29->5.21 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 7.61
+      },
+      "bond_code": "127083.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-07-06",
+      "event_date": "2026-07-06",
+      "fields": {
+        "conversion_price": 7.42
+      },
+      "note": "conversion_price 7.61->7.42 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -313603,6 +314105,20 @@
         "outstanding_balance": 10.586127
       },
       "note": "outstanding_balance 12.716768->10.586127 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 19.0
+      },
+      "bond_code": "113652.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-07-10",
+      "event_date": "2026-07-10",
+      "fields": {
+        "conversion_price": 19.02
+      },
+      "note": "conversion_price 19.0->19.02 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -314221,6 +314737,22 @@
       "source": "wind_asof"
     },
     {
+      "before_fields": {
+        "conversion_price": 9.84
+      },
+      "bond_code": "110099.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-07-16",
+      "event_date": "2026-07-10",
+      "fields": {
+        "conversion_price": 9.49
+      },
+      "note": "转股价 9.84->9.49 | https://static.cninfo.com.cn/finalpage/2026-07-10/1225417209.PDF",
+      "raw_title": "福能股份关于利润分配调整福能转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "110099.SH|2026-07-10|conversion_price_adjusted|福能股份关于利润分配调整福能转债转股价格的公告"
+    },
+    {
       "bond_code": "111024.SH",
       "confidence": "parsed",
       "effective_date": "2026-07-16",
@@ -314323,7 +314855,7 @@
       "effective_date": "2026-07-16",
       "event_date": "2026-07-16",
       "fields": {
-        "credit_rating": "A",
+        "credit_rating": "AA",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-07-16/1225427467.PDF",
@@ -314509,6 +315041,20 @@
       "source": "wind_asof"
     },
     {
+      "before_fields": {
+        "conversion_price": 10.22
+      },
+      "bond_code": "127102.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-07-17",
+      "event_date": "2026-07-17",
+      "fields": {
+        "conversion_price": 10.17
+      },
+      "note": "conversion_price 10.22->10.17 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
       "bond_code": "113686.SH",
       "confidence": "parsed",
       "effective_date": "2026-07-18",
@@ -314645,6 +315191,20 @@
         "outstanding_balance": 1.77891
       },
       "note": "outstanding_balance 2.125015->1.77891 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 12.91
+      },
+      "bond_code": "127025.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-07-20",
+      "event_date": "2026-07-20",
+      "fields": {
+        "conversion_price": 12.92
+      },
+      "note": "conversion_price 12.91->12.92 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
     },
     {
@@ -315204,7 +315764,7 @@
       "effective_date": "2026-07-25",
       "event_date": "2026-07-25",
       "fields": {
-        "credit_rating": "A"
+        "credit_rating": "AAA"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-07-25/1225441052.PDF",
       "raw_title": "宝鸡钛业股份有限公司关于“宝钛转债”跟踪信用评级结果的公告",
@@ -315574,7 +316134,7 @@
       "effective_date": "2026-07-30",
       "event_date": "2026-07-30",
       "fields": {
-        "credit_rating": "A+",
+        "credit_rating": "AA+",
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-07-30/1225445871.PDF",
@@ -315974,7 +316534,7 @@
       "effective_date": "2026-08-08",
       "event_date": "2026-08-08",
       "fields": {
-        "credit_rating": "A+"
+        "credit_rating": "AA+"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-08-08/1225464804.PDF",
       "raw_title": "关于“宜化转债”2026 年跟踪信用评级结果的公告",
@@ -316030,8 +316590,7 @@
       "event_date": "2026-08-10",
       "fields": {
         "credit_rating": "AA+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-08-10/1225465847.PDF",
       "raw_title": "中汽研汽车试验场股份有限公司2026年跟踪评级报告",
@@ -316306,8 +316865,7 @@
       "event_date": "2026-08-17",
       "fields": {
         "credit_rating": "A+",
-        "credit_rating_outlook": "稳定",
-        "credit_watch_status": "列入观察名单"
+        "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-08-17/1225476280.PDF",
       "raw_title": "金三江（肇庆）硅材料股份有限公司向不特定对象发行可转换公司债券2026年跟踪评级报告",
@@ -316341,6 +316899,19 @@
       },
       "note": "conversion_price 10.35->10.33 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-18",
+      "event_date": "2026-08-18",
+      "fields": {
+        "call_redemption_price": 100.686
+      },
+      "note": "赎回价 100.686 | https://static.cninfo.com.cn/finalpage/2026-08-18/1225477508.PDF",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-08-18|call_redemption|关于实施“春23转债”赎回暨摘牌的公告"
     },
     {
       "bond_code": "113697.SH",
@@ -316398,6 +316969,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-18",
+      "event_date": "2026-08-18",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-18/1225478796.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-18|call_redemption|关于提前赎回“恒逸转2”的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 0.192777
       },
@@ -316410,6 +316994,19 @@
       },
       "note": "outstanding_balance 0.192777->0.040709 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-19",
+      "event_date": "2026-08-19",
+      "fields": {
+        "call_redemption_price": 100.686
+      },
+      "note": "赎回价 100.686 | https://static.cninfo.com.cn/finalpage/2026-08-19/1225479934.PDF",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-08-19|call_redemption|关于实施“春23转债”赎回暨摘牌的第一次提示性公告"
     },
     {
       "bond_code": "113697.SH",
@@ -316437,6 +317034,32 @@
       },
       "note": "outstanding_balance 10.325944->9.652495 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-19",
+      "event_date": "2026-08-19",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-19/1225479083.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-19|call_redemption|关于提前赎回“恒逸转2”的第一次提示性公告"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-20",
+      "event_date": "2026-08-20",
+      "fields": {
+        "call_redemption_price": 100.686
+      },
+      "note": "赎回价 100.686 | https://static.cninfo.com.cn/finalpage/2026-08-20/1225482201.PDF",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-08-20|call_redemption|关于实施“春23转债”赎回暨摘牌的第二次提示性公告"
     },
     {
       "bond_code": "113697.SH",
@@ -316480,6 +317103,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-20",
+      "event_date": "2026-08-20",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-20/1225481616.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-20|call_redemption|关于提前赎回“恒逸转2”的第二次提示性公告"
+    },
+    {
       "before_fields": {
         "conversion_price": 51.54
       },
@@ -316492,6 +317128,19 @@
       },
       "note": "conversion_price 51.54->51.29 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-21",
+      "event_date": "2026-08-21",
+      "fields": {
+        "call_redemption_price": 100.686
+      },
+      "note": "赎回价 100.686 | https://static.cninfo.com.cn/finalpage/2026-08-21/1225485085.PDF",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-08-21|call_redemption|关于实施“春23转债”赎回暨摘牌的第三次提示性公告"
     },
     {
       "bond_code": "113697.SH",
@@ -316521,6 +317170,32 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-21",
+      "event_date": "2026-08-21",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-21/1225484803.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-21|call_redemption|关于提前赎回“恒逸转2”的第三次提示性公告"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-22",
+      "event_date": "2026-08-22",
+      "fields": {
+        "call_redemption_price": 100.686
+      },
+      "note": "赎回价 100.686 | https://static.cninfo.com.cn/finalpage/2026-08-22/1225489249.PDF",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-08-22|call_redemption|关于实施“春23转债”赎回暨摘牌的第四次提示性公告"
+    },
+    {
       "bond_code": "113707.SH",
       "confidence": "parsed",
       "effective_date": "2026-08-22",
@@ -316545,6 +317220,87 @@
       "raw_title": "科博达技术股份有限公司2026年度跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "113707.SH|2026-08-22|rating_change|科博达技术股份有限公司2026年度跟踪评级报告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-22",
+      "event_date": "2026-08-22",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-22/1225488278.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-22|call_redemption|关于提前赎回“恒逸转2”的第四次提示性公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 38.72
+      },
+      "bond_code": "113049.SH",
+      "confidence": "wind_asof",
+      "effective_date": "2026-08-25",
+      "event_date": "2026-08-25",
+      "fields": {
+        "conversion_price": 38.74
+      },
+      "note": "conversion_price 38.72->38.74 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-25",
+      "event_date": "2026-08-25",
+      "fields": {
+        "call_redemption_price": 100.686
+      },
+      "note": "赎回价 100.686 | https://static.cninfo.com.cn/finalpage/2026-08-25/1225494465.PDF",
+      "raw_title": "关于实施“春23转债”赎回暨摘牌的第五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2026-08-25|call_redemption|关于实施“春23转债”赎回暨摘牌的第五次提示性公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 12.7
+      },
+      "bond_code": "123076.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-08-25",
+      "event_date": "2026-08-25",
+      "fields": {
+        "conversion_price": 10.6
+      },
+      "note": "conversion_price 12.7->10.6 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 15.88
+      },
+      "bond_code": "123124.SZ",
+      "confidence": "wind_asof",
+      "effective_date": "2026-08-25",
+      "event_date": "2026-08-25",
+      "fields": {
+        "conversion_price": 12.79
+      },
+      "note": "conversion_price 15.88->12.79 (Wind as-of 日序列变化点)",
+      "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-25",
+      "event_date": "2026-08-25",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-25/1225494803.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-25|call_redemption|关于提前赎回“恒逸转2”的第五次提示性公告"
     }
   ]
 }

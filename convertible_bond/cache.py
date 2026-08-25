@@ -179,12 +179,33 @@ class TermsBundle:
             return None
         return _json_dict_to_terms(d)
 
+    def _meta_for_write(self, bond_code: str, source: str, now: str) -> dict:
+        """写入用的 ``_meta``: 全局 fetched_at + **按来源分桶**的时间戳.
+
+        为什么要分桶: ``fetched_at`` 的原意是"这份条款快照的截止日", 但写它的有四条路径,
+        只有 ``cb-sync-tradable`` (source=provider.name) 真的抓条款 —— 每日的
+        ``Wind:admission_status``、每月的 ``akshare:ratings``、每日的 ``cb_events``
+        都只刷各自那几个状态字段, 却一样把 fetched_at 推到今天。于是这个字段退化成
+        "上次被任何人碰过的时间", 而两个消费者仍按原意读它:
+
+          - ``cb_data_sync`` 的 ``--incremental`` → 实测 1052/1058 只被判成"7 天内已更新"
+            而跳过, 且打印"已在 7 天内更新", 看起来完全正常;
+          - ``CachedBondDataProvider.terms_as_of()`` → 当作 ``after=`` 传给条款 patch 投影,
+            于是 live 定价路径上**一条 patch 都不生效**, 两次全量同步之间的条款变更
+            (晶瑞转2 K 差 19.5%、强力转债 16.5%) 完全没有兜底。
+
+        ``fetched_at_by_source`` 缺失时上层按"陈旧"处理 —— 保守, 且跑一次全量同步就自愈,
+        不需要迁移脚本。
+        """
+        prev = (self._data.get(bond_code) or {}).get("_meta") or {}
+        by_source = dict(prev.get("fetched_at_by_source") or {})
+        by_source[source] = now
+        return {"fetched_at": now, "source": source, "fetched_at_by_source": by_source}
+
     def set(self, bond_code: str, terms: BondTerms, source: str = "?") -> Path:
         d = _terms_to_json_dict(terms)
-        d["_meta"] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "source": source,
-        }
+        d["_meta"] = self._meta_for_write(
+            bond_code, source, datetime.now().isoformat(timespec="seconds"))
         self._data[bond_code] = d
         self._save()
         return self.path
@@ -195,15 +216,20 @@ class TermsBundle:
         now = datetime.now().isoformat(timespec="seconds")
         for code, terms in items:
             d = _terms_to_json_dict(terms)
-            d["_meta"] = {"fetched_at": now, "source": source}
+            d["_meta"] = self._meta_for_write(code, source, now)
             self._data[code] = d
         self._save()
 
-    def fetched_at(self, bond_code: str) -> datetime | None:
+    def fetched_at(self, bond_code: str, *, source: str | None = None) -> datetime | None:
+        """记录的抓取时间。``source`` 给定时只认该来源写入的那次 (见 _meta_for_write)。"""
         d = self._data.get(bond_code)
         if d is None:
             return None
-        ts = d.get("_meta", {}).get("fetched_at")
+        meta = d.get("_meta", {})
+        if source is None:
+            ts = meta.get("fetched_at")
+        else:
+            ts = (meta.get("fetched_at_by_source") or {}).get(source)
         if not ts:
             return None
         try:
@@ -211,8 +237,9 @@ class TermsBundle:
         except ValueError:
             return None
 
-    def is_stale(self, bond_code: str, max_age_days: int) -> bool:
-        ts = self.fetched_at(bond_code)
+    def is_stale(self, bond_code: str, max_age_days: int, *,
+                 source: str | None = None) -> bool:
+        ts = self.fetched_at(bond_code, source=source)
         if ts is None:
             return True
         return datetime.now() - ts > timedelta(days=max_age_days)
@@ -259,10 +286,17 @@ class TermsCache:
 
     def set(self, bond_code: str, terms: BondTerms, source: str = "?") -> Path:
         d = _terms_to_json_dict(terms)
-        d["_meta"] = {
-            "fetched_at": datetime.now().isoformat(timespec="seconds"),
-            "source": source,
-        }
+        now = datetime.now().isoformat(timespec="seconds")
+        prev = {}
+        existing = self.path(bond_code)
+        if existing.exists():
+            try:
+                with open(existing, "r", encoding="utf-8") as f:
+                    prev = (json.load(f).get("_meta") or {}).get("fetched_at_by_source") or {}
+            except (json.JSONDecodeError, OSError):
+                prev = {}
+        d["_meta"] = {"fetched_at": now, "source": source,
+                      "fetched_at_by_source": {**prev, source: now}}
         p = self.path(bond_code)
         # 原子写: 先写 .tmp 再 rename, 防止中途崩溃留下半截 JSON
         tmp = p.with_suffix(".json.tmp")
@@ -271,7 +305,8 @@ class TermsCache:
         tmp.replace(p)
         return p
 
-    def fetched_at(self, bond_code: str) -> datetime | None:
+    def fetched_at(self, bond_code: str, *, source: str | None = None) -> datetime | None:
+        """与 :meth:`TermsBundle.fetched_at` 同签名 (鸭子类型缓存共用接口)。"""
         p = self.path(bond_code)
         if not p.exists():
             return None
@@ -281,16 +316,22 @@ class TermsCache:
         except (json.JSONDecodeError, OSError):
             return None
         meta = d.get("_meta", {})
-        ts = meta.get("fetched_at")
-        if not ts:
-            return datetime.fromtimestamp(p.stat().st_mtime)
+        if source is not None:
+            ts = (meta.get("fetched_at_by_source") or {}).get(source)
+            if not ts:
+                return None
+        else:
+            ts = meta.get("fetched_at")
+            if not ts:
+                return datetime.fromtimestamp(p.stat().st_mtime)
         try:
             return datetime.fromisoformat(ts)
         except ValueError:
             return None
 
-    def is_stale(self, bond_code: str, max_age_days: int) -> bool:
-        ts = self.fetched_at(bond_code)
+    def is_stale(self, bond_code: str, max_age_days: int, *,
+                 source: str | None = None) -> bool:
+        ts = self.fetched_at(bond_code, source=source)
         if ts is None:
             return True
         return datetime.now() - ts > timedelta(days=max_age_days)
@@ -326,11 +367,28 @@ class CachingDataProvider(DataProvider):
         self._write_lock = threading.Lock()
 
     def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
-        """条款来自本装饰器的缓存, 锚是缓存的抓取日。"""
+        """条款来自本装饰器的缓存, 锚是**条款那一次**的抓取日.
+
+        必须按来源取: 全局 ``fetched_at`` 会被每日的状态刷新 / 评级同步推到今天, 用它当锚
+        等于宣称"今天之前的条款变更都已含在快照里", 于是条款 patch 全被 ``after=`` 裁掉。
+        """
+        if self.cache is None:
+            return None
         try:
-            ts = self.cache.fetched_at(bond_code) if self.cache is not None else None
+            ts = self.cache.fetched_at(bond_code, source=self.inner.name)
+        except TypeError:      # 旧式 cache 没有 source 形参
+            ts = None
         except Exception:
             return None
+        if ts is None:
+            # 还没有按来源的时间戳 (本字段是后加的, 跑一次全量同步才落库)。此时**回落到
+            # 全局 fetched_at**, 而不是 None —— None 在上层表示"不裁剪", 会把整条 patch 链
+            # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债
+            # K 11.63 会被盖成 17.74)。宁可暂时保守裁掉, 也不能反向写坏。
+            try:
+                ts = self.cache.fetched_at(bond_code)
+            except Exception:
+                return None
         return ts.date() if ts is not None else None
 
     def get_bond_terms(self, bond_code, valuation_date):
@@ -420,11 +478,30 @@ class CachedBondDataProvider(DataProvider):
         self._risk_free_cache: dict[date, float | None] = {}
 
     def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
-        """cb_data 里这只债的抓取日 —— 快照已含该日之前生效的全部条款变更。"""
+        """cb_data 里这只债**条款**的抓取日 —— 快照已含该日之前生效的全部条款变更.
+
+        取的是 ``static_source`` (全量条款同步) 那一次的时间戳, 不是全局 ``fetched_at``:
+        后者被每日 ``Wind:admission_status`` / 每月 ``akshare:ratings`` / 每日 ``cb_events``
+        一起推到今天, 而这三者一个条款字段都不抓。用全局值当锚会把两次全量同步之间的
+        条款变更整段裁掉 —— 实测 live 路径上条款 patch 一条都不生效。
+        """
+        if self.cache is None:
+            return None
         try:
-            ts = self.cache.fetched_at(bond_code) if self.cache is not None else None
+            ts = self.cache.fetched_at(bond_code, source=self.static_source.name)
+        except TypeError:      # 旧式 cache 没有 source 形参
+            ts = None
         except Exception:
             return None
+        if ts is None:
+            # 还没有按来源的时间戳 (本字段是后加的, 跑一次全量同步才落库)。此时**回落到
+            # 全局 fetched_at**, 而不是 None —— None 在上层表示"不裁剪", 会把整条 patch 链
+            # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债
+            # K 11.63 会被盖成 17.74)。宁可暂时保守裁掉, 也不能反向写坏。
+            try:
+                ts = self.cache.fetched_at(bond_code)
+            except Exception:
+                return None
         return ts.date() if ts is not None else None
 
     def _merge_cashflow(self, bond_code: str, terms: BondTerms) -> BondTerms:

@@ -207,3 +207,115 @@ def test_terms_bundle_delete_removes_entry_and_meta(tmp_path):
     assert bundle.delete("128009.SZ") is True
     assert bundle.delete("128009.SZ") is False
     assert "128009.SZ" not in bundle.list_bonds()
+
+
+# ── 按来源分桶的抓取时间 ────────────────────────────────────────────────────
+#
+# ``fetched_at`` 的原意是"这份条款快照的截止日", 但写它的有四条路径, 只有全量条款同步
+# (source=provider.name) 真的抓条款 —— 每日的 ``Wind:admission_status``、每月的
+# ``akshare:ratings``、每日的 ``cb_events`` 都只刷各自那几个状态字段, 却一样把
+# fetched_at 推到今天。实测后果: ``cb-sync-tradable --incremental`` 把 1052/1058 只判成
+# "7 天内已更新"而跳过 (还照常打印"已在 7 天内更新"), 且 live 定价路径上条款 patch
+# 一条都不生效。
+
+def test_fetched_at_by_source_survives_partial_refresh(tmp_path):
+    bundle = TermsBundle(tmp_path / "cb_data.json")
+    bundle.set("128009.SZ", _sample_terms(), source="Wind")
+    wind_ts = bundle.fetched_at("128009.SZ", source="Wind")
+    assert wind_ts is not None
+
+    # 之后来一轮只刷状态字段的同步: 全局 fetched_at 被推走, 但 Wind 那一格不能动
+    bundle.set("128009.SZ", _sample_terms(), source="Wind:admission_status")
+    assert bundle.fetched_at("128009.SZ", source="Wind") == wind_ts
+    assert bundle.fetched_at("128009.SZ", source="Wind:admission_status") is not None
+    assert bundle.fetched_at("128009.SZ") >= wind_ts          # 全局仍是最近一次
+
+
+def test_is_stale_by_source_sees_through_partial_refresh(tmp_path):
+    bundle = TermsBundle(tmp_path / "cb_data.json")
+    bundle.set("128009.SZ", _sample_terms(), source="Wind:admission_status")
+    # 全局口径: 刚写过, 不算陈旧 —— 这正是 --incremental 空转的原因
+    assert not bundle.is_stale("128009.SZ", max_age_days=7)
+    # 按来源口径: 条款从来没抓过 → 陈旧
+    assert bundle.is_stale("128009.SZ", max_age_days=7, source="Wind")
+
+
+def test_is_stale_treats_missing_source_stamp_as_stale(tmp_path):
+    """老库里没有 fetched_at_by_source: 按陈旧处理 (保守), 跑一次全量同步即自愈。"""
+    import json
+    path = tmp_path / "cb_data.json"
+    bundle = TermsBundle(path)
+    bundle.set("128009.SZ", _sample_terms(), source="Wind")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    del raw["128009.SZ"]["_meta"]["fetched_at_by_source"]     # 模拟迁移前的老数据
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    reloaded = TermsBundle(path)
+    assert reloaded.is_stale("128009.SZ", max_age_days=3650, source="Wind")
+    assert not reloaded.is_stale("128009.SZ", max_age_days=3650)   # 全局口径不受影响
+
+
+def test_cached_bond_provider_terms_as_of_falls_back_to_global(tmp_path):
+    """缺按来源的戳时 terms_as_of 必须回落到全局值, **不能**返回 None。
+
+    None 在 ``project_terms`` 里表示"不裁剪", 会把整条 patch 链从发行日回放上来, 拿陈旧
+    或解析错的值盖掉正确的 cb_data (实测海顺转债 K 11.63 会被盖成 17.74)。宁可暂时保守
+    裁掉, 也不能反向写坏。
+    """
+    import json
+    from datetime import date as _date
+
+    from convertible_bond.cache import CachedBondDataProvider
+
+    class _Stub:
+        name = "Wind"
+
+        def get_bond_terms(self, *a, **k):
+            raise NotImplementedError
+
+    path = tmp_path / "cb_data.json"
+    bundle = TermsBundle(path)
+    bundle.set("128009.SZ", _sample_terms(), source="Wind")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    del raw["128009.SZ"]["_meta"]["fetched_at_by_source"]
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    provider = CachedBondDataProvider(
+        market=_Stub(), cache=TermsBundle(path), static_source=_Stub())
+    assert provider.terms_as_of("128009.SZ", _date(2026, 8, 25)) is not None
+
+
+def test_full_sync_does_not_clobber_third_party_rating(tmp_path, monkeypatch):
+    """全量条款同步不能把 akshare 刷来的评级盖回 Wind 的发行时冻结值。
+
+    日常状态刷新那条路早就堵上了 (``get_admission_status`` 显式返回 credit_rating=None),
+    全量这条却漏了 —— 实测一次 cb-sync-tradable 把 15 只已下调到 A-/A/BBB 的债盖回冻结值,
+    主池 285 → 301, 那 15 只全是刚被"评级过低"正确剔除的。
+    """
+    from datetime import date as _date
+
+    from convertible_bond.cb_data_sync import sync_cb_terms
+
+    class _Wind:
+        name = "Wind"
+
+        def get_bond_terms(self, code, valuation_date):
+            return BondTerms(sec_name="帝欧转债", conversion_price=10.0,
+                             maturity_date=_date(2030, 1, 1),
+                             credit_rating="AA-")        # 发行时冻结值
+
+        def get_cashflow(self, code):
+            return None
+
+    bundle = TermsBundle(tmp_path / "cb_data.json")
+    bundle.set("127047.SZ", BondTerms(sec_name="帝欧转债", credit_rating="BBB+"),
+               source="akshare:ratings")
+    bundle.set("999999.SZ", BondTerms(sec_name="新债"), source="unit")   # 本地为空
+
+    sync_cb_terms(_Wind(), ["127047.SZ", "999999.SZ"], store=bundle,
+                  valuation_date=_date(2026, 8, 25), drop_terminal=False)
+
+    assert bundle.get("127047.SZ").credit_rating == "BBB+"   # 第三方值胜出
+    assert bundle.get("999999.SZ").credit_rating == "AA-"    # 空值仍由 Wind 兜底
+    # 其余字段照常被全量重建
+    assert bundle.get("127047.SZ").conversion_price == 10.0

@@ -35,11 +35,23 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
     "redemption_price": 107.0,
     "coupon_rates": [0.003, 0.004, ...],
     ...
-    "_meta": {"fetched_at": "...", "source": "wind"}
+    "_meta": {
+      "fetched_at": "...",
+      "source": "Wind:admission_status",
+      "fetched_at_by_source": {"Wind": "...", "Wind:admission_status": "..."}
+    }
   },
   ...
 }
 ```
+
+> `_meta.fetched_at` 是**这条记录上次被任何人碰过的时间**，不是条款抓取日。写它的有四条
+> 路径，只有全量 `sync_tradable`（`source="Wind"`）真的抓条款；`Wind:admission_status`
+> （每日状态）、`akshare:ratings`（每月评级）、`cb_events`（每日事件回写）都只刷各自那几个
+> 字段，却一样把它推到今天。要问"条款有多旧"必须查 `fetched_at_by_source["Wind"]`
+> （`bundle.fetched_at(code, source="Wind")` / `bundle.is_stale(code, n, source="Wind")`）——
+> 用全局值会让 `sync_tradable --incremental` 永久空转、并让条款 patch 在定价路径上整段失效。
+> 老库里没有这个字段时按"陈旧"处理，跑一次全量同步即自愈。
 
 ### 何时刷新
 
