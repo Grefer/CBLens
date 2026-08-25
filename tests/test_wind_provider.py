@@ -282,3 +282,21 @@ def test_drop_sentinel_date_filters_wind_far_future_placeholder():
     assert _drop_sentinel_date(date(2032, 1, 16), val) == date(2032, 1, 16)  # 预定摘牌=到期
     assert _drop_sentinel_date(None, val) is None
     assert _drop_sentinel_date(date(2079, 6, 2), None) == date(2079, 6, 2)   # 无估值日不判
+
+
+def test_admission_status_does_not_overwrite_credit_rating():
+    """Wind 的 creditrating 是发行时值, 不能让每日状态刷新把第三方新值盖回冻结值。
+
+    实测 cb_data.json 跨 17 个版本、约 4000 次逐债 Wind 重取, credit_rating 变化 0 次,
+    而同批刷新里 conversion_price 变了 287 次; 已违约的搜特/鸿达/正邦仍标 AA。
+    """
+    import inspect
+
+    from convertible_bond.data_providers.wind import WindDataProvider
+
+    source = inspect.getsource(WindDataProvider.get_admission_status)
+    assert '"creditrating"' not in source, (
+        "get_admission_status 不该再取 Wind 的 creditrating —— 它是发行时冻结值; "
+        "当前值走 cb-sync-ratings 从第三方刷新")
+    assert "credit_rating=None" in source, (
+        "必须显式返回 None, 让 merge_admission_status 跳过该字段而不是写入冻结值")

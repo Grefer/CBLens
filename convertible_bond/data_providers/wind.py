@@ -467,7 +467,11 @@ class WindDataProvider(DataProvider):
                 ),
                 "last_trading_date": ("lasttrade_date", "lasttradingdate", "last_trade_date"),
                 "delisting_date": ("delist_date", "delistingdate"),
-                "credit_rating": ("creditrating",),
+                # credit_rating 有意不在这里取 —— Wind 的 ``creditrating`` 是**发行时值**,
+                # 实测 cb_data.json 跨 17 个版本、约 4000 次逐债重取零变化 (同批刷新里
+                # conversion_price 变了 287 次), 已违约的搜特/鸿达/正邦仍标 AA。留在状态刷新里
+                # 只会每天把 cb-sync-ratings 拉来的第三方新值盖回冻结值。
+                # 初次建档仍由 get_bond_terms 用它兜底覆盖率。
                 "credit_rating_outlook": ("ratingoutlook", "creditratingoutlook"),
                 "outstanding_balance": ("outstandingbalance",),
             },
@@ -514,7 +518,7 @@ class WindDataProvider(DataProvider):
             underlying_trade_status=_string_or_none(stock_data.get("underlying_trade_status")),
             underlying_pct_change=underlying_pct_change,
             bond_turnover_amount=bond_turnover_amount,
-            credit_rating=_string_or_none(bond_data.get("credit_rating")),
+            credit_rating=None,          # 见上: 不让冻结值覆盖第三方口径
             credit_rating_outlook=_string_or_none(bond_data.get("credit_rating_outlook")),
             outstanding_balance=_float_or_none(bond_data.get("outstanding_balance")),
         )
