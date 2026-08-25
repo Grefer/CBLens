@@ -75,9 +75,9 @@ logger = logging.getLogger(__name__)
 _BATCH_COLS_FULL = (
     ("代码", 100), ("名称", 80), ("正股", 80), ("相对偏差", 80), ("双低", 65),
     ("下修优势", 75), ("机会分", 70), ("质量分", 65), ("可信", 45),
-    ("转股价值", 70), ("转股溢价(%)", 80), ("σ(%)", 55), ("理论价", 65),
-    ("市价", 65), ("偏差(%)", 70), ("评级", 50), ("敏感性", 90),
-    ("标签", 180), ("复核建议", 260), ("状态", 60),
+    ("转股价值", 70), ("转股溢价(%)", 80), ("距下修线", 75), ("σ(%)", 55),
+    ("理论价", 65), ("市价", 65), ("偏差(%)", 70), ("评级", 50), ("敏感性", 90),
+    ("事件", 150), ("标签", 180), ("复核建议", 260), ("状态", 60),
 )
 # 简洁视图用「相对偏差 + 双低」替掉「机会分」: 实测 92% 的行机会分的低估项恒为 0,
 # 分数由评级/余额加分与风险惩罚决定, 与错定价无关 —— 放在决策位上会误导。
@@ -85,7 +85,7 @@ _BATCH_COLS_FULL = (
 _BATCH_COLS_SIMPLE = (
     ("代码", 100), ("名称", 90), ("相对偏差", 80), ("双低", 65), ("下修优势", 75), ("可信", 45),
     ("理论价", 70), ("市价", 70), ("偏差(%)", 75), ("评级", 50),
-    ("标签", 200), ("状态", 50),
+    ("事件", 150), ("标签", 170), ("状态", 50),
 )
 # 列名 → 取值函数, 简洁/完整共用
 _BATCH_COL_GETTERS = {
@@ -111,6 +111,13 @@ _BATCH_COL_GETTERS = {
     "偏差(%)":      lambda r: f"{float(r['deviation'])*100:+.2f}" if _is_finite(r.get("deviation")) else "—",
     "评级":         lambda r: r.get("credit_rating", ""),
     "敏感性":       lambda r: r.get("sensitivity_status", ""),
+    # 事件 = 确定性的日程/状态安排 (强赎日 / 在途下修 / 回售窗口 / 暂停转股 / 不强赎承诺)。
+    # **全列出不截断**: 实测每行最多 2 条、最长 17 字符, 放得下; 而 tooltip 取的是单元格
+    # display value, 一旦截断被隐藏的那条就彻底看不见了 —— 事件正是最不该被静默吞掉的一类。
+    # batch_pricing.event_flags 已按可操作性排好序, 硬退出期限在最前。
+    "事件":         lambda r: " / ".join(r.get("event_flags") or []) or "—",
+    # 正股价距下修触发线还有多远; 负 = 已在线下, 下修博弈已经活了
+    "距下修线":     lambda r: f"{float(r['down_reset_trigger_gap'])*100:+.0f}%" if _is_finite(r.get("down_reset_trigger_gap")) else "—",
     "标签":         lambda r: _format_tags(r.get("risk_tags")),
     "复核建议":     lambda r: _format_tags(r.get("review_notes")),
     "状态":         lambda r: "✓" if r.get("status") == "ok" else r.get("status", ""),
@@ -134,6 +141,8 @@ _BATCH_COL_STRETCH_WEIGHTS = {
     "偏差(%)": 0.35,
     "评级": 0.25,
     "敏感性": 0.8,
+    "距下修线": 0.35,
+    "事件": 1.6,
     "标签": 2.0,
     "复核建议": 3.0,
     "状态": 0.25,
@@ -682,7 +691,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
-    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签", "复核建议"})
+    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签", "复核建议", "事件"})
     app._batch_main_tree = tree
     _TREE_ATTRS.add("_batch_main_tree")
     _attach_main_context_menu(app, tree)

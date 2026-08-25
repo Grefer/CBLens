@@ -64,6 +64,8 @@ BATCH_RESULT_COLUMNS = [
     "quality_score",
     "confidence",
     "risk_tags",
+    "event_flags",
+    "down_reset_trigger_gap",
     "outstanding_balance",
     "days_to_last_trading",
     "model_signal_status",
@@ -845,6 +847,8 @@ def annotate_batch_result(row: dict, *,
         out.setdefault("quality_score", float("nan"))
         out.setdefault("double_low", float("nan"))
         out.setdefault("relative_deviation", float("nan"))
+        out.setdefault("event_flags", [])
+        out.setdefault("down_reset_trigger_gap", float("nan"))
         out.setdefault("model_signal_status", "不可用")
         # 定价失败的行也要有分桶, 否则分桶不是全覆盖的划分 (GUI 分桶列会空白),
         # 而视图侧的"需复核"是包含它们的 —— 两边口径必须一致。
@@ -1086,6 +1090,8 @@ def annotate_batch_result(row: dict, *,
     out["risk_tags"] = _dedupe_tags(risk_tags)
     out["confidence"] = confidence
     out["quality_score"] = quality_score
+    out["event_flags"] = event_flags(out)
+    out["down_reset_trigger_gap"] = down_reset_trigger_gap(out)
     # opportunity_score 是"模型低估程度"的复核排序信号, 用于筛选值得人工复核的标的;
     # 经全市场池回测其横截面排序对未来收益预测力≈0 (Rank-IC≈-0.05), 不是收益预测/买入
     # 排名。可用 convertible_bond.signal_eval 复验。NaN 表示无市价/理论价异常 (上层已处理)。
@@ -1495,10 +1501,10 @@ def _csv_value(row: dict, column: str):
         "down_reset_edge_worst_sigma", "down_reset_edge_worst_spread",
     }:
         return f"{float(value):.4f}" if value != "" else ""
-    if column == "risk_tags" and isinstance(value, list):
-        return "|".join(str(tag) for tag in value)
-    if column == "review_notes" and isinstance(value, list):
-        return "|".join(str(note) for note in value)
+    if column in {"risk_tags", "event_flags", "review_notes"} and isinstance(value, list):
+        return "|".join(str(item) for item in value)
+    if column == "down_reset_trigger_gap":
+        return f"{float(value):.6f}" if value != "" else ""
     return value
 
 
@@ -1520,7 +1526,7 @@ def _restore_result_row(row: dict) -> dict:
         "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
         "conversion_premium", "model_premium_to_parity", "opportunity_score",
         "quality_score", "double_low", "relative_deviation",
-        "market_median_deviation", "cheapness_percentile",
+        "market_median_deviation", "cheapness_percentile", "down_reset_trigger_gap",
         "undervaluation_rate", "no_down_price", "down_reset_uplift",
         "implied_p_down", "effective_p_down_1y_prob", "implied_p_down_1y_prob",
         "p_down_gap", "down_reset_probability_gap", "down_reset_sensitivity",
@@ -1557,6 +1563,96 @@ def _sensitivity_status(tags: Sequence[str], confidence: str) -> str:
     if confidence == "中":
         return "一般"
     return "需复核"
+
+
+# ── 事件旗标 ────────────────────────────────────────────────────────────────
+#
+# 与 risk_tags **分成两族, 不要合并**:
+#   risk_tags    驱动策略排除集 (LEGACY_STRATEGY_EXCLUDE_TAGS)、置信度扣分与视图拦截
+#                —— 往里加一个标签就是默认选债行为变更, 要单独立项。
+#   event_flags  只进展示与 CSV 导出, 回答"这只债现在有没有正在发生的事"。
+#
+# 这些字段此前**全部算好了却一个都不显示**: 实测 2026-08-22 主池 280 只里, 2 只有在途
+# 下修提议 (生效日 08-24 / 09-05)、1 只已公告强赎、67 只有不强赎承诺 (强赎上限被暂时
+# 解除, 是实打实的正面信息)、42 只暂停转股、82 只有回售窗口 —— 而"找交易机会"的页面
+# 一个都看不到。
+#
+# 顺序 = 可操作性, 不是字母序: 有硬退出期限的排最前, 纯提示排最后。表格列窄, 只显示
+# 前两个, 所以顺序直接决定用户看见什么。
+#
+# 刻意**不收**两类高频状态: 「已触发下修线」(实测 127/280 = 45%) 与「下修冻结中」
+# (186/280 = 66%)。在近半数债上都亮的旗标描述的是市场不是这只债 —— 与标签维度那条
+# 教训同源。前者改由「距下修线」数值列承载, 后者是模型入参, 经「下修优势」体现。
+_DOWN_RESET_KIND_LABEL = {"proposed": "下修提议", "approved": "下修已通过"}
+# 回售窗口提前多少天开始提示
+PUTBACK_NOTICE_DAYS = 60
+
+
+def event_flags(row: dict) -> list[str]:
+    """这一行当前有哪些**确定性的日程/状态安排**, 按可操作性降序。
+
+    纯读 row 上已有的字段, 不做任何取数; 无事件返回空列表。
+    """
+    val_date = _terms_date(row, "valuation_date")
+    flags: list[str] = []
+
+    def md(day: date | None) -> str:
+        return day.strftime("%m-%d") if day is not None else "待定"
+
+    # ① 已公告强赎: 唯一带硬退出期限的事件 —— 不转股就按赎回价被赎走
+    call_date = _terms_date(row, "call_redemption_date")
+    if row.get("redemption_mode") or row.get("call_status") == "已公告强赎":
+        flags.append(f"强赎 {md(call_date)}")
+
+    # ② 在途下修: 本工具的核心 thesis, 也是 pricer 建一次性下修节点的依据
+    kind = _DOWN_RESET_KIND_LABEL.get(str(row.get("down_reset_scheduled_kind") or ""))
+    if kind:
+        flags.append(f"{kind} {md(_terms_date(row, 'down_reset_scheduled_date'))}")
+
+    # ③ 回售申报窗口: 开启中是可执行的价格下限, 临近的值得提前排期。
+    #
+    # **必须同时有起止日才认**。缺 end 的记录不是"窗口还没结束", 而是公告正文没解析出
+    # 截止日 —— 此时 effective_start 退化成了**公告日**而不是窗口起始日。实测主池 82 条
+    # 有 start 的记录里 29 条缺 end, 全部来自"关于XX转债回售的第N次提示性公告"这类正文
+    # (与解析成功的帝欧/长汽同一类公告), 窗口其实早已关闭。按 end is None 当成"仍开启"
+    # 会把 30 只债长期错报成「回售中」—— 又一次把**解析残缺**当成**当期状态**。
+    put_start = _terms_date(row, "putback_start_date")
+    put_end = _terms_date(row, "putback_end_date")
+    if val_date is not None and put_start is not None and put_end is not None:
+        if put_start <= val_date <= put_end:
+            flags.append(f"回售中 至{md(put_end)}")
+        elif 0 < (put_start - val_date).days <= PUTBACK_NOTICE_DAYS:
+            flags.append(f"回售 {md(put_start)}起")
+
+    # ④ 暂停转股: 转股价值这条腿暂时断了, parity 口径要打折扣看
+    if row.get("conversion_suspension_status") == "暂停转股":
+        flags.append("暂停转股")
+
+    # ⑤ 不强赎承诺: 强赎上限在承诺期内被解除, 对持有人是正面信息
+    no_call_until = _terms_date(row, "call_no_redemption_until")
+    if (row.get("call_status") == "不强赎" and no_call_until is not None
+            and val_date is not None and no_call_until > val_date):
+        flags.append(f"不强赎至 {no_call_until.strftime('%y-%m')}")
+
+    return flags
+
+
+def down_reset_trigger_gap(row: dict) -> float | None:
+    """正股价距下修触发线还有多远: ``S0 / (K * trigger_ratio) - 1``。
+
+    负 = 已在触发线下方 (下修博弈已经活了), 0 = 恰在线上。实测主池 127/280 已在线下、
+    41 只在线上 10% 以内 —— 这是"哪些债的下修故事正在发生"最直接的一个数, 而它此前
+    只作为 pricer 入参存在, 表上没有。
+    """
+    s0 = finite_float(row.get("S0"))
+    k = finite_float(row.get("K"))
+    ratio = finite_float(row.get("down_reset_trigger_ratio"))
+    if ratio is None:
+        pct = finite_float(row.get("down_reset_trigger_pct"))
+        ratio = None if pct is None else pct / 100.0
+    if s0 is None or k is None or not ratio or k <= 0 or ratio <= 0:
+        return None
+    return s0 / (k * ratio) - 1.0
 
 
 def _review_bucket(row: dict) -> str:

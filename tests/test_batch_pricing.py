@@ -18,6 +18,7 @@ from convertible_bond.batch_pricing import (
     view_exclusion_reason,
     annotate_batch_result,
     annotate_batch_results,
+    down_reset_trigger_gap,
     filter_batch_results_by_view,
     sort_batch_results_for_review,
     sort_batch_results_for_view,
@@ -1137,3 +1138,98 @@ def test_batch_result_columns_carry_the_new_signals():
     for key in ("relative_deviation", "cheapness_rank", "double_low",
                 "quality_score", "down_reset_edge_rank"):
         assert key in BATCH_RESULT_COLUMNS
+
+
+# ── 事件旗标 / 距下修线 ──
+#
+# 这些字段此前**全部算好了却一个都不显示**: 实测主池 280 只里 2 只有在途下修提议、
+# 1 只已公告强赎、67 只有不强赎承诺、42 只暂停转股 —— 而"找交易机会"的页面看不到。
+
+def _flag_row(**kw):
+    row = dict(status="ok", bond_code="113000.SH", S0=12.0, K=13.5,
+               theoretical_price=110.0, market_price=118.0, deviation=0.07,
+               sigma=0.30, T=3.0, credit_rating="AA", outstanding_balance=4.25,
+               valuation_date="2026-08-24")
+    row.update(kw)
+    return annotate_batch_result(row)
+
+
+def test_event_flags_put_hard_deadlines_first():
+    """列窄, 顺序直接决定用户看见什么: 错过就没得选的排最前。"""
+    row = _flag_row(redemption_mode=True, call_redemption_date="2026-08-27",
+                    conversion_suspension_status="暂停转股",
+                    down_reset_scheduled_kind="proposed",
+                    down_reset_scheduled_date="2026-09-05")
+    assert row["event_flags"][0].startswith("强赎")
+    assert row["event_flags"][1].startswith("下修提议")
+    assert "暂停转股" in row["event_flags"]
+
+
+def test_event_flags_stay_empty_for_a_quiet_bond():
+    assert _flag_row()["event_flags"] == []
+
+
+def test_putback_flag_requires_both_window_dates():
+    """缺 end 不是"窗口还没结束", 是公告没解析出截止日 —— 此时 start 已退化成公告日。
+
+    实测主池 82 条有 start 的回售记录里 29 条缺 end, 全部来自"回售的第N次提示性公告"
+    (与解析成功的帝欧/长汽同一类公告), 窗口早已关闭。按 end is None 当"仍开启"会把
+    30 只债长期错报成「回售中」—— 把**解析残缺**当成**当期状态**。
+    """
+    partial = _flag_row(putback_start_date="2025-12-11")          # 只有起始日
+    assert not any(f.startswith("回售") for f in partial["event_flags"])
+
+    live = _flag_row(putback_start_date="2026-08-20", putback_end_date="2026-08-26")
+    assert any(f.startswith("回售中") for f in live["event_flags"])
+
+    closed = _flag_row(putback_start_date="2025-08-14", putback_end_date="2025-08-20")
+    assert not any(f.startswith("回售") for f in closed["event_flags"])
+
+    soon = _flag_row(putback_start_date="2026-09-10", putback_end_date="2026-09-16")
+    assert any(f.startswith("回售 09-10起") for f in soon["event_flags"])
+
+
+def test_no_call_commitment_flag_needs_a_live_deadline():
+    """不强赎承诺过期就不该再显示 —— 实测 call_status 有 67 只, 承诺未过期的只有 33 只。"""
+    live = _flag_row(call_status="不强赎", call_no_redemption_until="2027-01-09")
+    assert any(f.startswith("不强赎至") for f in live["event_flags"])
+    expired = _flag_row(call_status="不强赎", call_no_redemption_until="2026-01-09")
+    assert not any(f.startswith("不强赎") for f in expired["event_flags"])
+
+
+def test_high_frequency_states_are_deliberately_not_flags():
+    """在近半数债上都亮的旗标描述的是市场不是这只债 (与标签维度同源的教训)。
+
+    「已触发下修线」实测 127/280 = 45%, 「下修冻结中」186/280 = 66% —— 前者改由
+    「距下修线」数值列承载, 后者是模型入参, 经「下修优势」体现。
+    """
+    row = _flag_row(S0=8.0, K=13.5, down_reset_trigger_ratio=0.85,
+                    down_reset_block_until="2027-01-09")
+    assert row["event_flags"] == []
+    assert row["down_reset_trigger_gap"] < 0          # 确实已在触发线下方
+
+
+@pytest.mark.parametrize("s0, k, ratio, expected", [
+    (11.475, 13.5, 0.85, 0.0),        # 恰在触发线上
+    (8.0, 13.5, 0.85, -0.303),        # 已在线下
+    (13.5, 13.5, 0.85, 0.176),        # 线上方
+])
+def test_down_reset_trigger_gap_measures_distance_to_the_line(s0, k, ratio, expected):
+    row = {"S0": s0, "K": k, "down_reset_trigger_ratio": ratio}
+    assert down_reset_trigger_gap(row) == pytest.approx(expected, abs=1e-3)
+
+
+def test_down_reset_trigger_gap_falls_back_to_pct_and_degrades_safely():
+    assert down_reset_trigger_gap(
+        {"S0": 8.0, "K": 13.5, "down_reset_trigger_pct": 85.0}) == pytest.approx(-0.303, abs=1e-3)
+    for bad in ({}, {"S0": 8.0}, {"S0": 8.0, "K": 0.0, "down_reset_trigger_ratio": 0.85},
+                {"S0": 8.0, "K": 13.5, "down_reset_trigger_ratio": 0.0}):
+        assert down_reset_trigger_gap(bad) is None
+
+
+def test_event_flags_are_not_risk_tags():
+    """两族必须分开: risk_tags 驱动策略排除集, 往里加东西就是默认选债行为变更。"""
+    row = _flag_row(redemption_mode=True, call_redemption_date="2026-08-27")
+    assert row["event_flags"]
+    assert not (set(row["event_flags"]) & set(row["risk_tags"]))
+    assert not (set(row["event_flags"]) & LEGACY_STRATEGY_EXCLUDE_TAGS)

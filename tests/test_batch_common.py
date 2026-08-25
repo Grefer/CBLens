@@ -1,4 +1,5 @@
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import date, timedelta
 
 import inspect
 
@@ -128,6 +129,22 @@ def test_batch_column_getters_tolerate_missing_and_nan_values():
             assert isinstance(getter(row), str), f"{name} 在缺值行上没返回字符串"
 
 
+def test_event_and_trigger_columns_are_present():
+    """确定性的日程安排此前全算好了却一个都不显示 —— 强赎日、在途下修、回售窗口。"""
+    simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
+    full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
+    assert "事件" in simple, "事件是最该被看见的一类, 不能只在完整视图里"
+    assert "距下修线" in full
+
+
+def test_event_column_never_truncates():
+    """tooltip 取的是单元格 display value, 一旦截断被隐藏的那条就彻底看不见了。"""
+    row = {"event_flags": ["强赎 08-27", "下修提议 09-05", "暂停转股", "不强赎至 27-01"]}
+    rendered = batch_tab._BATCH_COL_GETTERS["事件"](row)
+    for flag in row["event_flags"]:
+        assert flag in rendered
+
+
 def test_simple_view_leads_with_cross_sectional_signals_not_score():
     """简洁视图的决策位必须是相对偏差 —— 机会分在 92% 的行上与错定价无关。
 
@@ -149,3 +166,100 @@ def test_both_pricing_entries_request_pde_down_reset_signals():
     for module in (batch_tab, watchlist_tab):
         src = inspect.getsource(module)
         assert "compute_pde_signals=True" in src, f"{module.__name__} 未开 PDE 下修信号"
+
+
+# ── 事件横幅 ──
+#
+# 此前只扫关注池 —— 主池里昨天出的下修提议不会浮出来, 除非你已经在关注它。
+# 而"已经在关注"恰恰意味着你已经知道了。
+
+@dataclass
+class _Ev:
+    bond_code: str
+    event_type: str
+    event_date: date
+    effective_start: date | None = None
+    effective_end: date | None = None
+
+
+class _Store:
+    def __init__(self, events):
+        self._by_code = {}
+        for ev in events:
+            self._by_code.setdefault(ev.bond_code, []).append(ev)
+
+    def list_events(self, bond_code=None):
+        return list(self._by_code.get(bond_code, []))
+
+
+TODAY = date(2026, 8, 24)
+HORIZON = TODAY + timedelta(days=30)
+
+
+def _collect(events, codes=None):
+    from convertible_bond.gui.tabs.batch_watchlist import collect_upcoming_events
+    store = _Store(events)
+    return collect_upcoming_events(
+        store, codes or sorted({e.bond_code for e in events}), TODAY, HORIZON)
+
+
+def test_banner_shows_the_date_that_actually_falls_in_the_window():
+    """入窗判定看三个日期中任意一个, 显示的却固定是 effective_start ——
+    于是 effective_end 在窗口内的区间事件, 会把几个月前的起始日当成"未来 30 天的事"。
+    """
+    rows = _collect([_Ev("A.SH", "call_no_redemption", date(2026, 3, 1),
+                         effective_start=date(2026, 3, 1), effective_end=date(2026, 8, 26))])
+    assert rows == [("A.SH", "不强赎到期", date(2026, 8, 26))]
+
+
+def test_banner_ignores_events_entirely_outside_the_window():
+    assert _collect([_Ev("A.SH", "rating_change", date(2025, 1, 1))]) == []
+    assert _collect([_Ev("A.SH", "rating_change", date(2027, 1, 1))]) == []
+
+
+def test_banner_ignores_untrustworthy_end_dates():
+    """conversion_suspension 的 end 被公告里的回售期区间污染, 不能当"未来事件"。"""
+    contaminated = _Ev("A.SH", "conversion_suspension", date(2024, 10, 25),
+                       effective_start=date(2021, 3, 11), effective_end=date(2026, 9, 3))
+    assert _collect([contaminated]) == []
+
+
+def test_banner_dedupes_repeat_announcements():
+    """同一件事常有"第N次提示性公告"多条 (实测鸿路转债 33 条 putback)。"""
+    window = dict(effective_start=date(2026, 8, 25), effective_end=date(2026, 8, 31))
+    rows = _collect([_Ev("A.SH", "putback", date(2026, 8, 20), **window),
+                     _Ev("A.SH", "putback", date(2026, 8, 21), **window),
+                     _Ev("A.SH", "putback", date(2026, 8, 22), **window)])
+    assert rows == [("A.SH", "回售", date(2026, 8, 25))]
+
+
+def test_banner_orders_by_actionability_not_by_date():
+    """纯按日期排会让"评级调整"挤掉三天后的强赎。"""
+    rows = _collect([
+        _Ev("R.SH", "rating_change", date(2026, 8, 25)),
+        _Ev("C.SH", "call_redemption", date(2026, 8, 28)),
+        _Ev("D.SH", "down_reset_proposed", date(2026, 8, 27)),
+    ])
+    assert [code for code, _t, _d in rows] == ["C.SH", "D.SH", "R.SH"]
+
+
+def test_banner_groups_repeats_so_the_urgent_one_survives():
+    """扫全主池后同类成片 (实测 22 件里 11 件是「不下修到期」), 逐条铺开会占满展示位。"""
+    from convertible_bond.gui.tabs.batch_watchlist import _group_banner_entries
+    upcoming = [("C.SH", "强赎截止", date(2026, 8, 27))]
+    upcoming += [(f"N{i}.SH", "不下修到期", date(2026, 8, 25) + timedelta(days=i))
+                 for i in range(11)]
+    parts = _group_banner_entries(upcoming, {"C.SH": "应流转债"})
+    assert parts[0] == "应流转债 强赎截止 (08-27)"
+    assert parts[1] == "不下修到期 x11 (最早 08-25)"
+    assert len(parts) == 2                       # 12 条压成 2 段, 紧急那条不会被挤掉
+
+
+def test_banner_scan_codes_cover_the_whole_main_pool():
+    from convertible_bond.gui.tabs.batch_watchlist import _banner_scan_codes
+
+    class _App:
+        _batch_watchlist = [{"bond_code": "W.SH"}]
+        _batch_all_results = [{"bond_code": "M1.SH"}, {"bond_code": "M2.SH"}, {}]
+
+    assert _banner_scan_codes(_App()) == {"W.SH", "M1.SH", "M2.SH"}

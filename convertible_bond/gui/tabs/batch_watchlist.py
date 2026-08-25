@@ -23,6 +23,11 @@ from ...batch_pricing import (
     sort_batch_results_for_review,
 )
 from ...pricing_api import batch_price_from_provider_threaded
+from ...cb_events import (
+    event_actionability,
+    event_end_label,
+    event_short_label,
+)
 from ...watchlist import (
     add_to_watchlist,
     load_watchlist,
@@ -619,8 +624,81 @@ def _refresh_watchlist_summary(app, rows):
     summary_var.set("  ·  ".join(parts))
 
 
-def _refresh_events_banner(app, *, window_days: int = 30):
-    """扫描关注池在未来 window_days 天的事件, 拼成横幅; 无事件时隐藏."""
+def _banner_scan_codes(app) -> set[str]:
+    """横幅要扫的代码集 = **主池全量** + 关注池。
+
+    此前只扫关注池, 于是主池里昨天出的下修提议不会浮出来 —— 除非你已经在关注它。
+    而"已经在关注"恰恰意味着你已经知道了; 横幅真正的用处是告诉你**还不知道的那些**。
+    """
+    codes = {e.get("bond_code") for e in (app._batch_watchlist or []) if e.get("bond_code")}
+    for row in (getattr(app, "_batch_all_results", None) or []):
+        code = row.get("bond_code")
+        if code:
+            codes.add(code)
+    return codes
+
+
+def _window_hit(ev, today: date, horizon: date) -> tuple[date, bool] | None:
+    """事件是哪个日期落进了窗口, 以及那是不是**结束**日; 都没落进返回 None。
+
+    此前入窗判定看 (event_date, effective_start, effective_end) 里**任意一个**,
+    显示的却固定是 ``effective_start or event_date`` —— 于是一条 effective_end 在窗口内
+    的区间事件, 会把几个月前的起始日当成"未来 30 天的事"显示出来 (实测扫全主池后
+    冒出「暂停转股 03-08」这种明显自相矛盾的行)。这里改成: 谁把它带进窗口就显示谁。
+
+    结束日只对 ``event_end_label`` 认可的类型生效 —— 其余类型的 effective_end 要么
+    覆盖率≈0, 要么被公告正文里的回售期区间污染 (详见 cb_events.EVENT_END_LABEL)。
+    """
+    for day in (ev.event_date, ev.effective_start):
+        if day is not None and today <= day <= horizon:
+            return day, False
+    end = ev.effective_end
+    if (end is not None and today <= end <= horizon
+            and event_end_label(ev.event_type or "") is not None):
+        return end, True
+    return None
+
+
+def collect_upcoming_events(store, codes, today, horizon):
+    """扫这些代码在 [today, horizon] 内的事件, 去重并按可操作性排序。
+
+    返回 ``(bond_code, 标签, 日期)`` 三元组列表 —— 与横幅/弹窗的既有契约一致。
+    纯函数, 不碰 GUI, 便于单测。
+    """
+    collected: list[tuple[int, date, str, str]] = []
+    seen: set[tuple[str, str, date]] = set()
+    for code in codes:
+        try:
+            events = store.list_events(bond_code=code)
+        except Exception:
+            continue
+        for ev in events:
+            hit = _window_hit(ev, today, horizon)
+            if hit is None:
+                continue
+            ref_date, is_end = hit
+            event_type = ev.event_type or ""
+            # 区间事件落进窗口的往往是**结束日**, 那与"事件发生"是两回事:
+            # 「不强赎」是上限被解除, 「不强赎到期」是上限恢复 —— 含义相反, 标签必须分开。
+            text = event_short_label(event_type)
+            if is_end:
+                text += event_end_label(event_type) or "结束"
+            key = (code, text, ref_date)
+            # 同一件事常有"第一次/第二次/第N次提示性公告"多条 (实测鸿路转债 33 条
+            # putback), 逐条铺出来会把横幅刷满。按 (代码, 标签, 日期) 去重。
+            if key in seen:
+                continue
+            seen.add(key)
+            # 排序键在这里定, **不要**事后从标签字符串反查类型 —— 那是把展示词当主键。
+            collected.append(
+                (event_actionability(event_type, is_end=is_end), ref_date, code, text))
+    # 先可操作性再日期: 纯按日期排会让"评级调整"挤掉三天后的强赎。
+    collected.sort()
+    return [(code, text, day) for _rank, day, code, text in collected]
+
+
+def _refresh_events_banner(app, *, window_days: int = 30, head: int = 5):
+    """扫描主池+关注池在未来 window_days 天的事件, 按可操作性拼成横幅; 无事件时隐藏."""
     label = getattr(app, "lbl_batch_events_banner", None)
     var = getattr(app, "v_batch_events_banner", None)
     if label is None or var is None:
@@ -632,29 +710,8 @@ def _refresh_events_banner(app, *, window_days: int = 30):
         return
 
     today = market_today()
-    horizon = today + timedelta(days=window_days)
-    watchlist_codes = {e.get("bond_code") for e in (app._batch_watchlist or []) if e.get("bond_code")}
-
-    def _in_window(ev) -> bool:
-        for d in (ev.event_date, ev.effective_start, ev.effective_end):
-            if d is None:
-                continue
-            if today <= d <= horizon:
-                return True
-        return False
-
-    upcoming: list[tuple[str, str, date]] = []
-    for code in watchlist_codes:
-        try:
-            evs = store.list_events(bond_code=code)
-        except Exception:
-            continue
-        for ev in evs:
-            if not _in_window(ev):
-                continue
-            ref_date = ev.effective_start or ev.event_date
-            label_text = (ev.event_type or "事件").replace("_", " ")
-            upcoming.append((code, label_text, ref_date))
+    upcoming = collect_upcoming_events(
+        store, _banner_scan_codes(app), today, today + timedelta(days=window_days))
 
     if not upcoming:
         var.set("")
@@ -662,13 +719,41 @@ def _refresh_events_banner(app, *, window_days: int = 30):
         label.grid_remove()
         return
 
-    upcoming.sort(key=lambda t: t[2])
-    app._batch_events_banner_full = list(upcoming)
-    head = upcoming[:5]
-    parts = [f"{c} {t} ({d.isoformat()})" for c, t, d in head]
-    suffix = f"  ·  ...展开 {len(upcoming) - 5} 件" if len(upcoming) > 5 else ""
-    var.set(f"⚠ 关注池近 {window_days} 天事件 (单击查看全部): " + "  ·  ".join(parts) + suffix)
+    names = {row.get("bond_code"): row.get("bond_name")
+             for row in (getattr(app, "_batch_all_results", None) or [])}
+    app._batch_events_banner_full = list(upcoming)      # 明细留给弹窗, 一条不少
+    groups = _group_banner_entries(upcoming, names)
+    parts = groups[:head]
+    suffix = f"  ·  ...展开 {len(upcoming)} 件" if len(groups) > head else ""
+    var.set(f"⚠ 主池近 {window_days} 天事件 {len(upcoming)} 件 (单击查看全部): "
+            + "  ·  ".join(parts) + suffix)
     label.grid()
+
+
+def _group_banner_entries(upcoming, names) -> list[str]:
+    """横幅是**摘要行**, 同类事件折叠成 "标签 xN (最早 MM-DD)"。
+
+    扫全主池后同类事件很容易成片 (实测 22 件里 11 件是「不下修到期」), 逐条铺开会把
+    5 个展示位全占满, 把当天唯一一条「强赎截止」挤下去 —— 而那才是错过就没得选的。
+    折叠只影响横幅这一行; ``_batch_events_banner_full`` 仍是逐条明细, 弹窗照旧全展开。
+    """
+    order: list[str] = []
+    grouped: dict[str, list[tuple[str, str, date]]] = {}
+    for entry in upcoming:                              # upcoming 已按可操作性排好序
+        text = entry[1]
+        if text not in grouped:
+            grouped[text] = []
+            order.append(text)
+        grouped[text].append(entry)
+    parts: list[str] = []
+    for text in order:
+        items = grouped[text]
+        first_code, _text, first_date = items[0]
+        if len(items) == 1:
+            parts.append(f"{names.get(first_code) or first_code} {text} ({first_date.strftime('%m-%d')})")
+        else:
+            parts.append(f"{text} x{len(items)} (最早 {first_date.strftime('%m-%d')})")
+    return parts
 
 
 def _show_events_banner_full(app):
@@ -677,7 +762,7 @@ def _show_events_banner_full(app):
     if not full:
         return
     win = ctk.CTkToplevel(app)
-    win.title(f"关注池近 30 天事件 ({len(full)} 件)")
+    win.title(f"主池近 30 天事件 ({len(full)} 件)")
     win.geometry("520x420")
     win.transient(app)
     body = ctk.CTkScrollableFrame(win, fg_color=BG_CARD)
