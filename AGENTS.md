@@ -122,6 +122,24 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   纯错定价排序应为 −1.0)。批量页展示已改按相对偏差排序, `quality_score` 把这部分单列。
   **但 `opportunity_score` 的数值本身冻结不动**: 它是 `rank_signal="score"` 与旧策略
   快照可复现的前提, 改它就是默认选债行为变更。展示排序另走 `sort_batch_results_for_view`。
+- **事件旗标与风险标签是两族, 不要合并**: `risk_tags` 驱动策略排除集
+  (`LEGACY_STRATEGY_EXCLUDE_TAGS`)、置信度扣分与视图拦截 —— 加一个就是默认选债行为变更;
+  `event_flags` (`batch_pricing.event_flags`) 只进展示与 CSV, 回答"这只债现在有没有正在
+  发生的事"。旗标按**可操作性**排序而非字母序, 因为列窄只放得下前几条。刻意不收在
+  近半数债上都亮的状态 (「已触发下修线」45% / 「下修冻结中」66%) —— 那描述的是市场
+  不是这只债, 改由「距下修线」数值列与「下修优势」承载。
+- **事件类型的展示词表与可操作性次序集中在 `cb_events.py`**
+  (`EVENT_TYPE_SHORT_LABEL` / `EVENT_ACTIONABILITY` / `EVENT_END_LABEL`), 与写进
+  `BondTerms` 状态字段的 `_event_status` **分开** (后者是数据, 前者是展示)。GUI 曾自带
+  一份短标签表并漏掉 4 个类型, badge 渲染出 `bala`/`conv`/`unkn`, 且暂停转股与恢复转股
+  两个相反的意思同显 `conv`。有守护测试比对 `EVENT_TYPES` 全覆盖 + 标签互不重复。
+- **区间事件的 `effective_end` 要逐类型验过才能用**: 实测全库 7794 条,
+  `call_no_redemption` 94% / `down_reset_rejected` 66% / `suspension` 86% / `putback` 60% /
+  `call_redemption` 38% 有 end 且语义清楚; 而 `conversion_suspension`/`conversion_resume`
+  虽然 70%/98% 有 end, 那个 end 却被公告正文里的**回售期区间**污染 (宝莱转债
+  "关于回售期间…暂停转股" 解析出 `start=2021-03-11 end=2026-09-03`), 用它做未来事件提示
+  会渲染出"恢复转股到期"这种胡话。**入窗判定与显示日期必须是同一个日期** —— 曾经判定看
+  三个日期里任意一个、显示固定取 `effective_start`, 于是"未来 30 天"里冒出几个月前的日子。
 - **半开区间票息**: `(start, end]` 避免边界双计
 - **年化强度**: p_down 解释为年化事件强度，每步 `1-exp(-p·dt)`
 - **原子写**: JSON 先写 `.tmp` 再 `rename`，防半截文件
@@ -170,6 +188,13 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   照单全收会生成十万条无决策含义的 patch。按决策边界 (0/0.3/0.5/1.0/10 亿) + 1% 相对变动
   过滤, 压缩 92% 而真实缩量一步不落。比较基准取**上次落库值**而非前一日, 否则连续微动
   会被逐段吞掉、累积成大偏移。
+- **解析不到就写 None, 不要回落成公告日**。`effective_start` 的通用回落值是公告日本身,
+  而"最后交易日/申报期从公告当天开始"几乎恒为解析失败的信号。`call_redemption` 早就有
+  这道守卫 (见 `apply_events_to_terms` 里的注释), `putback` 却漏了 —— 于是 177 条
+  **法律意见书/核查意见** (它们本来就没有申报窗口) 每条都变成"从公告日开始、永不结束"
+  的假窗口, 实测污染主池 28 只债的 `putback_start_date`。存量回洗走
+  `cb-repair-putback-windows`。判断"这个字段是真解析出来的还是兜底填的"要有显式判据
+  (`putback_window_is_complete` / `putback_start_is_degraded`), 解析侧与回洗侧共用。
 - **公告解析里"条款文字"与"当期状态"必须区分**。赎回/回售/停止交易条款会成段引用
   "未转股余额少于 3,000 万元时公司有权赎回", 早期宽松正则把它当成真实余额, 让 546 条
   余额 patch 里 528 条值恰为 0.3 亿、覆盖 103 只债 (96 只真实余额 ≥0.5 亿), 这些大盘券
@@ -195,10 +220,30 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   3. 强赎事件只有**真解析到**停止交易日才写 `last_trading_date` —— `effective_start`
      无日期时回落成公告日, 而公告到停牌之间隔着法定提示期, "最后交易日 = 公告当天"
      恒为解析失败的信号。
-- **评级历史无权威源, 只能靠与 cb_data 当前值比对**。末条 patch 必须等于当前值 (中间历史值
-  本就该不同)。`_parse_bond_credit_rating` 的 `rating_re` 带 `(?<![A-C])` 左界 —— 少了它,
-  `.{0,10}` 回溯会让评级"尽量晚开始", 从 AA- 抠出 A-、AA+ 抠出 A+, 低评级让债在回测准入
-  里被整批误杀。`cb-repair-events` 只删这类**可证残缺**的末条 patch, 不猜一个对的填回去。
+- **信用评级的当前值走第三方 (akshare), 不走 Wind**。Wind 的 `creditrating` 是**发行时值**:
+  `cb_data.json` 跨 17 个版本 (2026-04~08)、约 4000 次逐债 Wind 重取, 该字段变化 **0 次**,
+  而同批刷新中 `conversion_price` 变了 287 次, 区间还完整覆盖 6 月法定年度跟踪评级季 ——
+  库里因此出现过 搜特退债 / 鸿达退债 / 正邦转债 这类**已违约券仍标 AA**。
+  评级经 `pricing_api._rating_spread_floor` 直接变成 pricer 的信用利差下限
+  (AA 2.50% ↔ C 80.00%), 陈旧的高评级会系统性高估困境债的理论价。
+  因此 `WindDataProvider.get_admission_status` **显式返回 `credit_rating=None`**
+  (否则每日状态刷新会把第三方新值盖回冻结值), 当前值由 `cb-sync-ratings` 从
+  `ak.bond_zh_cov()` 批量刷新 (一次调用拿全市场, 评级按年变动, 每月跑一次即可)。
+  首次建档仍由 Wind `get_bond_terms` 兜底覆盖率。**实测落地: 136 只评级变化 (下调 120 /
+  上调 16), 主池 298 → 284。**
+- **判断评级对错不能用库内自洽**。评级没有任何库内裁判: Wind 冻结、公告解析无自校验。
+  曾按"末条 patch 必须等于 cb_data"判 patch 脏, 据此删了 18 条又剥掉 330 条 —— 方向是反的
+  (灵康转债第三方 `A-`、cb_data `AA-`、patch `A-`, patch 才对)。实测对第三方的精确命中率:
+  cb_data(同步前) 79% / 平均差 0.55 档, 公告末条 84% / 0.42 档。
+  **`cb-repair-events` 因此不碰评级**: 解析 bug 的错误方向 (后缀残缺 → 评级偏低) 与真实下调
+  的方向完全重合, 任何架在数值上的启发式都分不开二者。
+  `_parse_bond_credit_rating` 的 `rating_re` 带 `(?<![A-C])` 左界 —— 少了它 `.{0,10}` 回溯会让
+  评级"尽量晚开始", 从 AA- 抠出 A-。这个正则 bug 是真的, 但**不能反推哪条存量 patch 是它造成的**。
+  同理, 体检里拿 cb_data 跟 akshare 比是**自证**的 (前者就是从后者同步来的), 那条只量同步水位;
+  真正的独立判据是「cb_data 评级新鲜度」—— 比的是公告, 与第三方彼此独立。
+- **`credit_rating_outlook` / `credit_watch_status` 只有公告一个来源**: Wind 侧有候选字段
+  (`ratingoutlook`/`creditratingoutlook`) 但实测取不到, cb_data 里 0/1058。取值分布合理
+  (稳定 924 / 负面 31), 迁移方向与信用承压名单吻合。
 - Wind 字段用"候选字段逐个尝试"的兼容模式，不要假设所有终端字段一致
   (例: `carrydate` → `issue_firstissue`)。
 
@@ -274,9 +319,11 @@ cb-sync-events --apply                      # 同步公告事件并应用回 cb_
 cb-valuation                                # 大类估值/择时信号 (--record 入基线)
 cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M  # 策略回测 (--cache-dir 复跑提速)
 cb-calibrate-down-reset                     # 从 cb_events 校准下修博弈常量
+cb-sync-ratings --apply                     # 从 akshare 第三方刷新信用评级 (每月; Wind 的是发行时冻结值)
 cb-data-doctor                              # 数据体检 (每天跑批**前**先跑; --online 加外部对照)
 cb-repair-events --apply                    # 存量迁移: 用当前解析器重放事件表与 patch 库
 cb-repair-balance-patches --apply           # 一次性存量迁移: 清洗被赎回门槛条款污染的余额 patch
+cb-repair-putback-windows --download --apply # 一次性存量迁移: 重取正文补回售申报窗口, 清掉退化的公告日起始日
 python CB.py 128009.SZ                      # 单只定价
 ```
 

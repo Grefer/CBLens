@@ -304,25 +304,41 @@ def check_statutory_line_clustering(ctx: dict) -> Check:
 
 # ─────────────────────────── 交叉校验 ───────────────────────────
 
-def check_rating_patches_vs_current(ctx: dict) -> Check:
-    """评级 patch 与 cb_data 当前值冲突。评级历史没有 Wind as-of 源, 只能靠这条兜。"""
+_RATING_ORDER = ("C", "CC", "CCC", "B-", "B", "B+", "BB-", "BB", "BB+", "BBB-", "BBB", "BBB+",
+                 "A-", "A", "A+", "AA-", "AA", "AA+", "AAA")
+_RATING_RANK = {grade: i for i, grade in enumerate(_RATING_ORDER)}
+
+
+def check_rating_freshness(ctx: dict) -> Check:
+    """cb_data 的评级是**发行时值**, 不会随跟踪评级变动 —— 这条检查盯的是它有多陈旧。
+
+    判据方向曾经搞反过: 一度按"末条 patch 必须等于 cb_data 当前值"来判 patch 脏, 据此删了
+    18 条、又把 330 条全剥掉。实测证明反了 —— cb_data.json 的 17 个版本、约 4000 次逐债
+    Wind 重取里 ``credit_rating`` 变化 **0 次**, 而同批刷新中 ``conversion_price`` 变了 287 次;
+    字段在被真实刷新却一格不动, 是发行时冻结值的特征。对 akshare 第三方评级的精确命中率
+    cb_data 79.5% < patch 末条 88.4% (平均档位误差 0.534 vs 0.260)。
+
+    所以 patch 才是较新的那个, 分歧要读成"cb_data 落后了几档", 不是"patch 错了"。
+    """
     bundle, store = ctx["bundle"], ctx["patch_store"]
     chains = _patches_by_field(store, "credit_rating")
-    bad = []
+    stale, ahead = [], 0
     for code, seq in chains.items():
-        cur = getattr(bundle.get(code), "credit_rating", None)
-        if not cur:
-            continue
+        current = str(getattr(bundle.get(code), "credit_rating", "") or "")
         tail = str(seq[-1].fields["credit_rating"])
-        if tail != str(cur):
-            bad.append(f"{code} 当前={cur} 末patch={tail}")
+        if not current or tail == current:
+            continue
+        if _RATING_RANK.get(tail, 99) < _RATING_RANK.get(current, -1):
+            stale.append(f"{code} cb_data={current} 最新公告={tail} @{seq[-1].effective_date}")
+        else:
+            ahead += 1
     total = len(chains)
     return Check(
-        "评级 patch 与当前值一致", _grade(1 - len(bad) / total if total else 1.0, 0.95, 0.80),
-        f"不一致 {_pct(len(bad), total)}",
-        "广核转债 AAA 曾被解析成 A, 12 只债因此被准入误杀。评级**没有** Wind as-of 源, "
-        "只能靠与当前值比对发现问题",
-        "交叉校验", extra=bad[:6])
+        "cb_data 评级新鲜度", _grade(1 - len(stale) / total if total else 1.0, 0.90, 0.75),
+        f"公告已下调但 cb_data 未跟进 {_pct(len(stale), total)}; 反向 {ahead} 只",
+        "Wind 的 creditrating 是发行时值, 全库跨 17 个版本零变化。这里分歧越多, "
+        "说明 cb_data 越落后 —— 不要反过来当成 patch 脏 (那个方向曾导致误删 348 条较准的数据)",
+        "交叉校验", extra=stale[:6])
 
 
 def check_pool_terms_projection(ctx: dict) -> Check:
@@ -439,6 +455,44 @@ def check_dead_but_trading(ctx: dict) -> Check:
         "外部对照", extra=ghosts[:10])
 
 
+def check_rating_sync_drift(ctx: dict) -> Check:
+    """cb_data 的评级与第三方**当前**值是否还对得上 —— 即距上次 ``cb-sync-ratings`` 漂了多少。
+
+    注意这条**不是**在验证"谁对": cb_data 的 credit_rating 就是从 akshare 同步来的, 拿它跟
+    akshare 比在同步当天恒为 100%, 那种比法没有信息量 (评级检查上一次就是这么失效的)。
+    它量的是**同步水位**: 第三方调了评级而本地还没跑同步, 这里就会显出来。
+    独立的对错判据在离线组的「cb_data 评级新鲜度」—— 那条比的是公告, 与第三方彼此独立。
+    """
+    if not ctx.get("online"):
+        return Check("评级同步水位", WARN, "需要 --online",
+                     "量距上次 cb-sync-ratings 的漂移, 不是验证谁对", "外部对照")
+    try:
+        from .sync_ratings import fetch_third_party_ratings
+        third = fetch_third_party_ratings()
+    except Exception as exc:
+        return Check("评级同步水位", WARN, f"取第三方评级失败: {exc}",
+                     "外部对照不可用时不阻断体检", "外部对照")
+
+    bundle = ctx["bundle"]
+    drift, n = [], 0
+    for code in bundle.list_bonds():
+        external = third.get(code.split(".")[0])
+        current = str(getattr(bundle.get(code), "credit_rating", "") or "")
+        if not external or current not in _RATING_RANK:
+            continue
+        n += 1
+        if external != current:
+            gap = _RATING_RANK[external] - _RATING_RANK[current]
+            drift.append(f"{code} {getattr(bundle.get(code), 'sec_name', '')} "
+                         f"本地={current} 第三方={external} ({gap:+d} 档)")
+    return Check(
+        "评级同步水位", _grade(1 - len(drift) / n if n else 1.0, 0.99, 0.95),
+        f"与第三方当前值不符 {_pct(len(drift), n)}" + ("  → 跑 cb-sync-ratings" if drift else ""),
+        "评级经 _rating_spread_floor 直接变成 pricer 的信用利差下限 (AA 2.50% ↔ C 80.00%), "
+        "陈旧的高评级会系统性高估困境债的理论价",
+        "外部对照", extra=drift[:8])
+
+
 # ─────────────────────────── 批量结果不变量 ───────────────────────────
 
 def check_batch_invariants(ctx: dict) -> list[Check]:
@@ -492,11 +546,12 @@ CHECKS: list[Callable[[dict], Any]] = [
     check_frozen_value_signature,
     check_cross_bond_patches,
     check_statutory_line_clustering,
-    check_rating_patches_vs_current,
+    check_rating_freshness,
     check_pool_terms_projection,
     check_events_predate_listing,
     check_events_match_current_parser,
     check_dead_but_trading,
+    check_rating_sync_drift,
     check_batch_invariants,
 ]
 

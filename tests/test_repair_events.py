@@ -133,33 +133,3 @@ def test_scan_sees_patches_shadowed_by_authoritative_source(tmp_path):
     assert repair(patches, bundle_path, dry_run=False, backup=False)["removed"] == 1
     left = TermsPatchStore(patches).list_patches("113652.SH", include_shadowed=True)
     assert [p.source for p in left] == ["wind_asof"]
-
-
-# ── 评级: 末条 patch 若是当前等级削掉前导字母的次级等级, 即为可证的解析残缺 ──
-
-def test_stale_rating_tail_patch_is_dropped(tmp_path):
-    """``.{0,10}`` 回溯会让评级"尽量晚开始", 从 AA- 抠出 A-; 低评级会让债在回测准入里被误杀。
-
-    只对**末条**成立 —— 中间历史值本就该与当前值不同, 末条必须等于 cb_data 的权威当前值。
-    评级没有 Wind as-of 源可重建, 所以只删可证错的, 不猜一个对的填回去。
-    """
-    patches, bundle_path = tmp_path / "patches.json", tmp_path / "cb_data.json"
-    TermsPatchStore(patches).add_many([
-        # 真实历史降级: AA+ → AA, 中间值与当前值不同是正常的, 不能动
-        _patch("110099.SH", 5, {"credit_rating": "AA+"}, "关于“福能转债”2024年跟踪评级结果的公告"),
-        # 末条被削掉首字母: cb_data 是 AA+, patch 是 A+
-        _patch("110099.SH", 9, {"credit_rating": "A+"}, "关于“福能转债”2026年跟踪评级结果的公告"),
-        # 真实降级到次级等级但方向相反 (当前 A+, patch AA) —— 不符合"削首字母"签名, 保留
-        _patch("123138.SZ", 9, {"credit_rating": "AA"}, "关于“丝路转债”跟踪评级结果的公告"),
-    ])
-    bundle = TermsBundle(bundle_path)
-    for code, name, rating in [("110099.SH", "福能转债", "AA+"), ("123138.SZ", "丝路转债", "A+")]:
-        bundle.set(code, BondTerms(sec_name=name, underlying_code="000001.SZ",
-                                   conversion_price=10.0, maturity_date=date(2030, 1, 1),
-                                   credit_rating=rating), source="unit")
-
-    assert repair(patches, bundle_path, dry_run=False, backup=False)["removed"] == 1
-    left = TermsPatchStore(patches)
-    assert [p.fields for p in left.list_patches("110099.SH", include_shadowed=True)] == \
-        [{"credit_rating": "AA+"}]
-    assert len(left.list_patches("123138.SZ", include_shadowed=True)) == 1

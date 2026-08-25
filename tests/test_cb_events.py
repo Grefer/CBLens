@@ -817,3 +817,64 @@ def test_call_event_without_a_parsed_date_does_not_set_last_trading_day():
                    effective_start=date(2026, 3, 24))
     assert apply_events_to_terms("127067.SZ", terms, [real],
                                  valuation_date=date(2026, 8, 24)).last_trading_date == date(2026, 3, 24)
+
+
+# ── 事件类型词表 ──
+#
+# 短标签此前只存在于 gui/controllers/events.py 的私有 staticmethod 里, 且漏了 4 个类型;
+# 缺的会 fallback 成 event_type[:4], 于是 badge 渲染出 "bala"/"conv"/"unkn",
+# 而 conversion_suspension 与 conversion_resume **两个相反的意思同显 "conv"**。
+
+def test_every_event_type_has_a_short_label():
+    from convertible_bond.cb_events import EVENT_TYPES, event_short_label
+    for event_type in EVENT_TYPES:
+        label = event_short_label(event_type)
+        assert label and label != event_type, f"{event_type} 缺短标签"
+        assert label.isprintable() and not label.isascii(), f"{event_type} 的标签像是英文残串: {label}"
+
+
+def test_short_labels_are_unique():
+    """两个相反的事件不能显示成同一个词 —— conversion_suspension/resume 曾都是 "conv"。"""
+    from convertible_bond.cb_events import EVENT_TYPE_SHORT_LABEL
+    labels = list(EVENT_TYPE_SHORT_LABEL.values())
+    assert len(labels) == len(set(labels))
+
+
+def test_every_event_type_has_an_actionability_rank():
+    from convertible_bond.cb_events import EVENT_TYPES, EVENT_ACTIONABILITY
+    assert set(EVENT_ACTIONABILITY) == set(EVENT_TYPES)
+
+
+def test_gui_badge_delegates_to_the_shared_label_table():
+    """GUI 曾自带一份词表并与这里分叉。"""
+    from convertible_bond.cb_events import EVENT_TYPES, event_short_label
+    from convertible_bond.gui.controllers.events import EventsMixin
+    for event_type in EVENT_TYPES:
+        assert EventsMixin._event_type_short(event_type) == event_short_label(event_type)
+
+
+def test_contaminated_end_dates_are_excluded():
+    """conversion_suspension/resume 的 effective_end 被公告正文里的回售期区间污染。
+
+    实测宝莱转债 (123065.SZ) 的"关于回售期间宝莱转债暂停转股的提示性公告"解析出
+    start=2021-03-11 end=2026-09-03 —— 那是回售期起止不是停牌窗口。拿它做"未来事件"
+    提示会渲染出"恢复转股到期"这种胡话。
+    """
+    from convertible_bond.cb_events import event_end_label
+    assert event_end_label("conversion_suspension") is None
+    assert event_end_label("conversion_resume") is None
+    # 实测覆盖率高且语义清楚的那几类才认
+    assert event_end_label("call_redemption") == "截止"
+    assert event_end_label("call_no_redemption") == "到期"
+    assert event_end_label("down_reset_rejected") == "到期"
+
+
+def test_commitment_expiry_outranks_the_commitment_announcement():
+    """公告当天是"这事没了", 期满那天是"这事又可能了" —— 对下修工具后者才是故事开始。"""
+    from convertible_bond.cb_events import event_actionability
+    assert event_actionability("down_reset_rejected", is_end=True) < \
+        event_actionability("down_reset_rejected")
+    assert event_actionability("call_no_redemption", is_end=True) < \
+        event_actionability("call_no_redemption")
+    # 强赎始终是最高档, 不因 is_end 变化
+    assert event_actionability("call_redemption", is_end=True) == 0

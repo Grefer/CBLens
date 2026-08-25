@@ -47,7 +47,12 @@ from pathlib import Path
 
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_event_sync import _title_names_other_bond
-from ..cb_events import CBEventStore, classify_announcement_title, project_events_path
+from ..cb_events import (
+    CBEventStore,
+    _event_postdates_listing,
+    classify_announcement_title,
+    project_events_path,
+)
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
 
 
@@ -70,6 +75,13 @@ def scan_events(event_path: Path | str, bundle_path: Path | str) -> dict:
     relabel: list = []
     for event in store.list_events():
         if _title_names_other_bond(event.raw_title, _bond_name(bundle, event.bond_code)):
+            hits.append(event)
+            continue
+        # 上市之前不可能发生本债的摘牌/强赎/回售/转股价调整。消费侧
+        # (``apply_events_to_terms``) 已经按同一判据过滤, 这里把存量也清掉 —— 库里留着
+        # 错事实, 迟早有个不走那条路径的消费者踩上去。评级与正股类事件已在判据里豁免。
+        terms = bundle.get(event.bond_code)
+        if terms is not None and not _event_postdates_listing(event, terms):
             hits.append(event)
             continue
         fresh = classify_announcement_title(event.raw_title or "")
@@ -151,43 +163,21 @@ def scan(patch_path: Path | str, bundle_path: Path | str) -> dict:
     }
 
 
-def _stale_rating_patches(store: TermsPatchStore, bundle: TermsBundle) -> list:
-    """末条评级 patch 是当前等级**削掉前导字母**的次级等级 → 可证的解析残缺。
-
-    正则里的 ``.{0,10}`` 回溯会让评级"尽量晚开始", 从 AA- 里抠出 A-, 从 AA+ 里抠出 A+。
-    低评级会让这些债在回测准入里被整批误杀。判据只对**末条**成立 —— 中间历史值本就该
-    与当前值不同, 只有末条必须等于 cb_data 的权威当前值。
-
-    评级**没有** Wind as-of 日序列可重建 (实测 881 天恒为当前值), 所以这里只删可证错的,
-    不做"猜一个对的填回去"。
-    """
-    chains: dict[str, list] = collections.defaultdict(list)
-    for patch in store.list_patches(include_shadowed=True):
-        if "credit_rating" in (patch.fields or {}):
-            chains[patch.bond_code].append(patch)
-    stale = []
-    for code, seq in chains.items():
-        seq.sort(key=lambda p: p.effective_date)
-        current = str(getattr(bundle.get(code), "credit_rating", "") or "")
-        tail = str(seq[-1].fields["credit_rating"])
-        if current and tail != current and current.endswith(tail) and len(tail) < len(current):
-            stale.append(seq[-1])
-    return stale
-
-
 def repair(patch_path: Path | str, bundle_path: Path | str, *,
            dry_run: bool = True, backup: bool = True) -> dict:
     patch_path = Path(patch_path)
     # 指纹必须在扫描**之前**取: 取在扫描之后, 并发窗口正好落在指纹与比对之间, 守卫恒为真。
     fingerprint = patch_path.read_bytes() if patch_path.exists() else b""
     report = scan(patch_path, bundle_path)
-    stale_ratings = _stale_rating_patches(TermsPatchStore(patch_path), TermsBundle(bundle_path))
-    report = {**report, "stale_ratings": stale_ratings}
-    keys = {p.key() for p in report["hits"]} | {p.key() for p in stale_ratings}
-    if not keys:
+    drop = {p.key() for p in report["hits"]}
+    # 评级**不动**: 解析 bug 的错误方向 (后缀残缺 → 评级偏低) 与真实下调的方向完全重合,
+    # 任何架在数值上的启发式都分不开二者。而实测 patch 末条对第三方评级的精确命中率
+    # 88.4% > cb_data 的 79.5% (平均档位误差 0.260 vs 0.534) —— 清洗它等于拿更准换更不准。
+    strip: set = set()
+    if not drop and not strip:
         return {**report, "removed": 0, "backup_path": None}
     if dry_run:
-        return {**report, "removed": len(keys), "backup_path": None}
+        return {**report, "removed": len(drop) + len(strip), "backup_path": None}
 
     # 扫描与写盘之间若有别的进程落盘 (GUI 后台同步), 整份重写会把它的成果吞掉。
     if (patch_path.read_bytes() if patch_path.exists() else b"") != fingerprint:
@@ -199,9 +189,20 @@ def repair(patch_path: Path | str, bundle_path: Path | str, *,
             f".bak-crossbond-{datetime.now():%Y%m%d%H%M%S}.json")
         shutil.copy2(patch_path, backup_path)
 
+    def _fix(patch):
+        if patch.key() in drop:
+            return None
+        if patch.key() not in strip:
+            return patch
+        fields = {k: v for k, v in (patch.fields or {}).items() if k != "credit_rating"}
+        if not fields:
+            return None                      # 整条只有评级 → 删干净
+        before = {k: v for k, v in (patch.before_fields or {}).items() if k != "credit_rating"}
+        return replace(patch, fields=fields, before_fields=before or None)
+
     store = TermsPatchStore(patch_path)
-    _, removed = store.rewrite(lambda p: None if p.key() in keys else p, dry_run=False)
-    return {**report, "removed": removed, "backup_path": backup_path}
+    changed, removed = store.rewrite(_fix, dry_run=False)
+    return {**report, "removed": removed + changed, "backup_path": backup_path}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -244,13 +245,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  备份: {ev['backup_path']}")
 
     print(f"\n扫描 {report['n_patches']} 条 patch: 串号 {len(report['hits'])} 条 / "
-          f"{len(report['audit'])} 只债, 评级解析残缺 {len(report['stale_ratings'])} 条" + ("" if args.apply else "  [预览, 未写盘]"))
+          f"{len(report['audit'])} 只债" + ("" if args.apply else "  [预览, 未写盘]"))
     for row in sorted(report["audit"], key=lambda r: -r["n_patches"]):
         print(f"  {row['bond_code']} {row['bond_name']}: {row['n_patches']} 条 "
               f"{row['fields']}\n       «{(row['sample_title'] or '')[:56]}»")
-    for patch in report["stale_ratings"][:8]:
-        print(f"  {patch.bond_code} 末条评级 patch={patch.fields['credit_rating']} "
-              f"vs cb_data={getattr(TermsBundle(bundle_path).get(patch.bond_code), 'credit_rating', None)}")
     if report["backup_path"]:
         print(f"\n备份: {report['backup_path']}")
     if not args.apply and (report["removed"] or ev["removed"]):
