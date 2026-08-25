@@ -163,7 +163,7 @@ def test_needs_body_for_call_no_redemption():
 
 
 def test_needs_body_for_call_redemption():
-    assert _needs_body("关于提前赎回并摘牌的公告") is True
+    assert _needs_body("关于提前赎回“阿拉转债”并摘牌的公告") is True
 
 
 def test_needs_body_for_conversion_price_adjustment():
@@ -588,7 +588,7 @@ def test_sync_writes_terms_patch_for_call_redemption_price(tmp_path):
         def list_bond_announcements(self, bond_code, start, end):
             return [
                 {
-                    "title": "关于实施赎回暨摘牌的公告",
+                    "title": "关于实施“阿拉转债”赎回暨摘牌的公告",
                     "date": date(2026, 4, 15),
                     "url": "http://example.com/call.PDF",
                     "pdf_url": "http://example.com/call.PDF",

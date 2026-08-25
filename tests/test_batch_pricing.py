@@ -17,8 +17,16 @@ from convertible_bond.batch_pricing import (
     tags_in,
     view_exclusion_reason,
     annotate_batch_result,
+    annotate_batch_results,
     filter_batch_results_by_view,
     sort_batch_results_for_review,
+    sort_batch_results_for_view,
+    DEFAULT_DOWN_RESET_EDGE_PERCENTILE,
+    DEFAULT_UNDERVALUED_PERCENTILE,
+    DEFAULT_UNDERVALUED_SCORE_THRESHOLD,
+    MIN_RELATIVE_CHEAPNESS,
+    MIN_VIEW_ROWS,
+    _selection_cutoff,
     batch_pricing_exclusion_reason,
     list_upcoming_tradable_from_cache,
     list_batch_codes_from_cache,
@@ -906,3 +914,226 @@ def test_review_bucket_is_a_real_partition():
     # 高 σ = 模型适用性 → 模型存疑, 不该占用需复核
     assert dict(zip([r["bond_code"] for r in rows], buckets))["hv.SZ"] == "模型存疑"
     assert dict(zip([r["bond_code"] for r in rows], buckets))["bad.SZ"] == "需复核"
+
+
+# ── 「低估候选」的横截面口径 ────────────────────────────────────────────────
+#
+# 旧口径 opportunity_score >= 8.0 是绝对阈值架在水平时变的量上: 实测 2026-08-22
+# 主池 280 只只剩 1 只候选, 页面默认打开等于空表。而 cb_valuation_history 20 期
+# 基线显示中位偏差摆幅 21.2pp、便宜尾形状 (p25-中位) 摆幅只有 4.2pp —— 判据必须
+# 锚在当期横截面上。
+
+def _pool(n, *, level, spread=0.30, **overrides):
+    """造一个 n 只的定价池: deviation 以 *level* 为中位、在 ±spread/2 内均匀铺开。
+
+    S0/K/theo 的取值有窄窗口, 动之前先算: 转股价值 88.9 要同时满足
+      · 低于这批最低市价 (否则便宜的一头带上「转股折价」, 被单独归类进另一个视图)
+      · 高于 theo/1.45 (否则整批带上「模型溢价高」, 全被吸进「模型存疑」分桶)
+    spread 超过约 0.3 后这两条就不可兼得 —— 那不是 fixture 的毛病, 是"理论价远高于
+    市价"本来就该同时被标成深度低估**和**模型溢价高。要测长度上限就靠加 n, 不靠加 spread。
+    """
+    rows = []
+    for i in range(n):
+        dev = level + spread * (i / (n - 1) - 0.5)
+        row = dict(status="ok", bond_code=f"{100000 + i}.SZ", S0=12.0, K=13.5,
+                   theoretical_price=110.0, market_price=110.0 * (1 + dev),
+                   deviation=dev, sigma=0.30, T=3.0, credit_rating="AA",
+                   outstanding_balance=4.25, valuation_date="2026-08-22")
+        row.update(overrides)
+        rows.append(row)
+    return rows
+
+
+@pytest.mark.parametrize("level", [0.004, 0.13, 0.216])
+def test_undervalued_view_survives_the_market_level_cycle(level):
+    """同一批相对结构的债, 整体估值水平从熊市谷底搬到牛市高位, 候选数不变。
+
+    这是换口径的**全部理由**: 绝对阈值下候选数随周期塌缩/泛滥 (实测 280 只主池
+    在 +18.7% 中位下只剩 1 只), 相对口径下不随水平漂移。
+    三个 level 取自 cb_valuation_history 的实际极值与中枢。
+    """
+    rows = filter_batch_results_by_view(_pool(120, level=level), "低估候选")
+    assert len(rows) == _selection_cutoff(120, DEFAULT_UNDERVALUED_PERCENTILE)
+    # 入选的必须是这批里最便宜的那一头, 而不是碰巧评级高的
+    assert rows[0]["relative_deviation"] < rows[-1]["relative_deviation"] <= -MIN_RELATIVE_CHEAPNESS
+
+
+def test_undervalued_view_goes_empty_when_dispersion_collapses():
+    """离散度塌掉时候选诚实归零 —— 分位闸单独用会永远凑满 15%。
+
+    这是相对便宜度下限 (闸①) 存在的唯一理由: 它能表达"今天真的没有便宜货",
+    而纯分位口径表达不了。
+    """
+    flat = _pool(120, level=0.15, spread=0.01)     # 全市场挤在中位附近
+    assert filter_batch_results_by_view(flat, "低估候选") == []
+
+
+def test_undervalued_view_caps_list_length_when_many_are_cheap():
+    """反过来: 便宜的一大片时闸② 挡住"几百只候选", 保持名单可人工复核。"""
+    wide = _pool(200, level=0.10)
+    kept = filter_batch_results_by_view(wide, "低估候选")
+    assert len(kept) == _selection_cutoff(200, DEFAULT_UNDERVALUED_PERCENTILE) == 30
+    # 闸① 单独会放行两倍以上 —— 证明上面那个数确实是闸② 定的, 不是闸① 恰好卡在 30
+    passing_floor = [r for r in annotate_batch_results(wide)
+                     if r["relative_deviation"] <= -MIN_RELATIVE_CHEAPNESS]
+    assert len(passing_floor) > 2 * len(kept)
+
+
+def test_selection_cutoff_keeps_small_batches_usable():
+    """小批量 (关注池/新债) 下 15% 会把名单削没, MIN_VIEW_ROWS 兜底。"""
+    assert _selection_cutoff(6, DEFAULT_UNDERVALUED_PERCENTILE) == 6
+    assert _selection_cutoff(40, DEFAULT_UNDERVALUED_PERCENTILE) == MIN_VIEW_ROWS
+    assert _selection_cutoff(200, DEFAULT_UNDERVALUED_PERCENTILE) == 30
+    assert _selection_cutoff(0, DEFAULT_UNDERVALUED_PERCENTILE) == 0
+
+
+def test_legacy_absolute_score_gate_still_reachable():
+    """显式传阈值 = 旧的绝对机会分口径, 供旧快照复现与对照实验。"""
+    pool = _pool(120, level=0.13)
+    legacy = filter_batch_results_by_view(
+        pool, "低估候选",
+        undervalued_score_threshold=DEFAULT_UNDERVALUED_SCORE_THRESHOLD)
+    assert len(legacy) < len(filter_batch_results_by_view(pool, "低估候选"))
+
+
+def test_review_bucket_and_undervalued_view_stay_in_sync():
+    """分桶与视图必须同判据 —— 曾经一个硬编码 8.0, 另一个另写一份。"""
+    rows = annotate_batch_results(_pool(120, level=0.13))
+    in_view = {r["bond_code"] for r in filter_batch_results_by_view(rows, "低估候选")}
+    in_bucket = {r["bond_code"] for r in rows if r["review_bucket"] == "低估候选"}
+    assert in_view and in_bucket
+    # 精确契约: 没被更高优先级的桶吸走的行, 分桶与视图必须逐行一致
+    higher_priority = {"需复核", "模型存疑", "转股折价"}
+    for row in rows:
+        if row["review_bucket"] in higher_priority:
+            continue
+        assert (row["review_bucket"] == "低估候选") is (row["bond_code"] in in_view)
+    assert in_bucket <= in_view
+
+
+# ── 双低 ──
+
+def test_double_low_matches_strategy_rank_signal():
+    """批量页的双低值必须与 strategy_backtest 的 double_low 信号逐字同口径。"""
+    from convertible_bond.strategy_backtest import _rank_signal_value
+    row = annotate_batch_result(dict(
+        status="ok", S0=12.0, K=13.5, theoretical_price=110.0, market_price=118.0,
+        deviation=0.07, sigma=0.30, T=3.0, credit_rating="AA",
+        outstanding_balance=4.25, valuation_date="2026-08-22"))
+    assert row["double_low"] == pytest.approx(_rank_signal_value(row, "double_low"))
+
+
+def test_double_low_view_takes_the_lowest_and_ignores_model_confidence():
+    """双低是纯市场量 (价格+溢价), 不该被模型置信度筛掉。"""
+    rows = _pool(120, level=0.13, sigma=1.5)       # 全部高 HV → 模型置信度低
+    kept = filter_batch_results_by_view(rows, "双低")
+    assert len(kept) == _selection_cutoff(120, DEFAULT_UNDERVALUED_PERCENTILE)
+    ordered = sort_batch_results_for_view(kept, "双低")
+    values = [r["double_low"] for r in ordered]
+    assert values == sorted(values)
+    # 入选的最贵一只仍不贵于落选的最便宜一只 —— 即确实是"最低的一截"
+    kept_codes = {r["bond_code"] for r in kept}
+    dropped = [r["double_low"] for r in annotate_batch_results(rows)
+               if r["bond_code"] not in kept_codes]
+    assert max(values) <= min(dropped)
+
+
+def test_view_sort_must_not_reannotate_a_filtered_subset():
+    """在过滤后的子集上重排不得改动相对偏差 —— 重新标注会把中位算到子集上。"""
+    base = sort_batch_results_for_review(_pool(120, level=0.13))
+    subset = filter_batch_results_by_view(base, "低估候选")
+    before = {r["bond_code"]: r["relative_deviation"] for r in subset}
+    after = {r["bond_code"]: r["relative_deviation"]
+             for r in sort_batch_results_for_view(subset, "低估候选")}
+    assert before == after
+
+
+# ── 评级阶梯的两个修复 ──
+
+def test_rating_bonus_ladder_is_monotone():
+    """AAA 曾因 "AAA".startswith("AA+") 为假而落到 +2.0 分支, 比 AA+ 还低、与 AA 同分。"""
+    def quality(rating):
+        return annotate_batch_result(dict(
+            status="ok", S0=12.0, K=13.5, theoretical_price=110.0, market_price=99.0,
+            deviation=-0.10, sigma=0.30, T=3.0, credit_rating=rating,
+            outstanding_balance=4.25, valuation_date="2026-08-22"))["quality_score"]
+
+    ladder = [quality(r) for r in ("AAA", "AA+", "AA", "AA-", "A+")]
+    assert ladder == sorted(ladder, reverse=True)
+    assert len(set(ladder)) == len(ladder)          # 不许有并列, 否则档就没意义
+
+
+@pytest.mark.parametrize("rating, expect_low", [
+    ("AAsti", False),      # AA + 稳定展望: 曾掉进 LOW_RATING_PREFIXES 的 "A" 被判低评级
+    ("AA+sti", False),
+    ("AAAsti", False),
+    ("AA-sti", False),
+    ("A+", True),
+    ("BBB", True),
+])
+def test_rating_outlook_suffix_does_not_flip_low_rating(rating, expect_low):
+    """打分层与准入层必须同一套评级口径 —— 前者曾用裸前缀匹配, 两边对 AAsti 判反。"""
+    row = annotate_batch_result(dict(
+        status="ok", S0=12.0, K=13.5, theoretical_price=110.0, market_price=99.0,
+        deviation=-0.10, sigma=0.30, T=3.0, credit_rating=rating,
+        outstanding_balance=4.25, valuation_date="2026-08-22"))
+    assert ("低评级" in row["risk_tags"]) is expect_low
+    # 与准入层的判据一致: 低评级 <=> 低于 A+ 之上的档
+    assert (batch_pricing._rating_score(rating) < batch_pricing._RATING_SCORES["AA-"]) is expect_low
+
+
+# ── 下修优势 ──
+#
+# 稳健下修优势是策略页的默认排序信号, 而批量页此前跑完整 PDE 网格却整批丢掉这族
+# 信号 (实测缓存 down_reset_robust_edge_value 有值 0/280) —— 全项目最贴近模型能力
+# 边界的信号, 在"找机会"的页面上是空列。
+
+def _edge_row(edge, **kw):
+    row = dict(status="ok", bond_code=kw.pop("bond_code", "113000.SH"),
+               S0=12.0, K=13.5, theoretical_price=110.0, market_price=118.0,
+               deviation=0.07, sigma=0.30, T=3.0, credit_rating="AA",
+               outstanding_balance=4.25, valuation_date="2026-08-22",
+               down_reset_robust_edge_value=edge)
+    row.update(kw)
+    return row
+
+
+def test_down_reset_edge_view_keeps_only_positive_edge():
+    """零点在这里是**有意义**的: 最差角点下模型价仍高于市价才算有优势。"""
+    rows = [_edge_row(3.0, bond_code="POS.SH"), _edge_row(-3.0, bond_code="NEG.SH"),
+            _edge_row(0.0, bond_code="ZERO.SH")]
+    kept = [r["bond_code"] for r in filter_batch_results_by_view(rows, "下修优势")]
+    assert kept == ["POS.SH"]
+    assert "不为正" in view_exclusion_reason(
+        annotate_batch_results(rows)[1], "下修优势")
+
+
+def test_down_reset_edge_view_ranks_strongest_first():
+    rows = [_edge_row(e, bond_code=f"{100000 + i}.SZ")
+            for i, e in enumerate([1.0, 9.0, 5.0, -2.0])]
+    ordered = sort_batch_results_for_view(
+        filter_batch_results_by_view(rows, "下修优势"), "下修优势")
+    assert [r["down_reset_robust_edge_value"] for r in ordered] == [9.0, 5.0, 1.0]
+
+
+def test_down_reset_edge_view_explains_missing_signal():
+    """没开 compute_pde_signals 与"这只债反解不出隐含强度"是两回事, 落选解释要分得开。"""
+    off = annotate_batch_results([_edge_row(math.nan)])[0]
+    assert view_exclusion_reason(off, "下修优势") == "未计算 PDE 下修信号"
+    unsolvable = annotate_batch_results(
+        [_edge_row(math.nan, pde_down_reset_signal_status="no_implied_solution")])[0]
+    assert "反解不出" in view_exclusion_reason(unsolvable, "下修优势")
+
+
+def test_down_reset_edge_view_caps_length_in_a_cheap_market():
+    """贵市场里这个视图合法地变空; 但谷底时 5% 会变成几百只, 长度上限得在。"""
+    rows = [_edge_row(float(i) + 1.0, bond_code=f"{100000 + i}.SZ") for i in range(200)]
+    kept = filter_batch_results_by_view(rows, "下修优势")
+    assert len(kept) == _selection_cutoff(200, DEFAULT_DOWN_RESET_EDGE_PERCENTILE) == 30
+
+
+def test_batch_result_columns_carry_the_new_signals():
+    """新字段必须进 CSV/缓存列, 否则导出与跨运行缓存会静默丢掉它们。"""
+    for key in ("relative_deviation", "cheapness_rank", "double_low",
+                "quality_score", "down_reset_edge_rank"):
+        assert key in BATCH_RESULT_COLUMNS

@@ -141,6 +141,28 @@ class CBEventStore:
             self._save()
         return added
 
+    def rewrite(self, transform, *, dry_run: bool = False) -> tuple[int, int]:
+        """按 *transform* 逐条重写已有事件, 返回 ``(改写数, 删除数)``.
+
+        *transform* 返回 None 表示删除该事件。用于修数据 (例如剔除标的串号误挂的公告);
+        新增走 :meth:`add_many`。与 ``TermsPatchStore.rewrite`` 同形 —— 事件表和 patch 库
+        往往要一起洗, 两边接口分叉会让回洗工具各写一套。
+        """
+        kept: list[CBEvent] = []
+        changed = removed = 0
+        for event in self._events:
+            new_event = transform(event)
+            if new_event is None:
+                removed += 1
+                continue
+            if new_event != event:
+                changed += 1
+            kept.append(new_event)
+        if not dry_run and (changed or removed):
+            self._events = kept
+            self._save()
+        return changed, removed
+
     def mark_synced(self, bond_codes: Iterable[str], synced_at: datetime | None = None) -> None:
         """记录某些转债公告已完成同步, 即使本次没有新增事件也更新时间戳."""
         codes = sorted({str(code).strip().upper() for code in bond_codes if str(code).strip()})
@@ -563,11 +585,36 @@ def is_down_reset_trigger_notice_title(title: str) -> bool:
     return bool(re.search(r"(可能|预计|即将|将要)?.{0,12}触发.{0,20}(向下修正|下修)", text))
 
 
+# 「摘牌」「提前赎回」在 A 股公告里是**多义词**, 同一个发行人当天可能在说完全不同的东西:
+#   · 优先股全部赎回及摘牌            (上银/兴业转债 —— 说的是优先股)
+#   · 公开摘牌取得某公司 100% 股权     (节能转债/精测转2 —— 产权交易所竞拍)
+#   · 公司债券(第一期)本息兑付暨摘牌    (冀东/浙建/山路 —— 普通公司债)
+#   · 可交换公司债券换股完成暨摘牌      (新乳转债 —— 股东发的 EB)
+#   · 使用闲置募集资金现金管理提前赎回   (海顺转债 —— 赎回的是理财产品)
+# 这些标题一律不含转债标识, 却全部被判成本债摘牌/强赎, 再经 apply_events_to_bundle
+# 写进 last_trading_date / delisting_date —— 实测让 12 只在市转债 (含兴业、上银两只
+# 千亿级银行转债) 被准入整体判死。所以会改写 BondTerms 状态的事件类型必须先过这道闸。
+#
+# 「公司债券」不算标识 —— 「可转换公司债券」含它, 但反过来不成立; 转2/转02 这类简称
+# (恒逸转2、胜蓝转02、精测转2) 不含「债」字, 必须单列。
+_CB_MENTION_RE = re.compile(r"转债|可转换公司债券|转[0-9]{1,2}(?![0-9])")
+
+
+def _mentions_convertible_bond(text: str) -> bool:
+    return bool(_CB_MENTION_RE.search(text))
+
+
 def classify_announcement_title(title: str) -> str:
-    text = str(title or "").upper()
-    if re.search(r"不(提前)?赎回|不强赎|暂不(提前)?赎回|不行使.{0,30}(?:提前赎回|赎回权利?)", text):
+    # 空白在这里归一化, 而不是留给调用方 —— 巨潮标题里会出现「关于 晶瑞转债 到期兑付…」
+    # 这种带空格的写法, 正则里的 ``.{0,30}`` 邻接约束会被撑开。
+    # ``parse_event_from_announcement`` 原本自己先 strip 一遍, 于是"照标题重放分类器"的
+    # 存量校验会凭空看到差异; 两处各归一化一份, 迟早分叉。
+    text = re.sub(r"\s+", "", str(title or "")).upper()
+    about_cb = _mentions_convertible_bond(text)
+    if about_cb and re.search(
+            r"不(提前)?赎回|不强赎|暂不(提前)?赎回|不行使.{0,30}(?:提前赎回|赎回权利?)", text):
         return "call_no_redemption"
-    if re.search(r"赎回实施|实施赎回|强制赎回|提前赎回|赎回暨摘牌|赎回登记日", text):
+    if about_cb and re.search(r"赎回实施|实施赎回|强制赎回|提前赎回|赎回暨摘牌|赎回登记日", text):
         return "call_redemption"
     if re.search(r"不向下修正|不下修|暂不向下修正|不修正.*转股", text):
         return "down_reset_rejected"
@@ -589,7 +636,7 @@ def classify_announcement_title(title: str) -> str:
         return "putback"
     if "评级" in text:
         return "rating_change"
-    if re.search(r"摘牌|最后交易日", text):
+    if about_cb and re.search(r"摘牌|最后交易日", text):
         return "delisting"
     # ── 正股风险 (反向事件优先, 避免被 ST risk 误判) ──
     if _is_underlying_st_clear(text):
@@ -633,6 +680,24 @@ def _is_underlying_st_clear(text: str) -> bool:
     return bool(re.search(r"撤销.*(?:退市)?风险警示|撤销.*\*?ST|申请撤销.*ST", text))
 
 
+# 同一发行人可以在同一个名字下**先后发两只转债**: 110099.SH 福能转债 2025-10-30 上市, 而
+# 库里挂着 2024-10/11 的「关于“福能转债”到期兑付暨摘牌」四条公告 —— 那是上一只同名债的。
+# 标题守卫按名字比对, 对同名债天然无解; 日期能: 一只债上市之前不可能发生它自己的摘牌、
+# 强赎、回售、转股价调整。这条不变量放在消费侧, 存量脏数据无需回洗即自愈。
+#
+# 例外: 评级报告 (初始评级本就早于上市) 与正股类事件 (ST/停牌讲的是股票, 与债无关)。
+_PRE_LISTING_ALLOWED = frozenset({
+    "rating_change", "underlying_st_risk", "underlying_st_clear", "underlying_suspension",
+})
+
+
+def _event_postdates_listing(event: CBEvent, terms: BondTerms) -> bool:
+    if event.event_type in _PRE_LISTING_ALLOWED:
+        return True
+    listed = getattr(terms, "listing_date", None)
+    return listed is None or event.event_date >= listed
+
+
 def apply_events_to_terms(
     bond_code: str,
     terms: BondTerms,
@@ -643,7 +708,8 @@ def apply_events_to_terms(
 ) -> BondTerms:
     """把事件层合并到 ``BondTerms`` 中, 供筛选和定价使用."""
     val_date = valuation_date or market_today()
-    active = [e for e in events if e.bond_code == bond_code and e.event_date <= val_date]
+    active = [e for e in events if e.bond_code == bond_code and e.event_date <= val_date
+              and _event_postdates_listing(e, terms)]
     if not active:
         return terms
 
@@ -652,7 +718,12 @@ def apply_events_to_terms(
     if latest_call:
         updates["call_status"] = latest_call.parsed_status or "已公告强赎"
         updates["call_announce_date"] = latest_call.event_date
-        if latest_call.effective_start:
+        # 只有**真解析到**停止交易日才写。``effective_start`` 在标题/正文都没有日期时会回落成
+        # 公告日本身, 而强赎公告与停止交易之间隔着法定提示期 —— "最后交易日 = 公告当天"几乎
+        # 恒为解析失败的信号。实测恒逸转2 被一份泛称"可转换公司债券"的法律意见书 (讲的是
+        # 兄弟债恒逸转债) 按公告日写成 2026-03-03 停止交易, 于是这只当天成交 326 万手的
+        # 活券被准入判成"已过最后交易日"。
+        if latest_call.effective_start and latest_call.effective_start > latest_call.event_date:
             updates["last_trading_date"] = latest_call.effective_start
         if latest_call.effective_end:
             updates["call_redemption_date"] = latest_call.effective_end

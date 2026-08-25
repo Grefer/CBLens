@@ -108,6 +108,20 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
   "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用
   是替缺失的 `delisting_date` 兜底, 全库回填后独立贡献实测为 0。摘牌该由摘牌判据管
+- **横截面口径 vs 绝对阈值**: 凡是判据架在"模型偏差"这类**水平时变**的量上, 一律锚当期
+  横截面 (相对全市场中位), 不要用绝对阈值。实测 `cb_valuation_history` 20 期季度基线:
+  中位偏差水平摆幅 21.2pp (+0.4%↔+21.6%), 而便宜尾形状 (p25−中位) 摆幅只有 4.2pp ——
+  水平不可跨期比较, 形状可以。批量页「低估候选」曾用 `opportunity_score >= 8.0`,
+  2026-08 主池 280 只只剩 1 只候选、页面默认打开是空表。现改为两道闸串联:
+  `MIN_RELATIVE_CHEAPNESS` (比中位便宜 ≥5pp, 负责表达"今天真没便宜货") +
+  `DEFAULT_UNDERVALUED_PERCENTILE` (名单长度上限, 负责挡住谷底时的几百只)。
+  缺任一道都会退化 —— 纯分位永远凑得满 15%, 纯下限在谷底会泛滥。
+- **机会分不是机会**: `opportunity_score` 的低估项是 `max(0, -deviation)*100`, 而全市场
+  中位 deviation 长期为正, 于是**92% 的行这一项恒为 0**, 分数完全由评级/余额加分与风险
+  惩罚决定 —— 它在九成的债上度量的是信用质量 (秩相关 score vs deviation 仅 −0.63,
+  纯错定价排序应为 −1.0)。批量页展示已改按相对偏差排序, `quality_score` 把这部分单列。
+  **但 `opportunity_score` 的数值本身冻结不动**: 它是 `rank_signal="score"` 与旧策略
+  快照可复现的前提, 改它就是默认选债行为变更。展示排序另走 `sort_batch_results_for_view`。
 - **半开区间票息**: `(start, end]` 避免边界双计
 - **年化强度**: p_down 解释为年化事件强度，每步 `1-exp(-p·dt)`
 - **原子写**: JSON 先写 `.tmp` 再 `rename`，防半截文件
@@ -164,6 +178,27 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   见 `parse_outstanding_balance_change` 的两道语义闸 (gap 比较词 / 金额尾缀), 存量数据用
   `cb-repair-balance-patches` 回洗。新增任何"从公告正文抽数值"的解析器时先想清楚:
   这句话说的是**已经发生的状态**, 还是**触发条件**?
+- **公告关键词是多义词, 分类前先确认主语是本转债**。「摘牌」「提前赎回」在 A 股公告里同时
+  指: 优先股赎回摘牌、产权交易所公开摘牌 (竞拍取得股权)、普通公司债兑付摘牌、可交换债换股
+  摘牌、理财产品提前赎回。早期分类器只看关键词, 把这些统统判成本债强赎/摘牌, 经
+  `apply_events_to_bundle` 写进 `last_trading_date`/`delisting_date`, 让 12 只在市转债
+  (含兴业、上银两只银行转债) 被准入整体判死。`classify_announcement_title` 现对
+  delisting/call_redemption/call_no_redemption 三类要求标题出现转债标识
+  (`转债|可转换公司债券|转[0-9]{1,2}`; **`公司债券` 不算** —— 「可转换公司债券」含它但反之不成立,
+  而 `转2/转02` 简称不含「债」字必须单列)。
+- **归属判据有三层, 缺一层就有一类债漏网**:
+  1. `_title_names_other_bond` — 标题点名了兄弟债 (胜蓝转债 ≠ 胜蓝转02)。守卫必须在
+     **建事件之前**, 只挡 patch 不够: 事件本身会回写 BondTerms 状态。
+  2. `_event_postdates_listing` — 上市之前不可能发生本债的摘牌/强赎/回售/转股价调整。
+     对**同名先后两只债**是唯一判据 (110099.SH 福能转债 2025-10-30 上市, 却挂着上一只
+     同名债 2024-11 的到期摘牌公告)。例外: 评级 (初始评级本就早于上市) 与正股类事件。
+  3. 强赎事件只有**真解析到**停止交易日才写 `last_trading_date` —— `effective_start`
+     无日期时回落成公告日, 而公告到停牌之间隔着法定提示期, "最后交易日 = 公告当天"
+     恒为解析失败的信号。
+- **评级历史无权威源, 只能靠与 cb_data 当前值比对**。末条 patch 必须等于当前值 (中间历史值
+  本就该不同)。`_parse_bond_credit_rating` 的 `rating_re` 带 `(?<![A-C])` 左界 —— 少了它,
+  `.{0,10}` 回溯会让评级"尽量晚开始", 从 AA- 抠出 A-、AA+ 抠出 A+, 低评级让债在回测准入
+  里被整批误杀。`cb-repair-events` 只删这类**可证残缺**的末条 patch, 不猜一个对的填回去。
 - Wind 字段用"候选字段逐个尝试"的兼容模式，不要假设所有终端字段一致
   (例: `carrydate` → `issue_firstissue`)。
 
@@ -201,6 +236,19 @@ UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆�
 | Wind 相关逻辑 | mock WindPy，不依赖真实连接 |
 | 跨层契约或共享数据结构 | `pytest -x -q` 全量 |
 
+### 数据体检 (`cb-data-doctor`)
+
+每条检查都对应一次**靠运气才发现**的静默事故 —— 不抛异常、测试全绿, 只表现为"池子里
+怎么全是边角料"。所以判据一律是可量化的比率与不变量。分五组: 新鲜度 / 覆盖率 /
+patch 自洽 / 交叉校验 / 不变量, 外加 `--online` 的**外部对照**。
+
+外部对照是最强的一条: 库内自洽性检查全绿时, 它靠"被准入判死、但今日 akshare 有成交"
+一次抓出 19 只被误杀的活券 (精测转2 431 元、胜蓝转02 326 元), 占主池 6.8%。判据是
+**今日成交量 > 0** 而不是"有没有报价" —— akshare 现货表里退市券仍留着零成交的陈旧行。
+
+改解析器或分类器之后必跑 `cb-data-doctor`: "代码修好了"和"存量数据是对的"是两回事,
+存量事件不会被任何流程重新审视。
+
 ## 数据文件
 
 - `data/cb_data.json` — 全部转债静态条款，不要手动编辑
@@ -226,6 +274,8 @@ cb-sync-events --apply                      # 同步公告事件并应用回 cb_
 cb-valuation                                # 大类估值/择时信号 (--record 入基线)
 cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M  # 策略回测 (--cache-dir 复跑提速)
 cb-calibrate-down-reset                     # 从 cb_events 校准下修博弈常量
+cb-data-doctor                              # 数据体检 (每天跑批**前**先跑; --online 加外部对照)
+cb-repair-events --apply                    # 存量迁移: 用当前解析器重放事件表与 patch 库
 cb-repair-balance-patches --apply           # 一次性存量迁移: 清洗被赎回门槛条款污染的余额 patch
 python CB.py 128009.SZ                      # 单只定价
 ```

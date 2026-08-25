@@ -27,6 +27,7 @@ from ...batch_pricing import (
     load_batch_results_cache,
     save_batch_results_cache,
     sort_batch_results_for_review,
+    sort_batch_results_for_view,
     split_batch_codes_from_cache,
     summarize_exclusions,
     summarize_batch_results,
@@ -72,15 +73,19 @@ logger = logging.getLogger(__name__)
 # 列预设: 简洁视图只保留投资决策最常看的字段, 完整视图沿用所有字段
 # 状态列: 成功 → ✓ (单字符即可), 失败行保留错误文本, 故宽度大幅收窄
 _BATCH_COLS_FULL = (
-    ("代码", 100), ("名称", 80), ("正股", 80), ("机会分", 70), ("可信", 45),
+    ("代码", 100), ("名称", 80), ("正股", 80), ("相对偏差", 80), ("双低", 65),
+    ("下修优势", 75), ("机会分", 70), ("质量分", 65), ("可信", 45),
     ("转股价值", 70), ("转股溢价(%)", 80), ("σ(%)", 55), ("理论价", 65),
     ("市价", 65), ("偏差(%)", 70), ("评级", 50), ("敏感性", 90),
     ("标签", 180), ("复核建议", 260), ("状态", 60),
 )
+# 简洁视图用「相对偏差 + 双低」替掉「机会分」: 实测 92% 的行机会分的低估项恒为 0,
+# 分数由评级/余额加分与风险惩罚决定, 与错定价无关 —— 放在决策位上会误导。
+# 机会分没有删除, 切到「完整」仍可查, 旧缓存与策略层也照旧读它。
 _BATCH_COLS_SIMPLE = (
-    ("代码", 100), ("名称", 90), ("机会分", 70), ("可信", 45),
+    ("代码", 100), ("名称", 90), ("相对偏差", 80), ("双低", 65), ("下修优势", 75), ("可信", 45),
     ("理论价", 70), ("市价", 70), ("偏差(%)", 75), ("评级", 50),
-    ("标签", 220), ("状态", 50),
+    ("标签", 200), ("状态", 50),
 )
 # 列名 → 取值函数, 简洁/完整共用
 _BATCH_COL_GETTERS = {
@@ -88,11 +93,20 @@ _BATCH_COL_GETTERS = {
     "名称":         lambda r: r.get("bond_name", ""),
     "正股":         lambda r: r.get("stock_code", ""),
     "机会分":       lambda r: f"{float(r['opportunity_score']):.1f}" if _is_finite(r.get("opportunity_score")) else "—",
+    # 相对偏差 = 这只债比全市场中位便宜/贵多少 (pp)。负=相对便宜。绝对偏差的水平
+    # 随市场周期在 +0.4%~+21.6% 之间整体漂移, 只有相对量在横截面上可比。
+    "相对偏差":     lambda r: f"{float(r['relative_deviation'])*100:+.1f}" if _is_finite(r.get("relative_deviation")) else "—",
+    "双低":         lambda r: f"{float(r['double_low']):.0f}" if _is_finite(r.get("double_low")) else "—",
+    "质量分":       lambda r: f"{float(r['quality_score']):+.1f}" if _is_finite(r.get("quality_score")) else "—",
+    # 稳健下修优势: sigma ±15% / 利差 ±100bp 四角点里最差的 (理论价 − 市价), 正 = 有优势
+    "下修优势":     lambda r: f"{float(r['down_reset_robust_edge_value']):+.1f}" if _is_finite(r.get("down_reset_robust_edge_value")) else "—",
     "可信":         lambda r: r.get("confidence", "") if r.get("status") == "ok" else "—",
     "转股价值":     lambda r: f"{float(r['parity']):.2f}" if r.get("status") == "ok" and _is_finite(r.get("parity")) else "—",
     "转股溢价(%)":  lambda r: f"{float(r['conversion_premium'])*100:+.1f}" if _is_finite(r.get("conversion_premium")) else "—",
-    "σ(%)":         lambda r: f"{r['sigma']*100:.1f}" if r.get("status") == "ok" and "sigma" in r else "—",
-    "理论价":       lambda r: f"{r['theoretical_price']:.2f}" if r.get("status") == "ok" else "—",
+    # 这两个原先一个是裸下标、一个只查键在不在, 与相邻 getter 的 _is_finite 口径不一致:
+    # status=="ok" 但字段缺失/为 NaN 时前者 KeyError、后者渲染出 "nan"。统一收口。
+    "σ(%)":         lambda r: f"{float(r['sigma'])*100:.1f}" if _is_finite(r.get("sigma")) else "—",
+    "理论价":       lambda r: f"{float(r['theoretical_price']):.2f}" if _is_finite(r.get("theoretical_price")) else "—",
     "市价":         lambda r: f"{float(r['market_price']):.2f}" if r.get("status") == "ok" and r.get("market_price") is not None else "—",
     "偏差(%)":      lambda r: f"{float(r['deviation'])*100:+.2f}" if _is_finite(r.get("deviation")) else "—",
     "评级":         lambda r: r.get("credit_rating", ""),
@@ -107,6 +121,10 @@ _BATCH_COL_STRETCH_WEIGHTS = {
     "名称": 1.0,
     "正股": 0.6,
     "机会分": 0.35,
+    "相对偏差": 0.4,
+    "双低": 0.3,
+    "质量分": 0.3,
+    "下修优势": 0.4,
     "可信": 0.2,
     "转股价值": 0.35,
     "转股溢价(%)": 0.4,
@@ -142,12 +160,15 @@ def build(app, tab):
     lbl_batch_title = ctk.CTkLabel(ch, text="📦 批量定价 / 转债池筛选",
                                    font=(FONT_FAMILY, 16, "bold"), text_color=TEXT)
     lbl_batch_title.pack(side="left")
-    ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按机会分复核排序 (复核标记, 非收益预测)",
+    ctk.CTkLabel(ch, text="基于本地条款库全量转债池 → 并发定价 → 按当期横截面相对便宜度排序 (复核标记, 非收益预测)",
                  font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
     Tooltip(lbl_batch_title,
-            "机会分 = 模型低估程度的复核排序信号, 用于筛出'值得人工复核'的标的。\n"
-            "⚠️ 经全市场池回测, 机会分对未来收益的横截面预测力≈0 (Rank-IC≈-0.05),\n"
-            "不是选股/买入排名; 请结合公告、流动性与组合风险人工判断。")
+            "相对偏差 = 本券偏差 − 全市场当期中位偏差 (负 = 相对便宜)。\n"
+            "模型对全市场有系统性水平偏移且随周期在 +0.4%~+21.6% 摆动, 所以绝对低估度\n"
+            "不可跨期比较, 只有横截面相对量可比。「低估候选」= 相对中位便宜 ≥5pp\n"
+            "且排进当期最便宜的 15%。\n"
+            "⚠️ 这仍是复核标记而非收益预测: 全市场池回测 Rank-IC≈0, 请结合公告、\n"
+            "流动性与组合风险人工判断。")
 
     # 右侧: 转债大类估值/择时信号 (全市场中位偏差 → 贵/便宜), 随结果刷新
     app.v_batch_valuation = ctk.StringVar(value="")
@@ -342,6 +363,11 @@ def _run_batch(app):
             M=max(300, int(float(app.v_M.get()))),
             N=max(1000, int(float(app.v_N.get()))),
             vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
+            # 反解隐含下修强度 + 四角点扰动, 产出稳健下修优势 (策略页的默认排序信号)。
+            # 此前批量页跑完整 PDE 网格却把这族信号整批丢掉 (实测缓存里 0/280 有值)。
+            # 实测边际成本: 诊断走粗网格 (150,400) = 细网格的 0.16x, 每债 +166ms,
+            # 全池 280 只按 10 线程折算 3.1s → 7.7s —— 相对分钟级的取数可忽略。
+            compute_pde_signals=True,
         )
     except ValueError as e:
         messagebox.showerror("参数错误", str(e))
@@ -531,7 +557,10 @@ def _render_batch_views(
     base_results = getattr(app, "_batch_all_results", None) or []
     view = _canonical_view_name(
         app.v_batch_view.get() if hasattr(app, "v_batch_view") else "综合机会")
-    display_results = filter_batch_results_by_view(base_results, view)
+    # 过滤在**全池**上做 (中位锚与横截面名次都需要完整 population), 排序在过滤后做。
+    # 顺序反过来会让相对偏差算到子集上, 视图归属整体漂移。
+    display_results = sort_batch_results_for_view(
+        filter_batch_results_by_view(base_results, view), view)
     app._batch_results = display_results
     _refresh_view_menu_labels(app, base_results)
     _update_valuation_banner(app, base_results)

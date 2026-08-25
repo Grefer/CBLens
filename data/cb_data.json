@@ -2391,7 +2391,7 @@
   },
   "110076.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -2434,7 +2434,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-31",
+    "putback_start_date": "2025-12-26",
     "redemption_price": 110.0,
     "sec_name": "华海转债",
     "suspension_status": null,
@@ -2448,8 +2448,8 @@
   },
   "110077.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2025-07-12",
@@ -2483,7 +2483,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2020-11-20",
-    "last_trading_date": "2025-07-12",
+    "last_trading_date": null,
     "listing_date": "2020-12-17",
     "maturity_date": "2026-11-20",
     "outstanding_balance": 5.83871861,
@@ -2615,7 +2615,7 @@
   },
   "110081.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -2658,7 +2658,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-06-06",
+    "putback_start_date": "2025-05-31",
     "redemption_price": 108.0,
     "sec_name": "闻泰转债",
     "suspension_status": null,
@@ -2667,7 +2667,7 @@
     "underlying_code": "600745.SH",
     "underlying_name": "*ST闻泰",
     "underlying_pct_change": null,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "停牌",
     "underlying_trade_status": null
   },
   "110082.SH": {
@@ -3118,7 +3118,7 @@
   },
   "110090.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -3161,7 +3161,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-04-27",
+    "putback_start_date": "2026-04-22",
     "redemption_price": 110.0,
     "sec_name": "爱迪转债",
     "suspension_status": null,
@@ -3620,8 +3620,8 @@
   },
   "110099.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:59:49",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -3646,7 +3646,7 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2024-11-29",
+    "delisting_date": "2031-10-13",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -5105,7 +5105,7 @@
   },
   "111003.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:53:41",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -5132,9 +5132,9 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2028-03-07",
-    "down_reset_block_until": "2026-10-30",
+    "down_reset_block_until": "2024-09-19",
     "down_reset_cooldown_months": null,
-    "down_reset_note": "聚合顺新材料股份有限公司关于不向下修正“合顺转债”转股价格的公告",
+    "down_reset_note": "杭州聚合顺新材料股份有限公司关于不向下修正“聚合转债”转股价格的公告",
     "down_reset_p_scale": null,
     "down_reset_trigger_pct": 80.0,
     "face_value": 100.0,
@@ -5219,7 +5219,7 @@
   },
   "111005.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -5600,7 +5600,7 @@
   },
   "111012.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -5643,7 +5643,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-03-11",
+    "putback_start_date": "2026-03-05",
     "redemption_price": 115.0,
     "sec_name": "福新转债",
     "suspension_status": null,
@@ -5657,7 +5657,7 @@
   },
   "111013.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -6218,8 +6218,8 @@
   },
   "111023.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -6248,7 +6248,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2025-07-03",
-    "last_trading_date": "2026-05-27",
+    "last_trading_date": "2026-06-17",
     "listing_date": "2025-07-22",
     "maturity_date": "2031-07-03",
     "outstanding_balance": 0.0,
@@ -8247,8 +8247,8 @@
   },
   "113042.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -8273,7 +8273,7 @@
     "credit_rating": "AAA",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-12-23",
+    "delisting_date": "2027-01-25",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -8473,14 +8473,14 @@
   },
   "113046.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:39",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2025-08-23",
     "call_no_redemption_until": null,
     "call_redemption_date": "2025-08-25",
-    "call_redemption_price": 100.0477,
+    "call_redemption_price": null,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
     "close": 137.3071,
@@ -8499,7 +8499,7 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-08-25",
+    "delisting_date": "2027-03-22",
     "down_reset_block_until": "2025-07-25",
     "down_reset_cooldown_months": null,
     "down_reset_note": "金田股份关于不向下修正“金田转债”转股价格的公告",
@@ -8508,7 +8508,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-03-22",
-    "last_trading_date": "2025-08-20",
+    "last_trading_date": null,
     "listing_date": "2021-04-12",
     "maturity_date": "2027-03-22",
     "outstanding_balance": 14.9917401,
@@ -8756,8 +8756,8 @@
   },
   "113051.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -8782,7 +8782,7 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2024-12-17",
+    "delisting_date": "2027-06-21",
     "down_reset_block_until": "2025-11-24",
     "down_reset_cooldown_months": null,
     "down_reset_note": "中节能风力发电股份有限公司关于不向下修正“节能转债”转股价格的公告",
@@ -8813,8 +8813,8 @@
   },
   "113052.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -8839,7 +8839,7 @@
     "credit_rating": "AAA",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-07-03",
+    "delisting_date": "2027-12-27",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -13779,7 +13779,7 @@
   },
   "113575.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -13822,7 +13822,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-02-04",
+    "putback_start_date": "2026-01-30",
     "redemption_price": 108.0,
     "sec_name": "东时转债",
     "suspension_status": null,
@@ -14274,7 +14274,7 @@
   },
   "113584.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -14489,7 +14489,7 @@
   },
   "113588.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -14546,7 +14546,7 @@
   },
   "113589.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -16520,7 +16520,7 @@
   },
   "113627.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -16561,9 +16561,9 @@
     "outstanding_balance": 7.99745,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": null,
-    "putback_price": null,
-    "putback_start_date": "2025-11-03",
+    "putback_end_date": "2025-10-29",
+    "putback_price": 100.49,
+    "putback_start_date": "2025-10-23",
     "redemption_price": 110.0,
     "sec_name": "太平转债",
     "suspension_status": null,
@@ -16854,7 +16854,7 @@
   },
   "113633.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -16897,7 +16897,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-01-30",
+    "putback_start_date": "2026-01-27",
     "redemption_price": 110.0,
     "sec_name": "科沃转债",
     "suspension_status": null,
@@ -17132,7 +17132,7 @@
   },
   "113638.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -17175,7 +17175,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-03-09",
+    "putback_start_date": "2026-03-04",
     "redemption_price": 112.0,
     "sec_name": "台21转债",
     "suspension_status": null,
@@ -17863,8 +17863,8 @@
   },
   "113652.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:40",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2025-12-17",
@@ -17898,7 +17898,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-07-22",
-    "last_trading_date": "2025-12-17",
+    "last_trading_date": null,
     "listing_date": "2022-08-12",
     "maturity_date": "2028-07-22",
     "outstanding_balance": 14.7661901,
@@ -17975,8 +17975,8 @@
   },
   "113654.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-09",
@@ -18008,7 +18008,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-08-04",
-    "last_trading_date": "2026-05-09",
+    "last_trading_date": "2026-05-07",
     "listing_date": "2022-09-01",
     "maturity_date": "2028-08-04",
     "outstanding_balance": 0.0,
@@ -18030,7 +18030,7 @@
   },
   "113655.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -18073,7 +18073,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-02-09",
+    "putback_start_date": "2026-02-03",
     "redemption_price": 112.0,
     "sec_name": "欧22转债",
     "suspension_status": null,
@@ -18199,8 +18199,8 @@
   },
   "113658.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -18224,7 +18224,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-06-05",
+    "delisting_date": "2026-08-12",
     "down_reset_block_until": "2025-09-14",
     "down_reset_cooldown_months": null,
     "down_reset_note": "密尔克卫智能供应链服务集团股份有限公司关于不向下修正“密卫转债”转股价格的公告",
@@ -18703,8 +18703,8 @@
   },
   "113667.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:40",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2025-11-06",
@@ -18736,7 +18736,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2023-03-17",
-    "last_trading_date": "2025-11-06",
+    "last_trading_date": "2026-08-25",
     "listing_date": "2023-04-11",
     "maturity_date": "2029-03-17",
     "outstanding_balance": 2.2014928,
@@ -20371,7 +20371,7 @@
   },
   "113697.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -21050,14 +21050,14 @@
   },
   "113709.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:40",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-04-23",
     "call_no_redemption_until": null,
     "call_redemption_date": "2026-04-23",
-    "call_redemption_price": 100.3134,
+    "call_redemption_price": null,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
     "close": 162.981,
@@ -21076,7 +21076,7 @@
     "credit_rating": "AA",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-04-23",
+    "delisting_date": "2032-07-30",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -21085,7 +21085,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2026-07-30",
-    "last_trading_date": "2026-04-20",
+    "last_trading_date": null,
     "listing_date": "2026-08-17",
     "maturity_date": "2032-07-30",
     "outstanding_balance": 8.78,
@@ -21323,8 +21323,8 @@
   },
   "118003.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-09",
@@ -21357,7 +21357,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-11-29",
-    "last_trading_date": "2026-05-09",
+    "last_trading_date": "2026-05-13",
     "listing_date": "2021-12-20",
     "maturity_date": "2027-11-29",
     "outstanding_balance": 0.0,
@@ -21379,8 +21379,8 @@
   },
   "118004.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-09",
@@ -21413,7 +21413,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-01-04",
-    "last_trading_date": "2026-05-09",
+    "last_trading_date": "2026-05-18",
     "listing_date": "2022-01-27",
     "maturity_date": "2028-01-04",
     "outstanding_balance": 0.0,
@@ -21435,7 +21435,7 @@
   },
   "118005.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -21478,7 +21478,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-04-03",
+    "putback_start_date": "2026-03-31",
     "redemption_price": 110.0,
     "sec_name": "天奈转债",
     "suspension_status": null,
@@ -21492,8 +21492,8 @@
   },
   "118006.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-04-29",
@@ -21526,7 +21526,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-03-15",
-    "last_trading_date": "2026-04-29",
+    "last_trading_date": "2026-04-27",
     "listing_date": "2022-04-12",
     "maturity_date": "2028-03-15",
     "outstanding_balance": 0.0,
@@ -22887,7 +22887,7 @@
   },
   "118031.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -22930,7 +22930,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-03-06",
+    "putback_start_date": "2026-02-28",
     "redemption_price": 115.0,
     "sec_name": "天23转债",
     "suspension_status": null,
@@ -23001,7 +23001,7 @@
   },
   "118033.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -23229,7 +23229,7 @@
   },
   "118037.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:53:41",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -23256,9 +23256,9 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2029-07-06",
-    "down_reset_block_until": "2026-09-30",
+    "down_reset_block_until": "2026-09-29",
     "down_reset_cooldown_months": null,
-    "down_reset_note": "苏州上声电子股份有限公司关于不向下修正”上26转债“转股价格的公告",
+    "down_reset_note": "苏州上声电子股份有限公司关于不向下修正”上声转债“转股价格的公告",
     "down_reset_p_scale": null,
     "down_reset_trigger_pct": 85.0,
     "face_value": 100.0,
@@ -23286,8 +23286,8 @@
   },
   "118038.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-04-28",
@@ -23318,7 +23318,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2023-07-17",
-    "last_trading_date": "2026-04-28",
+    "last_trading_date": "2026-04-23",
     "listing_date": "2023-08-10",
     "maturity_date": "2029-07-17",
     "outstanding_balance": 0.0,
@@ -23326,7 +23326,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-12",
+    "putback_start_date": "2025-12-08",
     "redemption_price": 100.783561643836,
     "sec_name": "金宏转债",
     "suspension_status": null,
@@ -23454,8 +23454,8 @@
   },
   "118041.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-20",
@@ -23489,7 +23489,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2023-07-31",
-    "last_trading_date": "2026-05-20",
+    "last_trading_date": "2026-06-04",
     "listing_date": "2023-08-22",
     "maturity_date": "2029-07-31",
     "outstanding_balance": 0.0,
@@ -24271,8 +24271,8 @@
   },
   "118057.SH": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-22",
@@ -24301,7 +24301,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2025-06-26",
-    "last_trading_date": "2026-05-22",
+    "last_trading_date": "2026-06-10",
     "listing_date": "2025-07-16",
     "maturity_date": "2031-06-26",
     "outstanding_balance": 0.0,
@@ -28579,8 +28579,8 @@
   },
   "123054.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -28614,7 +28614,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2020-06-10",
-    "last_trading_date": "2026-05-26",
+    "last_trading_date": "2026-05-25",
     "listing_date": "2020-07-06",
     "maturity_date": "2026-06-10",
     "outstanding_balance": 0.0,
@@ -29187,7 +29187,7 @@
   },
   "123065.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -29230,7 +29230,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-11-05",
+    "putback_start_date": "2025-11-03",
     "redemption_price": 115.0,
     "sec_name": "宝莱转债",
     "suspension_status": null,
@@ -29567,7 +29567,7 @@
   },
   "123072.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -29610,7 +29610,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-11",
+    "putback_start_date": "2025-12-10",
     "redemption_price": 120.0,
     "sec_name": "乐歌转债",
     "suspension_status": null,
@@ -30276,8 +30276,8 @@
   },
   "123085.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-08",
@@ -30311,7 +30311,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2020-12-11",
-    "last_trading_date": "2026-05-08",
+    "last_trading_date": "2026-05-12",
     "listing_date": "2020-12-28",
     "maturity_date": "2026-12-11",
     "outstanding_balance": 0.0,
@@ -30555,7 +30555,7 @@
   },
   "123090.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -30598,7 +30598,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-02-24",
+    "putback_start_date": "2026-02-13",
     "redemption_price": 112.0,
     "sec_name": "三诺转债",
     "suspension_status": null,
@@ -32274,8 +32274,8 @@
   },
   "123121.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T00:12:25",
-      "source": "Wind:admission_status"
+      "fetched_at": "2026-08-24T19:58:25",
+      "source": "cb_events"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -32316,7 +32316,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-01-20",
+    "putback_start_date": "2026-01-16",
     "redemption_price": 102.068493150685,
     "sec_name": "帝尔转债",
     "suspension_status": null,
@@ -32440,8 +32440,8 @@
   },
   "123124.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:40",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -32466,7 +32466,7 @@
     "credit_rating": "A+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-08-23",
+    "delisting_date": "2027-08-16",
     "down_reset_block_until": "2025-10-30",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正晶瑞转2转股价格的公告",
@@ -32550,8 +32550,8 @@
   },
   "123126.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -32584,7 +32584,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-09-10",
-    "last_trading_date": "2026-05-27",
+    "last_trading_date": "2026-05-26",
     "listing_date": "2021-10-18",
     "maturity_date": "2027-09-10",
     "outstanding_balance": 0.0,
@@ -32717,8 +32717,8 @@
   },
   "123129.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-08",
@@ -32751,7 +32751,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-11-04",
-    "last_trading_date": "2026-05-08",
+    "last_trading_date": "2026-05-05",
     "listing_date": "2021-11-24",
     "maturity_date": "2027-11-04",
     "outstanding_balance": 0.0,
@@ -35252,7 +35252,7 @@
   },
   "123175.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -35295,7 +35295,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-10",
+    "putback_start_date": "2025-12-08",
     "redemption_price": 112.0,
     "sec_name": "百畅转债",
     "suspension_status": null,
@@ -35309,8 +35309,8 @@
   },
   "123176.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -35335,7 +35335,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-09-25",
+    "delisting_date": "2029-03-02",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -35420,7 +35420,7 @@
   },
   "123178.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -35463,7 +35463,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-01-19",
+    "putback_start_date": "2026-01-15",
     "redemption_price": 115.0,
     "sec_name": "花园转债",
     "suspension_status": null,
@@ -35697,8 +35697,8 @@
   },
   "123183.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2025-05-16",
@@ -35732,7 +35732,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2023-03-23",
-    "last_trading_date": "2025-05-16",
+    "last_trading_date": null,
     "listing_date": "2023-04-20",
     "maturity_date": "2029-03-23",
     "outstanding_balance": 6.328782,
@@ -37241,7 +37241,7 @@
   },
   "123211.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -37284,7 +37284,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-04-17",
+    "putback_start_date": "2026-04-10",
     "redemption_price": 115.0,
     "sec_name": "阳谷转债",
     "suspension_status": null,
@@ -38620,8 +38620,8 @@
   },
   "123236.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-26",
@@ -38652,7 +38652,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2023-12-22",
-    "last_trading_date": "2026-05-25",
+    "last_trading_date": "2026-05-22",
     "listing_date": "2024-01-18",
     "maturity_date": "2029-12-22",
     "outstanding_balance": 0.0,
@@ -39611,8 +39611,8 @@
   },
   "123254.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-04-22",
@@ -39642,7 +39642,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2025-03-24",
-    "last_trading_date": "2026-04-22",
+    "last_trading_date": "2026-04-20",
     "listing_date": "2025-04-11",
     "maturity_date": "2031-03-24",
     "outstanding_balance": 0.0,
@@ -39664,7 +39664,7 @@
   },
   "123255.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -39707,7 +39707,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-10",
+    "putback_start_date": "2025-12-04",
     "redemption_price": 110.0,
     "sec_name": "鼎龙转债",
     "suspension_status": null,
@@ -39721,8 +39721,8 @@
   },
   "123256.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-08",
@@ -39751,7 +39751,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2025-05-29",
-    "last_trading_date": "2026-05-08",
+    "last_trading_date": "2026-05-07",
     "listing_date": "2025-06-17",
     "maturity_date": "2031-05-29",
     "outstanding_balance": 0.0,
@@ -39759,7 +39759,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-11-28",
+    "putback_start_date": "2025-11-21",
     "redemption_price": 100.191232876712,
     "sec_name": "恒帅转债",
     "suspension_status": null,
@@ -39830,14 +39830,14 @@
   },
   "123258.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:40",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2024-12-02",
     "call_no_redemption_until": "2026-08-19",
     "call_redemption_date": "2024-12-04",
-    "call_redemption_price": 100.68,
+    "call_redemption_price": null,
     "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 345.7118,
@@ -39856,7 +39856,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2024-12-12",
+    "delisting_date": "2031-08-28",
     "down_reset_block_until": "2026-06-04",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正胜蓝转02转股价格的公告",
@@ -39865,7 +39865,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2025-08-28",
-    "last_trading_date": "2024-11-29",
+    "last_trading_date": null,
     "listing_date": "2025-09-10",
     "maturity_date": "2031-08-28",
     "outstanding_balance": 4.498298,
@@ -43429,7 +43429,7 @@
   },
   "127017.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -43472,7 +43472,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-24",
+    "putback_start_date": "2025-12-20",
     "redemption_price": 113.0,
     "sec_name": "万青转债",
     "suspension_status": null,
@@ -43877,7 +43877,7 @@
   },
   "127025.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -43903,7 +43903,7 @@
     "credit_rating": "AAA",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-06-09",
+    "delisting_date": "2026-11-05",
     "down_reset_block_until": "2027-01-22",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正冀东转债转股价格的公告",
@@ -43920,7 +43920,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-30",
+    "putback_start_date": "2025-12-26",
     "redemption_price": 106.0,
     "sec_name": "冀东转债",
     "suspension_status": null,
@@ -43934,7 +43934,7 @@
   },
   "127026.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -44946,7 +44946,7 @@
   },
   "127044.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -44989,7 +44989,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-05-06",
+    "putback_start_date": "2026-04-29",
     "redemption_price": 112.0,
     "sec_name": "蒙娜转债",
     "suspension_status": null,
@@ -45060,7 +45060,7 @@
   },
   "127046.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -45103,7 +45103,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-11-27",
+    "putback_start_date": "2025-11-25",
     "redemption_price": 110.0,
     "sec_name": "百润转债",
     "suspension_status": null,
@@ -45226,8 +45226,8 @@
   },
   "127049.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:53:40",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -45252,7 +45252,7 @@
     "credit_rating": "AAA",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-12-24",
+    "delisting_date": "2027-11-02",
     "down_reset_block_until": "2026-08-12",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正希望转2转股价格的公告",
@@ -45899,7 +45899,7 @@
   },
   "127061.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -45942,7 +45942,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-11",
+    "putback_start_date": "2025-12-04",
     "redemption_price": 118.0,
     "sec_name": "美锦转债",
     "suspension_status": null,
@@ -46177,7 +46177,7 @@
   },
   "127066.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -46232,11 +46232,11 @@
   },
   "127067.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
-    "call_announce_date": "2026-03-24",
+    "call_announce_date": "2026-03-03",
     "call_no_redemption_until": "2026-07-27",
     "call_redemption_date": "2026-09-09",
     "call_redemption_price": null,
@@ -46257,16 +46257,16 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-04-02",
-    "down_reset_block_until": "2026-04-29",
+    "delisting_date": "2026-09-16",
+    "down_reset_block_until": "2026-02-28",
     "down_reset_cooldown_months": null,
-    "down_reset_note": "关于不向下修正恒逸转债转股价格的公告",
+    "down_reset_note": "关于不向下修正恒逸转2转股价格的公告",
     "down_reset_p_scale": null,
     "down_reset_trigger_pct": 85.0,
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-07-21",
-    "last_trading_date": "2026-03-24",
+    "last_trading_date": "2026-09-03",
     "listing_date": "2022-08-18",
     "maturity_date": "2028-07-21",
     "outstanding_balance": 7.677526,
@@ -47126,8 +47126,8 @@
   },
   "127083.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:24",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -47152,7 +47152,7 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-10-29",
+    "delisting_date": "2029-03-24",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -47518,7 +47518,7 @@
   },
   "127090.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -48180,8 +48180,8 @@
   },
   "127102.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:25",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -48206,7 +48206,7 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-09-25",
+    "delisting_date": "2029-12-25",
     "down_reset_block_until": "2026-06-11",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正可转换公司债券转股价格的公告",
@@ -48683,7 +48683,7 @@
   },
   "127111.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -48726,7 +48726,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-02-07",
+    "putback_start_date": "2026-02-03",
     "redemption_price": 110.0,
     "sec_name": "金威转债",
     "suspension_status": null,
@@ -50761,7 +50761,7 @@
   },
   "128044.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -50812,7 +50812,7 @@
     "underlying_code": "002717.SZ",
     "underlying_name": "*ST岭南",
     "underlying_pct_change": null,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "停牌",
     "underlying_trade_status": null
   },
   "128045.SZ": {
@@ -54259,7 +54259,7 @@
   },
   "128108.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T20:00:22",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -55707,7 +55707,7 @@
   },
   "128134.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -55750,7 +55750,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2025-12-13",
+    "putback_start_date": "2025-12-11",
     "redemption_price": 110.0,
     "sec_name": "鸿路转债",
     "suspension_status": null,
@@ -55764,7 +55764,7 @@
   },
   "128135.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
+      "fetched_at": "2026-08-24T19:58:25",
       "source": "cb_events"
     },
     "bond_turnover_amount": null,
@@ -55807,7 +55807,7 @@
     "put_trigger_pct": 70.0,
     "putback_end_date": null,
     "putback_price": null,
-    "putback_start_date": "2026-03-12",
+    "putback_start_date": "2026-03-10",
     "redemption_price": 115.0,
     "sec_name": "洽洽转债",
     "suspension_status": null,
@@ -56099,8 +56099,8 @@
   },
   "128141.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T20:00:21",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-18",
@@ -56134,7 +56134,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2020-12-17",
-    "last_trading_date": "2026-05-15",
+    "last_trading_date": "2026-05-14",
     "listing_date": "2021-01-18",
     "maturity_date": "2026-12-17",
     "outstanding_balance": 0.0,
@@ -56156,8 +56156,8 @@
   },
   "128142.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-22T10:38:04",
-      "source": "cb_events"
+      "fetched_at": "2026-08-24T19:58:25",
+      "source": "wind-restore"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -56182,7 +56182,7 @@
     "credit_rating": "AA",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2025-06-18",
+    "delisting_date": "2026-12-18",
     "down_reset_block_until": "2025-03-09",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正新乳转债转股价格的公告",
@@ -58142,7 +58142,7 @@
   },
   "_bundle_meta": {
     "n_bonds": 1058,
-    "updated_at": "2026-08-22T10:40:37"
+    "updated_at": "2026-08-24T20:00:22"
   },
   "q18082207.IME": {
     "_meta": {

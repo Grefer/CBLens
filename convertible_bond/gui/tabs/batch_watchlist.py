@@ -205,6 +205,11 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None) -> bool:
             M=max(300, int(float(app.v_M.get()))),
             N=max(1000, int(float(app.v_N.get()))),
             vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
+            # 反解隐含下修强度 + 四角点扰动, 产出稳健下修优势 (策略页的默认排序信号)。
+            # 此前批量页跑完整 PDE 网格却把这族信号整批丢掉 (实测缓存里 0/280 有值)。
+            # 实测边际成本: 诊断走粗网格 (150,400) = 细网格的 0.16x, 每债 +166ms,
+            # 全池 280 只按 10 线程折算 3.1s → 7.7s —— 相对分钟级的取数可忽略。
+            compute_pde_signals=True,
         )
     except ValueError as exc:
         messagebox.showerror("参数错误", str(exc))

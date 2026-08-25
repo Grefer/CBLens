@@ -158,8 +158,14 @@ class TermsPatchStore:
         bond_code: str | None = None,
         through_date: date | None = None,
         after: date | None = None,
+        include_shadowed: bool = False,
     ) -> list[TermsPatch]:
-        """列出 patch。*after* 排除生效日 <= 该日的条目 —— 基础条款快照已经包含它们。"""
+        """列出 patch。*after* 排除生效日 <= 该日的条目 —— 基础条款快照已经包含它们。
+
+        默认返回**生效视图**: 被权威源逐字段遮蔽的解析 patch 不出现。数据体检与存量回洗
+        要的是**文件里到底有什么**, 传 ``include_shadowed=True`` —— 否则一条被 Wind 遮蔽的
+        脏 patch 会既扫不到、也删不掉, 等哪天权威源覆盖收窄就原地复活。
+        """
         patches = list(self._patches)
         if bond_code:
             patches = [p for p in patches if p.bond_code == bond_code]
@@ -167,7 +173,8 @@ class TermsPatchStore:
             patches = [p for p in patches if p.effective_date <= through_date]
         if after is not None:
             patches = [p for p in patches if p.effective_date > after]
-        return _drop_shadowed_patches(sorted(patches, key=_patch_sort_key))
+        patches = sorted(patches, key=_patch_sort_key)
+        return patches if include_shadowed else _drop_shadowed_patches(patches)
 
     def apply(self, bond_code: str, terms: BondTerms, valuation_date: date,
               *, after: date | None = None) -> BondTerms:

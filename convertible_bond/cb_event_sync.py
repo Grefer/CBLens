@@ -174,6 +174,15 @@ def sync_cb_events(
                     pdf_failed += 1
                     logger.debug("PDF 正文提取失败: %s %s", code, pdf_url)
 
+            # 串号守卫必须在**建事件之前**: 只挡 patch 是不够的。事件本身会经
+            # apply_events_to_bundle 回写 last_trading_date/delisting_date/call_redemption_price,
+            # 实测 cb-sync-events --apply 用兄弟债的摘牌公告把 15 只在市券的摘牌日从未来
+            # 改成过去 (胜蓝转02 2031-08-28 → 2024-12-12), 准入随即把它们整批当成已退市 ——
+            # 而这些券当天成交量都在十万手以上。
+            if _title_names_other_bond(title, name_of(code)):
+                logger.debug("跳过标的串号公告: %s ← %s", code, title)
+                continue
+
             event = parse_event_from_announcement(
                 code,
                 str(title),
@@ -237,6 +246,11 @@ def _title_names_other_bond(title: str | None, bond_name: str | None) -> bool:
         return False
     me = str(bond_name).replace("(退市)", "").strip()
     if not me:
+        return False
+    # 本债名字只要在标题里出现过就不算串号 —— 抽名字用的贪婪前缀会被标题里的重复词撑坏
+    # (「关于宝莱转债转债回售的公告」抽出「关于宝莱转债转债」, 双向 endswith 全不成立),
+    # 而"标题提到了本债"本身就是最直接的归属证据。标题同时点名两只债时也走这条放行。
+    if me in str(title):
         return False
     return not any(n == me or me.endswith(n) or n.endswith(me) for n in names)
 
@@ -510,7 +524,11 @@ def parse_outstanding_balance_change(text: str | None) -> float | None:
 
 
 def _parse_bond_credit_rating(t: str) -> str | None:
-    rating_re = r"(AAA|AA\+|AA-|AA|A\+|A-|A|BBB\+|BBB-|BBB|BB\+|BB-|BB|B\+|B-|B|CCC|CC|C)"
+    # 左界必须不是评级字母: 否则 ``.{0,10}`` 回溯时会让评级"尽量晚开始", 从 AA- 里抠出 A-。
+    # 实测 46/165 只债的末条评级 patch 与 cb_data 当前值不符, 其中大多是被削掉首字母的次级等级
+    # (AA+→A+, AA→A, AA-→A-), 而低评级会让这些债在回测准入里被整批误杀。
+    rating_re = (r"(?<![A-C])"
+                 r"(AAA|AA\+|AA-|AA|A\+|A-|A|BBB\+|BBB-|BBB|BB\+|BB-|BB|B\+|B-|B|CCC|CC|C)")
     bond_rating_label = (
         r"(?:债项信用等级|本期债券信用等级|可转债信用等级|转债信用等级|债券信用等级|"
         r"[“\"'《]?[^，。；：]{0,20}转债[”\"'》]?(?:债项)?信用等级)"
@@ -518,7 +536,7 @@ def _parse_bond_credit_rating(t: str) -> str | None:
     patterns = (
         bond_rating_label + r"(?:为|维持为|调整为)" + rating_re,
         bond_rating_label + r"由" + rating_re + r"(?:下调至|调降至|调整至|下调为|调降为|调整为)" + rating_re,
-        r"(?:维持|确认).{0,20}" + bond_rating_label + r".{0,10}" + rating_re,
+        r"(?:维持|确认).{0,20}?" + bond_rating_label + r".{0,10}?" + rating_re,
     )
     for pattern in patterns:
         match = re.search(pattern, t)

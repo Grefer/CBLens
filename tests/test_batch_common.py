@@ -1,5 +1,9 @@
 from datetime import timedelta
 
+import inspect
+
+from convertible_bond.gui.tabs import batch as batch_tab
+from convertible_bond.gui.tabs import batch_watchlist as watchlist_tab
 from convertible_bond.gui.tabs.batch_common import _is_new_bond, _resolve_row_tag
 from convertible_bond.gui.tabs.batch_watchlist import (
     _format_days_to_trade,
@@ -100,3 +104,48 @@ def test_days_to_trade_shows_already_tradable_instead_of_negative():
 
     stale_days = {"bond_code": "123284.SZ", "days_to_trade": -3}
     assert _format_days_to_trade(stale_days) == "已可交易"
+
+
+# ── 批量页列 / 定价参数的静态守护 ──
+#
+# GUI 在测试环境跑不起真实渲染, 但这些是纯数据结构与源码常量, 可以机器兜底。
+
+def test_every_batch_column_has_a_getter_and_a_stretch_weight():
+    """列表加了列却忘了 getter, 运行期才 KeyError; F821 也扫不到 (是字典键不是名字)。"""
+    for preset in (batch_tab._BATCH_COLS_FULL, batch_tab._BATCH_COLS_SIMPLE):
+        for name, _width in preset:
+            assert name in batch_tab._BATCH_COL_GETTERS, f"{name} 缺 getter"
+            assert name in batch_tab._BATCH_COL_STRETCH_WEIGHTS, f"{name} 缺列宽权重"
+
+
+def test_batch_column_getters_tolerate_missing_and_nan_values():
+    """定价失败行 / 旧缓存行不带新字段, 取值函数必须退化成 '—' 而不是抛异常。"""
+    import math
+    for row in ({}, {"status": "error"},
+                {"status": "ok", "relative_deviation": math.nan,
+                 "double_low": None, "down_reset_robust_edge_value": math.nan}):
+        for name, getter in batch_tab._BATCH_COL_GETTERS.items():
+            assert isinstance(getter(row), str), f"{name} 在缺值行上没返回字符串"
+
+
+def test_simple_view_leads_with_cross_sectional_signals_not_score():
+    """简洁视图的决策位必须是相对偏差 —— 机会分在 92% 的行上与错定价无关。
+
+    机会分没有删除, 切「完整」仍可查; 但它不该占着人第一眼看的那一列。
+    """
+    simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
+    assert "相对偏差" in simple
+    assert "机会分" not in simple
+    assert "机会分" in [name for name, _ in batch_tab._BATCH_COLS_FULL]
+    assert simple.index("相对偏差") < simple.index("偏差(%)")
+
+
+def test_both_pricing_entries_request_pde_down_reset_signals():
+    """主池与关注池两条定价路径都要开 PDE 下修信号, 否则「下修优势」列一半是空的。
+
+    这个 kwarg 走 ``**pricer_overrides``, 漏传不报错只静默不算 —— 正是它此前在批量页
+    缺席、让稳健下修优势在缓存里 0/280 有值的原因。
+    """
+    for module in (batch_tab, watchlist_tab):
+        src = inspect.getsource(module)
+        assert "compute_pde_signals=True" in src, f"{module.__name__} 未开 PDE 下修信号"

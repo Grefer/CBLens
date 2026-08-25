@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-08-24T22:44:52"
+    "updated_at": "2026-08-23T20:59:09"
   },
   "patches": [
     {
@@ -181672,6 +181672,20 @@
       "effective_date": "2024-06-13",
       "event_date": "2024-06-13",
       "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2024-06-13/1220336588.PDF",
+      "raw_title": "福能股份关于可转换公司债券跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "110099.SH|2024-06-13|rating_change|福能股份关于可转换公司债券跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "110099.SH",
+      "confidence": "parsed",
+      "effective_date": "2024-06-13",
+      "event_date": "2024-06-13",
+      "fields": {
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2024-06-13/1220336589.PDF",
@@ -208800,6 +208814,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2024-11-26",
+      "event_date": "2024-11-26",
+      "fields": {
+        "call_redemption_price": 100.68
+      },
+      "note": "余额 0.3亿 | 赎回价 100.68 | https://static.cninfo.com.cn/finalpage/2024-11-26/1221853246.PDF",
+      "raw_title": "关于胜蓝转债赎回实施的第十五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2024-11-26|call_redemption|关于胜蓝转债赎回实施的第十五次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.929638
       },
@@ -209134,6 +209161,19 @@
       },
       "note": "conversion_price 24.75->24.39 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2024-11-27",
+      "event_date": "2024-11-27",
+      "fields": {
+        "call_redemption_price": 100.68
+      },
+      "note": "余额 0.3亿 | 赎回价 100.68 | https://static.cninfo.com.cn/finalpage/2024-11-27/1221864009.PDF",
+      "raw_title": "关于胜蓝转债赎回实施暨即将停止交易的重要性提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2024-11-27|call_redemption|关于胜蓝转债赎回实施暨即将停止交易的重要性提示性公告"
     },
     {
       "before_fields": {
@@ -209500,6 +209540,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2024-11-28",
+      "event_date": "2024-11-28",
+      "fields": {
+        "call_redemption_price": 100.68
+      },
+      "note": "余额 0.3亿 | 赎回价 100.68 | https://static.cninfo.com.cn/finalpage/2024-11-28/1221878147.PDF",
+      "raw_title": "关于胜蓝转债赎回实施暨即将停止交易的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2024-11-28|call_redemption|关于胜蓝转债赎回实施暨即将停止交易的重要提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.416604
       },
@@ -209834,6 +209887,19 @@
       },
       "note": "outstanding_balance 5.966163->5.876013 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2024-11-29",
+      "event_date": "2024-11-29",
+      "fields": {
+        "call_redemption_price": 100.68
+      },
+      "note": "余额 0.3亿 | 赎回价 100.68 | https://static.cninfo.com.cn/finalpage/2024-11-29/1221891952.PDF",
+      "raw_title": "关于胜蓝转债赎回实施暨即将停止转股的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2024-11-29|call_redemption|关于胜蓝转债赎回实施暨即将停止转股的重要提示性公告"
     },
     {
       "before_fields": {
@@ -210282,6 +210348,19 @@
       },
       "note": "outstanding_balance 6.744003->6.641757 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "123258.SZ",
+      "confidence": "parsed",
+      "effective_date": "2024-12-02",
+      "event_date": "2024-12-02",
+      "fields": {
+        "call_redemption_price": 100.68
+      },
+      "note": "余额 0.3亿 | 赎回价 100.68 | https://static.cninfo.com.cn/finalpage/2024-12-02/1221905779.PDF",
+      "raw_title": "关于胜蓝转债赎回实施暨即将停止转股的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123258.SZ|2024-12-02|call_redemption|关于胜蓝转债赎回实施暨即将停止转股的重要提示性公告"
     },
     {
       "before_fields": {
@@ -231558,6 +231637,20 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113051.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-05-08",
+      "event_date": "2025-05-08",
+      "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-05-08/1223488394.PDF",
+      "raw_title": "中节能风力发电股份有限公司主体与相关债项2025年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "113051.SH|2025-05-08|rating_change|中节能风力发电股份有限公司主体与相关债项2025年度跟踪评级报告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.594262
       },
@@ -234644,6 +234737,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "111010.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-05-28",
+      "event_date": "2025-05-28",
+      "fields": {
+        "credit_rating": "A"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-05-28/1223695918.PDF",
+      "raw_title": "立昂微关于“立昂转债”2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "111010.SH|2025-05-28|rating_change|立昂微关于“立昂转债”2025年跟踪评级结果的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 78.242486
       },
@@ -237075,6 +237181,20 @@
       "source_event_key": "128129.SZ|2025-06-05|rating_change|公开发行A股可转换公司债券2025年跟踪评级报告"
     },
     {
+      "bond_code": "128129.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-06-05",
+      "event_date": "2025-06-05",
+      "fields": {
+        "credit_rating": "A",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-05/1223767217.PDF",
+      "raw_title": "关于公开发行A股可转换公司债券2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "128129.SZ|2025-06-05|rating_change|关于公开发行A股可转换公司债券2025年跟踪评级结果的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.420456
       },
@@ -239195,6 +239315,19 @@
       },
       "note": "conversion_price 20.81->20.88 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-06-13",
+      "event_date": "2025-06-13",
+      "fields": {
+        "credit_rating": "A"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-13/1223858883.PDF",
+      "raw_title": "伟明环保关于可转换公司债券2025年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-06-13|rating_change|伟明环保关于可转换公司债券2025年跟踪评级结果的公告"
     },
     {
       "bond_code": "113652.SH",
@@ -243618,6 +243751,19 @@
       "source_event_key": "127108.SZ|2025-06-25|rating_change|中节能太阳能股份有限公司主体与相关债项2025年度跟踪评级报告"
     },
     {
+      "bond_code": "127108.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-06-25",
+      "event_date": "2025-06-25",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-25/1223974484.PDF",
+      "raw_title": "晶澳太阳能科技股份有限公司主体及“晶澳转债”2025年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127108.SZ|2025-06-25|rating_change|晶澳太阳能科技股份有限公司主体及“晶澳转债”2025年度跟踪评级报告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 2.230714
       },
@@ -244759,6 +244905,20 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "123061.SZ",
+      "confidence": "parsed",
+      "effective_date": "2025-06-27",
+      "event_date": "2025-06-27",
+      "fields": {
+        "credit_rating": "A-",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-27/1224012941.PDF",
+      "raw_title": "广州航新航空科技股份有限公司公开发行可转换公司债券定期跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123061.SZ|2025-06-27|rating_change|广州航新航空科技股份有限公司公开发行可转换公司债券定期跟踪评级报告"
+    },
+    {
       "before_fields": {
         "conversion_price": 32.93
       },
@@ -245059,6 +245219,19 @@
       "source_event_key": "111003.SH|2025-06-28|rating_change|聚合顺新材料股份有限公司相关债券2025年跟踪评级报告（聚合转债）"
     },
     {
+      "bond_code": "111003.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-06-28",
+      "event_date": "2025-06-28",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-28/1224016010.PDF",
+      "raw_title": "聚合顺新材料股份有限公司相关债券2025年跟踪评级报告（合顺转债）",
+      "source": "cninfo",
+      "source_event_key": "111003.SH|2025-06-28|rating_change|聚合顺新材料股份有限公司相关债券2025年跟踪评级报告（合顺转债）"
+    },
+    {
       "bond_code": "111013.SH",
       "confidence": "parsed",
       "effective_date": "2025-06-28",
@@ -245097,6 +245270,19 @@
       "raw_title": "东方金诚国际信用评估有限公司关于东亚药业主体及“东亚转债”2025年度跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "111015.SH|2025-06-28|rating_change|东方金诚国际信用评估有限公司关于东亚药业主体及“东亚转债”2025年度跟踪评级报告"
+    },
+    {
+      "bond_code": "111020.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-06-28",
+      "event_date": "2025-06-28",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2025-06-28/1224016014.PDF",
+      "raw_title": "聚合顺新材料股份有限公司相关债券2025年跟踪评级报告（聚合转债）",
+      "source": "cninfo",
+      "source_event_key": "111020.SH|2025-06-28|rating_change|聚合顺新材料股份有限公司相关债券2025年跟踪评级报告（聚合转债）"
     },
     {
       "bond_code": "111020.SH",
@@ -255421,6 +255607,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-11",
+      "event_date": "2025-08-11",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-11/1224442895.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-11|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 9.502121
       },
@@ -255785,6 +255984,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-12",
+      "event_date": "2025-08-12",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-12/1224444291.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-12|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第一次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 8.925906
       },
@@ -256147,6 +256359,19 @@
       },
       "note": "outstanding_balance 11.121->10.571 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-13",
+      "event_date": "2025-08-13",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-13/1224461592.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-13|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第二次提示性公告"
     },
     {
       "before_fields": {
@@ -256581,6 +256806,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-14",
+      "event_date": "2025-08-14",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-14/1224473196.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-14|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第三次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 7.070387
       },
@@ -256901,6 +257139,19 @@
       },
       "note": "outstanding_balance 1.93023->1.907711 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-15",
+      "event_date": "2025-08-15",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-15/1224487119.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-15|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第四次提示性公告"
     },
     {
       "before_fields": {
@@ -257279,6 +257530,19 @@
       },
       "note": "outstanding_balance 2.482587->2.420511 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-16",
+      "event_date": "2025-08-16",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-16/1224499631.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-16|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第五次提示性公告"
     },
     {
       "bond_code": "127061.SZ",
@@ -257995,6 +258259,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-20",
+      "event_date": "2025-08-20",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-20/1224518763.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-20|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第七次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 4.456108
       },
@@ -258259,6 +258536,19 @@
       },
       "note": "outstanding_balance 2.186602->1.902308 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-21",
+      "event_date": "2025-08-21",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-21/1224524684.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-21|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第八次提示性公告"
     },
     {
       "before_fields": {
@@ -258555,6 +258845,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-22",
+      "event_date": "2025-08-22",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-22/1224531129.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的第九次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-22|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的第九次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.769779
       },
@@ -258819,6 +259122,19 @@
       },
       "note": "outstanding_balance 1.849348->1.729492 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113046.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-08-23",
+      "event_date": "2025-08-23",
+      "fields": {
+        "call_redemption_price": 100.0477
+      },
+      "note": "赎回价 100.048 | https://static.cninfo.com.cn/finalpage/2025-08-23/1224554857.PDF",
+      "raw_title": "金田股份关于实施“金铜转债”赎回暨摘牌的最后一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113046.SH|2025-08-23|call_redemption|金田股份关于实施“金铜转债”赎回暨摘牌的最后一次提示性公告"
     },
     {
       "before_fields": {
@@ -268028,6 +268344,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-09",
+      "event_date": "2025-10-09",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-09/1224697589.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-09|call_redemption|关于实施“春秋转债”赎回暨摘牌的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.513807
       },
@@ -268236,6 +268565,19 @@
       },
       "note": "outstanding_balance 2.921064->2.795737 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-10",
+      "event_date": "2025-10-10",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-10/1224701524.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-10|call_redemption|关于实施“春秋转债”赎回暨摘牌的第一次提示性公告"
     },
     {
       "before_fields": {
@@ -268530,6 +268872,19 @@
       },
       "note": "conversion_price 56.25->56.14 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-11",
+      "event_date": "2025-10-11",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-11/1224706010.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-11|call_redemption|关于实施“春秋转债”赎回暨摘牌的第二次提示性公告"
     },
     {
       "before_fields": {
@@ -268966,6 +269321,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-14",
+      "event_date": "2025-10-14",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-14/1224708181.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-14|call_redemption|关于实施“春秋转债”赎回暨摘牌的第三次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 0.525748
       },
@@ -269286,6 +269654,19 @@
       },
       "note": "outstanding_balance 2.032189->1.78629 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-15",
+      "event_date": "2025-10-15",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-15/1224710744.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-15|call_redemption|关于实施“春秋转债”赎回暨摘牌的第四次提示性公告"
     },
     {
       "before_fields": {
@@ -269622,6 +270003,19 @@
       },
       "note": "outstanding_balance 1.78629->1.542577 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-16",
+      "event_date": "2025-10-16",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-16/1224713080.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-16|call_redemption|关于实施“春秋转债”赎回暨摘牌的第五次提示性公告"
     },
     {
       "before_fields": {
@@ -269973,6 +270367,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-17",
+      "event_date": "2025-10-17",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-17/1224715903.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第六次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-17|call_redemption|关于实施“春秋转债”赎回暨摘牌的第六次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 5.434464
       },
@@ -270167,6 +270574,19 @@
       },
       "note": "outstanding_balance 0.936763->0.196448 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-18",
+      "event_date": "2025-10-18",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-18/1224718271.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-18|call_redemption|关于实施“春秋转债”赎回暨摘牌的第七次提示性公告"
     },
     {
       "before_fields": {
@@ -270519,6 +270939,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-21",
+      "event_date": "2025-10-21",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-21/1224720349.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-21|call_redemption|关于实施“春秋转债”赎回暨摘牌的第八次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.016658
       },
@@ -270741,6 +271174,19 @@
       },
       "note": "outstanding_balance 1.405789->1.359321 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-22",
+      "event_date": "2025-10-22",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-22/1224722735.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第九次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-22|call_redemption|关于实施“春秋转债”赎回暨摘牌的第九次提示性公告"
     },
     {
       "before_fields": {
@@ -271078,6 +271524,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-23",
+      "event_date": "2025-10-23",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-23/1224724877.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-23|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.924369
       },
@@ -271344,6 +271803,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-24",
+      "event_date": "2025-10-24",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-24/1224727572.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-24|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十一次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.18629
       },
@@ -271552,6 +272024,19 @@
       },
       "note": "conversion_price 0.12->0.1 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-25",
+      "event_date": "2025-10-25",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-25/1224731227.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-25|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十二次提示性公告"
     },
     {
       "bond_code": "127111.SZ",
@@ -271778,6 +272263,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-28",
+      "event_date": "2025-10-28",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-28/1224743305.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-28|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十三次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 12.33061
       },
@@ -271960,6 +272458,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-29",
+      "event_date": "2025-10-29",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-29/1224750992.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-29|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十四次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 10.562209
       },
@@ -272128,6 +272639,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-30",
+      "event_date": "2025-10-30",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-30/1224761559.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-30|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十五次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 10.035652
       },
@@ -272282,6 +272806,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-10-31",
+      "event_date": "2025-10-31",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-10-31/1224770742.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十六次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-10-31|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十六次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 9.594285
       },
@@ -272433,6 +272970,19 @@
       },
       "note": "outstanding_balance 13.848888->13.047274 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-11-01",
+      "event_date": "2025-11-01",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-11-01/1224780110.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-11-01|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十七次提示性公告"
     },
     {
       "before_fields": {
@@ -272714,6 +273264,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-11-04",
+      "event_date": "2025-11-04",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-11-04/1224782750.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-11-04|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十八次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 7.164331
       },
@@ -272936,6 +273499,19 @@
       },
       "note": "outstanding_balance 0.919238->0.90437 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-11-05",
+      "event_date": "2025-11-05",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-11-05/1224785466.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的第十九次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-11-05|call_redemption|关于实施“春秋转债”赎回暨摘牌的第十九次提示性公告"
     },
     {
       "before_fields": {
@@ -273216,6 +273792,19 @@
       },
       "note": "outstanding_balance 8.449471->7.63681 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113667.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-11-06",
+      "event_date": "2025-11-06",
+      "fields": {
+        "call_redemption_price": 101.701
+      },
+      "note": "赎回价 101.701 | https://static.cninfo.com.cn/finalpage/2025-11-06/1224787835.PDF",
+      "raw_title": "关于实施“春秋转债”赎回暨摘牌的最后一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113667.SH|2025-11-06|call_redemption|关于实施“春秋转债”赎回暨摘牌的最后一次提示性公告"
     },
     {
       "before_fields": {
@@ -277747,6 +278336,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-04",
+      "event_date": "2025-12-04",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-04/1224848871.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-04|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.765515
       },
@@ -277971,6 +278573,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-05",
+      "event_date": "2025-12-05",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-05/1224850444.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-05|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第一次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.685431
       },
@@ -278165,6 +278780,19 @@
       },
       "note": "outstanding_balance 2.598461->2.110666 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-06",
+      "event_date": "2025-12-06",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-06/1224853014.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-06|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第二次提示性公告"
     },
     {
       "before_fields": {
@@ -278544,6 +279172,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-09",
+      "event_date": "2025-12-09",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-09/1224857291.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-09|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第三次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 2.961224
       },
@@ -278866,6 +279507,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-10",
+      "event_date": "2025-12-10",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-10/1224860604.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-10|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第四次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 2.67978
       },
@@ -279118,6 +279772,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-11",
+      "event_date": "2025-12-11",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-11/1224864663.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-11|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第五次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 2.621634
       },
@@ -279356,6 +280023,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-12",
+      "event_date": "2025-12-12",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-12/1224868340.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第六次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-12|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第六次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 2.511813
       },
@@ -279494,6 +280174,19 @@
       },
       "note": "outstanding_balance 1.093501->1.042051 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-13",
+      "event_date": "2025-12-13",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-13/1224872141.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-13|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第七次提示性公告"
     },
     {
       "before_fields": {
@@ -279720,6 +280413,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-16",
+      "event_date": "2025-12-16",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-16/1224877549.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的第八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-16|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的第八次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.917197
       },
@@ -279942,6 +280648,19 @@
       },
       "note": "outstanding_balance 1.809071->1.771441 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "113652.SH",
+      "confidence": "parsed",
+      "effective_date": "2025-12-17",
+      "event_date": "2025-12-17",
+      "fields": {
+        "call_redemption_price": 100.2904
+      },
+      "note": "余额 0.3亿 | 赎回价 100.29 | https://static.cninfo.com.cn/finalpage/2025-12-17/1224880780.PDF",
+      "raw_title": "伟明环保关于实施“伟24转债”赎回暨摘牌的最后一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113652.SH|2025-12-17|call_redemption|伟明环保关于实施“伟24转债”赎回暨摘牌的最后一次提示性公告"
     },
     {
       "before_fields": {
@@ -288632,6 +289351,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-03",
+      "event_date": "2026-03-03",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-03/1224992630.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-03|call_redemption|关于提前赎回“恒逸转债”的公告"
+    },
+    {
       "before_fields": {
         "conversion_price": 52.19
       },
@@ -288840,6 +289572,19 @@
       },
       "note": "conversion_price 46.68->20.68 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-04",
+      "event_date": "2026-03-04",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-04/1224993379.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第一次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-04|call_redemption|关于提前赎回“恒逸转债”的第一次提示性公告"
     },
     {
       "before_fields": {
@@ -289063,6 +289808,19 @@
       },
       "note": "outstanding_balance 11.71561->8.34104 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-05",
+      "event_date": "2026-03-05",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-05/1224995623.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第二次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-05|call_redemption|关于提前赎回“恒逸转债”的第二次提示性公告"
     },
     {
       "bond_code": "127113.SZ",
@@ -289316,6 +290074,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-06",
+      "event_date": "2026-03-06",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-06/1224997328.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第三次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-06|call_redemption|关于提前赎回“恒逸转债”的第三次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 9.013482
       },
@@ -289482,6 +290253,19 @@
       },
       "note": "outstanding_balance 6.861777->6.196417 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-09",
+      "event_date": "2026-03-09",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-09/1224999321.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第四次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-09|call_redemption|关于提前赎回“恒逸转债”的第四次提示性公告"
     },
     {
       "before_fields": {
@@ -289750,6 +290534,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-10",
+      "event_date": "2026-03-10",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-10/1225001469.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第五次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-10|call_redemption|关于提前赎回“恒逸转债”的第五次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 1.932807
       },
@@ -289958,6 +290755,19 @@
       },
       "note": "outstanding_balance 6.013167->4.858272 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-11",
+      "event_date": "2026-03-11",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-11/1225002935.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第六次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-11|call_redemption|关于提前赎回“恒逸转债”的第六次提示性公告"
     },
     {
       "before_fields": {
@@ -290252,6 +291062,19 @@
       },
       "note": "outstanding_balance 4.858272->4.320375 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-12",
+      "event_date": "2026-03-12",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-12/1225004727.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-12|call_redemption|关于提前赎回“恒逸转债”的第七次提示性公告"
     },
     {
       "before_fields": {
@@ -290618,6 +291441,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-13",
+      "event_date": "2026-03-13",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-13/1225006378.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-13|call_redemption|关于提前赎回“恒逸转债”的第八次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 7.405828
       },
@@ -290964,6 +291800,19 @@
       },
       "note": "outstanding_balance 3.834575->3.727351 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-16",
+      "event_date": "2026-03-16",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-16/1225008453.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第九次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-16|call_redemption|关于提前赎回“恒逸转债”的第九次提示性公告"
     },
     {
       "before_fields": {
@@ -291330,6 +292179,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-17",
+      "event_date": "2026-03-17",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-17/1225010779.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”的第十次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-17|call_redemption|关于提前赎回“恒逸转债”的第十次提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 5.507763
       },
@@ -291636,6 +292498,19 @@
       },
       "note": "outstanding_balance 2.651609->1.920467 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-18",
+      "event_date": "2026-03-18",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-18/1225013472.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”暨即将停止交易的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-18|call_redemption|关于提前赎回“恒逸转债”暨即将停止交易的重要提示性公告"
     },
     {
       "before_fields": {
@@ -291946,6 +292821,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-19",
+      "event_date": "2026-03-19",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-19/1225015807.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”暨即将停止交易的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-19|call_redemption|关于提前赎回“恒逸转债”暨即将停止交易的重要提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 3.42626
       },
@@ -292212,6 +293100,19 @@
       "source": "wind_asof"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-20",
+      "event_date": "2026-03-20",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-20/1225019271.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”暨即将停止转股的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-20|call_redemption|关于提前赎回“恒逸转债”暨即将停止转股的重要提示性公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 5.344375
       },
@@ -292447,6 +293348,19 @@
       },
       "note": "outstanding_balance 1.194881->0.926281 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-23",
+      "event_date": "2026-03-23",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-23/1225020769.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”暨即将停止转股的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-23|call_redemption|关于提前赎回“恒逸转债”暨即将停止转股的重要提示性公告"
     },
     {
       "before_fields": {
@@ -292685,6 +293599,19 @@
       },
       "note": "outstanding_balance 1.676026->1.444475 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-03-24",
+      "event_date": "2026-03-24",
+      "fields": {
+        "call_redemption_price": 100.88
+      },
+      "note": "余额 0.3亿 | 赎回价 100.88 | https://static.cninfo.com.cn/finalpage/2026-03-24/1225024932.PDF",
+      "raw_title": "关于提前赎回“恒逸转债”暨最后一个转股日的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-03-24|call_redemption|关于提前赎回“恒逸转债”暨最后一个转股日的重要提示性公告"
     },
     {
       "before_fields": {
@@ -298689,6 +299616,19 @@
       "source_event_key": "123250.SZ|2026-05-08|rating_change|铜陵精达特种电磁线股份有限公司公开发行可转换公司债券2026年跟踪评级报告"
     },
     {
+      "bond_code": "123250.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-08",
+      "event_date": "2026-05-08",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-08/1225281477.PDF",
+      "raw_title": "精达股份关于“精达转债”2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "123250.SZ|2026-05-08|rating_change|精达股份关于“精达转债”2026年跟踪评级结果的公告"
+    },
+    {
       "before_fields": {
         "outstanding_balance": 0.036845
       },
@@ -300360,6 +301300,20 @@
       "effective_date": "2026-05-19",
       "event_date": "2026-05-19",
       "fields": {
+        "credit_rating": "A",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-19/1225314236.PDF",
+      "raw_title": "长江精工钢结构（集团）股份有限公司主体与相关债项2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "110086.SH|2026-05-19|rating_change|长江精工钢结构（集团）股份有限公司主体与相关债项2026年度跟踪评级报告"
+    },
+    {
+      "bond_code": "110086.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-05-19",
+      "event_date": "2026-05-19",
+      "fields": {
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-05-19/1225314233.PDF",
@@ -301802,6 +302756,19 @@
       "effective_date": "2026-05-23",
       "event_date": "2026-05-23",
       "fields": {
+        "credit_rating": "A+"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-23/1225325520.PDF",
+      "raw_title": "关于可转换公司债券2026年度跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113054.SH|2026-05-23|rating_change|关于可转换公司债券2026年度跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "113054.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-05-23",
+      "event_date": "2026-05-23",
+      "fields": {
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-05-23/1225325534.PDF",
@@ -302991,6 +303958,19 @@
       },
       "note": "conversion_price 14.74->14.59 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "118013.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-05-27",
+      "event_date": "2026-05-27",
+      "fields": {
+        "credit_rating": "A"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-05-27/1225331842.PDF",
+      "raw_title": "道通科技关于“道通转债”跟踪信用评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "118013.SH|2026-05-27|rating_change|道通科技关于“道通转债”跟踪信用评级结果的公告"
     },
     {
       "bond_code": "118013.SH",
@@ -304443,6 +305423,19 @@
       "effective_date": "2026-06-03",
       "event_date": "2026-06-03",
       "fields": {
+        "credit_rating": "A+"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-03/1225345932.PDF",
+      "raw_title": "南京医药关于可转换公司债券2026年度跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "110098.SH|2026-06-03|rating_change|南京医药关于可转换公司债券2026年度跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "110098.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-03",
+      "event_date": "2026-06-03",
+      "fields": {
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-06-03/1225345936.PDF",
@@ -305632,6 +306625,20 @@
       },
       "note": "outstanding_balance 3.398208->3.247448 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "110087.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-09",
+      "event_date": "2026-06-09",
+      "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-09/1225358202.PDF",
+      "raw_title": "新疆天业股份有限公司关于“天业转债”2026年度跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "110087.SH|2026-06-09|rating_change|新疆天业股份有限公司关于“天业转债”2026年度跟踪评级结果的公告"
     },
     {
       "bond_code": "110087.SH",
@@ -308284,6 +309291,20 @@
       "source_event_key": "127082.SZ|2026-06-22|rating_change|公开发行可转换公司债券2026年跟踪评级报告"
     },
     {
+      "bond_code": "127108.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-22",
+      "event_date": "2026-06-22",
+      "fields": {
+        "credit_rating": "A+",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-22/1225377897.PDF",
+      "raw_title": "中节能太阳能股份有限公司主体与相关债项2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "127108.SZ|2026-06-22|rating_change|中节能太阳能股份有限公司主体与相关债项2026年度跟踪评级报告"
+    },
+    {
       "bond_code": "111000.SH",
       "confidence": "parsed",
       "effective_date": "2026-06-23",
@@ -308939,6 +309960,20 @@
       "source_event_key": "123150.SZ|2026-06-24|rating_change|北京九强生物技术股份有限公司相关债券2026年跟踪评级报告"
     },
     {
+      "bond_code": "123157.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-24",
+      "event_date": "2026-06-24",
+      "fields": {
+        "credit_rating": "A-",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-24/1225386433.PDF",
+      "raw_title": "北京科蓝软件系统股份有限公司主体及科蓝转债2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123157.SZ|2026-06-24|rating_change|北京科蓝软件系统股份有限公司主体及科蓝转债2026年度跟踪评级报告"
+    },
+    {
       "bond_code": "123194.SZ",
       "confidence": "parsed",
       "effective_date": "2026-06-24",
@@ -309318,6 +310353,19 @@
       "raw_title": "洛阳建龙微纳新材料股份有限公司相关债券2026年跟踪评级报告",
       "source": "cninfo",
       "source_event_key": "118032.SH|2026-06-25|rating_change|洛阳建龙微纳新材料股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
+      "bond_code": "118034.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-25",
+      "event_date": "2026-06-25",
+      "fields": {
+        "credit_rating": "A+"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-25/1225386393.PDF",
+      "raw_title": "晶科能源关于“晶能转债”跟踪信用评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "118034.SH|2026-06-25|rating_change|晶科能源关于“晶能转债”跟踪信用评级结果的公告"
     },
     {
       "bond_code": "118034.SH",
@@ -310367,6 +311415,20 @@
       "source_event_key": "113610.SH|2026-06-27|rating_change|灵康药业集团股份有限公司主体及“灵康转债”2026年度跟踪评级报告"
     },
     {
+      "bond_code": "113610.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-27",
+      "event_date": "2026-06-27",
+      "fields": {
+        "credit_rating": "A-",
+        "credit_rating_outlook": "负面"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225391828.PDF",
+      "raw_title": "关于“灵康转债”2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "113610.SH|2026-06-27|rating_change|关于“灵康转债”2026年跟踪评级结果的公告"
+    },
+    {
       "bond_code": "113615.SH",
       "confidence": "parsed",
       "effective_date": "2026-06-27",
@@ -310770,6 +311832,19 @@
       "raw_title": "关于广泰转债跟踪信用评级结果的公告",
       "source": "cninfo",
       "source_event_key": "127095.SZ|2026-06-27|rating_change|关于广泰转债跟踪信用评级结果的公告"
+    },
+    {
+      "bond_code": "127110.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-27",
+      "event_date": "2026-06-27",
+      "fields": {
+        "credit_rating": "A"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-27/1225390313.PDF",
+      "raw_title": "关于“广核转债”2026年跟踪信用评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "127110.SZ|2026-06-27|rating_change|关于“广核转债”2026年跟踪信用评级结果的公告"
     },
     {
       "bond_code": "127112.SZ",
@@ -311695,6 +312770,20 @@
       },
       "note": "conversion_price 52.3->52.15 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "123266.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "credit_rating": "A",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225399621.PDF",
+      "raw_title": "博士眼镜连锁股份有限公司主体与相关债项2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123266.SZ|2026-06-30|rating_change|博士眼镜连锁股份有限公司主体与相关债项2026年度跟踪评级报告"
     },
     {
       "bond_code": "127027.SZ",
@@ -314076,6 +315165,20 @@
       "effective_date": "2026-07-16",
       "event_date": "2026-07-16",
       "fields": {
+        "credit_rating": "A",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-07-16/1225427467.PDF",
+      "raw_title": "关于可转换公司债券2026年跟踪评级结果的公告",
+      "source": "cninfo",
+      "source_event_key": "123267.SZ|2026-07-16|rating_change|关于可转换公司债券2026年跟踪评级结果的公告"
+    },
+    {
+      "bond_code": "123267.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-16",
+      "event_date": "2026-07-16",
+      "fields": {
         "credit_rating_outlook": "稳定"
       },
       "note": "https://static.cninfo.com.cn/finalpage/2026-07-16/1225427466.PDF",
@@ -314246,22 +315349,6 @@
       },
       "note": "conversion_price 5.26->3.47 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
-    },
-    {
-      "before_fields": {
-        "conversion_price": 5.26
-      },
-      "bond_code": "127061.SZ",
-      "confidence": "parsed",
-      "effective_date": "2026-07-17",
-      "event_date": "2026-07-17",
-      "fields": {
-        "conversion_price": 3.47
-      },
-      "note": "转股价 5.26->3.47 | https://static.cninfo.com.cn/finalpage/2026-07-17/1225428696.PDF",
-      "raw_title": "关于向下修正美锦转债转股价格的公告",
-      "source": "cninfo",
-      "source_event_key": "127061.SZ|2026-07-17|down_reset_approved|关于向下修正美锦转债转股价格的公告"
     },
     {
       "bond_code": "113686.SH",

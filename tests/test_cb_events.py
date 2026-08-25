@@ -23,7 +23,7 @@ from convertible_bond.data_providers import BondTerms
 
 def test_classify_announcement_title_handles_core_event_types():
     assert classify_announcement_title("关于不提前赎回可转债的公告") == "call_no_redemption"
-    assert classify_announcement_title("关于实施赎回暨摘牌的公告") == "call_redemption"
+    assert classify_announcement_title("关于实施“阿拉转债”赎回暨摘牌的公告") == "call_redemption"
     assert classify_announcement_title("关于不向下修正转股价格的公告") == "down_reset_rejected"
     assert classify_announcement_title("董事会提议向下修正转股价格的公告") == "down_reset_proposed"
     assert classify_announcement_title("关于可转债转股价格调整的公告") == "conversion_price_adjusted"
@@ -39,7 +39,7 @@ def test_classify_announcement_title_handles_core_event_types():
 def test_parse_event_from_announcement_extracts_dates_and_status():
     event = parse_event_from_announcement(
         "118006.SH",
-        "关于实施赎回暨摘牌的公告，最后交易日为2026年4月27日，赎回日为2026年5月6日",
+        "关于实施“阿拉转债”赎回暨摘牌的公告，最后交易日为2026年4月27日，赎回日为2026年5月6日",
         date(2026, 4, 15),
         source="unit",
     )
@@ -71,7 +71,7 @@ def test_parse_event_from_call_redemption_body_uses_execution_dates():
     )
     event = parse_event_from_announcement(
         "118006.SH",
-        "关于实施赎回暨摘牌的公告",
+        "关于实施“阿拉转债”赎回暨摘牌的公告",
         date(2026, 4, 15),
         body=body,
     )
@@ -88,7 +88,7 @@ def test_parse_event_from_call_redemption_body_uses_price():
     )
     event = parse_event_from_announcement(
         "118006.SH",
-        "关于实施赎回暨摘牌的公告",
+        "关于实施“阿拉转债”赎回暨摘牌的公告",
         date(2026, 4, 15),
         body=body,
     )
@@ -667,3 +667,153 @@ def test_sync_events_and_apply_to_bundle(tmp_path):
     assert applied["updated"] == 1
     assert patched.call_status == "不强赎"
     assert patched.down_reset_block_until == date(2026, 10, 2)
+
+
+# ── 标的串号: 兄弟债公告不能变成本债的事件 ──
+
+class _SiblingAnnouncementProvider:
+    """同一发行人两只转债, cninfo 把兄弟债的摘牌公告也返回给本债。"""
+    name = "fake"
+
+    def list_bond_announcements(self, bond_code, start, end):
+        return [
+            {"title": "关于胜蓝转债赎回实施暨即将停止交易的重要提示性公告",
+             "date": "2024-11-28", "url": "u1"},
+            {"title": "关于不提前赎回胜蓝转02的公告", "date": "2026-05-19", "url": "u2"},
+        ]
+
+
+def test_sync_skips_sibling_bond_announcements_before_building_events(tmp_path):
+    """守卫只挡 patch 是不够的 —— 事件会经 apply_events_to_bundle 回写摘牌日。
+
+    实测这条路径曾把 15 只在市券的 delisting_date 从未来改成过去 (胜蓝转02
+    2031-08-28 → 2024-12-12), 准入把它们整批判成已退市, 而它们当天成交都在十万手以上。
+    """
+    from convertible_bond.cb_events import CBEventStore
+    from convertible_bond.cb_event_sync import sync_cb_events
+
+    store = CBEventStore(tmp_path / "events.json")
+    result = sync_cb_events(
+        _SiblingAnnouncementProvider(),
+        ["123258.SZ"],
+        event_store=store,
+        download_pdf=False,
+        bond_names={"123258.SZ": "胜蓝转02"},
+    )
+
+    titles = [e.raw_title for e in result["parsed_events"]]
+    assert titles == ["关于不提前赎回胜蓝转02的公告"], (
+        f"兄弟债公告不该变成本债事件, 实得: {titles}")
+
+
+def test_sync_keeps_announcements_that_name_no_bond(tmp_path):
+    """标题没点名任何转债时无从判断, 必须放行 —— 否则会误杀大量通用标题公告。"""
+    from convertible_bond.cb_events import CBEventStore
+    from convertible_bond.cb_event_sync import sync_cb_events
+
+    class _Generic:
+        name = "fake"
+
+        def list_bond_announcements(self, bond_code, start, end):
+            return [{"title": "关于提前赎回可转换公司债券的公告",
+                     "date": "2026-05-19", "url": "u"}]
+
+    result = sync_cb_events(_Generic(), ["123258.SZ"],
+                            event_store=CBEventStore(tmp_path / "e.json"),
+                            download_pdf=False, bond_names={"123258.SZ": "胜蓝转02"})
+    assert len(result["parsed_events"]) == 1
+
+
+# ── 「摘牌」「提前赎回」是多义词: 公告说的必须是本转债 ──────────────────────────
+#
+# 早期分类器只看关键词不看主语, 于是同一发行人当天的其它证券公告被判成本债摘牌/强赎,
+# 再经 apply_events_to_bundle 写进 last_trading_date/delisting_date。实测 12 只在市转债
+# (含兴业、上银两只银行转债) 被准入整体判死, 而它们当天成交都在十万手以上。
+
+@pytest.mark.parametrize("title", [
+    "上海银行关于优先股全部赎回及摘牌的公告",                       # 优先股, 不是转债
+    "中节能风力发电股份有限公司关于公开摘牌取得内蒙古古恒新能源有限责任公司100%股权的公告",   # 产权交易所摘牌
+    "武汉精测电子集团股份有限公司关于以公开摘牌方式受让控股子公司少数股东股权暨关联交易的公告",
+    "唐山冀东水泥股份有限公司2021年面向专业投资者公开发行公司债券(第一期)2026年本息兑付暨摘牌公告",
+    "浙江省建设投资集团股份有限公司2023年面向专业投资者公开发行可续期公司债券(第一期)兑付暨摘牌公告",
+    "山东高速路桥集团股份有限公司关于“22山路01”提前摘牌的公告",
+    "关于股东非公开发行可交换公司债券换股完成暨摘牌并拟解除剩余标的股票质押的公告",
+    "关于使用暂时闲置募集资金进行现金管理提前赎回的公告",            # 赎回的是理财产品
+])
+def test_delisting_and_call_require_the_title_to_be_about_a_convertible_bond(title):
+    assert classify_announcement_title(title) == "unknown", title
+
+
+@pytest.mark.parametrize("title, want", [
+    ("关于提前赎回“恒逸转债”的公告", "call_redemption"),
+    ("关于希望转债到期兑付暨摘牌的公告", "delisting"),
+    ("关于提前赎回可转换公司债券的公告", "call_redemption"),
+    # 转2/转02 这类简称不含「债」字, 必须单独认
+    ("关于精测转2到期兑付暨摘牌的公告", "delisting"),
+    ("关于胜蓝转02赎回登记日的公告", "call_redemption"),
+    ("申万宏源证券关于江西洪城环境股份有限公司不行使“洪城转债”提前赎回权利的核查意见",
+     "call_no_redemption"),
+])
+def test_genuine_convertible_bond_announcements_still_classify(title, want):
+    assert classify_announcement_title(title) == want
+
+
+def test_classifier_normalizes_whitespace_inside_titles():
+    """巨潮标题会带空格; 归一化下沉到分类器, 免得调用方各做一份而分叉。"""
+    assert classify_announcement_title("关于 晶瑞转债 到期兑付及摘牌的公告") == "delisting"
+
+
+# ── 同名先后两只债: 上市之前不可能发生它自己的摘牌 ──
+
+def _terms(**kw):
+    base = dict(sec_name="福能转债", underlying_code="600483.SH", conversion_price=10.0,
+                maturity_date=date(2031, 10, 13), listing_date=date(2025, 10, 30))
+    base.update(kw)
+    return BondTerms(**base)
+
+
+def test_events_before_listing_date_are_ignored():
+    """110099.SH 福能转债 2025-10-30 上市, 却挂着 2024-11 的同名旧债摘牌公告。
+
+    名字守卫对**同名**债天然无解, 日期能。这条不变量放在消费侧, 存量脏数据无需回洗即自愈。
+    """
+    terms = _terms()
+    stale = CBEvent(bond_code="110099.SH", event_date=date(2024, 11, 29),
+                    event_type="delisting", raw_title="福能股份关于“福能转债”到期兑付暨摘牌的公告",
+                    effective_end=date(2024, 11, 29))
+    got = apply_events_to_terms("110099.SH", terms, [stale],
+                                valuation_date=date(2026, 8, 24))
+    assert got.delisting_date is None
+
+
+def test_rating_events_before_listing_are_kept():
+    """初始评级报告本就早于上市, 不能被日期闸误杀。"""
+    terms = _terms()
+    rating = CBEvent(bond_code="110099.SH", event_date=date(2025, 9, 1),
+                     event_type="rating_change", raw_title="“福能转债”信用评级报告")
+    got = apply_events_to_terms("110099.SH", terms, [rating],
+                                valuation_date=date(2026, 8, 24))
+    assert got is not None          # 未被整体丢弃
+
+
+def test_call_event_without_a_parsed_date_does_not_set_last_trading_day():
+    """强赎公告到停止交易之间隔着法定提示期, "最后交易日 = 公告当天"恒为解析失败的信号。
+
+    恒逸转2 曾被一份泛称"可转换公司债券"的法律意见书 (讲的是兄弟债) 按公告日写成
+    2026-03-03 停止交易, 而它当天成交 326 万手。
+    """
+    terms = _terms(sec_name="恒逸转2", listing_date=date(2022, 8, 18))
+    vague = CBEvent(bond_code="127067.SZ", event_date=date(2026, 3, 3),
+                    event_type="call_redemption",
+                    raw_title="浙江天册律师事务所关于恒逸石化股份有限公司提前赎回可转换公司债券的法律意见书",
+                    effective_start=date(2026, 3, 3))
+    got = apply_events_to_terms("127067.SZ", terms, [vague],
+                                valuation_date=date(2026, 8, 24))
+    assert got.last_trading_date is None
+
+    # 真解析到的停止交易日 (晚于公告日) 必须照写
+    real = CBEvent(bond_code="127067.SZ", event_date=date(2026, 3, 3),
+                   event_type="call_redemption", raw_title="关于提前赎回“恒逸转2”的公告",
+                   effective_start=date(2026, 3, 24))
+    assert apply_events_to_terms("127067.SZ", terms, [real],
+                                 valuation_date=date(2026, 8, 24)).last_trading_date == date(2026, 3, 24)

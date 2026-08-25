@@ -53,8 +53,15 @@ BATCH_RESULT_COLUMNS = [
     "status",
     "parity",
     "conversion_premium",
+    "double_low",
+    "double_low_rank",
     "model_premium_to_parity",
+    "relative_deviation",
+    "market_median_deviation",
+    "cheapness_rank",
+    "cheapness_percentile",
     "opportunity_score",
+    "quality_score",
     "confidence",
     "risk_tags",
     "outstanding_balance",
@@ -71,6 +78,7 @@ BATCH_RESULT_COLUMNS = [
     "down_reset_edge_value",
     "down_reset_edge_pct",
     "down_reset_robust_edge_value",
+    "down_reset_edge_rank",
     "down_reset_edge_scenario_range",
     "down_reset_edge_worst_sigma",
     "down_reset_edge_worst_spread",
@@ -86,7 +94,7 @@ _CODE_SPLIT_RE = re.compile(r"[\s,;，；]+")
 _HEADER_TOKENS = {"code", "bond_code", "证券代码", "转债代码", "代码"}
 BATCH_RESULT_META_KEY = "_meta"
 LOW_RATING_PREFIXES = ("A", "BBB", "BB", "B", "CCC", "CC", "C")
-BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "转股折价", "需复核")
+BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "下修优势", "双低", "转股折价", "需复核")
 # ── 标签维度 ──────────────────────────────────────────────────────────────
 # 标签混了四类**性质不同**的关切, 却挤在一个扁平集合里驱动四个消费者 (展示 / 置信度 /
 # 批量页视图 / 策略 exclude_risk_tags), 于是调一个阈值会同时穿透四层。先给每个标签
@@ -834,6 +842,9 @@ def annotate_batch_result(row: dict, *,
         out.setdefault("risk_tags", [])
         out.setdefault("confidence", "低")
         out.setdefault("opportunity_score", float("nan"))
+        out.setdefault("quality_score", float("nan"))
+        out.setdefault("double_low", float("nan"))
+        out.setdefault("relative_deviation", float("nan"))
         out.setdefault("model_signal_status", "不可用")
         # 定价失败的行也要有分桶, 否则分桶不是全覆盖的划分 (GUI 分桶列会空白),
         # 而视图侧的"需复核"是包含它们的 —— 两边口径必须一致。
@@ -853,6 +864,12 @@ def annotate_batch_result(row: dict, *,
 
     risk_tags: list[str] = []
     score = 0.0
+    # 「质量分」= 机会分里与错定价**无关**的那部分 (评级档 + 大余额加分)。
+    # 单独记账是因为实测 92% 的行低估项恒为 0, 机会分完全由这部分和风险惩罚决定 ——
+    # 一只 115.6 亿的 AAA 银行转债 (dev +0.054, 比市场中位还贵) 曾靠它排进机会榜第 4。
+    # 拆出来只做**展示与审计**, 仍然照旧计入 score, 以免改动 opportunity_score 的数值
+    # 变成 rank_signal="score" 的默认选债行为变更。
+    quality_score = 0.0
     confidence_points = 100.0
 
     parity = s0 / k * 100.0 if s0 is not None and k and k > 0 else None
@@ -866,6 +883,9 @@ def annotate_batch_result(row: dict, *,
     if market is not None and parity and parity > 0:
         conversion_premium = market / parity - 1.0
         out["conversion_premium"] = conversion_premium
+        # 双低值 = 转债价格 + 转股溢价率x100 (越低越好)。口径与
+        # strategy_backtest._rank_signal_value("double_low") 逐字一致, 两边不得分叉。
+        out["double_low"] = market + conversion_premium * 100.0
         if conversion_premium < -0.03:
             risk_tags.append("转股折价")
             score += min(30.0, abs(conversion_premium) * 140.0)
@@ -894,6 +914,11 @@ def annotate_batch_result(row: dict, *,
         # "异常"踢出低估候选 —— 等于系统性删掉唯一的假设来源。
         anchor = market_median_deviation if market_median_deviation is not None else 0.0
         gap = deviation - anchor
+        # 相对偏差 = 这只债比全市场中位贵/便宜多少。这是**横截面**口径, 与随周期
+        # 在 +0.4%~+21.6% 之间摆动的绝对 deviation 不同, 它的分布形状跨 regime 稳定,
+        # 因此「低估候选」视图与排序都锚在它上面 (见 MIN_RELATIVE_CHEAPNESS)。
+        out["relative_deviation"] = gap
+        out["market_median_deviation"] = anchor
         if gap >= DEVIATION_ANOMALY_THRESHOLD:
             risk_tags.append("模型高估离群")
             confidence_points -= 25
@@ -939,6 +964,7 @@ def annotate_batch_result(row: dict, *,
             confidence_points -= 14.0
         elif balance >= 10.0:
             score += 2.0
+            quality_score += 2.0
     else:
         risk_tags.append("无余额")
         confidence_points -= 8.0
@@ -966,15 +992,34 @@ def annotate_batch_result(row: dict, *,
             confidence_points -= 7.0
 
     if rating:
-        if rating.startswith("AA+"):
+        # 一律走 _rating_score 归一, **不要再用裸前缀匹配**。历史上这里是自成一套的
+        # 前缀判断, 与准入层的 _rating_score 两套口径, 于是:
+        #   ① 阶梯倒挂: "AAA".startswith("AA+") 为假 → AAA 落到 +2.0 分支, 比 AA+ 的
+        #      +3.0 还低、与 AA 同分 (实测影响 15 只);
+        #   ② 带展望后缀的评级被误判: "AAsti" (AA/稳定) 三个 AA 分支全不匹配, 掉进
+        #      LOW_RATING_PREFIXES 的 "A" → 被打「低评级」并扣 8 分 12 置信度
+        #      (华峰转债 118071.SH / 联瑞转债 118064.SH), 而同一字符串在准入层
+        #      _rating_score("AAsti") 正确返回 16 (=AA)。
+        # 分档边界与修复前逐档等价 (低评级 <=> A+ 及以下), 只有上面两类错判被纠正。
+        rating_score = _rating_score(rating)
+        if rating_score is None:
+            pass                                # 无法识别的评级: 不加分也不打标签
+        elif rating_score >= _RATING_SCORES["AAA"]:
+            score += 3.5
+            quality_score += 3.5
+        elif rating_score >= _RATING_SCORES["AA+"]:
             score += 3.0
-        elif rating == "AA" or rating.startswith("AAA"):
+            quality_score += 3.0
+        elif rating_score >= _RATING_SCORES["AA"]:
             score += 2.0
-        elif rating.startswith("AA-"):
+            quality_score += 2.0
+        elif rating_score >= _RATING_SCORES["AA-"]:
             score += 0.5
-        elif rating.startswith(LOW_RATING_PREFIXES):
+            quality_score += 0.5
+        else:
             risk_tags.append("低评级")
             score -= 8.0
+            quality_score -= 8.0
             confidence_points -= 12.0
     else:
         risk_tags.append("无评级")
@@ -1040,6 +1085,7 @@ def annotate_batch_result(row: dict, *,
 
     out["risk_tags"] = _dedupe_tags(risk_tags)
     out["confidence"] = confidence
+    out["quality_score"] = quality_score
     # opportunity_score 是"模型低估程度"的复核排序信号, 用于筛选值得人工复核的标的;
     # 经全市场池回测其横截面排序对未来收益预测力≈0 (Rank-IC≈-0.05), 不是收益预测/买入
     # 排名。可用 convertible_bond.signal_eval 复验。NaN 表示无市价/理论价异常 (上层已处理)。
@@ -1056,17 +1102,76 @@ def annotate_batch_result(row: dict, *,
     return out
 
 
+def _selection_cutoff(n: int, percentile: float) -> int:
+    """取"最便宜的 percentile"时实际保留几行 —— 秩口径, 小批量有下限保护。"""
+    if n <= 0:
+        return 0
+    return min(n, max(MIN_VIEW_ROWS, math.ceil(percentile * n)))
+
+
+def _assign_cross_sectional_ranks(rows: list[dict]) -> list[dict]:
+    """就地写入横截面秩与分位 (0 / 0.0 = 本批最便宜), 返回同一个列表。
+
+    秩是**这一批**内部的精确名次, 不是对全市场的估计, 因此不设最小样本门槛 ——
+    与 median_deviation_of 的 <30 退化规则不同, 那里退化是因为中位数被当作市场水平
+    的估计量在用, 估计不准会静默污染标签; 而名次在任何批量大小下都良定义。
+    调用方要对"这批是不是有代表性"负责 (关注池/新债那种子集本就不该被当成市场)。
+    """
+    # (名次键, 分位键, 总数键, 取值字段, 是否越大越靠前)
+    for rank_key, pct_key, total_key, source, descending in (
+        ("cheapness_rank", "cheapness_percentile", "cheapness_rank_total",
+         "relative_deviation", False),
+        ("double_low_rank", "double_low_percentile", "double_low_rank_total",
+         "double_low", False),
+        ("down_reset_edge_rank", "down_reset_edge_percentile",
+         "down_reset_edge_rank_total", "down_reset_robust_edge_value", True),
+    ):
+        ranked: list[tuple[float, str, int]] = []
+        for idx, row in enumerate(rows):
+            if row.get("status") != "ok":
+                continue
+            value = finite_float(row.get(source))
+            if value is None:
+                continue
+            if descending:
+                value = -value          # 统一成"升序 = 越靠前越好"
+            # 并列按代码稳定排序, 免得同值行的名次随输入顺序漂移
+            ranked.append((value, str(row.get("bond_code") or ""), idx))
+        ranked.sort()
+        total = len(ranked)
+        for rank, (_value, _code, idx) in enumerate(ranked):
+            rows[idx][rank_key] = rank
+            rows[idx][pct_key] = rank / (total - 1) if total > 1 else 0.0
+            # 名次总数随行走, 这样 view_exclusion_reason 仍是**单行**判据 ——
+            # 它被 strategy_backtest._candidate_filter_reason 共用, 签名不能变。
+            rows[idx][total_key] = total
+        for row in rows:
+            row.setdefault(rank_key, None)
+            row.setdefault(pct_key, None)
+            row.setdefault(total_key, None)
+    # 名次到位后重算分桶 —— 单行标注时只有相对便宜度下限生效, 长度上限要等到这里。
+    for row in rows:
+        row["review_bucket"] = _review_bucket(row)
+    return rows
+
+
 def annotate_batch_results(results: Sequence[dict], *,
                            market_median_deviation: float | None = None) -> list[dict]:
     """补齐批量研究字段, 不改变输入列表.
 
     *market_median_deviation* 缺省时从这批结果自算 (样本 <30 则退回绝对阈值)。
     给关注池/新债这类小批量标注时, 应显式传主池的中位数, 否则自算出来的中位没有代表性。
+
+    横截面秩 (cheapness_rank / double_low_rank) 在这一层算 —— 单行的
+    ``annotate_batch_result`` 拿不到population, 「低估候选」「双低」两个视图的
+    长度上限就依赖它。因此**视图过滤前必须先过这个函数**
+    (``filter_batch_results_by_view`` 经 ``sort_batch_results_for_review`` 保证了这点)。
     """
     if market_median_deviation is None:
         market_median_deviation = median_deviation_of(results)
-    return [annotate_batch_result(row, market_median_deviation=market_median_deviation)
-            for row in results]
+    return _assign_cross_sectional_ranks(
+        [annotate_batch_result(row, market_median_deviation=market_median_deviation)
+         for row in results])
 
 
 def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
@@ -1084,7 +1189,84 @@ def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
     return sorted(annotated, key=key)
 
 
+# ── 「低估候选」的横截面口径 ────────────────────────────────────────────────
+#
+# 旧口径是 opportunity_score >= 8.0 —— 一个**绝对**阈值架在一个水平时变的量上。
+# 实测 2026-08-22 主池 280 只: 低估候选 1 只、转股折价 0 只, 页面默认打开等于空表。
+#
+# 根因: score 的低估项是 max(0, -deviation)*100, 而全市场中位 deviation = +18.7%,
+# 于是 258/280 (92%) 的行这一项恒为 0, 分数完全由评级/余额加分与风险惩罚决定 ——
+# 「机会分」在九成的债上度量的是**信用质量**而不是错定价 (秩相关 score vs deviation
+# 只有 -0.63, 纯错定价排序应为 -1.0)。
+#
+# 为什么换成分位而不是换个数: cb_valuation_history 的 20 期季度基线实测,
+#   中位偏差 (水平)     +0.4% ~ +21.6%, 摆幅 21.2pp  → 绝对阈值随周期整体塌缩/泛滥
+#   IQR (横截面离散度)   0.103 ~ 0.181, 摆幅  7.7pp
+#   p25 - 中位 (便宜尾)  -9.6pp ~ -5.4pp, 摆幅 4.2pp → 跨完整牛熊周期几乎不变
+# 便宜尾的**形状**稳定而水平不稳定, 所以判据必须锚在当期横截面上。
+#
+# 两道闸串联, 各自管一件事 —— 缺了任一道都会退化:
+#   ① 相对便宜度下限 MIN_RELATIVE_CHEAPNESS —— 「比市场中位便宜至少这么多」。
+#      取 5pp 是因为历史上 p25-中位 从未浅于 -5.4pp, 即该线在任何 regime 下都不松于
+#      "最便宜的四分之一"。**只有它**能表达"今天真的没有便宜货": 离散度塌掉时候选数
+#      诚实归零, 而单靠分位永远凑得满 15%。
+#   ② 名单长度上限 DEFAULT_UNDERVALUED_PERCENTILE —— 人工复核一次能看完的量。
+#      **只有它**能挡住反过来的那一天: 熊市谷底中位偏差压到 0 时闸① 会放行几百只。
+# 长度上限按**秩**而不是按分位阈值实现 (见 _selection_cutoff): 小批量 (关注池/新债/
+# 单元测试常见的个位数行) 下分位数没有意义, 秩仍然良定义, 且 MIN_VIEW_ROWS 保证
+# 小批量不会被 15% 削到只剩一行。
+DEFAULT_UNDERVALUED_PERCENTILE = 0.15
+MIN_RELATIVE_CHEAPNESS = 0.05
+# 长度上限的下限: 批量再小也至少保留这么多行, 免得 15% 在小样本上把名单削没。
+MIN_VIEW_ROWS = 10
+# 双低 = 转债价格 + 转股溢价率x100, 国内转债最通用的实操筛子; strategy_backtest 早已
+# 有 double_low 排序信号, 批量页此前既无列也无视图。同样用分位而非绝对值: 价格中枢
+# 与溢价中枢都随周期漂移 (今日主池市价中位 132.9, p95 297.7)。
+DEFAULT_DOUBLE_LOW_PERCENTILE = 0.15
+# 「下修优势」视图: 稳健下修优势 = sigma ±15% / 信用利差 ±100bp 四角点中最差的
+# (理论价 − 市价)。口径与 strategy_backtest 的 down_reset_robust_edge 排序信号、
+# 以及 PDEStrategyConfig.min_down_reset_edge_value=0.0 的门槛完全一致。
+#
+# 这里的零点**是有意义的**, 不同于机会分的 8.0: 它表示"即便按最不利的 nuisance 参数,
+# 模型给的价仍高于你要付的价"。所以这个视图在贵市场里合法地变空 (实测 2026-08-22
+# 主池 280 只离线复算, 14 只为正 = 5%), 那是信号在说话, 不是判据坏了。仍加长度上限,
+# 是为了反过来的那一天 —— 谷底时 5% 会变成几百只。
+DEFAULT_DOWN_RESET_EDGE_PERCENTILE = 0.15
+# 旧的绝对分数阈值。**保留但不再驱动视图** —— view_exclusion_reason 的
+# undervalued_score_threshold 入参仍然接受它, 供旧快照复现与对照实验使用。
 DEFAULT_UNDERVALUED_SCORE_THRESHOLD = 8.0
+
+
+def _legacy_score_gate(row: dict, threshold: float) -> str | None:
+    """旧的绝对机会分判据。仅在调用方显式传阈值时启用, 见 view_exclusion_reason。"""
+    score = finite_float(row.get("opportunity_score"))
+    if score is None:
+        return "缺少机会分"
+    if score < threshold:
+        return f"机会分 {score:.1f} < {threshold:.1f}"
+    return None
+
+
+def _cross_sectional_cheapness_gate(row: dict) -> str | None:
+    """「低估候选」的当期横截面判据: 相对便宜度下限 + 名单长度上限。
+
+    两道闸的分工与实测依据见 MIN_RELATIVE_CHEAPNESS / DEFAULT_UNDERVALUED_PERCENTILE
+    的注释。这里只做判定, 不做估计 —— 相对偏差与名次都已由 annotate_batch_results
+    在有 population 的那一层算好。
+    """
+    relative = finite_float(row.get("relative_deviation"))
+    if relative is None:
+        return "缺少相对偏差"
+    if relative > -MIN_RELATIVE_CHEAPNESS:
+        return (f"相对市场中位 {relative * 100:+.1f}pp, "
+                f"未便宜过 {MIN_RELATIVE_CHEAPNESS * 100:.0f}pp")
+    rank = finite_float(row.get("cheapness_rank"))
+    total = finite_float(row.get("cheapness_rank_total"))
+    if rank is not None and total is not None:
+        cutoff = _selection_cutoff(int(total), DEFAULT_UNDERVALUED_PERCENTILE)
+        if rank >= cutoff:
+            return f"便宜度排第 {int(rank) + 1}/{int(total)}, 不在最便宜的 {cutoff} 名内"
+    return None
 
 
 def view_exclusion_reason(
@@ -1105,20 +1287,60 @@ def view_exclusion_reason(
     if view_name == "综合机会":
         return None
     if view_name == "低估候选":
-        threshold = (DEFAULT_UNDERVALUED_SCORE_THRESHOLD
-                     if undervalued_score_threshold is None
-                     else float(undervalued_score_threshold))
         if not ok:
             return "定价未成功"
-        score = finite_float(row.get("opportunity_score"))
-        if score is None:
-            return "缺少机会分"
-        if score < threshold:
-            return f"机会分 {score:.1f} < {threshold:.1f}"
+        if undervalued_score_threshold is not None:
+            # legacy 口径: 显式传阈值时仍走旧的绝对机会分判据, 供旧快照复现与对照实验。
+            reason = _legacy_score_gate(row, float(undervalued_score_threshold))
+            if reason is not None:
+                return reason
+        else:
+            reason = _cross_sectional_cheapness_gate(row)
+            if reason is not None:
+                return reason
         if row.get("confidence") not in {"高", "中"}:
             return "置信度不足"
         if "转股折价" in tags:
             return "转股折价单独归类"
+        blocking = tags & _BLOCKING_TAGS
+        if blocking:
+            return "拦截标签 " + "/".join(sorted(blocking))
+        return None
+    if view_name == "下修优势":
+        if not ok:
+            return "定价未成功"
+        edge = finite_float(row.get("down_reset_robust_edge_value"))
+        if edge is None:
+            # 批量跑时没开 compute_pde_signals, 或该债市价反解不出隐含下修强度
+            status = str(row.get("pde_down_reset_signal_status") or "")
+            return ("市价反解不出隐含下修强度" if status == "no_implied_solution"
+                    else "未计算 PDE 下修信号")
+        if edge <= 0:
+            return f"最差角点优势 {edge:+.1f} 元, 不为正"
+        rank = finite_float(row.get("down_reset_edge_rank"))
+        total = finite_float(row.get("down_reset_edge_rank_total"))
+        if rank is not None and total is not None:
+            cutoff = _selection_cutoff(int(total), DEFAULT_DOWN_RESET_EDGE_PERCENTILE)
+            if rank >= cutoff:
+                return f"优势排第 {int(rank) + 1}/{int(total)}, 不在最强的 {cutoff} 名内"
+        blocking = tags & _BLOCKING_TAGS
+        if blocking:
+            return "拦截标签 " + "/".join(sorted(blocking))
+        return None
+    if view_name == "双低":
+        if not ok:
+            return "定价未成功"
+        value = finite_float(row.get("double_low"))
+        if value is None:
+            return "缺少双低值"
+        rank = finite_float(row.get("double_low_rank"))
+        total = finite_float(row.get("double_low_rank_total"))
+        if rank is not None and total is not None:
+            cutoff = _selection_cutoff(int(total), DEFAULT_DOUBLE_LOW_PERCENTILE)
+            if rank >= cutoff:
+                return f"双低 {value:.0f} 排第 {int(rank) + 1}/{int(total)}, 不在最低 {cutoff} 名内"
+        # 双低是纯市场量 (价格 + 溢价), 不含模型输出, 因此**不**加置信度闸 ——
+        # 那是模型可信度, 与这个筛子无关。可交易性/数据质量的拦截标签仍然生效。
         blocking = tags & _BLOCKING_TAGS
         if blocking:
             return "拦截标签 " + "/".join(sorted(blocking))
@@ -1142,8 +1364,8 @@ def filter_batch_results_by_view(
 ) -> list[dict]:
     """按批量页视图过滤结果, 并保持研究排序.
 
-    *undervalued_score_threshold* 仅作用于"低估候选"视图; None 时使用
-    ``DEFAULT_UNDERVALUED_SCORE_THRESHOLD``。
+    *undervalued_score_threshold* 仅作用于"低估候选"视图; **None (默认) 时走当期
+    横截面口径** (相对便宜度下限 + 名单长度上限), 显式传值才回到旧的绝对机会分阈值。
     """
     rows = sort_batch_results_for_review(results)
     return [
@@ -1151,6 +1373,43 @@ def filter_batch_results_by_view(
         if view_exclusion_reason(
             row, view, undervalued_score_threshold=undervalued_score_threshold) is None
     ]
+
+
+def sort_batch_results_for_view(results: Sequence[dict], view: str | None) -> list[dict]:
+    """按视图**该看的顺序**排列 —— 展示层用, 不改变 sort_batch_results_for_review。
+
+    为什么要分成两个函数: ``sort_batch_results_for_review`` 的顺序 (机会分降序) 是
+    ``strategy_backtest`` 在 ``rank_signal="score"`` 下逐行依赖的历史行为, 也是旧策略
+    快照可复现的前提, 动它就是默认选债行为变更。而批量页需要的顺序恰恰不是机会分 ——
+    实测 92% 的行机会分与错定价无关, 按它排会把 115.6 亿的 AAA 银行转债 (比市场中位
+    还贵) 送上机会榜第 4。所以展示排序单独一份, 各自服务各自的消费者。
+
+    ⚠️ 本函数**只排序, 不重新标注**。输入必须是已经过 ``annotate_batch_results``
+    的行 —— 典型用法是接在 ``filter_batch_results_by_view`` 之后。在过滤后的子集上
+    重新标注会把中位锚与横截面名次算到**子集**上 (38 只的中位不是市场的中位),
+    相对偏差和视图归属会随之整体漂移。
+    """
+    rows = list(results)
+    view_name = view if view in BATCH_REVIEW_VIEWS else "综合机会"
+
+    def by(key: str):
+        def sort_key(row: dict):
+            value = finite_float(row.get(key))
+            return (
+                0 if row.get("status") == "ok" else 1,
+                value if value is not None else float("inf"),
+                str(row.get("bond_code") or ""),
+            )
+        return sort_key
+
+    if view_name == "双低":
+        return sorted(rows, key=by("double_low"))
+    if view_name == "下修优势":
+        return sorted(rows, key=by("down_reset_edge_rank"))
+    if view_name in {"综合机会", "低估候选", "转股折价"}:
+        # 相对偏差升序 = 相对全市场最便宜的在前
+        return sorted(rows, key=by("relative_deviation"))
+    return rows                                   # 需复核: 保持研究排序
 
 
 def save_batch_results_cache(
@@ -1260,6 +1519,8 @@ def _restore_result_row(row: dict) -> dict:
     for key in (
         "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
         "conversion_premium", "model_premium_to_parity", "opportunity_score",
+        "quality_score", "double_low", "relative_deviation",
+        "market_median_deviation", "cheapness_percentile",
         "undervaluation_rate", "no_down_price", "down_reset_uplift",
         "implied_p_down", "effective_p_down_1y_prob", "implied_p_down_1y_prob",
         "p_down_gap", "down_reset_probability_gap", "down_reset_sensitivity",
@@ -1310,8 +1571,13 @@ def _review_bucket(row: dict) -> str:
         return "模型存疑"
     if "转股折价" in tags:
         return "转股折价"
-    score = finite_float(row.get("opportunity_score"))
-    if score is not None and score >= 8.0 and row.get("confidence") in {"高", "中"}:
+    # 「低估候选」的判据**只此一处**: 直接问 view_exclusion_reason, 不再复制一份阈值。
+    # 曾经这里硬编码 score >= 8.0 而视图另写一份, 于是改口径要记得改两处 —— 视图归属
+    # 分叉的老毛病 (见 view_exclusion_reason 的 docstring)。
+    #
+    # 注意单行标注时 cheapness_rank 还不存在 (population 在上一层), 此刻只有相对便宜度
+    # 下限生效; _assign_cross_sectional_ranks 排完名会再刷一次分桶补上长度上限。
+    if view_exclusion_reason(row, "低估候选") is None:
         return "低估候选"
     return "综合机会"
 

@@ -252,6 +252,34 @@ def test_price_from_provider_reports_down_reset_uplift(monkeypatch):
     assert result["pde_down_reset_signal_status"] == "not_computed"
 
 
+def test_batch_threaded_forwards_compute_pde_signals(monkeypatch):
+    """批量线程入口必须把 compute_pde_signals 透传到 price_from_provider。
+
+    它走的是 ``**pricer_overrides`` 这条**没有形参兜底**的路 —— 拼错一个字母不会报错,
+    只会静默不算。批量页此前根本没传, 于是全池跑完整 PDE 网格却把稳健下修优势整批丢掉
+    (实测缓存里 down_reset_robust_edge_value 有值 0/280)。
+    """
+    seen = []
+    real = pricing_api.price_from_provider
+
+    def spy(provider, bond_code, **kwargs):
+        seen.append(kwargs.get("compute_pde_signals"))
+        return real(provider, bond_code, **kwargs)
+
+    monkeypatch.setattr(pricing_api, "price_from_provider", spy)
+    provider = SimplePricingProvider(_base_terms())
+
+    pricing_api.batch_price_from_provider_threaded(
+        provider, ["113001.SH"], valuation_date=date(2026, 5, 20), M=60, N=60)
+    assert seen == [None]                      # 不传时保持关闭, 不白烧 PDE
+
+    seen.clear()
+    pricing_api.batch_price_from_provider_threaded(
+        provider, ["113001.SH"], valuation_date=date(2026, 5, 20), M=60, N=60,
+        compute_pde_signals=True)
+    assert seen == [True]
+
+
 def test_price_from_provider_computes_pde_down_reset_signals_on_demand(monkeypatch):
     calls = {}
 
