@@ -6532,13 +6532,12 @@
   },
   "111026.SH": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-25T19:28:14",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
-        "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "Wind:admission_status": "2026-08-25T09:31:50"
       },
-      "source": "akshare:new_issues"
+      "source": "Wind"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -6587,7 +6586,7 @@
     "tradable_date": "2026-08-25",
     "trading_status": "tradable",
     "underlying_code": "605123.SH",
-    "underlying_name": "派克新材",
+    "underlying_name": null,
     "underlying_pct_change": null,
     "underlying_status": null,
     "underlying_trade_status": null
@@ -26023,13 +26022,12 @@
   },
   "118076.SH": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-25T19:28:14",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
-        "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "Wind:admission_status": "2026-08-25T09:31:50"
       },
-      "source": "akshare:new_issues"
+      "source": "Wind"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -26078,7 +26076,7 @@
     "tradable_date": "2026-08-26",
     "trading_status": "tradable",
     "underlying_code": "688605.SH",
-    "underlying_name": "先锋精科",
+    "underlying_name": null,
     "underlying_pct_change": null,
     "underlying_status": null,
     "underlying_trade_status": null
@@ -42240,13 +42238,12 @@
   },
   "123281.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-25T19:28:14",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
-        "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "Wind:admission_status": "2026-08-25T09:31:50"
       },
-      "source": "akshare:new_issues"
+      "source": "Wind"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -42295,20 +42292,19 @@
     "tradable_date": "2026-08-24",
     "trading_status": "tradable",
     "underlying_code": "301565.SZ",
-    "underlying_name": "中仑新材",
+    "underlying_name": null,
     "underlying_pct_change": null,
     "underlying_status": null,
     "underlying_trade_status": null
   },
   "123282.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-25T19:28:14",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
-        "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "Wind:admission_status": "2026-08-25T09:31:50"
       },
-      "source": "akshare:new_issues"
+      "source": "Wind"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -42357,20 +42353,19 @@
     "tradable_date": null,
     "trading_status": "pending",
     "underlying_code": "300953.SZ",
-    "underlying_name": "震裕科技",
+    "underlying_name": null,
     "underlying_pct_change": null,
     "underlying_status": null,
     "underlying_trade_status": null
   },
   "123283.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-25T19:28:14",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
-        "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "Wind:admission_status": "2026-08-25T09:31:50"
       },
-      "source": "akshare:new_issues"
+      "source": "Wind"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -42419,20 +42414,19 @@
     "tradable_date": null,
     "trading_status": "pending",
     "underlying_code": "301459.SZ",
-    "underlying_name": "丰茂股份",
+    "underlying_name": null,
     "underlying_pct_change": null,
     "underlying_status": null,
     "underlying_trade_status": null
   },
   "123284.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-25T19:28:14",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
-        "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "Wind:admission_status": "2026-08-25T09:31:50"
       },
-      "source": "akshare:new_issues"
+      "source": "Wind"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -42481,7 +42475,7 @@
     "tradable_date": null,
     "trading_status": "pending",
     "underlying_code": "301628.SZ",
-    "underlying_name": "强达电路",
+    "underlying_name": null,
     "underlying_pct_change": null,
     "underlying_status": null,
     "underlying_trade_status": null
@@ -59539,7 +59533,7 @@
   },
   "_bundle_meta": {
     "n_bonds": 1058,
-    "updated_at": "2026-08-25T19:42:20"
+    "updated_at": "2026-08-25T19:28:14"
   },
   "q18082207.IME": {
     "_meta": {
