@@ -62,6 +62,7 @@ from .batch_watchlist import (
     _refresh_watchlist_with_upcoming,
     _render_watchlist_table,
     _show_events_banner_full,
+    run_new_issue_sync_async,
 )
 from ...market_time import market_today
 
@@ -347,6 +348,23 @@ def _create_table_section(parent, *, row, title, with_summary=False):
 
 
 def _run_batch(app):
+    """'批量重算' 按钮: 先窄同步新债上市日 (秒级), 再跑全池定价.
+
+    准入判定读的是 cb_data 里的 ``listing_date``, 而它只有全量条款同步才会写 —— 不先刷
+    一下, 昨天挂牌的新债今天照样被判成"已发行未上市"而进不了主池。窄同步只碰那几只新债,
+    相对分钟级的全池取数可忽略。失败不阻断: 退回按现有条款库跑。
+    """
+    run_new_issue_sync_async(app, then=lambda synced: _run_batch_now(app, reload_terms=synced))
+
+
+def _run_batch_now(app, *, reload_terms: bool = False):
+    if reload_terms:
+        cache = getattr(app, "terms_cache", None)
+        if hasattr(cache, "reload"):
+            try:
+                cache.reload()
+            except Exception as exc:
+                logger.warning("批量重算前重载条款库失败: %s", exc)
     codes, excluded = split_batch_codes_from_cache(
         getattr(app, "terms_cache", None),
         admission_config=_batch_admission_config(app),

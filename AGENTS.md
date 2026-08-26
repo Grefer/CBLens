@@ -38,6 +38,7 @@ CBLens/
 │   ├── cb_events.py            # 事件模型与解析
 │   ├── cb_event_sync.py        # 公告 → 事件同步
 │   ├── cb_data_sync.py         # Wind → cb_data.json 同步
+│   ├── new_issue_sync.py       # 新债窄同步 (上市日; akshare, 不依赖 Wind)
 │   ├── admission_status.py     # 停牌/强赎/ST 状态刷新
 │   ├── down_reset_overrides.py # 下修覆盖 + 三 regime 强度解析
 │   ├── watchlist.py            # 关注池管理
@@ -309,6 +310,27 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   **每次同步都被静默跳过** —— 实测 26 只 (主池 21 只) 从未刷新过, 其中科蓝转债本地 `AA-` /
   第三方 `A-`, 差 3 档 (信用利差下限 3.50% vs 8.00%)。`sync_ratings.normalize_rating` 只剥
   已知后缀, 剥完必须精确命中 `_RANK`, 否则宁可返回 None 也不猜。
+- **新债的上市日走窄同步 `cb-sync-new-issues`, 不要靠全量条款同步**。`listing_date` 全库只有
+  `get_bond_terms` 一条写入通道 (Wind `ipo_date`), 而挂牌是**每天**发生的事 —— 两次全量同步
+  之间新债一直空着上市日, 于是昨天挂牌的债今天仍被判「已发行未上市」而进不了主池。GUI 的
+  「扫新债」原本靠"条款库超 1 天就提示跑 `--incremental`"兜底, 三处同时失效: ① 判龄读的是
+  `bundle_meta()['updated_at']`, 而**任何**一次写盘都把它推到今天 (每日状态刷新即可),
+  提示永不弹出 —— 这是 `_meta.fetched_at` 那个陷阱的第三个消费者; ② 就算弹出,
+  `--incremental` 按 `is_stale(code, 7, source="Wind")` 判, **恰好跳过**刚被全量同步抓过的
+  那批新债, 同时去取几百只无关的债 (实测 2026-08-25: 跳过 4 只、真取 741 只); ③ 没装 WindPy
+  连提示都不给。真实规模是**每天几只** (实测全库 1058 只里在途新债 4 只), 所以判据不该是
+  "库有多旧"而是"这几只债的上市日变了没" —— 直接同步, 不做闸门。
+  取数走 akshare `bond_zh_cov` (一次调用 ~2s, 不需要 Wind), 口径实测与 Wind 完全一致:
+  `上市时间` == `listing_date` **968/968**, `申购日期` == `issue_date` **974/974**。三条约定:
+  写盘 source 桶固定 `akshare:new_issues` (进 `Wind` 那格会同时毒化 `--incremental` 与
+  `terms_as_of`); 远端为空时**既不兜底也不清空** (`listing_date` 非空正是"已挂牌"的判据,
+  伪造一个就让新债带着空市价混进主池); 目标集只看 `issue_date`/`listing_date`, 不看
+  `trading_status`/`is_tradable` (自我确认)。
+- **DataFrame 单元格一律走 `safe_date`, 不要用 `to_date`**。`pandas.NaT` 是 `datetime` 的
+  **子类**且 `bool(NaT) is True` —— `to_date` 会原样放行, `x or fallback` 也不回落。实测
+  akshare provider 的 `listing_date=listing_dt or issue_dt` 因此对**还没挂牌的新债**产出
+  `NaT` 或起息日: 两种结果都让 `is_issued_pending_listing` 判成"已上市", 新债于是带着空市价
+  进主池、同时从「扫新债」里消失。
 - Wind 字段用"候选字段逐个尝试"的兼容模式，不要假设所有终端字段一致
   (例: `carrydate` → `issue_firstissue`)。
 
@@ -402,6 +424,7 @@ cb-valuation                                # 大类估值/择时信号 (--recor
 cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M  # 策略回测 (--cache-dir 复跑提速)
 cb-calibrate-down-reset                     # 从 cb_events 校准下修博弈常量
 cb-sync-ratings --apply                     # 从 akshare 第三方刷新信用评级 (每月; Wind 的是发行时冻结值)
+cb-sync-new-issues --apply                  # 新债上市日窄同步 (每天; 秒级, 不需要 Wind)
 cb-data-doctor                              # 数据体检 (每天跑批**前**先跑; --online 加外部对照)
 cb-repair-events --apply                    # 存量迁移: 用当前解析器重放事件表与 patch 库
 cb-repair-balance-patches --apply           # 一次性存量迁移: 清洗被赎回门槛条款污染的余额 patch

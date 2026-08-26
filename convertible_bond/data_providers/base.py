@@ -85,6 +85,36 @@ def to_date(v: Any) -> date | None:
     return date.fromisoformat(str(v)[:10])
 
 
+def safe_date(v: Any) -> date | None:
+    """宽松版 :func:`to_date`: 空值 / ``NaT`` / ``--`` / 解析失败一律 None, 不抛也不猜.
+
+    ``pandas.NaT`` 需要单独提防 —— 它是 ``datetime`` 的**子类**且 ``bool(NaT) is True``,
+    于是 ``to_date()`` 原样把它当日期返回、``x or fallback`` 也不会回落。一个 NaT 就这样
+    一路混进 ``listing_date``, 而"上市日非空"正是 :func:`is_issued_pending_listing` 判定
+    "已经挂牌了"的依据。判据用"唯一不等于自身的值"同时罩住 NaN 与 NaT。
+
+    数据源返回的 DataFrame 单元格一律走这个函数; ``to_date`` 留给已经清洗过的输入。
+    """
+    if v is None:
+        return None
+    try:
+        if v != v:
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    text = str(v).strip()
+    if not text or text in {"--", "-", "None", "NaT", "nan", "NaN"}:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
 def _add_months(d: date, months: int) -> date:
     month = d.month - 1 + months
     year = d.year + month // 12

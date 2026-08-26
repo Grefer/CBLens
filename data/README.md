@@ -58,6 +58,7 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 | 场景 | 命令 |
 | --- | --- |
 | 月初定期 (新债/退市/下修) | `python -m convertible_bond.cli.sync_tradable` |
+| 每日新债上市日 (不需要 Wind) | `python -m convertible_bond.cli.sync_new_issues --apply` |
 | 每日状态字段 (停牌/强赎/ST/成交额等) | `python -m convertible_bond.cli.sync_admission_status` |
 | 公告事件 (下修/强赎/回售等) | `python -m convertible_bond.cli.sync_events --apply` |
 | 查看公开交易主池报告 | `python -m convertible_bond.cli.screen_pool` |
@@ -74,6 +75,15 @@ runtime 会优先从此文件读转债基础信息，避免每次启动都打 Wi
 - `issue_date`: 发行日/起息日（Wind `carrydate`），票息期与应计利息的锚点；到期日恒为它的 N 周年
 - `listing_date`: 上市/挂牌日期（Wind `ipo_date`，即首个交易日），通常比 `issue_date` 晚 2~4 周；
   已发行未上市的新债该字段为空
+
+> `listing_date` 在 Wind 侧**只有全量 `sync_tradable` 一条写入通道** —— 每日状态刷新、
+> 事件同步、评级同步都不带这个字段。而新债挂牌是每天发生的事，两次全量同步之间它会一直
+> 空着，于是昨天挂牌的新债今天仍被判成「已发行未上市」而进不了主池。窄同步
+> `sync_new_issues` 专门补这个缺口：只碰那几只在途新债（实测每天 4 只上下），数据取自
+> akshare `bond_zh_cov` 的 `上市时间`，一次调用秒级完成且**不需要 Wind**。
+> 口径实测与 Wind 完全一致（2026-08-25 全库交叉：`上市时间` == `listing_date` 968/968，
+> `申购日期` == `issue_date` 974/974）。它写进 `fetched_at_by_source["akshare:new_issues"]`
+> 这一格，不碰 `Wind` 那格。
 - `tradable_date`: 进入可交易或关注窗口的日期；定向/非标准代码段若无明确字段，默认用上市/发行后 6 个月估算
 - `is_tradable`: 同步日视角是否已进入可交易日期
 - `trading_status`: `tradable` / `pending` / `private_pending` / `private_tradable` / `private_unknown`

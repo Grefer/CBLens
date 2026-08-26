@@ -37,6 +37,7 @@ from .base import (
     looks_private_cb_name,
     parse_coupon_chinese_text,
     parse_coupon_string,
+    safe_date,
     to_date,
     _add_months,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "looks_private_cb_name",
     "parse_coupon_chinese_text",
     "parse_coupon_string",
+    "safe_date",
     "to_date",
     # 包内跨模块助手 (cb_events/down_reset_overrides/cninfo 经此 facade 导入)
     "_add_months",

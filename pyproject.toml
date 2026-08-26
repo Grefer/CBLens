@@ -45,6 +45,7 @@ cb-valuation = "convertible_bond.cli.market_valuation:main"
 cb-strategy-backtest = "convertible_bond.cli.strategy_backtest:main"
 cb-sync-admission-status = "convertible_bond.cli.sync_admission_status:main"
 cb-sync-events = "convertible_bond.cli.sync_events:main"
+cb-sync-new-issues = "convertible_bond.cli.sync_new_issues:main"
 cb-sync-tradable = "convertible_bond.cli.sync_tradable:main"
 cb-sync-terms = "convertible_bond.cli.sync_terms:main"
 

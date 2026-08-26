@@ -75,35 +75,20 @@ _WATCHLIST_COL_STRETCH_WEIGHTS = {
 # "已发行未上市"那一类不受本窗口约束 —— 它们连上市日都还没有。
 _UPCOMING_SCAN_WINDOW_DAYS = 30
 
-# 必须与 wind_sync._POOL_SYNC_TARGETS 中的条目一致 (label 用于匹配确认文案)
+# 窄同步失败时的逃生出口: 必须与 wind_sync._POOL_SYNC_TARGETS 中的条目一致
+# (label 用于匹配确认文案)
 _TERMS_SYNC_MODULE = "convertible_bond.cli.sync_tradable"
 _TERMS_SYNC_LABEL = "🔄 增量更新基础信息 (推荐)"
-# 条款库超过这个天数就在扫新债前提示同步 —— 新债每天都在发, 隔夜的快照就可能漏
-_TERMS_STALE_DAYS = 1.0
 
 
 def _terms_sync_available() -> bool:
-    """条款库同步只走 Wind (cb-sync-tradable 固定 --source wind); 没装就别提示."""
+    """条款库全量同步只走 Wind (cb-sync-tradable 固定 --source wind); 没装就别提示."""
     try:
         from ...data_providers.wind import prepare_windpy_import_path
         prepare_windpy_import_path()
         return importlib.util.find_spec("WindPy") is not None
     except Exception:
         return False
-
-
-def _terms_bundle_age_days(app) -> float | None:
-    """本地条款库距上次同步的天数; 无法判断时返回 None."""
-    cache = getattr(app, "terms_cache", None)
-    if cache is None or not hasattr(cache, "bundle_meta"):
-        return None
-    try:
-        updated = (cache.bundle_meta() or {}).get("updated_at")
-        if not updated:
-            return None
-        return (datetime.now() - datetime.fromisoformat(str(updated))).total_seconds() / 86400.0
-    except (TypeError, ValueError):
-        return None
 
 
 def _auto_add_upcoming_to_watchlist(app, *, silent=False):
@@ -126,28 +111,70 @@ def _auto_add_upcoming_to_watchlist(app, *, silent=False):
             app.v_batch_status.set("暂无已发行未上市或即将上市的新债")
 
 
-def _refresh_watchlist_with_upcoming(app):
-    """'扫新债' 按钮: (可选) 先增量同步条款库 → 扫描新债 → 加入关注池 → 立刻定价.
+def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False):
+    """后台跑一次新债窄同步, 完成 (无论成败) 后在主线程回调 ``then(synced: bool)``.
 
-    只扫本地 cb_data 的话, 新债得等用户想起来手动同步基础信息才看得见; 这里把
-    "同步 → 扫描 → 定价"串成一步, 让按钮自己就能拿到当天新发的债和它的理论价。
+    只碰"在盯新债"那几只 (实测每天 4 只上下), 一次 akshare 调用秒级完成, 不需要 Wind ——
+    所以这里**不再问"要不要先同步"**: 原本那道闸读的是 ``bundle_meta()['updated_at']``,
+    而任何一次写盘都会把它推到今天, 于是提示永不弹出; 即便弹出并点"是", 跑的
+    ``cb-sync-tradable --incremental`` 又恰好按 7 天新鲜度跳过刚抓过的新债。
+    详见 :mod:`convertible_bond.new_issue_sync`。
     """
-    age = _terms_bundle_age_days(app)
-    if _terms_sync_available() and (age is None or age >= _TERMS_STALE_DAYS):
-        age_text = "无法判断上次同步时间" if age is None else f"本地条款库最后同步于 {age:.1f} 天前"
-        if messagebox.askyesno(
-            "先同步基础信息?",
-            f"新债要先同步进本地条款库才扫得到 ({age_text}).\n\n"
-            "「是」: 先跑一次增量同步 (需 Wind 终端, 通常 1-3 分钟), 完成后自动继续扫描并定价\n"
+    # 「扫新债」和「批量重算」共用这条路径, 两个按钮在同步的这两秒里都还是可点的 —
+    # 不挡住就会并发写同一个 bundle, 并且把后续流程跑两遍
+    if getattr(app, "_new_issue_sync_running", False):
+        return
+    app._new_issue_sync_running = True
+
+    def worker():
+        try:
+            from ...new_issue_sync import sync_new_issues
+            report = sync_new_issues(dry_run=False)
+        except Exception as exc:
+            app.after(0, lambda exc=exc: _after_new_issue_sync(app, None, exc, then, prompt_on_error))
+            return
+        app.after(0, lambda: _after_new_issue_sync(app, report, None, then, prompt_on_error))
+
+    app.v_batch_status.set("正在刷新新债上市日 ...")
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
+    app._new_issue_sync_running = False
+    if exc is not None:
+        app.v_batch_status.set(f"⚠ 新债上市日刷新失败 ({exc}) — 按本地条款库继续")
+        if prompt_on_error and _terms_sync_available() and messagebox.askyesno(
+            "改用全量条款同步?",
+            f"新债上市日刷新失败:\n{exc}\n\n"
+            "「是」: 改跑 Wind 增量条款同步 (通常 1-3 分钟), 完成后继续扫描\n"
             "「否」: 直接扫描现有条款库",
         ):
             app._run_pool_sync(
                 _TERMS_SYNC_MODULE, _TERMS_SYNC_LABEL, ("--incremental",),
                 confirm=False,
-                on_success=lambda: _scan_upcoming_and_price(app, reload_terms=True),
+                on_success=lambda: then(True),
             )
             return
-    _scan_upcoming_and_price(app)
+        then(False)
+        return
+
+    changed = len(report.get("changes") or [])
+    if changed:
+        app.v_batch_status.set(f"已刷新 {changed} 项新债要素")
+    then(bool(changed))
+
+
+def _refresh_watchlist_with_upcoming(app):
+    """'扫新债' 按钮: 窄同步新债上市日 → 扫描新债 → 加入关注池 → 立刻定价.
+
+    只扫本地 cb_data 的话, 新债得等用户想起来手动同步基础信息才看得见; 这里把
+    "同步 → 扫描 → 定价"串成一步, 让按钮自己就能拿到当天新发的债和它的理论价。
+    """
+    run_new_issue_sync_async(
+        app,
+        then=lambda synced: _scan_upcoming_and_price(app, reload_terms=True),
+        prompt_on_error=True,
+    )
 
 
 def _scan_upcoming_and_price(app, *, reload_terms: bool = False):

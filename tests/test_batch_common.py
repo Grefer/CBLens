@@ -263,3 +263,101 @@ def test_banner_scan_codes_cover_the_whole_main_pool():
         _batch_all_results = [{"bond_code": "M1.SH"}, {"bond_code": "M2.SH"}, {}]
 
     assert _banner_scan_codes(_App()) == {"W.SH", "M1.SH", "M2.SH"}
+
+
+# ── 扫新债: 窄同步 → 扫描 ──
+#
+# 原本这条路是"读 bundle_meta()['updated_at'] 判新鲜度 → 提示跑 cb-sync-tradable --incremental"。
+# 三处同时失效: updated_at 被任何一次写盘推到今天 (提示永不弹出); 就算弹出, 增量同步按
+# 7 天新鲜度**恰好跳过**刚被抓过的新债; 没装 WindPy 连提示都不给。详见
+# convertible_bond/new_issue_sync.py。
+
+class _FakeStatus:
+    def __init__(self):
+        self.value = ""
+        self.history = []
+
+    def set(self, value):
+        self.value = value
+        self.history.append(value)
+
+    def get(self):
+        return self.value
+
+
+class _FakeApp:
+    """够跑通同步→回调这条链的最小 app: after 同步执行, 线程 join 掉."""
+
+    def __init__(self):
+        self.v_batch_status = _FakeStatus()
+        self.pool_syncs = []
+
+    def after(self, _delay, fn):
+        fn()
+
+    def _run_pool_sync(self, module, label, extra_args=(), **kwargs):
+        self.pool_syncs.append((module, extra_args))
+
+
+def _run_sync_to_completion(monkeypatch, app, *, sync_result=None, exc=None, **kwargs):
+    import convertible_bond.new_issue_sync as new_issue_sync
+
+    def fake_sync(*_a, **_kw):
+        if exc is not None:
+            raise exc
+        return sync_result or {"changes": []}
+
+    monkeypatch.setattr(new_issue_sync, "sync_new_issues", fake_sync)
+    seen = []
+    real_thread = watchlist_tab.threading.Thread
+
+    def blocking_thread(*args, **thread_kwargs):
+        thread = real_thread(*args, **thread_kwargs)
+        thread.start()
+        thread.join(timeout=5)
+        return _NoopThread()
+
+    monkeypatch.setattr(watchlist_tab.threading, "Thread", blocking_thread)
+    watchlist_tab.run_new_issue_sync_async(app, then=seen.append, **kwargs)
+    return seen
+
+
+class _NoopThread:
+    def start(self):
+        pass
+
+
+def test_scan_new_issues_no_longer_asks_before_syncing(monkeypatch):
+    """窄同步只碰那几只新债 (秒级, 不需要 Wind), 所以直接做, 不再问用户."""
+    app = _FakeApp()
+    seen = _run_sync_to_completion(
+        monkeypatch, app,
+        sync_result={"changes": [{"bond_code": "118076.SH", "kind": "listing_date"}]})
+
+    assert seen == [True]                    # 后续流程照常触发
+    assert app.pool_syncs == []              # 没有弹窗, 也没有退回全库增量同步
+    assert any("新债上市日" in text for text in app.v_batch_status.history)
+
+
+def test_scan_continues_when_the_narrow_sync_fails(monkeypatch):
+    """取数失败不能阻断扫描 —— 退回按现有条款库继续, 状态栏说明原因."""
+    app = _FakeApp()
+    seen = _run_sync_to_completion(monkeypatch, app, exc=RuntimeError("网络不通"))
+
+    assert seen == [False]
+    assert "网络不通" in app.v_batch_status.value
+
+
+def test_concurrent_scan_requests_are_dropped(monkeypatch):
+    """「扫新债」与「批量重算」共用这条路径, 同步的这两秒里两个按钮都还能点."""
+    app = _FakeApp()
+    app._new_issue_sync_running = True
+    seen = _run_sync_to_completion(monkeypatch, app)
+
+    assert seen == []
+
+
+def test_batch_rerun_refreshes_listing_dates_first():
+    """批量重算前也要刷一次: 准入读的是 cb_data 的 listing_date, 不刷就把昨天挂牌的新债判死."""
+    src = inspect.getsource(batch_tab._run_batch)
+    assert "run_new_issue_sync_async" in src

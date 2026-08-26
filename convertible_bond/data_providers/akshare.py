@@ -26,6 +26,7 @@ from .base import (
     DataProvider,
     infer_cb_trading_metadata,
     parse_coupon_chinese_text,
+    safe_date,
     to_date,
 )
 from ._helpers import (
@@ -236,14 +237,20 @@ class AkshareDataProvider(DataProvider):
             except ValueError:
                 size_val = None
 
-        listing_dt = to_date(_gl("上市时间")) if _gl("上市时间") else None
-        issue_dt = to_date(issue_str) if issue_str else to_date(_gl("申购日期"))
+        # 这两格必须走 safe_date: 上游对还没挂牌的新债返回 ``pandas.NaT``, 而 NaT 是
+        # datetime 子类且 ``bool(NaT) is True`` —— ``to_date`` 会原样放行、``or`` 也不回落,
+        # 于是 NaT 一路混进 listing_date。
+        listing_dt = safe_date(_gl("上市时间"))
+        issue_dt = safe_date(issue_str) or safe_date(_gl("申购日期"))
         terms = BondTerms(
             sec_name=_gl("债券简称"),
             underlying_code=underlying,
             issue_date=issue_dt or listing_dt,
-            listing_date=listing_dt or issue_dt,
-            maturity_date=to_date(maturity_str) if maturity_str else None,
+            # 上市日**没有兜底**: 缺它才是"已发行未上市"的判据 (见 is_issued_pending_listing)。
+            # 原本回落成起息日, 于是刚申购完还没挂牌的新债被判成已上市 → tradable_date =
+            # 起息日 ≤ 今天 → 带着空市价混进主池, 同时从"扫新债"里消失。
+            listing_date=listing_dt,
+            maturity_date=safe_date(maturity_str),
             face_value=100.0,
             conversion_price=K_val,
             redemption_price=None,         # 不在 akshare 字段, 由默认 107 兜底

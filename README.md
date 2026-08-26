@@ -178,6 +178,10 @@ cb-sync-tradable
 # ③ 每日刷新停牌、强赎、摘牌、正股 ST、成交额、余额、评级等状态字段
 cb-sync-admission-status
 
+# ③.5 每日刷新新债上市日 (窄同步, 秒级, 不需要 Wind)
+#     上市日只有全量同步会写, 而新债每天都在挂牌 —— 不刷这一步, 昨天上市的新债今天进不了主池
+cb-sync-new-issues --apply
+
 # ④ 同步公告事件，并把事件状态应用回 cb_data
 cb-sync-events --apply
 
