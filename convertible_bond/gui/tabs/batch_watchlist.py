@@ -250,6 +250,10 @@ def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
     then(bool(changed))
 
 
+#: 「⚡ 关注池重算」按钮的文案。**只在这里写一次** —— 状态栏那句"点「…」再试"曾经
+#: 把它硬编码了一遍, 于是按钮改名后消息还指着旧名字, 用户在页面上找不到那个按钮。
+WATCH_REFRESH_LABEL = "⚡ 关注池重算"
+
 #: 「陈旧即刷」的防抖窗口。启动、切页、扫新债都可能触发这一轮, 没有窗口的话
 #: 用户在页签之间来回点就会不停起后台定价。
 STALE_REFRESH_DEBOUNCE_SEC = 15 * 60
@@ -405,7 +409,7 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None,
         # 变成"打开后转圈几十秒" —— 而这一轮本来就只是锦上添花: 用户没要求它,
         # 表里该有的盘上数据 (watchlist_cache) 已经画出来了。
         app.v_batch_status.set(
-            f"ℹ {len(codes)} 只待定价 — {source} 当前不可用, 点「⚡ 关注池重算」再试")
+            f"ℹ {len(codes)} 只待定价 — {source} 当前不可用, 点「{WATCH_REFRESH_LABEL}」再试")
         return False
 
     csv_root = getattr(app, "_csv_root", None)
@@ -880,8 +884,11 @@ def _render_watchlist_table(app):
             _format_days_to_trade(entry),
             f"{float(score):.1f}" if _is_finite(score) else "—",
             entry.get("confidence", "") if is_ok else "—",
-            f"{float(entry['theoretical_price']):.2f}" if is_ok and entry.get("theoretical_price") is not None else "—",
-            f"{float(entry['market_price']):.2f}" if entry.get("market_price") is not None else "—",
+            # 一律用 _is_finite 而不是 `is not None`: 落盘的 None 读回来是 **NaN**
+            # (与内存路径一致, 见 watchlist_cache._NAN_FIELDS), 而 NaN is not None 为真 ——
+            # 于是"今天没有市价"会被渲染成字面的 "nan"。实测三只未上市新债全中。
+            f"{float(entry['theoretical_price']):.2f}" if is_ok and _is_finite(entry.get("theoretical_price")) else "—",
+            f"{float(entry['market_price']):.2f}" if _is_finite(entry.get("market_price")) else "—",
             dev_str,
             snap_dev_str,
             mkt_chg_str,

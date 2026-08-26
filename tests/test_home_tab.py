@@ -157,3 +157,109 @@ def test_home_is_not_in_per_file_ignores():
     pyproject = (Path(convertible_bond.__file__).parent.parent / "pyproject.toml").read_text(
         encoding="utf-8")
     assert "tabs/home.py" not in pyproject
+
+
+# ── 行情源全局唯一 ───────────────────────────────────────────────
+
+def test_market_source_has_exactly_one_selector():
+    """行情源下拉全局只许有一个 (顶栏那个).
+
+    此前有三个: 顶栏 v_data_source、批量页 v_batch_source、主页又一个。三个下拉
+    控三条链路时, "我明明选了 akshare 怎么还在连 Wind"是找不出原因的那类问题。
+    """
+    menus = []
+    for path in sorted(_GUI_ROOT.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if "CTkOptionMenu" not in line:
+                continue
+            # 往后看几行找 variable=，判断是不是行情源下拉
+            window = "\n".join(text.splitlines()[lineno - 1:lineno + 4])
+            if "v_data_source" in window or "v_batch_source" in window:
+                menus.append(f"{path.name}:{lineno}")
+    assert menus == ["app.py:547"] or len(menus) == 1, (
+        f"行情源下拉应当只有顶栏一个, 实际: {menus}")
+
+
+def test_batch_source_is_the_same_var_as_the_header_one():
+    """v_batch_source 必须就是 v_data_source 本身 (同一个 StringVar 对象).
+
+    做成两个 var 再互相同步是行不通的 —— 同步总会漏掉某条路径, 而漏掉的表现是
+    "两页显示的源不一样", 用户无从判断哪个说了算。
+    """
+    src = inspect.getsource(app_mod.CBPricerApp._build_vars)
+    assert "self.v_batch_source = self.v_data_source" in src
+
+
+def test_pages_do_not_build_their_own_source_selector():
+    """两个业务页都不许自己建行情源下拉 (它们仍然**读** app.v_batch_source)."""
+    for module in (batch_tab, home_tab):
+        tree = ast.parse(inspect.getsource(module))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and getattr(node.func, "attr", "") == "CTkOptionMenu"):
+                continue
+            bound = {kw.value.attr for kw in node.keywords
+                     if kw.arg == "variable" and isinstance(kw.value, ast.Attribute)}
+            assert not (bound & {"v_batch_source", "v_data_source"}), (
+                f"{module.__name__} 里还有页内行情源下拉")
+
+
+# ── 按钮文案单一事实源 ───────────────────────────────────────────
+
+def test_watch_refresh_label_is_not_hardcoded_anywhere_else():
+    """状态栏那句"点「…」再试"引的必须是同一个常量.
+
+    实测事故: 按钮从「⚡ 关注池重算」改成「⚡ 今日刷新」后, 消息里还写着旧名字,
+    用户在页面上找不到那个按钮。
+
+    只扫**运行期字符串字面量** —— docstring 与注释里提到按钮名是说明文字, 不参与
+    渲染, 拿它们报错只会逼人把解释删掉。
+    """
+    label = watchlist_tab.WATCH_REFRESH_LABEL
+    offenders = []
+    for path in sorted(_GUI_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        exempt = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc is not None and node.body:
+                    exempt.add(id(node.body[0].value))
+            # 常量自己的定义处当然可以写字面量
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", "") == "WATCH_REFRESH_LABEL" for t in node.targets):
+                exempt.add(id(node.value))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in exempt and label in node.value):
+                offenders.append(f"{path.name}:{node.lineno}: {node.value[:60]!r}")
+    assert not offenders, (
+        "这些运行期字符串硬编码了按钮文案, 请改引 WATCH_REFRESH_LABEL:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_unavailable_message_interpolates_the_label():
+    """真实故障形态是消息里留着一个**过期**的名字, 而不是重复写了当前名字 ——
+    所以这里直接钉住"那句消息必须插值常量", 而不是扫字面量。"""
+    src = inspect.getsource(watchlist_tab._start_watchlist_pricing)
+    assert "再试" in src, "找不到那句提示, 用例需要更新"
+    line = next(ln for ln in src.splitlines() if "再试" in ln)
+    assert "WATCH_REFRESH_LABEL" in line, f"提示里的按钮名不是插值来的: {line.strip()}"
+
+
+def test_button_uses_the_label_constant():
+    assert "text=WATCH_REFRESH_LABEL" in inspect.getsource(home_tab)
+
+
+# ── NaN 不是 None ────────────────────────────────────────────────
+
+def test_price_cells_use_is_finite_not_is_not_none():
+    """落盘的 None 读回来是 NaN, 而 `NaN is not None` 为真 —— 用 `is not None`
+    判就会把"今天没有市价"渲染成字面的 "nan"。实测三只未上市新债全中。"""
+    src = inspect.getsource(watchlist_tab._render_watchlist_table)
+    for field in ("market_price", "theoretical_price"):
+        bad = f'entry.get("{field}") is not None'
+        assert bad not in src, f"{field} 还在用 `is not None` 判, NaN 会渲染成 'nan'"
+        assert f'_is_finite(entry.get("{field}"))' in src

@@ -425,7 +425,11 @@ class CBPricerApp(
         # 关注池 / 批量页共享状态 —— 提到这里而不是留在某一页的 build 里:
         # ⭐ 关注池主页比 📦 批量页先 build, 而定价页的 ⭐ 按钮 (controllers/pricing)
         # 也读 _batch_watchlist, 谁都不该假设自己是创建方。
-        self.v_batch_source = ctk.StringVar(value=default_market_source())
+        # 行情源全局只有**一个** —— 顶栏那个下拉。批量页与关注池主页此前各摆一个,
+        # 三个下拉控三条链路时, "我明明选了 akshare 怎么还在连 Wind"是找不出原因的
+        # 那类问题。这里让 v_batch_source 就是 v_data_source 本身 (同一个 StringVar
+        # 对象), 于是所有既有的 `app.v_batch_source.get()` 读点自动跟着顶栏走。
+        self.v_batch_source = self.v_data_source
         self.v_batch_status = ctk.StringVar(value="")
         self._batch_watchlist = load_watchlist()
         self._watchlist_price_cache = None   # 由 home_tab.build 走 load_price_cache_into 填
@@ -550,7 +554,9 @@ class CBPricerApp(
             dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT, corner_radius=6)
         self.data_source_menu.pack(side="left", padx=(0, 10))
         Tooltip(self.data_source_menu,
-                "选择行情和利率来源；转债基础信息固定读取本地条款库, 并可由 Wind 刷新")
+                "选择行情和利率来源 —— **全局生效**: 关注池主页、批量定价、单债定价、\n"
+                "策略回测走的都是这一个。转债基础信息固定读取本地条款库, 并可由 Wind 刷新。\n"
+                "Wind 需要终端已启动并登录; akshare 免费、纯 HTTP, 失败也是秒级。")
 
         # 全市场 cb_data / 状态字段同步入口 — 替代命令行 cb-sync-* 调用
         self.btn_sync_pool = ctk.CTkButton(

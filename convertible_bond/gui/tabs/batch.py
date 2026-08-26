@@ -191,13 +191,9 @@ def build(app, tab):
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
     cc.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
 
-    # v_batch_source / v_batch_status 已提到 app._build_vars —— 两页共用,
-    # 且主页比批量页先 build, 谁也不能再假设自己是创建方。
-    ctk.CTkLabel(cc, text="行情源", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(8, 4))
-    ctk.CTkOptionMenu(cc, variable=app.v_batch_source, values=["Wind", "akshare"],
-                      width=90, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
-                      text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT).pack(side="left", padx=(0, 12))
-
+    # 行情源在顶栏 (app.v_data_source, v_batch_source 就是它本身), 页内不再摆第二个。
+    # v_batch_status 同理已提到 app._build_vars —— 主页比批量页先 build, 谁也不能
+    # 再假设自己是创建方。
     # 默认进入"低估候选"视图: 评分高、可信度高、无硬复核风险的精选 (偏差异常自动排除)
     # canonical 名 (v_batch_view) 永远是 BATCH_REVIEW_VIEWS 之一; 菜单显示带 "(N)" 计数
     # 后缀的 display var 与之分离, 避免回写 canonical 引发字符串不一致.

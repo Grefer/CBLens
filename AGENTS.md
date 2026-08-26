@@ -158,6 +158,20 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   ③ `_render_batch_views(refresh_home_table=False)` **只给纯展示操作用**
   (切视图 / 切列预设): 那时 `_batch_all_results` 一个字节没变, 而重画会把主页那棵
   17 列的树整个 destroy 重建, 排序/选中/滚动全丢。凡是数据变了的路径都要保持 True。
+- **行情源全局只有一个下拉 (顶栏)**。`v_batch_source` 就是 `v_data_source` **本身**
+  (同一个 StringVar 对象, 在 `_build_vars` 里赋), 不是两个 var 互相同步 —— 同步总会漏掉
+  某条路径, 而漏掉的表现是"两页显示的源不一样", 用户无从判断哪个说了算。此前有三个下拉
+  (顶栏 / 批量页 / 关注池主页) 控三条链路, 「我明明选了 akshare 怎么还在连 Wind」是找不出
+  原因的那类问题。守护测试扫全 GUI 目录的 `CTkOptionMenu(variable=...)`。
+- **NaN 不是 None, 判空一律用 `_is_finite`**。落盘时 NaN 写成 `null`, 读回来还原成 NaN
+  (`watchlist_cache._NAN_FIELDS`, 与内存路径保持一致) —— 而 `NaN is not None` 为**真**,
+  于是 `entry.get(k) is not None` 这种判据会放行 NaN 并把"今天没有市价"渲染成字面的
+  `"nan"`。实测三只未上市新债的市价列全中。同一个坑在 `safe_date` / `pandas.NaT`
+  那条约定里已经踩过一次 (NaT 是 datetime 子类且 `bool(NaT)` 为真)。
+- **用户可见的按钮文案要有单一事实源**。`WATCH_REFRESH_LABEL` 定义在 `batch_watchlist`,
+  按钮与状态栏那句"点「…」再试"都引它。实测事故: 按钮改名后消息里还写着旧名字, 用户在
+  页面上找不到那个按钮。守护测试直接钉住"那句消息必须**插值**常量" —— 扫字面量抓不到
+  真实故障形态 (留着一个**过期**的名字, 而不是重复写了当前名字)。
 - **`tabs/home.py` 刻意不用 `from ..theme import *`**。pyproject 给 `tabs/batch.py` 与
   `tabs/batch_watchlist.py` 豁免了 `F403/F405`, 而 star import 会把本该报 **F821
   (未定义名)** 的错降级成 F405 被豁免吃掉 —— 那两个文件 `ruff check --isolated` 实测

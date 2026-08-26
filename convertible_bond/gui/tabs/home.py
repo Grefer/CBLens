@@ -13,7 +13,7 @@ F821 是运行期 NameError 的唯一静态防线, 新页不要把它关掉。
 
 页面结构 (单列纵向):
     row0  标题 + 关注池摘要
-    row1  工具条 (⚡ 今日刷新 / 🆕 扫新债 / 行情源)
+    row1  工具条 (⚡ 关注池重算 / 🆕 扫新债) —— 行情源在顶栏, 全局共用一个
     row2  状态行 (与批量页共用 ``v_batch_status``, 两页各挂一个 Label)
     row3  事件横幅 (默认隐藏, 单击展开)
     row4  关注池表
@@ -26,7 +26,7 @@ import customtkinter as ctk
 
 from ..theme import (
     ACCENT, ACCENT_HOVER,
-    BG_CARD, BG_INPUT,
+    BG_CARD,
     BTN_CTRL, BTN_HOVER,
     FONT_FAMILY,
     ORANGE,
@@ -35,6 +35,7 @@ from ..theme import (
 from ..widgets import Tooltip
 from .batch_common import _create_table_section
 from .batch_watchlist import (
+    WATCH_REFRESH_LABEL,
     _auto_add_upcoming_to_watchlist,
     _refresh_watchlist_pricing,
     _refresh_watchlist_with_upcoming,
@@ -86,7 +87,7 @@ def _build_header(app, tab) -> None:
                          font=(FONT_FAMILY, 16, "bold"), text_color=TEXT)
     title.grid(row=0, column=0, sticky="w")
     Tooltip(title,
-            "每天开页先看这里: 表里是上次落盘的价 (带估值日), 要最新值点「⚡ 今日刷新」。\n"
+            f"每天开页先看这里: 表里是上次落盘的价 (带估值日), 要最新值点「{WATCH_REFRESH_LABEL}」。\n"
             "理论价来自三级兜底 —— 磁盘热缓存 → 本轮新债定价 → 全市场批量结果,\n"
             "所以不跑全市场也有数。\n"
             "⚠ 这是复核标记而非收益预测, 请结合公告、流动性与组合风险人工判断。")
@@ -104,11 +105,12 @@ def _build_toolbar(app, tab) -> None:
     row = ctk.CTkFrame(bar, fg_color="transparent")
     row.grid(row=0, column=0, sticky="ew", padx=16, pady=10)
 
-    # ⚡ 今日刷新 = 原「⚡ 关注池重算」。属性名保持 btn_batch_refresh_watch ——
+    # 文案走 WATCH_REFRESH_LABEL 单一事实源 —— 状态栏那句"点「…」再试"引的是同一个常量,
+    # 免得按钮改名后消息还指着一个页面上不存在的名字。属性名保持 btn_batch_refresh_watch ——
     # batch_watchlist 的 worker 会跨模块改它的 enabled 状态 (走 _set_watch_button_state,
     # 找不到就静默跳过, 但没必要给自己制造那种缺口)。
     app.btn_batch_refresh_watch = ctk.CTkButton(
-        row, text="⚡ 今日刷新", command=lambda: _refresh_watchlist_pricing(app),
+        row, text=WATCH_REFRESH_LABEL, command=lambda: _refresh_watchlist_pricing(app),
         fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
         font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
     app.btn_batch_refresh_watch.pack(side="left")
@@ -125,14 +127,8 @@ def _build_toolbar(app, tab) -> None:
             "同步新债上市日 → 扫描 → 加入关注池 → 立刻定价。\n"
             "秒级, 不需要 Wind (走 akshare 窄同步)。")
 
-    ctk.CTkLabel(row, text="行情源", text_color=TEXT_DIM,
-                 font=(FONT_FAMILY, 13)).pack(side="left", padx=(16, 4))
-    # 与批量页共用同一个 StringVar: 两页各挂一个 OptionMenu, 改哪边都同步。
-    ctk.CTkOptionMenu(
-        row, variable=app.v_batch_source, values=["Wind", "akshare"],
-        width=90, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
-        text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
-    ).pack(side="left")
+    # 行情源**只在顶栏那一个下拉里选**, 页内不再各摆一个 —— 三个下拉控三条链路时,
+    # "我明明选了 akshare 怎么还在连 Wind"是找不出原因的那类问题。
 
 
 def _build_status(app, tab) -> None:
