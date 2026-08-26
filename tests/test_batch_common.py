@@ -361,3 +361,100 @@ def test_batch_rerun_refreshes_listing_dates_first():
     """批量重算前也要刷一次: 准入读的是 cb_data 的 listing_date, 不刷就把昨天挂牌的新债判死."""
     src = inspect.getsource(batch_tab._run_batch)
     assert "run_new_issue_sync_async" in src
+
+
+# ── 关注池取价的口径 ──
+#
+# `_batch_results` 是**视图过滤后**的子表 (见 _render_batch_views), `_batch_all_results` 才是全池。
+# 关注的债多半不在「低估候选」这类窄视图里 —— 读错变量, 关注池就整行显示「—」, 且理论价
+# 随主表视图开关忽有忽无。实测视图 40/284 只, 中仑/派克/先锋三只在池内定价成功却都不在视图中。
+
+def _watchlist_app(*, all_results, view_results, upcoming=(), watchlist=()):
+    app = _FakeApp()
+    app._batch_all_results = list(all_results)
+    app._batch_results = list(view_results)
+    app._batch_upcoming_results = list(upcoming)
+    app._batch_watchlist = [dict(row) for row in watchlist]
+    return app
+
+
+def test_watchlist_price_survives_a_narrow_main_view():
+    """主表切到窄视图时, 关注池的理论价不能跟着消失."""
+    priced = {"bond_code": "123281.SZ", "bond_name": "中仑转债",
+              "status": "ok", "theoretical_price": 110.78}
+    app = _watchlist_app(
+        all_results=[priced],
+        view_results=[],                       # 「低估候选」视图里没有它
+        watchlist=[{"bond_code": "123281.SZ", "bond_name": "中仑转债"}],
+    )
+
+    row = watchlist_tab._watchlist_display_rows(app)[0]
+
+    assert row["theoretical_price"] == 110.78
+    assert row["status"] == "ok"
+
+
+def test_watchlist_repricing_of_main_pool_bonds_reaches_the_table():
+    """⚡关注池重算 把主池标的写进 _batch_all_results —— 展示层必须读得到.
+
+    读 `_batch_results` 时这条路是死的: 状态栏报"主表 N / 关注 M", 而表里只有走
+    `_batch_upcoming_results` 的那 M 只出得来价, 主表那 N 只点多少次都是「—」。
+    """
+    app = _watchlist_app(
+        all_results=[{"bond_code": "111026.SH", "status": "ok", "theoretical_price": 108.69}],
+        view_results=[],
+        upcoming=[{"bond_code": "123284.SZ", "status": "ok", "theoretical_price": 128.93}],
+        watchlist=[{"bond_code": "111026.SH"}, {"bond_code": "123284.SZ"}],
+    )
+
+    priced = {row["bond_code"]: row.get("theoretical_price")
+              for row in watchlist_tab._watchlist_display_rows(app)}
+
+    assert priced == {"111026.SH": 108.69, "123284.SZ": 128.93}
+
+
+# ── 新债没价时的自愈 ──
+#
+# 新债不在主池 (剔除原因「已发行未上市」), 理论价只能来自 upcoming_results。那一格一旦
+# 没跑到就再没有自愈路径: 启动时 _load_result_cache 只把缓存里的空列表读回来, 行一直空着。
+
+def test_unpriced_new_bonds_are_picked_up_for_repricing():
+    app = _watchlist_app(
+        all_results=[{"bond_code": "128044.SZ", "status": "ok", "theoretical_price": 105.0}],
+        view_results=[],
+        watchlist=[
+            {"bond_code": "128044.SZ", "is_tradable": True, "trading_status": "tradable"},
+            {"bond_code": "123284.SZ", "is_tradable": False, "trading_status": "pending"},
+        ],
+    )
+
+    assert watchlist_tab.unpriced_new_bond_codes(app) == ["123284.SZ"]
+
+
+def test_priced_new_bond_is_not_repriced_again():
+    """已经有价的新债不再补枪 —— 否则每次加载缓存都白跑一轮."""
+    app = _watchlist_app(
+        all_results=[],
+        view_results=[],
+        upcoming=[{"bond_code": "123284.SZ", "status": "ok", "theoretical_price": 128.93}],
+        watchlist=[{"bond_code": "123284.SZ", "is_tradable": False, "trading_status": "pending"}],
+    )
+
+    assert watchlist_tab.unpriced_new_bond_codes(app) == []
+
+
+def test_cache_load_repairs_missing_new_bond_prices():
+    src = inspect.getsource(batch_tab._load_result_cache)
+    assert "price_unpriced_new_bonds" in src
+    # 这一轮不是用户发起的 (启动 80ms 后自动跑): 失败只写状态栏, 不许糊一个模态错误框
+    assert "quiet=True" in src
+
+
+def test_watchlist_pricing_is_single_flight():
+    """三个入口 (⚡重算 / 扫新债 / 缓存加载补价) 并发跑会互相覆盖 new_upcoming."""
+    app = _watchlist_app(all_results=[], view_results=[],
+                         watchlist=[{"bond_code": "123284.SZ", "trading_status": "pending"}])
+    app._watchlist_pricing_running = True
+
+    assert watchlist_tab._start_watchlist_pricing(app, ["123284.SZ"]) is False
+    assert watchlist_tab.price_unpriced_new_bonds(app) == 0

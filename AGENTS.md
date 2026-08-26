@@ -101,6 +101,19 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   当拦截集 —— 模型适用性是永久属性, 塞进需复核会让它变成 79% 的垃圾桶。
   视图归属的单一事实源是 `view_exclusion_reason`, 策略页的落选解释也走它;
   两边曾各自实现一份并在重构后悄悄分叉。
+- **`_batch_results` 是视图子集, `_batch_all_results` 才是全池**。前者在
+  `_render_batch_views` 里被赋成 `filter_batch_results_by_view(...)` 的结果, 只服务主表渲染;
+  任何**跨表**取值 (关注池取理论价、关注池重算回填) 都必须读后者。关注池曾读前者, 于是
+  主表切到「低估候选」(实测 40/284 只) 时, 关注的债只要不在那 40 只里就整行显示「—」,
+  理论价随视图开关忽有忽无; 更隐蔽的是 `_watchlist_pricing_worker` **回填的也是**
+  `_batch_all_results`, 所以「⚡ 关注池重算」对这些行永远无效 —— 状态栏照常报
+  "主表 3 / 关注 3", 而表里只有走 `_batch_upcoming_results` 的那 3 只出得来价。
+- **关注池里新债的理论价没有别的来路, 必须能自愈**。新债不进主池 (剔除原因
+  「已发行未上市」), 理论价只能来自 `_batch_upcoming_results`; 而这一格一旦某轮没跑到,
+  `_load_result_cache` 只会把缓存里的空列表读回来, 行就一直空着 (实测缓存
+  `n_upcoming_results=0` 时三只在途新债连着几天没有理论价)。缓存加载与扫新债两条路都要调
+  `price_unpriced_new_bonds`。非用户发起的那一轮传 `quiet=True`: 启动就糊一个模态错误框,
+  比"新债那几行暂时没价"糟得多。
 - **`LEGACY_STRATEGY_EXCLUDE_TAGS` 是冻结集, 不要跟着标签体系演化**: 它是
   `ScoreStrategyConfig.exclude_risk_tags` 的默认值。曾写成 `tuple(sorted(HARD_REVIEW_TAGS))`,
   于是任何为改展示而增删标签的动作都自动变成**默认选债行为变更**。实测该集合极敏感:

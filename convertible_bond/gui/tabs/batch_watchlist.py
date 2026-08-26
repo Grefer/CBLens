@@ -164,6 +164,36 @@ def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
     then(bool(changed))
 
 
+def unpriced_new_bond_codes(app) -> list[str]:
+    """关注池里"是新债、且还没有理论价"的代码.
+
+    只管新债 —— 关注池里其他没定价的标的交给「⚡ 关注池重算」, 免得一个入口做两件事。
+    """
+    return [
+        row.get("bond_code")
+        for row in _watchlist_display_rows(app)
+        if row.get("bond_code") and row.get("status") != "ok" and _is_new_bond(row)
+    ]
+
+
+def price_unpriced_new_bonds(app, *, note: str | None = None, quiet: bool = False) -> int:
+    """给关注池里还没有理论价的新债补一轮定价; 返回本轮送出的只数 (没有则 0).
+
+    新债不进主池 (剔除原因「已发行未上市」), 理论价**只能**来自关注池额外定价
+    (``_batch_upcoming_results``)。而这一格一旦没跑到就再没有自愈路径: 启动时
+    ``_load_result_cache`` 只把缓存里的空列表读回来, 行就一直空着。所以缓存加载与扫新债
+    两条路都要补这一枪 —— 否则"关注池里的新债没有理论价"会同时对应两种成因
+    (**没算过** 与 **算了但没落到展示层**), 症状却完全一样。
+    """
+    pending = unpriced_new_bond_codes(app)
+    if not pending:
+        return 0
+    if not _start_watchlist_pricing(
+            app, pending, note=note or f"新债 {len(pending)} 只", quiet=quiet):
+        return 0
+    return len(pending)
+
+
 def _refresh_watchlist_with_upcoming(app):
     """'扫新债' 按钮: 窄同步新债上市日 → 扫描新债 → 加入关注池 → 立刻定价.
 
@@ -192,16 +222,10 @@ def _scan_upcoming_and_price(app, *, reload_terms: bool = False):
 
     # 新债刚加进来时只有条款元数据, 表里一排空白; 顺手把还没有理论价的新债算出来,
     # 否则"扫新债"给出的只是一张代码清单, 没法判断贵贱。
-    # 只管新债 — 关注池里其他没定价的标的交给 ⚡ 关注池重算, 免得一个按钮做两件事。
-    pending = [
-        row.get("bond_code")
-        for row in _watchlist_display_rows(app)
-        if row.get("bond_code") and row.get("status") != "ok" and _is_new_bond(row)
-    ]
-    if pending:
-        scanned = app.v_batch_status.get()
-        if _start_watchlist_pricing(app, pending, note=f"新债 {len(pending)} 只"):
-            app.v_batch_status.set(f"{scanned} · 正在定价 {len(pending)} 只新债 ...")
+    scanned = app.v_batch_status.get()
+    started = price_unpriced_new_bonds(app)
+    if started:
+        app.v_batch_status.set(f"{scanned} · 正在定价 {started} 只新债 ...")
 
 
 # ── ⚡ 关注池快速重定价 ─────────────────────────────────────────
@@ -214,10 +238,19 @@ def _refresh_watchlist_pricing(app):
     _start_watchlist_pricing(app, codes)
 
 
-def _start_watchlist_pricing(app, codes, *, note: str | None = None) -> bool:
-    """对给定代码起一轮关注池定价; 参数不合法或已在跑时返回 False."""
+def _start_watchlist_pricing(app, codes, *, note: str | None = None,
+                             quiet: bool = False) -> bool:
+    """对给定代码起一轮关注池定价; 参数不合法或已在跑时返回 False.
+
+    ``quiet=True`` 时失败只写状态栏不弹窗 —— 给非用户发起的那一轮 (缓存加载后的自动补价)
+    用: 启动就糊一个模态错误框, 比"新债那几行暂时没价"糟得多。
+    """
     codes = [c for c in dict.fromkeys(codes) if c]
     if not codes:
+        return False
+    # 现在有三个入口能起这一轮 (⚡ 关注池重算 / 扫新债 / 缓存加载后的自动补价), 并发跑会
+    # 让两个 worker 各自基于同一份旧列表算出 new_upcoming 再互相覆盖。
+    if getattr(app, "_watchlist_pricing_running", False):
         return False
 
     source = app.v_batch_source.get()
@@ -248,6 +281,7 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None) -> bool:
         return False
 
     label = note or f"关注池 {len(codes)} 只"
+    app._watchlist_pricing_running = True
     app.btn_batch_refresh_watch.configure(state="disabled")
     app.v_batch_status.set(f"⚡ 正在定价{label} ...")
     app._start_progress(f"定价{label}")
@@ -255,12 +289,13 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None) -> bool:
     threading.Thread(
         target=_watchlist_pricing_worker,
         args=(app, codes, source, csv_root, params),
+        kwargs={"quiet": quiet},
         daemon=True,
     ).start()
     return True
 
 
-def _watchlist_pricing_worker(app, codes, source, csv_root, params):
+def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bool = False):
     # 延迟导入: 关注池刷新后回调主表渲染, 避免 batch ↔ batch_watchlist 循环导入
     from .batch import _render_batch_views
 
@@ -309,8 +344,10 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params):
             f"⚡ 已刷新关注池 {len(codes)} 只 (主表 {sum(1 for c in codes if c in main_by_code)} / 关注 {len(codes) - sum(1 for c in codes if c in main_by_code)})"))
     except Exception as exc:
         app.after(0, lambda exc=exc: app.v_batch_status.set(f"❌ 关注池定价失败: {exc}"))
-        app.after(0, lambda exc=exc: messagebox.showerror("关注池定价失败", str(exc)))
+        if not quiet:
+            app.after(0, lambda exc=exc: messagebox.showerror("关注池定价失败", str(exc)))
     finally:
+        app._watchlist_pricing_running = False
         app.after(0, app._stop_progress)
         app.after(0, lambda: app.btn_batch_refresh_watch.configure(state="normal"))
 
@@ -381,8 +418,18 @@ def _remove_selected_from_watchlist(app):
 
 
 def _watchlist_display_rows(app):
-    """合并主批量定价结果 + 关注池额外定价结果, 生成关注池表展示行."""
-    by_code = {row.get("bond_code"): row for row in (app._batch_results or [])}
+    """合并主批量定价结果 + 关注池额外定价结果, 生成关注池表展示行.
+
+    取价必须用 ``_batch_all_results`` (**全池**) 而不是 ``_batch_results`` —— 后者是
+    :func:`_render_batch_views` 按当前视图过滤后的子集。关注的债多半不在「低估候选」
+    这类窄视图里 (实测视图 40/284 只, 中仑/派克/先锋三只在池内定价成功却都不在视图中),
+    于是关注池整行显示成「—」, 且理论价会随主表视图开关忽有忽无。
+    ``_watchlist_pricing_worker`` 重算主池标的时写的也是 ``_batch_all_results``, 读错变量
+    会让「⚡ 关注池重算」对这些行**永远无效** —— 状态栏报"主表 3 / 关注 3", 表里却只有
+    走 ``_batch_upcoming_results`` 的那 3 只出得来价。
+    """
+    by_code = {row.get("bond_code"): row
+               for row in (getattr(app, "_batch_all_results", None) or [])}
     for row in (getattr(app, "_batch_upcoming_results", None) or []):
         code = row.get("bond_code")
         if code and code not in by_code:

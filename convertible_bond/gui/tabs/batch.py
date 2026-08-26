@@ -62,6 +62,7 @@ from .batch_watchlist import (
     _refresh_watchlist_with_upcoming,
     _render_watchlist_table,
     _show_events_banner_full,
+    price_unpriced_new_bonds,
     run_new_issue_sync_async,
 )
 from ...market_time import market_today
@@ -774,6 +775,14 @@ def _load_result_cache(app, *, silent: bool = False):
     _render_batch_views(
         app,
         cache_meta=loaded.get("meta"), excluded_count=excluded_count)
+    # 缓存里没有新债的定价时补一轮 —— 新债不在主池 (剔除原因「已发行未上市」), 理论价只能
+    # 来自 upcoming_results, 而那一格一旦是空的就再没有自愈路径: 启动只把空列表读回来,
+    # 关注池的新债行于是一直空着, 直到用户想起来点「扫新债」。实测缓存
+    # n_upcoming_results=0 时三只在途新债连着几天都没有理论价。
+    try:
+        price_unpriced_new_bonds(app, quiet=True)
+    except Exception:
+        logger.debug("缓存加载后自动补新债定价失败 (忽略)", exc_info=True)
 
 
 def _export_csv(app):
