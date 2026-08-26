@@ -1,6 +1,8 @@
 """CninfoAnnouncementProvider 与 cb_event_sync PDF 注入测试."""
+import re
 import time
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -212,6 +214,7 @@ def test_sync_with_pdf_download(tmp_path):
         start=date(2026, 1, 1),
         end=date(2026, 4, 28),
         download_pdf=True,
+        bond_names={"128009.SZ": "测试转债"},
     )
 
     assert result["scanned_announcements"] == 1
@@ -254,6 +257,7 @@ def test_sync_without_pdf_download(tmp_path):
         start=date(2026, 1, 1),
         end=date(2026, 4, 28),
         download_pdf=False,
+        bond_names={"128009.SZ": "测试转债"},
     )
 
     assert result["added"] == 1
@@ -290,6 +294,7 @@ def test_sync_with_pdf_download_failure(tmp_path):
         start=date(2026, 1, 1),
         end=date(2026, 4, 28),
         download_pdf=True,
+        bond_names={"113050.SH": "南银转债"},
     )
 
     assert result["added"] == 1
@@ -485,6 +490,7 @@ def test_sync_does_not_write_balance_patch_from_threshold_clause(tmp_path):
         FakeProvider(), ["113691.SH"], store,
         term_patch_store=patch_store,
         start=date(2026, 5, 1), end=date(2026, 5, 20),
+        bond_names={"113691.SH": "和邦转债"},
     )
 
     # 事件本身照常入库 (不提前赎回承诺仍要影响定价), 但不得带余额 patch
@@ -525,6 +531,7 @@ def test_sync_writes_terms_patch_for_conversion_price_adjustment(tmp_path):
         term_patch_store=patch_store,
         start=date(2026, 5, 1),
         end=date(2026, 5, 20),
+        bond_names={"123211.SZ": "阳谷转债"},
     )
 
     assert result["added"] == 1
@@ -565,6 +572,7 @@ def test_sync_writes_terms_patch_for_balance_change(tmp_path):
         term_patch_store=patch_store,
         start=date(2026, 5, 1),
         end=date(2026, 5, 25),
+        bond_names={"128119.SZ": "龙大转债"},
     )
 
     assert result["added"] == 1
@@ -607,6 +615,7 @@ def test_sync_writes_terms_patch_for_call_redemption_price(tmp_path):
         term_patch_store=patch_store,
         start=date(2026, 4, 1),
         end=date(2026, 4, 30),
+        bond_names={"118006.SH": "阿拉转债"},
     )
 
     assert result["added"] == 1
@@ -774,3 +783,50 @@ def test_strip_rating_legend_keeps_short_documents_intact():
 
     short = "评级符号及含义说明。" + "尾部。" * 5
     assert _strip_rating_legend(short) == short
+
+
+# ── 守护: sync_cb_events 的测试不得依赖真实 cb_data ────────────────
+
+_SYNC_CALL = re.compile(r"\bsync_cb_events\(")
+
+
+def test_sync_cb_events_tests_pass_bond_names():
+    """所有 ``sync_cb_events`` 用例必须显式传 ``bond_names``.
+
+    不传时 ``_bond_name_resolver`` 会 best-effort 去读**真实的**
+    ``data/cb_data.json`` 取 ``sec_name``, 再喂给串号守卫
+    ``_title_names_other_bond``。于是"用例过不过"取决于那只债当天在库里叫什么:
+
+    实测 2026-08-25 一次纯数据提交把 ``128009.SZ`` 的 ``sec_name`` 从 ``None``
+    填成 ``歌尔转债(退市)``, 而该用例的假公告标题写的是「测试转债」——
+    守卫正确判为串号并跳过, ``added`` 从 1 变 0, 套件一夜之间转红。
+    也就是说这条用例此前一直是**靠那只债在库里没名字**才通过的。
+
+    显式传名字让用例自带债名事实源, 与生产路径的解析结果一致但不再随数据漂移。
+    """
+    here = Path(__file__).parent
+    offenders = []
+    for path in sorted(here.glob("test_*.py")):
+        text = path.read_text(encoding="utf-8")
+        if not _SYNC_CALL.search(text):
+            continue
+        for match in _SYNC_CALL.finditer(text):
+            # 取这次调用的实参段 (到配对右括号为止), 看里面有没有 bond_names=
+            depth, i = 0, match.end() - 1
+            while i < len(text):
+                if text[i] == "(":
+                    depth += 1
+                elif text[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            args = text[match.end():i]
+            if "bond_names" in args:
+                continue
+            lineno = text.count("\n", 0, match.start()) + 1
+            offenders.append(f"{path.name}:{lineno}")
+    assert not offenders, (
+        "以下 sync_cb_events 调用没传 bond_names, 会去读真实 data/cb_data.json, "
+        "用例过不过将取决于那只债当天在库里叫什么:\n  " + "\n  ".join(offenders)
+    )

@@ -41,14 +41,18 @@ CBLens/
 │   ├── new_issue_sync.py       # 新债窄同步 (上市日; akshare, 不依赖 Wind)
 │   ├── admission_status.py     # 停牌/强赎/ST 状态刷新
 │   ├── down_reset_overrides.py # 下修覆盖 + 三 regime 强度解析
-│   ├── watchlist.py            # 关注池管理
+│   ├── watchlist.py            # 关注池**意图层** (我关注什么 + 加入时快照)
+│   ├── watchlist_cache.py      # 关注池**行情层** (热缓存 + 按日窄快照, 纯数据无 GUI 依赖)
 │   ├── gui/                    # CustomTkinter GUI
 │   │   ├── app.py              # CBPricerApp: 多 mixin 组装
 │   │   ├── controllers/        # 业务域 mixin; 策略回测已按职责拆为
 │   │   │                       #   strategy_{setup,run,snapshots,render,
 │   │   │                       #   render_analysis,compare,common} 7 模块,
 │   │   │                       #   strategy_backtest.py 仅为聚合入口
-│   │   └── tabs/               # 各页 UI 构建 (batch/pricing/backtest/strategy/...)
+│   │   └── tabs/               # 各页 UI 构建
+│   │       #   home.py     ⭐ 关注池主页 (默认落地页; 只建控件, 逻辑在 batch_watchlist)
+│   │       #   batch.py    📦 批量页; batch_watchlist.py 关注池数据/渲染/动作
+│   │       #   batch_common.py 两页共用 helper (Treeview 样式/列宽/染色/表格区)
 │   └── cli/                    # CLI 工具 (screen_pool, sync_*, valuation, strategy_backtest)
 ├── data/                       # 持久化数据 (cb_data.json, cb_events.json, ...)
 ├── tests/                      # pytest 测试 (380+)
@@ -108,12 +112,59 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   理论价随视图开关忽有忽无; 更隐蔽的是 `_watchlist_pricing_worker` **回填的也是**
   `_batch_all_results`, 所以「⚡ 关注池重算」对这些行永远无效 —— 状态栏照常报
   "主表 3 / 关注 3", 而表里只有走 `_batch_upcoming_results` 的那 3 只出得来价。
-- **关注池里新债的理论价没有别的来路, 必须能自愈**。新债不进主池 (剔除原因
-  「已发行未上市」), 理论价只能来自 `_batch_upcoming_results`; 而这一格一旦某轮没跑到,
-  `_load_result_cache` 只会把缓存里的空列表读回来, 行就一直空着 (实测缓存
-  `n_upcoming_results=0` 时三只在途新债连着几天没有理论价)。缓存加载与扫新债两条路都要调
-  `price_unpriced_new_bonds`。非用户发起的那一轮传 `quiet=True`: 启动就糊一个模态错误框,
-  比"新债那几行暂时没价"糟得多。
+- **关注池的取价是三级兜底, 且必须能自愈**。`_priced_rows_by_code` 的优先级由低到高:
+  ① 磁盘热缓存 `watchlist_pricing_cache.json` → ② `_batch_upcoming_results` →
+  ③ `_batch_all_results` (**全池**, 不是视图子集 `_batch_results`)。第 ① 层是"开页即有数"
+  的地基 —— 没有它, 关注池的理论价完全寄生在"这次开机跑没跑过全市场"上 (实测缓存
+  `n_upcoming_results=0` 时三只在途新债连着几天没有理论价; 新债不进主池, 剔除原因
+  「已发行未上市」)。**读盘只许发生在 `load_price_cache_into`**, 由启动路径显式调 ——
+  展示层一旦隐式碰真实磁盘, 用例就变成"过不过取决于你上次开 GUI 点没点刷新"
+  (`sync_cb_events` 那批用例踩过这个坑, 一次纯数据提交就让套件转红)。
+  自愈判据从"是不是没价的新债"放宽成 `_price_state != "ok"` (`stale_watchlist_codes`),
+  带 15 分钟防抖; 非用户发起的那一轮传 `quiet=True`, 且遇到源连不上会被直接挡掉。
+- **`_price_state` 把三种长得一样的「—」分开**: `unpriced` (从没算过) / `failed`
+  (算了但失败) / `no_market` (算了但数据源没给市价) / `stale` (隔夜的价) / `ok`。
+  实测同一份关注池里三种同时存在。`no_market` 那一档尤其要留神: 118076.SH 先锋转债
+  `status=="ok"`、估值日就是今天、唯独市价是 None —— 只看"是不是今天算的"会让它当天
+  永远不再重试。反过来**还没上市的新债**的 `no_market` 是天然状态, 不该每轮陪跑。
+- **GUI 启动路径上不许建立新的数据源连接**。`w.start()` 的 WindPy 默认签名是
+  `start(options=None, waitTime=120)` —— **终端没开时它等满两分钟**, 而"装了 WindPy
+  但终端没登录"恰恰是最常见的一档 (实测本机: 可导入、`isconnected()` 为 False)。
+  启动 80ms 后那一轮自愈 (`_load_result_cache` → `price_unpriced_new_bonds` →
+  `_start_watchlist_pricing(quiet=True)` → worker → `build_batch_provider("Wind")` →
+  `get_risk_free_rate`) 于是把"打开 GUI"变成"打开后转两分钟圈"。三道闸缺一不可:
+  ① `wind_is_ready()` 只问 `isconnected()`、**绝不 start**, 非用户发起的取数按它决定起不起
+  (`_source_ready_without_connecting`: Wind 要已连接 / akshare 纯 HTTP 放行 /
+  CSV 要弹模态挡住)。注意它与 `detect_available_providers()` 不是一回事 —— 后者只答
+  "装没装", 而"装了但没连"正是会卡住的那一档。
+  ② `WIND_START_WAIT_SEC` 给 `w.start()` 一个上限 (默认 20s, `CBLENS_WIND_START_WAIT_SEC`
+  可覆盖; 设 0 沿用 WindPy 默认)。
+  ③ 连接失败进负缓存 (`WIND_CONNECT_COOLDOWN_SEC`, 默认 60s) —— 失败时 `self._w` 仍是
+  None, 没有这道闸每次取数都重等一遍, 全池 284 只按 10 线程折算就是约 570s 的假死。
+  行情源默认值也不再硬编码 `"Wind"`, 改走 `gui.constants.default_market_source()`
+  (有守护测试扫 `StringVar(value="Wind")`)。**代价要认**: Wind 没连时启动那一轮不再给
+  新债补价, 状态栏改为提示点「⚡ 关注池重算」—— 但它此前的结局本来也是失败, 只是先卡两分钟。
+- **关注池是独立主页, 但「⭐ 加入关注池」搬不走**。`tabs/home.py` 是默认落地页, 拥有
+  关注池表 / 摘要条 / 事件横幅 / 「⚡ 今日刷新」/「🆕 扫新债」; 而「⭐ 加入关注池」必须
+  留在批量页 —— 它读主表控件 `app._batch_main_tree` 的 selection, 且 iid 是
+  `_batch_results` 的**整数下标**。三条接线约定 (都有守护测试):
+  ① `home_tab.build` 必须排在 `batch_tab.build` **之前** —— `_render_watchlist_table`
+  拿不到 `batch_watchlist_table_frame` 时是 `return` 而不是报错, 顺序反了只表现为
+  "默认落地页首屏是空的"。
+  ② 两页共用的 `v_batch_source` / `v_batch_status` / `_batch_watchlist` /
+  `_watchlist_price_cache` 提到 `app._build_vars`, 谁都不该假设自己是创建方
+  (定价页的 ⭐ 按钮也读 `_batch_watchlist`)。同一个 `v_batch_status` 挂两个 Label,
+  于是"⚡ 已刷新 N 只"这类消息在哪页都看得见。
+  ③ `_render_batch_views(refresh_home_table=False)` **只给纯展示操作用**
+  (切视图 / 切列预设): 那时 `_batch_all_results` 一个字节没变, 而重画会把主页那棵
+  17 列的树整个 destroy 重建, 排序/选中/滚动全丢。凡是数据变了的路径都要保持 True。
+- **`tabs/home.py` 刻意不用 `from ..theme import *`**。pyproject 给 `tabs/batch.py` 与
+  `tabs/batch_watchlist.py` 豁免了 `F403/F405`, 而 star import 会把本该报 **F821
+  (未定义名)** 的错降级成 F405 被豁免吃掉 —— 那两个文件 `ruff check --isolated` 实测
+  84 处告警全被吸收, 于是**任何拼错/漏删的名字 ruff 都看不见**, 只在真实渲染那一行抛
+  NameError。这不是假想: 搬页时删掉一个 import 却留着两处调用, ruff 与 pytest 双双全绿。
+  守护测试 `test_star_import_exemption_only_shields_real_theme_names` 把豁免收窄成
+  "只放行 theme 里真实导出的名字"。新页不要把这道防线一起关掉。
 - **`LEGACY_STRATEGY_EXCLUDE_TAGS` 是冻结集, 不要跟着标签体系演化**: 它是
   `ScoreStrategyConfig.exclude_risk_tags` 的默认值。曾写成 `tuple(sorted(HARD_REVIEW_TAGS))`,
   于是任何为改展示而增删标签的动作都自动变成**默认选债行为变更**。实测该集合极敏感:
@@ -144,6 +195,20 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   `infer_cb_trading_metadata` 兜不住这一档: 两个日期都没有时 `tradable_date` 为 None, 而
   `inferred_is_tradable = tradable_date is None or ...` 把"没有日期"读成"随时可交易" ——
   那个默认对定向债是对的, 对撤销发行的公募债恰好反了。
+- **小批量标注要传锚, 而且传锚修不了秩**: `annotate_batch_results` 有两个独立开关,
+  给关注池/新债这类**主池外的一小撮**标注时两个都要动 (GUI 侧统一走
+  `tabs/batch._annotate_off_pool`, 有守护测试扫 GUI 目录里的裸调用)。
+  ① `market_median_deviation=` 传主池锚 (从 `cross_section_anchor_from` 取, 它读的是
+  **行内**的 `market_median_deviation`, **不是 `_meta`** —— 实测 `batch_pricing_cache.json`
+  的 `_meta` 里根本没有这个键, 走那条路永远静默取不到)。不传时 `median_deviation_of`
+  样本 <30 返回 None 退回绝对阈值; 真自算更糟 —— 6 行子集的中位就是它们自己, 每只的
+  `relative_deviation` 恰好偏移一个中位 (实测 +20.86pp), 而那是个看上去完全正常的数字。
+  ② `rank_scope=False` 把 `cheapness_rank/percentile/total` 等 9 个秩字段显式写成 None。
+  秩是 `_assign_cross_sectional_ranks` 在**传进来的这一批内部**排的, 与锚无关: 实测
+  123281.SZ 全池 `cheapness_percentile=0.8794`, 单独拿子集算变成 **0.0** —— 一个"全市场
+  最便宜的 0%"标签。这一档尤其危险因为**没有自愈路径**: `_batch_all_results` 每轮都过
+  `sort_batch_results_for_review` 在全池上重标注, 错了下一轮修回来; 而
+  `_batch_upcoming_results` 标注一次之后再没人碰。
 - **横截面口径 vs 绝对阈值**: 凡是判据架在"模型偏差"这类**水平时变**的量上, 一律锚当期
   横截面 (相对全市场中位), 不要用绝对阈值。实测 `cb_valuation_history` 20 期季度基线:
   中位偏差水平摆幅 21.2pp (+0.4%↔+21.6%), 而便宜尾形状 (p25−中位) 摆幅只有 4.2pp ——
@@ -421,7 +486,12 @@ patch 自洽 / 交叉校验 / 不变量, 外加 `--online` 的**外部对照**�
   每条带 `caliber` 口径标记, 缺失视为 `v1`, 见 `market_valuation.CALIBER_CHANGES`)
 - `data/down_reset_overrides.json` — 人工下修覆盖 (可手动编辑)
 - `data/batch_pricing_cache.json` — 批量定价缓存 (运行态, gitignored)
-- `data/watchlist.json` — 关注池 (运行态, gitignored)
+- `data/watchlist.json` — 关注池**意图层**: 我关注什么 + 加入瞬间的 `snapshot_*` (运行态, gitignored)
+- `data/watchlist_pricing_cache.json` — 关注池**行情层**热缓存, 最新一期完整行, 逐只 upsert
+  (运行态, gitignored)。与 `watchlist.json` 分开是因为两者的保留期与语义不同: 前者是
+  "我为什么关注它"(永久), 后者是"它今天多少钱"(每次刷新重写)
+- `data/watchlist_daily/YYYY-MM-DD.json` — 关注池按日窄快照, 每交易日一份、只追加,
+  支撑"涨跌 vs 上一交易日"(运行态, gitignored)
 - `data/strategy_backtest_snapshots/`, `data/strategy_backtest_cache/` — 策略回测
   快照与跨运行磁盘缓存 (运行态, gitignored)
 

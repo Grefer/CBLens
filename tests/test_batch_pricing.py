@@ -1331,3 +1331,141 @@ def test_event_flags_are_not_risk_tags():
     assert row["event_flags"]
     assert not (set(row["event_flags"]) & set(row["risk_tags"]))
     assert not (set(row["event_flags"]) & LEGACY_STRATEGY_EXCLUDE_TAGS)
+
+
+# ── 横截面锚回传 + 小样本秩字段清空 (S3) ─────────────────────────────
+
+def _anchor_row(code, deviation, double_low=None, edge=None, median=None):
+    row = {"bond_code": code, "status": "ok", "deviation": deviation,
+           "theoretical_price": 110.0, "market_price": 108.0}
+    if double_low is not None:
+        row["double_low"] = double_low
+    if edge is not None:
+        row["down_reset_robust_edge_value"] = edge
+    if median is not None:
+        row["market_median_deviation"] = median
+    return row
+
+
+def _anchor_pool(n=40, base=0.20):
+    """一个 >= _DEVIATION_MEDIAN_MIN_SAMPLE 的合成主池."""
+    return [_anchor_row(f"1230{i:02d}.SZ", base + (i - n / 2) / 1000.0) for i in range(n)]
+
+
+def test_cross_section_anchor_reads_row_level_median():
+    """锚在**每一行**里, 不在 _meta 里.
+
+    实测 batch_pricing_cache.json 的 _meta 键只有
+    {saved_at, source, params, n_results, n_upcoming_results, summary} ——
+    任何"从 _meta 读锚"的实现都会静默取不到值。
+    """
+    rows = [_anchor_row("A", 0.1), _anchor_row("B", 0.3, median=0.2085946726167419)]
+    assert batch_pricing.cross_section_anchor_from(rows) == pytest.approx(0.2085946726167419)
+
+
+def test_cross_section_anchor_falls_back_to_self_computed():
+    pool = batch_pricing.annotate_batch_results(_anchor_pool())
+    anchor = batch_pricing.cross_section_anchor_from(pool)
+    assert anchor == pytest.approx(batch_pricing.median_deviation_of(pool))
+
+
+def test_cross_section_anchor_none_when_sample_too_small():
+    """样本不足又没有行内锚时返回 None —— 让调用方看见"没有锚", 而不是拿到一个假的."""
+    assert batch_pricing.cross_section_anchor_from([_anchor_row("A", 0.1)]) is None
+    assert batch_pricing.cross_section_anchor_from([]) is None
+
+
+def test_off_pool_subset_relative_deviation_matches_full_pool():
+    """拿主池锚标注的子集, 相对偏差必须与它在全池里的值逐只相等.
+
+    不传锚时 6 行子集自算中位就是它们自己, 每只恰好偏移一个中位的量 ——
+    而那是个看上去完全正常的数字。
+    """
+    pool = batch_pricing.annotate_batch_results(_anchor_pool())
+    anchor = batch_pricing.cross_section_anchor_from(pool)
+    by_code = {r["bond_code"]: r for r in pool}
+
+    subset_src = [dict(r) for r in pool[:6]]
+    for row in subset_src:                     # 去掉行内锚, 强制走传入的那个
+        row.pop("market_median_deviation", None)
+        row.pop("relative_deviation", None)
+
+    anchored = batch_pricing.annotate_batch_results(
+        subset_src, market_median_deviation=anchor, rank_scope=False)
+    for row in anchored:
+        assert row["relative_deviation"] == pytest.approx(
+            by_code[row["bond_code"]]["relative_deviation"])
+
+    # 对照: 不传锚就会整体偏移
+    naive = batch_pricing.annotate_batch_results([dict(r) for r in subset_src])
+    assert any(
+        n["relative_deviation"] != pytest.approx(by_code[n["bond_code"]]["relative_deviation"])
+        for n in naive)
+
+
+def test_rank_scope_false_blanks_every_rank_field():
+    """传锚修不了秩 —— 名次是在这一批内部排的, 必须显式清空."""
+    rows = [_anchor_row("A", 0.1, double_low=120, edge=2.0),
+            _anchor_row("B", 0.3, double_low=140, edge=1.0)]
+    out = batch_pricing.annotate_batch_results(rows, market_median_deviation=0.2,
+                                               rank_scope=False)
+    for row in out:
+        for key in batch_pricing._CROSS_SECTIONAL_RANK_FIELDS:
+            assert row[key] is None, f"{key} 应为 None, 实得 {row[key]!r}"
+
+
+def test_rank_scope_false_would_otherwise_fabricate_top_percentile():
+    """反证: 同一行在全池里排在后段, 单独拿子集算会变成"最便宜的 0%"."""
+    pool = batch_pricing.annotate_batch_results(_anchor_pool())
+    target = max(pool, key=lambda r: r.get("cheapness_percentile") or 0.0)
+    assert target["cheapness_percentile"] > 0.5          # 全池里它并不便宜
+
+    solo = batch_pricing.annotate_batch_results([dict(target)])
+    assert solo[0]["cheapness_percentile"] == 0.0        # 子集里凭空变成最便宜
+
+    safe = batch_pricing.annotate_batch_results([dict(target)], rank_scope=False)
+    assert safe[0]["cheapness_percentile"] is None       # 加了闸就打「—」
+
+
+def test_rank_scope_true_still_ranks():
+    """默认路径不受影响 (主池标注仍要有名次, 否则视图长度上限失效)."""
+    out = batch_pricing.annotate_batch_results(_anchor_pool())
+    ranks = [r["cheapness_rank"] for r in out]
+    assert sorted(ranks) == list(range(len(out)))
+    assert all(r["cheapness_rank_total"] == len(out) for r in out)
+
+
+def test_gui_never_calls_annotate_batch_results_without_an_anchor():
+    """守护: GUI 侧任何小批量标注都要走 _annotate_off_pool.
+
+    实测 2026-08 之前全仓库**没有一个调用点**传过 market_median_deviation,
+    于是 _batch_upcoming_results 那一档 (新债 / 只在关注池里的债) 的横截面字段
+    是在 <=6 行样本上算的 —— 而且它没有自愈路径: _batch_all_results 每轮都在
+    全池上重标注能修回来, upcoming 标注一次之后再没人碰。
+    """
+    import re
+    from pathlib import Path
+    import convertible_bond
+
+    call_re = re.compile(r"\bannotate_batch_results\(")
+    gui_root = Path(convertible_bond.__file__).parent / "gui"
+    offenders = []
+    for path in sorted(gui_root.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for match in call_re.finditer(text):
+            depth, i = 0, match.end() - 1
+            while i < len(text):                     # 取这次调用的完整实参段
+                if text[i] == "(":
+                    depth += 1
+                elif text[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            if "market_median_deviation" in text[match.end():i]:
+                continue
+            lineno = text.count("\n", 0, match.start()) + 1
+            offenders.append(f"{path.name}:{lineno}")
+    assert not offenders, (
+        "GUI 侧这些 annotate_batch_results 调用没带锚, 请改用 _annotate_off_pool:\n  "
+        + "\n  ".join(offenders))

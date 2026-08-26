@@ -10,6 +10,8 @@ import tkinter as tk
 from datetime import date, datetime
 from tkinter import ttk
 
+import customtkinter as ctk
+
 from ..theme import (
     BG_CARD, BG_INPUT, BORDER,
     FONT_FAMILY, FONT_MONO,
@@ -442,3 +444,35 @@ def _attach_cell_tooltip(
     tree.bind("<Leave>", _hide, add="+")
     tree.bind("<ButtonPress>", _hide, add="+")
     tree.bind("<MouseWheel>", _hide, add="+")
+
+
+def _create_table_section(parent, *, row, title, with_summary=False):
+    section = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
+    section.grid(row=row, column=0, sticky="nsew", pady=(0, 8) if row == 0 else (0, 0))
+    section.grid_columnconfigure(0, weight=1)
+
+    header = ctk.CTkFrame(section, fg_color="transparent")
+    header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
+    header.grid_columnconfigure(1, weight=1)
+    ctk.CTkLabel(
+        header, text=title,
+        font=(FONT_FAMILY, 13, "bold"), text_color=TEXT,
+    ).grid(row=0, column=0, sticky="w")
+
+    summary_var = None
+    if with_summary:
+        summary_var = ctk.StringVar(value="")
+        ctk.CTkLabel(
+            header, textvariable=summary_var,
+            font=(FONT_FAMILY, 11), text_color=TEXT_DIM, anchor="e",
+        ).grid(row=0, column=1, sticky="e", padx=(12, 0))
+
+    body_row = 1
+    section.grid_rowconfigure(body_row, weight=1)
+    body = ctk.CTkFrame(section, fg_color="transparent")
+    body.grid(row=body_row, column=0, sticky="nsew")
+    body.grid_columnconfigure(0, weight=1)
+    body.grid_rowconfigure(0, weight=1)
+    if with_summary:
+        return body, summary_var
+    return body

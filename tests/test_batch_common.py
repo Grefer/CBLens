@@ -3,6 +3,8 @@ from datetime import date, timedelta
 
 import inspect
 
+import pytest
+
 from convertible_bond.gui.tabs import batch as batch_tab
 from convertible_bond.gui.tabs import batch_watchlist as watchlist_tab
 from convertible_bond.gui.tabs.batch_common import _is_new_bond, _resolve_row_tag
@@ -443,9 +445,14 @@ def test_priced_new_bond_is_not_repriced_again():
     assert watchlist_tab.unpriced_new_bond_codes(app) == []
 
 
-def test_cache_load_repairs_missing_new_bond_prices():
+def test_cache_load_repairs_stale_and_missing_prices():
+    """启动加载缓存后要补一轮.
+
+    判据已从"是不是没价的新债"放宽成 `_price_state != "ok"` —— 隔夜的旧价、
+    上一轮失败的行原本没有任何人管。
+    """
     src = inspect.getsource(batch_tab._load_result_cache)
-    assert "price_unpriced_new_bonds" in src
+    assert "refresh_stale_watchlist" in src
     # 这一轮不是用户发起的 (启动 80ms 后自动跑): 失败只写状态栏, 不许糊一个模态错误框
     assert "quiet=True" in src
 
@@ -458,3 +465,356 @@ def test_watchlist_pricing_is_single_flight():
 
     assert watchlist_tab._start_watchlist_pricing(app, ["123284.SZ"]) is False
     assert watchlist_tab.price_unpriced_new_bonds(app) == 0
+
+
+# ── 关注池定价合并与降级守卫 (S4) ────────────────────────────────
+
+def _wl_row(code, status="ok", price=110.0):
+    return {"bond_code": code, "status": status, "theoretical_price": price,
+            "market_price": 108.0, "valuation_date": "2026-08-26"}
+
+
+def test_merge_only_ok_rows_overwrite_existing_good_rows():
+    """一次取数失败不该把内存里昨天算好的行换成 nan 行."""
+    main = [_wl_row("A", price=100.0)]
+    upcoming = [_wl_row("B", price=200.0)]
+    fresh = [_wl_row("A", status="failed", price=float("nan")),
+             _wl_row("B", status="failed", price=float("nan"))]
+
+    new_main, new_upcoming = watchlist_tab.merge_watchlist_pricing(main, upcoming, fresh)
+    assert new_main[0]["theoretical_price"] == 100.0
+    assert new_upcoming[0]["theoretical_price"] == 200.0
+
+
+def test_merge_ok_rows_do_overwrite():
+    main = [_wl_row("A", price=100.0)]
+    new_main, _ = watchlist_tab.merge_watchlist_pricing(
+        main, [], [_wl_row("A", price=111.0)])
+    assert new_main[0]["theoretical_price"] == 111.0
+
+
+def test_merge_appends_new_failures_to_upcoming():
+    """失败的**在途新债**仍要出现在 upcoming 里.
+
+    新债不进主池, 唯一来路就是 upcoming。顺手加一句
+    `if status != "ok": continue` 会让它彻底消失 —— 于是"取价失败"和
+    "我根本没关注它"变成同一种表现。
+    """
+    _, new_upcoming = watchlist_tab.merge_watchlist_pricing(
+        [], [], [_wl_row("NEW", status="failed")])
+    assert [r["bond_code"] for r in new_upcoming] == ["NEW"]
+    assert new_upcoming[0]["status"] == "failed"
+
+
+def test_merge_does_not_mutate_inputs():
+    main, upcoming = [_wl_row("A")], [_wl_row("B")]
+    watchlist_tab.merge_watchlist_pricing(main, upcoming, [_wl_row("C")])
+    assert len(main) == 1 and len(upcoming) == 1
+
+
+def test_worker_has_zero_success_guard_and_persists():
+    """源码守护: 全失败不落盘不覆盖内存, 成功才写 watchlist_cache.
+
+    这两件事都没法在无 Tk 环境跑真 worker 验证, 但它们各自对应一次会静默发生的
+    数据损坏, 所以在这里钉住源码形态。
+    """
+    src = inspect.getsource(watchlist_tab._watchlist_pricing_worker)
+    assert 'ok_rows = [r for r in results if r.get("status") == "ok"]' in src
+    assert "if not ok_rows:" in src
+    assert "save_watchlist_pricing(" in src
+    assert "今日取价失败" in src
+    # 落盘必须用主池锚, 不能让这几行自算
+    assert "cross_section_anchor_from(" in src
+
+
+def test_lock_is_set_immediately_before_thread_start():
+    """置位必须紧挨 Thread.start(), 中间不许有会抛的裸控件访问.
+
+    原先顺序是 `_watchlist_pricing_running = True` → `btn.configure(...)` →
+    `Thread.start()`。中间那次访问一旦抛, finally 永不执行, 三个入口全被单飞
+    检查静默挡死 —— 而检查只 return False, 不写状态、不排队。
+    """
+    src = inspect.getsource(watchlist_tab._start_watchlist_pricing)
+    lock_at = src.index("app._watchlist_pricing_running = True")
+    start_at = src.index("threading.Thread(")
+    between = src[lock_at:start_at]
+    assert "configure(" not in between, f"置位与起线程之间不该有控件访问:\n{between}"
+    assert "_start_progress" not in between
+
+
+def test_quiet_round_does_not_touch_shared_progress():
+    """quiet 那一轮 (启动自愈) 不碰全局进度条与按钮.
+
+    _start_progress 没有引用计数, 且 _tick_progress 写的是**全局** v_status ——
+    一轮后台自愈会把别的页正在跑的任务的状态文字顶掉, 而 _stop_progress 不还原。
+    """
+    for fn in (watchlist_tab._start_watchlist_pricing,
+               watchlist_tab._watchlist_pricing_worker):
+        src = inspect.getsource(fn)
+        for lineno, line in enumerate(src.splitlines()):
+            if "_start_progress" in line or "_stop_progress" in line:
+                # 该行前面必须有 quiet 分支把它挡住
+                assert "if not quiet:" in src[:src.index(line)][-400:], (
+                    f"{fn.__name__} 第 {lineno} 行的进度条调用没有被 quiet 挡住: {line.strip()}")
+
+
+def test_watch_button_access_is_defensive():
+    """按钮建在 batch.py、消费在 batch_watchlist.py —— 跨文件裸属性访问是定时炸弹."""
+    src = inspect.getsource(watchlist_tab)
+    assert "app.btn_batch_refresh_watch.configure" not in src
+    assert "_set_watch_button_state" in src
+
+
+# ── 三级取价合并层 (S5) ──────────────────────────────────────────
+
+def _cache(rows):
+    return {"meta": {}, "rows": {r["bond_code"]: r for r in rows}}
+
+
+def test_merge_layer_never_touches_disk(monkeypatch):
+    """展示层不许隐式读真实磁盘.
+
+    一旦它会读 data/watchlist_pricing_cache.json, 用例过不过就取决于"你上次开
+    GUI 点没点刷新" —— 这正是 sync_cb_events 那批用例踩过的坑 (实测: 一次纯数据
+    提交就让套件转红)。读盘只许发生在 load_price_cache_into, 由启动路径显式调。
+    """
+    def boom(*a, **kw):
+        raise AssertionError("展示层读盘了")
+
+    monkeypatch.setattr(watchlist_tab, "load_watchlist_pricing", boom)
+    app = _watchlist_app(all_results=[], view_results=[],
+                         watchlist=[{"bond_code": "123284.SZ"}])
+    rows = watchlist_tab._watchlist_display_rows(app)
+    assert rows[0]["_price_state"] == "unpriced"
+
+
+def test_disk_cache_supplies_price_when_memory_is_empty():
+    """开页立刻有数: 没跑过全池时理论价来自磁盘热缓存."""
+    app = _watchlist_app(all_results=[], view_results=[],
+                         watchlist=[{"bond_code": "123284.SZ"}])
+    app._watchlist_price_cache = _cache([
+        {"bond_code": "123284.SZ", "status": "ok", "theoretical_price": 128.93,
+         "market_price": 120.0, "valuation_date": date(2026, 8, 26)},
+    ])
+    row = watchlist_tab._watchlist_display_rows(app, today=date(2026, 8, 26))[0]
+    assert row["theoretical_price"] == 128.93
+    assert row["_price_state"] == "ok"
+
+
+def test_memory_beats_disk():
+    """内存是"这次算的", 磁盘是"上次算的" —— 内存永远压过磁盘."""
+    app = _watchlist_app(
+        all_results=[{"bond_code": "123284.SZ", "status": "ok",
+                      "theoretical_price": 130.0, "market_price": 121.0,
+                      "valuation_date": date(2026, 8, 26)}],
+        view_results=[], watchlist=[{"bond_code": "123284.SZ"}])
+    app._watchlist_price_cache = _cache([
+        {"bond_code": "123284.SZ", "status": "ok", "theoretical_price": 128.93,
+         "market_price": 120.0, "valuation_date": date(2026, 8, 25)},
+    ])
+    row = watchlist_tab._watchlist_display_rows(app, today=date(2026, 8, 26))[0]
+    assert row["theoretical_price"] == 130.0
+
+
+def test_stale_unstamped_market_price_cannot_win():
+    """watchlist.json 里那个无 as-of 戳的 market_price 不许在"今天没市价"时顶上来.
+
+    实测三只在途新债今天 market_price 全是 None (还没上市), 而 entry 里可能留着
+    扫新债时写下的旧价 —— 让它胜出就等于把几天前的价当成今天的。
+    """
+    app = _watchlist_app(all_results=[], view_results=[],
+                         watchlist=[{"bond_code": "123284.SZ", "market_price": 119.9}])
+    app._watchlist_price_cache = _cache([
+        {"bond_code": "123284.SZ", "status": "ok", "theoretical_price": 128.93,
+         "market_price": None, "valuation_date": date(2026, 8, 26)},
+    ])
+    row = watchlist_tab._watchlist_display_rows(app, today=date(2026, 8, 26))[0]
+    assert row["market_price"] is None
+    assert row["_price_state"] == "no_market"
+
+
+def test_entry_price_survives_when_nothing_priced_it():
+    """完全没有定价行时 entry 的值仍然显示 —— 有总比空好, 但状态标成 unpriced."""
+    app = _watchlist_app(all_results=[], view_results=[],
+                         watchlist=[{"bond_code": "123284.SZ", "market_price": 119.9}])
+    row = watchlist_tab._watchlist_display_rows(app, today=date(2026, 8, 26))[0]
+    assert row["market_price"] == 119.9
+    assert row["_price_state"] == "unpriced"
+
+
+@pytest.mark.parametrize("priced,expected,why", [
+    (None, "unpriced", "从没算过"),
+    ({"status": "failed"}, "failed", "算了但失败"),
+    ({"status": "ok", "market_price": None, "valuation_date": date(2026, 8, 26)},
+     "no_market", "算了但数据源没给市价 (118076.SH 那个 case)"),
+    ({"status": "ok", "market_price": 108.0, "valuation_date": date(2026, 8, 25)},
+     "stale", "昨天的价"),
+    ({"status": "ok", "market_price": 108.0, "valuation_date": None},
+     "stale", "不知道是哪天的价"),
+    ({"status": "ok", "market_price": 108.0, "valuation_date": date(2026, 8, 26)},
+     "ok", "今天算的、有市价"),
+])
+def test_price_state_tells_the_three_dashes_apart(priced, expected, why):
+    """今天三种「—」在表上长得一模一样, 成因却完全不同 —— 分不开就没法判断要不要刷新."""
+    app = _watchlist_app(all_results=[], view_results=[],
+                         watchlist=[{"bond_code": "X"}])
+    if priced is not None:
+        app._watchlist_price_cache = _cache([{"bond_code": "X", **priced}])
+    row = watchlist_tab._watchlist_display_rows(app, today=date(2026, 8, 26))[0]
+    assert row["_price_state"] == expected, why
+
+
+def test_new_columns_have_a_source_in_the_merge_whitelist():
+    """守护: 主页新增列要用的字段都得先登记进 _PRICED_MERGE_FIELDS.
+
+    漏掉不会报错, 只是那一列恒空 —— 而这一处没有别的守护能替你发现。
+    """
+    needed = {"event_flags", "relative_deviation", "cheapness_percentile",
+              "cheapness_rank_total", "double_low", "quality_score",
+              "valuation_date", "origin", "market_price_as_of", "market_price_source"}
+    missing = needed - set(watchlist_tab._PRICED_MERGE_FIELDS)
+    assert not missing, f"这些字段没进合并白名单, 对应列会恒空: {sorted(missing)}"
+
+
+def test_market_price_is_not_in_the_generic_merge_list():
+    """market_price 必须单独处理, 不能走"非 None 才覆盖"那条通用规则."""
+    assert "market_price" not in watchlist_tab._PRICED_MERGE_FIELDS
+
+
+# ── 陈旧即刷 (S6) ────────────────────────────────────────────────
+
+def _stale_app(watchlist, cache_rows=(), all_results=()):
+    app = _watchlist_app(all_results=list(all_results), view_results=[],
+                         watchlist=list(watchlist))
+    app._watchlist_price_cache = _cache(list(cache_rows))
+    return app
+
+
+def test_stale_codes_cover_every_non_ok_state():
+    """ok 之外全部要重来 —— 隔夜的旧价、失败的行原本没有任何人管."""
+    today = date(2026, 8, 26)
+    app = _stale_app(
+        watchlist=[{"bond_code": "FRESH"}, {"bond_code": "OLD"},
+                   {"bond_code": "FAILED"}, {"bond_code": "NEVER"}],
+        cache_rows=[
+            {"bond_code": "FRESH", "status": "ok", "market_price": 108.0,
+             "valuation_date": today},
+            {"bond_code": "OLD", "status": "ok", "market_price": 108.0,
+             "valuation_date": date(2026, 8, 25)},
+            {"bond_code": "FAILED", "status": "failed"},
+        ])
+    rows = watchlist_tab._watchlist_display_rows(app, today=today)
+    assert watchlist_tab.stale_watchlist_codes(app, rows=rows) == ["OLD", "FAILED", "NEVER"]
+
+
+def test_listed_bond_missing_market_price_is_retried():
+    """118076.SH 那个 case: status ok + 今天的估值日, 唯独市价是 None.
+
+    只看"是不是今天算的"会让它当天永远不再重试, 市价与偏差两列空到明天。
+    """
+    today = date(2026, 8, 26)
+    app = _stale_app(
+        watchlist=[{"bond_code": "118076.SH", "is_tradable": True,
+                    "trading_status": "tradable"}],
+        cache_rows=[{"bond_code": "118076.SH", "status": "ok", "market_price": None,
+                     "valuation_date": today}])
+    rows = watchlist_tab._watchlist_display_rows(app, today=today)
+    assert rows[0]["_price_state"] == "no_market"
+    assert watchlist_tab.stale_watchlist_codes(app, rows=rows) == ["118076.SH"]
+
+
+def test_pre_listing_new_bond_is_not_retried_forever():
+    """还没上市的新债没有市价是天然状态, 不该每一轮都陪跑."""
+    today = date(2026, 8, 26)
+    app = _stale_app(
+        watchlist=[{"bond_code": "123284.SZ", "is_tradable": False,
+                    "trading_status": "pending"}],
+        cache_rows=[{"bond_code": "123284.SZ", "status": "ok", "market_price": None,
+                     "theoretical_price": 128.93, "valuation_date": today}])
+    rows = watchlist_tab._watchlist_display_rows(app, today=today)
+    assert rows[0]["_price_state"] == "no_market"
+    assert watchlist_tab.stale_watchlist_codes(app, rows=rows) == []
+
+
+def test_refresh_stale_debounces_quiet_rounds(monkeypatch):
+    """启动 / 切页都会触发这一轮, 没有窗口就会在页签之间来回点时不停起后台定价."""
+    calls = []
+    monkeypatch.setattr(watchlist_tab, "_start_watchlist_pricing",
+                        lambda app, codes, **kw: calls.append(codes) or True)
+    app = _stale_app(watchlist=[{"bond_code": "X"}])
+
+    assert watchlist_tab.refresh_stale_watchlist(app, quiet=True) == 1
+    assert watchlist_tab.refresh_stale_watchlist(app, quiet=True) == 0   # 窗口内
+    assert len(calls) == 1
+
+    # 用户自己点的不受防抖限制
+    assert watchlist_tab.refresh_stale_watchlist(app, quiet=False) == 1
+    assert len(calls) == 2
+
+
+def test_refresh_stale_does_not_stamp_when_round_did_not_start(monkeypatch):
+    """被单飞/源不可用挡掉时不能记时间戳, 否则真正能跑的时候还要再等 15 分钟."""
+    monkeypatch.setattr(watchlist_tab, "_start_watchlist_pricing",
+                        lambda app, codes, **kw: False)
+    app = _stale_app(watchlist=[{"bond_code": "X"}])
+    assert watchlist_tab.refresh_stale_watchlist(app, quiet=True) == 0
+    assert getattr(app, "_last_stale_refresh_at", None) is None
+
+
+def test_refresh_stale_is_a_noop_when_everything_is_fresh(monkeypatch):
+    monkeypatch.setattr(watchlist_tab, "_start_watchlist_pricing",
+                        lambda app, codes, **kw: pytest.fail("不该起这一轮"))
+    today = date(2026, 8, 26)
+    app = _stale_app(
+        watchlist=[{"bond_code": "X"}],
+        cache_rows=[{"bond_code": "X", "status": "ok", "market_price": 108.0,
+                     "valuation_date": today}])
+    monkeypatch.setattr(watchlist_tab, "market_today", lambda: today)
+    assert watchlist_tab.refresh_stale_watchlist(app, quiet=True) == 0
+
+
+# ── star import 盲区的守卫 ───────────────────────────────────────
+
+def test_star_import_exemption_only_shields_real_theme_names():
+    """`from ..theme import *` 会把本该报 F821 (未定义名) 的错降级成 F405,
+    而 pyproject 对 tabs/batch.py 与 tabs/batch_watchlist.py 豁免了 F405 ——
+    于是那两个文件里**任何拼错的名字 ruff 都看不见**, 只在真实渲染那一行抛
+    NameError, 而 GUI 在测试环境跑不起来。
+
+    实测这不是假想: 本次搬页时删掉 `_auto_add_upcoming_to_watchlist` 的 import
+    却留着两处调用, ruff 与 pytest 双双全绿。
+
+    这条守卫把豁免从"忽略一切"收窄成"只忽略 theme 里真实导出的名字":
+    逐个取出 ruff 报的 F405 名字, 不在 theme 命名空间里的一律算错。
+    """
+    import json
+    import subprocess
+    from pathlib import Path
+    import convertible_bond
+    from convertible_bond.gui import theme
+
+    targets = [
+        Path(convertible_bond.__file__).parent / "gui" / "tabs" / "batch.py",
+        Path(convertible_bond.__file__).parent / "gui" / "tabs" / "batch_watchlist.py",
+    ]
+    proc = subprocess.run(
+        ["ruff", "check", "--isolated", "--select", "F", "--output-format", "json",
+         *[str(p) for p in targets]],
+        capture_output=True, text=True,
+    )
+    if proc.returncode not in (0, 1):
+        pytest.skip(f"ruff 不可用: {proc.stderr[:200]}")
+
+    theme_names = set(dir(theme))
+    unknown = []
+    for item in json.loads(proc.stdout or "[]"):
+        if item.get("code") != "F405":
+            continue
+        # message 形如: `X` may be undefined, or defined from star imports: ...
+        message = item.get("message", "")
+        name = message.split("`")[1] if "`" in message else ""
+        if name and name not in theme_names:
+            unknown.append(f"{Path(item['filename']).name}:{item['location']['row']}: {name}")
+    assert not unknown, (
+        "以下名字既不是 theme 的导出、也没有在本模块定义 —— star import 豁免正在替它们打掩护, "
+        "运行期会抛 NameError:\n  " + "\n  ".join(unknown))

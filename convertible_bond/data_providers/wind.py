@@ -204,6 +204,34 @@ def _drop_sentinel_date(value, valuation_date):
     return value
 
 
+#: ``w.start()`` 的等待上限 (秒)。WindPy 默认 **120**, 而"终端没开/没登录"这件事
+#: 恰恰是最常见的一种失败 —— 于是一次取数会把调用线程钉住两分钟。GUI 启动路径上
+#: 这就表现为"打开就卡住", 用户看到的是一个转了两分钟的进度条。
+#: 用 ``CBLENS_WIND_START_WAIT_SEC`` 覆盖 (设 0 表示沿用 WindPy 默认)。
+WIND_START_WAIT_SEC = int(os.environ.get("CBLENS_WIND_START_WAIT_SEC", "20") or 0)
+
+#: 连接失败后的冷却期 (秒)。``_ensure`` 失败时不缓存连接, 于是**每一次**取数都会
+#: 重新等一遍 —— 全池 284 只按 10 线程折算就是 284 × 20s / 10 ≈ 570s 的"假死"。
+#: 冷却期内直接复用上次的异常, 让"没有 Wind 环境"变成秒级失败而不是漫长等待。
+WIND_CONNECT_COOLDOWN_SEC = float(os.environ.get("CBLENS_WIND_CONNECT_COOLDOWN_SEC", "60"))
+
+
+def wind_is_ready() -> bool:
+    """WindPy 可导入**且**终端已连接 —— 只做检查, 不发起连接, 不阻塞.
+
+    与 ``detect_available_providers()`` 的区别很重要: 那个只回答"装没装",
+    而"装了但终端没开"恰恰是会卡住两分钟的那一档 (实测本机 WindPy 可导入、
+    ``w.isconnected()`` 为 False)。凡是**非用户发起**的取数 (启动自愈那一轮)
+    都该用这个函数当闸, 而不是拿可导入性当可用性。
+    """
+    try:
+        prepare_windpy_import_path()
+        from WindPy import w  # type: ignore[import-not-found]
+        return bool(w.isconnected())
+    except Exception:
+        return False
+
+
 class WindDataProvider(DataProvider):
     """通过 WindPy 拉数据. 需要本机已安装 Wind 终端 + 插件."""
     name = "Wind"
@@ -235,6 +263,9 @@ class WindDataProvider(DataProvider):
     def __init__(self):
         self._w = None
         self._wind_lock = threading.RLock()
+        # 连接失败的负缓存 (异常, 发生时刻): 冷却期内直接复用, 见 WIND_CONNECT_COOLDOWN_SEC
+        self._connect_error: Exception | None = None
+        self._connect_error_at: float = 0.0
         # Wind 字段在不同终端版本/账户权限下偶尔会失效 (返回 "CWSSService: invalid indicators").
         # 首次批量调用失败时探测一次, 把坏字段缓存到此集合, 后续直接跳过, 避免每只债都重复探测.
         self._bad_bond_fields: set[str] = set()
@@ -256,6 +287,13 @@ class WindDataProvider(DataProvider):
             if self._w is not None:
                 return self._w
 
+            # 冷却期内不再重试: 失败时 self._w 仍是 None, 没有这道闸的话每一次取数
+            # 都要重新等满 waitTime, 一整轮批量就变成几分钟的"假死"。
+            if self._connect_error is not None:
+                if time.monotonic() - self._connect_error_at < WIND_CONNECT_COOLDOWN_SEC:
+                    raise self._connect_error
+                self._connect_error = None
+
             frozen = bool(getattr(sys, "frozen", False))
             prepare_windpy_import_path()
 
@@ -270,23 +308,35 @@ class WindDataProvider(DataProvider):
                         "`/Applications/Wind API.app/Contents/python/WindPy.py`。"
                         "如安装在自定义位置, 请设置环境变量 CBLENS_WINDPY_PATH。"
                     )
-                raise ImportError(
+                error = ImportError(
                     "未安装 WindPy，请安装 Wind 金融终端并配置 Python 插件。\n"
                     "  pip install WindPy  或在 Wind 终端中设置 Python 接口。"
                     f"{frozen_hint}\n  原始错误: {type(e).__name__}: {e}"
-                ) from e
+                )
+                # 同样进负缓存: prepare_windpy_import_path 会扫盘找 WindPy.py,
+                # 没装 Wind 的机器上跑一轮批量会把这件事重复几百遍。
+                self._connect_error = error
+                self._connect_error_at = time.monotonic()
+                raise error from e
 
             if not w.isconnected():
-                ret = w.start()
+                # 有界等待: WindPy 默认 waitTime=120, 而"终端没开"是最常见的失败,
+                # 默认值会把调用线程钉住两分钟 (GUI 上就是"打开就卡住")。
+                ret = (w.start(waitTime=WIND_START_WAIT_SEC) if WIND_START_WAIT_SEC > 0
+                       else w.start())
                 if getattr(ret, "ErrorCode", -1) != 0:
-                    raise ConnectionError(
+                    error = ConnectionError(
                         f"Wind 连接失败: ErrorCode={getattr(ret, 'ErrorCode', -1)}, Data={getattr(ret, 'Data', '')}"
                         + (
                             "\n  [frozen build] 请确认 Wind 终端已在本机启动并已登录."
                             if frozen else ""
                         )
                     )
+                    self._connect_error = error
+                    self._connect_error_at = time.monotonic()
+                    raise error
             self._w = w
+            self._connect_error = None
             return w
 
     _TRANSIENT_RETRIES = 4

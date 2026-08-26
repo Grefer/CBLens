@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
-from datetime import date
 from typing import TYPE_CHECKING
 import customtkinter as ctk
 from tkinter import messagebox, filedialog, ttk
@@ -23,6 +22,7 @@ from ...batch_pricing import (
     annotate_batch_results,
     batch_pricing_exclusion_reason,
     build_batch_provider,
+    cross_section_anchor_from,
     filter_batch_results_by_view,
     load_batch_results_cache,
     save_batch_results_cache,
@@ -41,9 +41,9 @@ from ...market_valuation import (
     valuation_banner,
 )
 from ...paths import data_path
-from ...watchlist import load_watchlist
 from ..widgets import Tooltip
 from .batch_common import (
+    _create_table_section,
     _TREE_ATTRS,
     _apply_tag_colors,
     _attach_cell_tooltip,
@@ -58,11 +58,8 @@ from .batch_common import (
 from .batch_watchlist import (
     _add_selection_to_watchlist,
     _auto_add_upcoming_to_watchlist,
-    _refresh_watchlist_pricing,
-    _refresh_watchlist_with_upcoming,
-    _render_watchlist_table,
-    _show_events_banner_full,
-    price_unpriced_new_bonds,
+    refresh_stale_watchlist,
+    refresh_home,
     run_new_issue_sync_async,
 )
 from ...market_time import market_today
@@ -159,8 +156,7 @@ def build(app, tab):
     # 把工具栏 ctrl 从 98px 压到 52px, cc 按钮行被裁出可视区域.
     tab.grid_rowconfigure(0, weight=0)  # ctrl
     tab.grid_rowconfigure(1, weight=0)  # status
-    tab.grid_rowconfigure(2, weight=0)  # events banner (默认隐藏)
-    tab.grid_rowconfigure(3, weight=1)  # results frame
+    tab.grid_rowconfigure(2, weight=1)  # results frame
 
     # 控制栏
     ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
@@ -195,7 +191,8 @@ def build(app, tab):
     cc = ctk.CTkFrame(ctrl, fg_color="transparent")
     cc.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
 
-    app.v_batch_source = ctk.StringVar(value="Wind")
+    # v_batch_source / v_batch_status 已提到 app._build_vars —— 两页共用,
+    # 且主页比批量页先 build, 谁也不能再假设自己是创建方。
     ctk.CTkLabel(cc, text="行情源", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(8, 4))
     ctk.CTkOptionMenu(cc, variable=app.v_batch_source, values=["Wind", "akshare"],
                       width=90, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
@@ -232,25 +229,17 @@ def build(app, tab):
         font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
     app.btn_batch_run.pack(side="left")
 
+    # 「🆕 扫新债」「⚡ 关注池重算」已搬到 ⭐ 关注池主页 —— 它们是关注池的操作,
+    # 顶在「📦 批量定价 / 转债池筛选」标题下名不副实。
+    # 「⭐ 加入关注池」**必须留在这里**: 它读主表控件 app._batch_main_tree 的 selection,
+    # 且 iid 是 _batch_results 的整数下标, 搬到主页后永远只会弹"请先运行批量定价"。
+    #
     # 次要按钮用 BTN_CTRL 而非 BG_INPUT: 浅色模式下 BG_INPUT(#e6e9ef) 与 BG_CARD(#eff1f5) 几乎同色, 按钮看不见
-    app.btn_batch_upcoming = ctk.CTkButton(
-        cc, text="🆕 扫新债", command=lambda: _refresh_watchlist_with_upcoming(app),
-        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6)
-    app.btn_batch_upcoming.pack(side="left", padx=(8, 0))
-
     app.btn_batch_add_watch = ctk.CTkButton(
         cc, text="⭐ 加入关注池", command=lambda: _add_selection_to_watchlist(app),
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
     app.btn_batch_add_watch.pack(side="left", padx=(8, 0))
-
-    # ⚡ 仅定价关注池: 跳过全市场 322 只, 几秒级反馈; 紧邻 ⭐ 加入关注池
-    app.btn_batch_refresh_watch = ctk.CTkButton(
-        cc, text="⚡ 关注池重算", command=lambda: _refresh_watchlist_pricing(app),
-        fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
-        font=(FONT_FAMILY, 12), width=110, height=32, corner_radius=6)
-    app.btn_batch_refresh_watch.pack(side="left", padx=(8, 0))
 
     app.btn_batch_export = ctk.CTkButton(
         cc, text="📝 导出 CSV", command=lambda: _export_csv(app),
@@ -272,80 +261,28 @@ def build(app, tab):
         admission_config=_batch_admission_config(app),
     )
     suffix = _excluded_status_suffix(excluded)
-    app.v_batch_status = ctk.StringVar(value=f"将基于本地条款库的公开交易转债池定价 ({len(codes)} 只{suffix})")
+    app.v_batch_status.set(f"将基于本地条款库的公开交易转债池定价 ({len(codes)} 只{suffix})")
     ctk.CTkLabel(tab, textvariable=app.v_batch_status,
                  font=(FONT_FAMILY, 13, "bold"), text_color=TEXT).grid(
                      row=1, column=0, sticky="w", padx=24, pady=(2, 8))
 
-    # 事件 banner (近 30 天关注池内事件), 仅在有内容时显示; 单击弹窗展开全部
-    app.v_batch_events_banner = ctk.StringVar(value="")
-    app._batch_events_banner_full: list[tuple[str, str, "date"]] = []
-    app.lbl_batch_events_banner = ctk.CTkLabel(
-        tab, textvariable=app.v_batch_events_banner,
-        font=(FONT_FAMILY, 12, "bold"), text_color=ORANGE,
-        fg_color=BG_CARD, corner_radius=12,
-        padx=12, pady=8,
-        anchor="w", justify="left", wraplength=1080, cursor="hand2")
-    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
-    app.lbl_batch_events_banner.grid_remove()
-    app.lbl_batch_events_banner.bind(
-        "<Button-1>", lambda _e: _show_events_banner_full(app))
-
-    # 结果表格区: 主批量列表 + 我的关注池 (含自动发现的即将上市新债)
+    # 事件横幅与关注池表已搬到 ⭐ 关注池主页。主表现在独占整个结果区 ——
+    # 此前两表纵向 3:2 分屏, 而 Tk 在空间不足时按权重**收缩**(权重越大缩得越多),
+    # 于是"主表是主角"这个意图从未兑现: 实测主表实际只占 44%~50%。
     app.batch_results_frame = ctk.CTkFrame(tab, fg_color="transparent")
-    app.batch_results_frame.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 6))
+    app.batch_results_frame.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 6))
     app.batch_results_frame.grid_columnconfigure(0, weight=1)
-    app.batch_results_frame.grid_rowconfigure(0, weight=3)
-    app.batch_results_frame.grid_rowconfigure(1, weight=2)
+    app.batch_results_frame.grid_rowconfigure(0, weight=1)
 
     app.batch_table_frame = _create_table_section(
         app.batch_results_frame, row=0, title="主批量定价结果")
-    app.batch_watchlist_table_frame, app.v_batch_watchlist_summary = _create_table_section(
-        app.batch_results_frame, row=1, title="⭐ 我的关注池 (右键删除)",
-        with_summary=True)
 
     app._batch_results = []
     app._batch_all_results = []
     app._batch_upcoming_results = []
-    app._batch_watchlist = load_watchlist()
-    # 自动发现即将上市/可交易的新债并加入关注池
-    _auto_add_upcoming_to_watchlist(app, silent=True)
-    _render_watchlist_table(app)  # 内部已调用 _refresh_watchlist_summary + _refresh_events_banner
     # 启动时异步加载上次的批量定价缓存; 缓存文件 ~440KB, 同步读会让窗口出现前停顿
     # 80ms 延迟让 mainloop 先完成首屏绘制, 主表加载后再调一次 _render_batch_views 不影响关注池
     app.after(80, lambda: _load_result_cache(app, silent=True))
-
-
-def _create_table_section(parent, *, row, title, with_summary=False):
-    section = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=12)
-    section.grid(row=row, column=0, sticky="nsew", pady=(0, 8) if row == 0 else (0, 0))
-    section.grid_columnconfigure(0, weight=1)
-
-    header = ctk.CTkFrame(section, fg_color="transparent")
-    header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
-    header.grid_columnconfigure(1, weight=1)
-    ctk.CTkLabel(
-        header, text=title,
-        font=(FONT_FAMILY, 13, "bold"), text_color=TEXT,
-    ).grid(row=0, column=0, sticky="w")
-
-    summary_var = None
-    if with_summary:
-        summary_var = ctk.StringVar(value="")
-        ctk.CTkLabel(
-            header, textvariable=summary_var,
-            font=(FONT_FAMILY, 11), text_color=TEXT_DIM, anchor="e",
-        ).grid(row=0, column=1, sticky="e", padx=(12, 0))
-
-    body_row = 1
-    section.grid_rowconfigure(body_row, weight=1)
-    body = ctk.CTkFrame(section, fg_color="transparent")
-    body.grid(row=body_row, column=0, sticky="nsew")
-    body.grid_columnconfigure(0, weight=1)
-    body.grid_rowconfigure(0, weight=1)
-    if with_summary:
-        return body, summary_var
-    return body
 
 
 def _run_batch(app):
@@ -454,7 +391,7 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
                 provider, extra_codes,
                 **params,
             )
-            watchlist_pricing = annotate_batch_results(watchlist_pricing)
+            watchlist_pricing = _annotate_off_pool(watchlist_pricing, results)
         success_count = sum(1 for row in results if row.get("status") == "ok")
         if success_count == 0:
             cached = _load_successful_result_cache(app)
@@ -504,9 +441,11 @@ def _load_successful_result_cache(app):
         admission_config=_batch_admission_config(app))
     if not any(row.get("status") == "ok" for row in results):
         return None
+    main_results = sort_batch_results_for_review(results)
     return {
-        "results": sort_batch_results_for_review(results),
-        "upcoming_results": annotate_batch_results(loaded.get("upcoming_results") or []),
+        "results": main_results,
+        "upcoming_results": _annotate_off_pool(loaded.get("upcoming_results") or [],
+                                               main_results),
         "meta": loaded.get("meta"),
         "excluded_count": excluded_count,
     }
@@ -579,7 +518,17 @@ def _render_batch_views(
     cache_path=None,
     cache_meta=None,
     excluded_count=0,
+    refresh_home_table=True,
 ):
+    """重画主表 (以及默认情况下的关注池主页).
+
+    ``refresh_home_table=False`` 只给**纯展示**操作用 (切视图 / 切列预设): 那时
+    ``_batch_all_results`` 一个字节都没变, 而重画会把主页那棵 17 列的树整个
+    destroy 重建, 用户在上面的排序/选中/滚动位置全丢。
+
+    反过来, 凡是**数据变了**的路径都必须让它保持 True —— 少刷一次的表现是
+    "算完了但表还是旧值", 没有任何异常, 正是 AGENTS 记的那个陷阱。
+    """
     if results is not None:
         app._batch_all_results = sort_batch_results_for_review(results)
     base_results = getattr(app, "_batch_all_results", None) or []
@@ -594,7 +543,8 @@ def _render_batch_views(
     _update_valuation_banner(app, base_results)
     _render_table(app, display_results, total_results=len(base_results), view=view, cache_path=cache_path,
                   cache_meta=cache_meta, excluded_count=excluded_count)
-    _render_watchlist_table(app)
+    if refresh_home_table:
+        refresh_home(app)
 
 
 def _record_valuation_history(results, history_path=None) -> bool:
@@ -660,9 +610,10 @@ def _on_view_menu_select(app, label: str) -> None:
 
 
 def _change_batch_view(app):
+    """切视图 / 切列预设 —— 纯展示操作, 数据没变, 别去动主页那棵树."""
     if not getattr(app, "_batch_all_results", None):
         return
-    _render_batch_views(app)
+    _render_batch_views(app, refresh_home_table=False)
 
 
 def _render_table(app, results, *, total_results=None, view=None, cache_path=None, cache_meta=None, excluded_count=0):
@@ -769,20 +720,23 @@ def _load_result_cache(app, *, silent: bool = False):
         admission_config=_batch_admission_config(app))
     results = sort_batch_results_for_review(results)
     app._batch_all_results = results
-    app._batch_upcoming_results = annotate_batch_results(loaded.get("upcoming_results") or [])
+    app._batch_upcoming_results = _annotate_off_pool(
+        loaded.get("upcoming_results") or [], results)
     # 自动将即将上市新债加入关注池
     _auto_add_upcoming_to_watchlist(app, silent=True)
     _render_batch_views(
         app,
         cache_meta=loaded.get("meta"), excluded_count=excluded_count)
-    # 缓存里没有新债的定价时补一轮 —— 新债不在主池 (剔除原因「已发行未上市」), 理论价只能
-    # 来自 upcoming_results, 而那一格一旦是空的就再没有自愈路径: 启动只把空列表读回来,
-    # 关注池的新债行于是一直空着, 直到用户想起来点「扫新债」。实测缓存
-    # n_upcoming_results=0 时三只在途新债连着几天都没有理论价。
+    # 给关注池里陈旧/缺价的标的补一轮 —— 判据从"是不是没价的新债"放宽成
+    # `_price_state != "ok"` (见 stale_watchlist_codes): 新债不在主池 (剔除原因
+    # 「已发行未上市」), 理论价只能来自 upcoming_results, 而那一格一旦是空的就再没有
+    # 自愈路径 (实测缓存 n_upcoming_results=0 时三只在途新债连着几天都没有理论价);
+    # 隔夜的旧价、上一轮失败的行同理没人管。带 15 分钟防抖, 且遇到"源当前连不上"
+    # 会被直接挡掉而不是卡住启动。
     try:
-        price_unpriced_new_bonds(app, quiet=True)
+        refresh_stale_watchlist(app, quiet=True)
     except Exception:
-        logger.debug("缓存加载后自动补新债定价失败 (忽略)", exc_info=True)
+        logger.debug("缓存加载后自动补价失败 (忽略)", exc_info=True)
 
 
 def _export_csv(app):
@@ -802,6 +756,31 @@ def _export_csv(app):
         app.v_batch_status.set(f"已导出 {len(app._batch_results)} 条到 {path}")
     except Exception as exc:
         messagebox.showerror("导出失败", str(exc))
+
+
+def _annotate_off_pool(rows, pool_results):
+    """给**主池外**的一小撮结果 (新债 / 只在关注池里的债) 补研究字段.
+
+    两件事必须同时做, 缺一个都会静默算错:
+
+    1. 锚用主池的中位偏差, 不要让这几行自算 —— ``median_deviation_of`` 样本 <30 时
+       返回 None, ``annotate_batch_result`` 随即退回绝对阈值; 而真自算出来更糟:
+       6 行子集的中位就是它们自己, 于是每只的 ``relative_deviation`` 恰好偏移一个
+       中位的量 (实测 +20.9pp), 数字看上去完全正常。
+    2. ``rank_scope=False`` —— 传锚**修不了秩**, 名次是在传进来的这一批内部排的。
+       实测 123281.SZ 全池 ``cheapness_percentile=0.8794``, 6 行子集单独算变 0.0。
+
+    这一档尤其容易被漏, 因为它没有自愈路径: ``_batch_all_results`` 每次都过
+    ``sort_batch_results_for_review`` 在全池上重标注, 错了下一轮就修回来; 而
+    ``_batch_upcoming_results`` 标注一次之后再没人碰。
+    """
+    if not rows:
+        return []
+    return annotate_batch_results(
+        rows,
+        market_median_deviation=cross_section_anchor_from(pool_results or []),
+        rank_scope=False,
+    )
 
 
 def _filter_nonstandard_results(results, terms_cache=None, admission_config=None):

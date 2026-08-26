@@ -42,7 +42,7 @@ from .base import (
     _add_months,
 )
 from ._helpers import _retry
-from .wind import WindDataProvider
+from .wind import WindDataProvider, wind_is_ready
 from .akshare import AkshareDataProvider
 from .csv_provider import CSVDataProvider
 from .auto import auto_data_provider, detect_available_providers
@@ -58,6 +58,7 @@ __all__ = [
     "CSVDataProvider",
     "auto_data_provider",
     "detect_available_providers",
+    "wind_is_ready",
     "finite_float",
     "infer_cb_trading_metadata",
     "is_issued_pending_listing",

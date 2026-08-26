@@ -50327,6 +50327,63 @@
     "underlying_status": null,
     "underlying_trade_status": null
   },
+  "128009.SZ": {
+    "_meta": {
+      "fetched_at": "2026-08-25T21:45:58",
+      "fetched_at_by_source": {
+        "Wind": "2026-08-25T21:45:58"
+      },
+      "source": "Wind"
+    },
+    "bond_turnover_amount": null,
+    "call_announce_date": null,
+    "call_no_redemption_until": null,
+    "call_redemption_date": null,
+    "call_redemption_price": null,
+    "call_status": null,
+    "call_trigger_pct": 130.0,
+    "close": null,
+    "conversion_price": 13.04,
+    "conversion_suspension_end_date": null,
+    "conversion_suspension_start_date": null,
+    "conversion_suspension_status": null,
+    "coupon_rates": [
+      0.005,
+      0.006999999999999999,
+      0.01
+    ],
+    "credit_rating": "AA+",
+    "credit_rating_outlook": null,
+    "credit_watch_status": null,
+    "delisting_date": null,
+    "down_reset_block_until": null,
+    "down_reset_cooldown_months": null,
+    "down_reset_note": null,
+    "down_reset_p_scale": null,
+    "down_reset_trigger_pct": 90.0,
+    "face_value": 100.0,
+    "is_tradable": true,
+    "issue_date": "2014-12-12",
+    "last_trading_date": null,
+    "listing_date": "2014-12-26",
+    "maturity_date": "2020-12-12",
+    "outstanding_balance": 0.0,
+    "put_obs_months": 48.0,
+    "put_trigger_pct": 70.0,
+    "putback_end_date": null,
+    "putback_price": null,
+    "putback_start_date": null,
+    "redemption_price": 100.547945205479,
+    "sec_name": "歌尔转债(退市)",
+    "suspension_status": null,
+    "tradable_date": "2014-12-26",
+    "trading_status": "tradable",
+    "underlying_code": "002241.SZ",
+    "underlying_name": null,
+    "underlying_pct_change": null,
+    "underlying_status": null,
+    "underlying_trade_status": null
+  },
   "128010.SZ": {
     "_meta": {
       "fetched_at": "2026-08-25T02:26:06",
@@ -59538,8 +59595,8 @@
     "underlying_trade_status": null
   },
   "_bundle_meta": {
-    "n_bonds": 1058,
-    "updated_at": "2026-08-25T19:42:20"
+    "n_bonds": 1059,
+    "updated_at": "2026-08-25T21:45:58"
   },
   "q18082207.IME": {
     "_meta": {

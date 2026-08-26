@@ -251,3 +251,40 @@ python -m convertible_bond.cli.sync_events --codes 118006.SH --apply
 如果没有历史快照，回测会退回当前 `cb_data` 的静态字段，并清掉强赎、摘牌、
 停牌、ST、不下修、成交额等日级/事件状态，再用事件表按日期重建；但当前转股价
 等半静态字段仍可能带有未来信息。因此严肃回测应尽量补齐历史快照或条款 patch。
+
+---
+
+## 关注池: `watchlist.json` / `watchlist_pricing_cache.json` / `watchlist_daily/`
+
+三个文件都是**运行态**、都 gitignored，但语义与保留期各不相同，不要合并：
+
+| 文件 | 层 | 回答什么 | 保留期 |
+| --- | --- | --- | --- |
+| `watchlist.json` | 意图层 | 我关注哪几只 + **加入瞬间**的 `snapshot_*` 研究信号 | 永久，只随手动增删变化 |
+| `watchlist_pricing_cache.json` | 行情层（热） | 这些债**最新一期**多少钱 | 每次刷新整体 upsert |
+| `watchlist_daily/YYYY-MM-DD.json` | 行情层（日志） | 这些债**那一天**多少钱 | 每交易日一份，只追加 |
+
+### 为什么日志用按日文件，而不是热缓存里放一个 `prev` 块
+
+`prev` 需要一条「新 `valuation_date` ≠ 旧 `valuation_date` 才滚动」的规则。这条规则
+写错的后果是：同日重跑两次就把 `prev` 冲成今早的值，于是所有「涨跌 / 偏差Δ」列恒为 0
+**且完全静默**——表面上只是「今天没什么变化」。按日文件让这件事在结构上不可能：写今天
+的文件永远不碰昨天的文件。代价约 5KB/天。
+
+### 三个时间戳不要混用
+
+| 字段 | 取值 | 用途 |
+| --- | --- | --- |
+| `_meta.saved_at` / 行内 `priced_at` | `datetime.now()` | 本机挂钟，答「几分钟前算的」 |
+| `_meta.valuation_date` / 按日文件名 | `market_time.market_today()` | 市场口径，答「这是哪个交易日的价」 |
+| 行内 `market_price_as_of` | 行情数据自身的日期 | 答「这个市价本身是哪天的」 |
+
+混用会静默错一天：实测 `batch_pricing_cache.json` 的 `saved_at` 是 `2026-08-25T10:16`
+而 284/284 行的 `valuation_date` 是 `2026-08-26`（本机在美西，上海已跨日）。
+
+### 陈旧不拒绝，只标注
+
+`market_price_source` 取 `history`（行情序列，带 as-of）/ `terms_close`（条款库兜底，
+**无 as-of**，可能任意旧——日升转债 `123095.SZ` 库里的 `close=99.994` 是 2021 年的值）
+/ `null`。展示层据此标灰，但**不丢弃**：拒绝旧值会让那一行回到整行「—」，而「空表」和
+「真的没数据」长得一模一样。

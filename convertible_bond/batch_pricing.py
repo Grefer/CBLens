@@ -1202,12 +1202,49 @@ def _assign_cross_sectional_ranks(rows: list[dict]) -> list[dict]:
     return rows
 
 
+#: ``_assign_cross_sectional_ranks`` 写出的全部字段。小批量标注时要**显式清空**
+#: 它们 —— 见 ``annotate_batch_results`` 的 ``rank_scope``。
+_CROSS_SECTIONAL_RANK_FIELDS = (
+    "cheapness_rank", "cheapness_percentile", "cheapness_rank_total",
+    "double_low_rank", "double_low_percentile", "double_low_rank_total",
+    "down_reset_edge_rank", "down_reset_edge_percentile", "down_reset_edge_rank_total",
+)
+
+
+def cross_section_anchor_from(results: Sequence[dict]) -> float | None:
+    """从一批**已标注**的结果里取回横截面锚 (全市场中位偏差)。
+
+    优先直接读行内的 ``market_median_deviation`` —— ``annotate_batch_result`` 会把
+    当时用的锚原样写进每一行 (实测主池缓存 283/284 行有值), 所以一份读回来的
+    ``batch_pricing_cache.json`` 自带它当初的锚, 不需要重算。取不到才退回自算。
+
+    **不要改成从 ``_meta`` 读**: 实测 ``batch_pricing_cache.json`` 的 ``_meta`` 键
+    只有 ``{saved_at, source, params, n_results, n_upcoming_results, summary}``,
+    那条路永远取不到值, 而且会静默落到"返回 None"那一档 —— 于是关注池又变回
+    自算中位, 与本函数要解决的问题完全一样。
+    """
+    for row in results or ():
+        value = finite_float(row.get("market_median_deviation"))
+        if value is not None:
+            return value
+    return median_deviation_of(results or ())
+
+
 def annotate_batch_results(results: Sequence[dict], *,
-                           market_median_deviation: float | None = None) -> list[dict]:
+                           market_median_deviation: float | None = None,
+                           rank_scope: bool = True) -> list[dict]:
     """补齐批量研究字段, 不改变输入列表.
 
     *market_median_deviation* 缺省时从这批结果自算 (样本 <30 则退回绝对阈值)。
-    给关注池/新债这类小批量标注时, 应显式传主池的中位数, 否则自算出来的中位没有代表性。
+    给关注池/新债这类小批量标注时, 应显式传主池的中位数 (见
+    :func:`cross_section_anchor_from`), 否则自算出来的中位没有代表性。
+
+    *rank_scope* 说的是"这一批本身是不是一个有代表性的横截面"。**传锚修不了秩** ——
+    ``_assign_cross_sectional_ranks`` 是在**传进来的这一批内部**排名次, 与锚无关,
+    而且末尾还用这些名次重算 ``review_bucket``。实测 123281.SZ 在全池 284 行里
+    ``cheapness_percentile=0.8794``, 单独拿 6 行子集算就变成 0.0 —— 一个"全市场最
+    便宜的 0%"标签, 数字看上去完全正常。所以小批量必须 ``rank_scope=False``,
+    把这一族字段显式写成 None, 让展示层打「—」而不是打一个假名次。
 
     横截面秩 (cheapness_rank / double_low_rank) 在这一层算 —— 单行的
     ``annotate_batch_result`` 拿不到population, 「低估候选」「双低」两个视图的
@@ -1216,9 +1253,16 @@ def annotate_batch_results(results: Sequence[dict], *,
     """
     if market_median_deviation is None:
         market_median_deviation = median_deviation_of(results)
-    return _assign_cross_sectional_ranks(
-        [annotate_batch_result(row, market_median_deviation=market_median_deviation)
-         for row in results])
+    annotated = [annotate_batch_result(row, market_median_deviation=market_median_deviation)
+                 for row in results]
+    if not rank_scope:
+        # review_bucket 保留单行标注的结果: 没有 population 就没有"长度上限"这回事,
+        # 只有相对便宜度下限生效 —— 那正是单行版本已经算好的语义。
+        for row in annotated:
+            for key in _CROSS_SECTIONAL_RANK_FIELDS:
+                row[key] = None
+        return annotated
+    return _assign_cross_sectional_ranks(annotated)
 
 
 def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:

@@ -148,3 +148,35 @@ def default_p_down_pct_for_state(
     if triggered is True:
         return DEFAULT_P_DOWN_PCT, "已触发"
     return DEFAULT_P_DOWN_PCT, "模型"
+
+
+# ── 行情源默认值 ────────────────────────────────────────────────
+
+_DEFAULT_SOURCE_CACHE: list[str] = []
+
+
+def default_market_source() -> str:
+    """GUI 启动时该默认选哪个行情源.
+
+    此前两处都硬编码 ``"Wind"``, 于是**没装 Wind 的机器上每一次取数都必然失败** ——
+    而 GUI 侧从来没引用过 ``detect_available_providers``, 用户拿到的只是一句
+    "未安装 WindPy"。
+
+    判据只看**可导入性**, 故意不看"终端连没连": 连接状态是会变的 (用户可能先开
+    CBLens 再登录 Wind 终端), 拿它定默认值会让下拉框的初值随开机顺序漂移。
+    "装了但没连"那一档由 ``wind_is_ready()`` 在**非用户发起**的取数处单独挡
+    (见 ``tabs/batch_watchlist._source_ready_without_connecting``)。
+
+    只探测一次并缓存: 探测本身是 import (实测 WindPy 0.11s / akshare 0.56s),
+    在启动路径上重复做没有意义。
+    """
+    if not _DEFAULT_SOURCE_CACHE:
+        try:
+            from ..data_providers import detect_available_providers
+            available = detect_available_providers()
+        except Exception:
+            available = []
+        # 两个都探测不到时仍回落 akshare: 它是 pip 依赖, 失败信息 ("pip install akshare")
+        # 比 Wind 那条 ("请安装 Wind 金融终端") 对绝大多数用户更可操作。
+        _DEFAULT_SOURCE_CACHE.append(available[0] if available else "akshare")
+    return _DEFAULT_SOURCE_CACHE[0]

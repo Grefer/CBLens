@@ -650,6 +650,7 @@ def test_sync_events_and_apply_to_bundle(tmp_path):
         event_store,
         start=date(2026, 1, 1),
         end=date(2026, 4, 28),
+        bond_names={"113050.SH": "南银转债"},
     )
 
     assert result["scanned_announcements"] == 2

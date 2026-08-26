@@ -27,6 +27,7 @@ matplotlib.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti TC', 'Arial Unic
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 from ..cache import TermsBundle, project_bundle_path
+from ..watchlist import load_watchlist
 from ..cb_events import CBEventStore, project_events_path
 from ..market_time import market_today
 from ..batch_pricing import DEFAULT_MIN_CREDIT_RATING, DEFAULT_MIN_OUTSTANDING_BALANCE
@@ -37,6 +38,7 @@ from ..pricing_api import (
 )
 from .constants import (
     BOND_CODE_RE,
+    default_market_source,
     DEFAULT_DOWN_RESET_TRIGGER_PCT,
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
@@ -55,6 +57,7 @@ from .controllers import (
 )
 from .tabs import backtest as backtest_tab
 from .tabs import batch as batch_tab
+from .tabs import home as home_tab
 from .tabs import pricing as pricing_tab
 from .tabs import sensitivity as sensitivity_tab
 from .tabs import strategy as strategy_tab
@@ -417,7 +420,15 @@ class CBPricerApp(
         self._source_trace_handles = []
 
         # 动态行情源
-        self.v_data_source = ctk.StringVar(value="Wind")
+        self.v_data_source = ctk.StringVar(value=default_market_source())
+
+        # 关注池 / 批量页共享状态 —— 提到这里而不是留在某一页的 build 里:
+        # ⭐ 关注池主页比 📦 批量页先 build, 而定价页的 ⭐ 按钮 (controllers/pricing)
+        # 也读 _batch_watchlist, 谁都不该假设自己是创建方。
+        self.v_batch_source = ctk.StringVar(value=default_market_source())
+        self.v_batch_status = ctk.StringVar(value="")
+        self._batch_watchlist = load_watchlist()
+        self._watchlist_price_cache = None   # 由 home_tab.build 走 load_price_cache_into 填
         self._provider_cache: dict = {}      # name -> 已实例化的 provider (惰性)
         self._csv_root: str = ""             # CSV provider 的根目录
 
@@ -488,7 +499,8 @@ class CBPricerApp(
     def _build_header(self):
         # 投资者工作流: 先筛候选 → 钻单债 → 验模型 → 做压力测试
         # tab 顺序: 多债视图 (批量 → 策略) → 单债钻取 (定价 → 回测 → 敏感性)
-        self._tab_names = [E("📦 批量"), E("🎯 策略"), E("⚡ 定价"), E("📈 回测"), E("🔥 敏感性")]
+        self._tab_names = [E("⭐ 关注"), E("📦 批量"), E("🎯 策略"), E("⚡ 定价"),
+                           E("📈 回测"), E("🔥 敏感性")]
 
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
@@ -520,8 +532,8 @@ class CBPricerApp(
             unselected_color=BG_INPUT, unselected_hover_color=BTN_HOVER,
             text_color=TEXT, text_color_disabled=TEXT_DIM,
             corner_radius=8)
-        # 启动默认进入批量复核页 — 投资入口先看候选池, 再钻到单债
-        self.tab_seg.set(E("📦 批量"))
+        # 启动默认进入关注池主页 — 每天开页先看自己在盯的那几只, 再去全市场找候选
+        self.tab_seg.set(E("⭐ 关注"))
         self.tab_seg.grid(row=0, column=1, pady=15)
 
         right_frame = ctk.CTkFrame(header, fg_color="transparent")
@@ -676,15 +688,18 @@ class CBPricerApp(
             f.grid_rowconfigure(0, weight=1)
             self._tab_frames[name] = f
 
-        # 默认显示批量页 (与 tab_seg 初始选中一致)
         pricing_tab.build(self, self._tab_frames[E("⚡ 定价")])
         backtest_tab.build(self, self._tab_frames[E("📈 回测")])
         strategy_tab.build(self, self._tab_frames[E("🎯 策略")])
         sensitivity_tab.build(self, self._tab_frames[E("🔥 敏感性")])
+        # ⭐ 关注池主页必须排在 📦 批量页**之前**: 批量页的 _render_batch_views 与
+        # 「⭐ 加入关注池」都要求 batch_watchlist_table_frame 已存在, 而
+        # _render_watchlist_table 拿不到那个 frame 时是 return 而不是报错 ——
+        # 顺序反了只表现为"主页首屏是空的", 没有任何异常。
+        home_tab.build(self, self._tab_frames[E("⭐ 关注")])
         batch_tab.build(self, self._tab_frames[E("📦 批量")])
-        # 关注池在批量页构建时才载入, 此时才能给定价页的 ⭐ 按钮定初始状态
-        self._refresh_watchlist_button()
-        self._active_tab_name = E("📦 批量")
+        self._refresh_watchlist_button()   # 关注池已载入, 给定价页的 ⭐ 按钮定初始状态
+        self._active_tab_name = E("⭐ 关注")
         self._sync_active_tab_frame()
 
     # ── 响应式布局 ────────────────────────────────────────
@@ -748,7 +763,7 @@ class CBPricerApp(
             pass
 
     def _sync_active_tab_frame(self):
-        selected = self._active_tab_name or E("📦 批量")
+        selected = self._active_tab_name or E("⭐ 关注")
         for name, f in self._tab_frames.items():
             if name == selected:
                 f.grid(row=0, column=0, sticky="nsew")
@@ -758,7 +773,7 @@ class CBPricerApp(
 
     def _switch_tab(self, selected):
         if selected not in self._tab_frames:
-            selected = E("📦 批量")
+            selected = E("⭐ 关注")
         self._active_tab_name = selected
         self._sync_active_tab_frame()
         if selected == E("⚡ 定价"):

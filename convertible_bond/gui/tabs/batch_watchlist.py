@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import threading
 import tkinter as tk
 from datetime import date, datetime, timedelta
@@ -16,9 +17,9 @@ import customtkinter as ctk
 
 from ..theme import *  # noqa: F401,F403  保持与 batch.py 一致的颜色 / 字体常量入口
 from ...batch_pricing import (
-    annotate_batch_results,
     average_rating_label,
     build_batch_provider,
+    cross_section_anchor_from,
     list_upcoming_tradable_from_cache,
     sort_batch_results_for_review,
 )
@@ -32,6 +33,10 @@ from ...watchlist import (
     add_to_watchlist,
     load_watchlist,
     remove_from_watchlist,
+)
+from ...watchlist_cache import (
+    load_watchlist_pricing,
+    save_watchlist_pricing,
 )
 from .batch_common import (
     _TREE_ATTRS,
@@ -47,6 +52,7 @@ from .batch_common import (
     _resolve_row_tag,
 )
 from ...market_time import market_today
+from ...data_providers import wind_is_ready
 
 _WATCHLIST_COL_STRETCH_WEIGHTS = {
     "代码": 0.5,
@@ -79,6 +85,86 @@ _UPCOMING_SCAN_WINDOW_DAYS = 30
 # (label 用于匹配确认文案)
 _TERMS_SYNC_MODULE = "convertible_bond.cli.sync_tradable"
 _TERMS_SYNC_LABEL = "🔄 增量更新基础信息 (推荐)"
+
+
+logger = logging.getLogger(__name__)
+
+
+def _source_ready_without_connecting(source: str) -> bool:
+    """这个行情源现在能不能**不新建连接**就取到数.
+
+    只给非用户发起的那一轮当闸。判据按源分:
+
+    - **Wind**: 要求终端已连接 (``wind_is_ready``)。"装了 WindPy"不算 ——
+      装了但终端没开时 ``w.start()`` 会等满 waitTime, 那正是"打开 GUI 就卡住"
+      的成因; 实测本机就是这个状态 (可导入 / ``isconnected()`` 为 False)。
+    - **akshare**: 纯 HTTP, 没有"连接"这回事, 失败也是秒级 —— 放行。
+    - **CSV**: 要在主线程弹目录选择框, 启动时弹一个模态比不定价糟得多 —— 挡住。
+    """
+    key = (source or "").strip().lower()
+    if key == "wind":
+        return wind_is_ready()
+    if key == "akshare":
+        return True
+    return False
+
+
+def _set_watch_button_state(app, state: str) -> None:
+    """改「⚡ 关注池重算」按钮状态; 按钮不在就静默跳过.
+
+    原先是直接在 app 上取那个按钮属性再 configure, 而按钮建在
+    ``tabs/batch.py`` 里、被这个模块跨文件消费。按钮一旦搬走或改名, 起线程前那次
+    访问就抛 AttributeError, 而 finally 里那次在 Tk 回调中抛 (Tk 只打到 stderr),
+    症状是"按钮再也不恢复"。用 getattr 兜住, 让控件归属的变化不再是个定时炸弹。
+    """
+    button = getattr(app, "btn_batch_refresh_watch", None)
+    if button is None:
+        return
+    try:
+        button.configure(state=state)
+    except Exception:
+        logger.debug("关注池重算按钮状态更新失败 (忽略)", exc_info=True)
+
+
+def _cached_valuation_label(app) -> str:
+    """内存里这批行是哪个估值日的 —— 给"今日取价失败"那条状态用."""
+    for row in (app._batch_upcoming_results or []) + (app._batch_all_results or []):
+        value = row.get("valuation_date")
+        if value:
+            return str(value)[:10]
+    return "上一次"
+
+
+def merge_watchlist_pricing(main_rows, upcoming_rows, fresh_rows):
+    """把一轮关注池定价结果并回 (主池行, 主池外行), 返回两个新列表.
+
+    规则不对称, 两半都是必须的:
+
+    - **code 已存在时, 只有 ``status == "ok"`` 才覆盖。** 否则一次取数失败就把
+      内存里昨天算好的那一行换成 nan 行 —— 而表上看不出区别, 只是"今天数字没了"。
+    - **code 不存在时, 无条件 append 到 upcoming (失败行也进)。** 这一半容易被
+      当成 bug 顺手"修掉": 加一句 ``if status != "ok": continue`` 会让一只**失败的
+      在途新债**从表里彻底消失, 而新债不进主池、唯一的来路就是 upcoming —— 于是
+      "这只债取价失败"和"我根本没关注它"变成同一种表现。
+    """
+    main_by_code = {r.get("bond_code"): i for i, r in enumerate(main_rows)}
+    upcoming_by_code = {r.get("bond_code"): i for i, r in enumerate(upcoming_rows)}
+    new_main = list(main_rows)
+    new_upcoming = list(upcoming_rows)
+    for row in fresh_rows:
+        code = row.get("bond_code")
+        if not code:
+            continue
+        is_ok = row.get("status") == "ok"
+        if code in main_by_code:
+            if is_ok:
+                new_main[main_by_code[code]] = row
+        elif code in upcoming_by_code:
+            if is_ok:
+                new_upcoming[upcoming_by_code[code]] = row
+        else:
+            new_upcoming.append(row)
+    return new_main, new_upcoming
 
 
 def _terms_sync_available() -> bool:
@@ -164,6 +250,63 @@ def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
     then(bool(changed))
 
 
+#: 「陈旧即刷」的防抖窗口。启动、切页、扫新债都可能触发这一轮, 没有窗口的话
+#: 用户在页签之间来回点就会不停起后台定价。
+STALE_REFRESH_DEBOUNCE_SEC = 15 * 60
+
+#: 需要重算的取价状态。``ok`` 之外**全部**要重来, 其中 ``no_market`` 那一档最容易
+#: 被漏: 实测 118076.SH 先锋转债 ``status=="ok"``、``valuation_date`` 就是今天、
+#: 唯独市价是 None —— 只看"是不是今天算的"会让它当天永远不再重试。
+_STALE_PRICE_STATES = frozenset({"unpriced", "failed", "no_market", "stale"})
+
+
+def stale_watchlist_codes(app, *, rows=None) -> list[str]:
+    """关注池里今天需要重算的代码.
+
+    判据直接架在 :func:`_watchlist_display_rows` 派生的 ``_price_state`` 上, 不另写
+    一份 —— 两份判据迟早分叉, 而分叉的表现是"表上显示要刷新、刷新却不刷它"。
+
+    唯一的例外是**还没上市的新债**: 它们的 ``no_market`` 是天然状态 (市场还不存在),
+    不该每一轮都陪跑。已上市却缺市价的 (118076.SH) 仍然要重算。
+    """
+    rows = rows if rows is not None else _watchlist_display_rows(app)
+    out: list[str] = []
+    for row in rows:
+        code = row.get("bond_code")
+        if not code:
+            continue
+        state = row.get("_price_state")
+        if state not in _STALE_PRICE_STATES:
+            continue
+        if state == "no_market" and _is_new_bond(row):
+            continue          # 还没上市, 没有市价是正常的
+        out.append(code)
+    return out
+
+
+def refresh_stale_watchlist(app, *, quiet: bool = True,
+                            note: str | None = None) -> int:
+    """给关注池里陈旧/缺价的标的补一轮定价; 返回本轮送出的只数.
+
+    ``quiet=True`` 是**非用户发起**的那一轮 (启动 / 切进主页) 用的: 不碰全局进度条,
+    失败只写状态栏, 且遇到"Wind 装了但终端没连"会被
+    :func:`_source_ready_without_connecting` 直接挡掉 —— 见 AGENTS.md「GUI 启动路径上
+    不许建立新的数据源连接」。
+    """
+    now = datetime.now()
+    last = getattr(app, "_last_stale_refresh_at", None)
+    if quiet and last is not None and (now - last).total_seconds() < STALE_REFRESH_DEBOUNCE_SEC:
+        return 0
+    pending = stale_watchlist_codes(app)
+    if not pending:
+        return 0
+    if not _start_watchlist_pricing(
+            app, pending, note=note or f"待刷新 {len(pending)} 只", quiet=quiet):
+        return 0
+    app._last_stale_refresh_at = now
+    return len(pending)
+
+
 def unpriced_new_bond_codes(app) -> list[str]:
     """关注池里"是新债、且还没有理论价"的代码.
 
@@ -218,7 +361,7 @@ def _scan_upcoming_and_price(app, *, reload_terms: bool = False):
                 app.v_batch_status.set(f"⚠ 条款库重载失败: {exc}")
 
     _auto_add_upcoming_to_watchlist(app, silent=False)
-    _render_watchlist_table(app)
+    refresh_home(app)
 
     # 新债刚加进来时只有条款元数据, 表里一排空白; 顺手把还没有理论价的新债算出来,
     # 否则"扫新债"给出的只是一张代码清单, 没法判断贵贱。
@@ -248,12 +391,23 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None,
     codes = [c for c in dict.fromkeys(codes) if c]
     if not codes:
         return False
+
+    # 单飞检查必须最先 —— 它最便宜, 而且"已经在跑"这件事与源可用与否无关。
     # 现在有三个入口能起这一轮 (⚡ 关注池重算 / 扫新债 / 缓存加载后的自动补价), 并发跑会
     # 让两个 worker 各自基于同一份旧列表算出 new_upcoming 再互相覆盖。
     if getattr(app, "_watchlist_pricing_running", False):
         return False
 
     source = app.v_batch_source.get()
+    if quiet and not _source_ready_without_connecting(source):
+        # 非用户发起的那一轮 (启动自愈) **绝不允许**去建立一条新连接。
+        # WindPy 装了但终端没开时 w.start() 会等满 waitTime, 于是"打开 GUI"
+        # 变成"打开后转圈几十秒" —— 而这一轮本来就只是锦上添花: 用户没要求它,
+        # 表里该有的盘上数据 (watchlist_cache) 已经画出来了。
+        app.v_batch_status.set(
+            f"ℹ {len(codes)} 只待定价 — {source} 当前不可用, 点「⚡ 关注池重算」再试")
+        return False
+
     csv_root = getattr(app, "_csv_root", None)
     if source == "CSV" and not csv_root:
         csv_root = filedialog.askdirectory(title="选择 CSV 数据根目录 (含 bonds/ stocks/ terms/ 子目录)")
@@ -281,17 +435,31 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None,
         return False
 
     label = note or f"关注池 {len(codes)} 只"
-    app._watchlist_pricing_running = True
-    app.btn_batch_refresh_watch.configure(state="disabled")
     app.v_batch_status.set(f"⚡ 正在定价{label} ...")
-    app._start_progress(f"定价{label}")
+    if not quiet:
+        # quiet 那一轮 (启动自愈) 刻意不碰这两样共用件: _start_progress 没有引用计数,
+        # 且 _tick_progress 写的是**全局** v_status —— 一轮后台自愈会把定价页/回测页
+        # 正在跑的任务的状态文字顶掉, 而 finally 里的 _stop_progress 又不还原文案。
+        _set_watch_button_state(app, "disabled")
+        app._start_progress(f"定价{label}")
 
-    threading.Thread(
-        target=_watchlist_pricing_worker,
-        args=(app, codes, source, csv_root, params),
-        kwargs={"quiet": quiet},
-        daemon=True,
-    ).start()
+    # 置位必须紧挨 start(): 它原先在 btn.configure 之前, 而那次裸属性访问一旦抛
+    # (按钮被搬走/改名), finally 就永远不执行 —— 三个入口全被单飞检查静默挡死,
+    # 且检查只 return False、不写状态、不排队, 症状是"点了没反应"。
+    app._watchlist_pricing_running = True
+    try:
+        threading.Thread(
+            target=_watchlist_pricing_worker,
+            args=(app, codes, source, csv_root, params),
+            kwargs={"quiet": quiet},
+            daemon=True,
+        ).start()
+    except Exception:
+        app._watchlist_pricing_running = False
+        if not quiet:
+            _set_watch_button_state(app, "normal")
+            app._stop_progress()
+        raise
     return True
 
 
@@ -319,37 +487,65 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
 
         results = batch_price_from_provider_threaded(
             provider, codes, progress_cb=on_progress, **params)
-        results = annotate_batch_results(results)
+        # 主池外的那几只必须锚主池中位并跳过秩 —— 延迟导入与 _render_batch_views
+        # 同因 (batch ↔ batch_watchlist 会成环)
+        from .batch import _annotate_off_pool
+        results = _annotate_off_pool(results, app._batch_all_results or [])
 
-        # 把结果合并: 主结果里有的就更新主结果, 否则写到 upcoming_results
-        main_by_code = {r.get("bond_code"): i for i, r in enumerate(app._batch_all_results or [])}
-        upcoming_by_code = {r.get("bond_code"): i for i, r in enumerate(app._batch_upcoming_results or [])}
-        new_upcoming = list(app._batch_upcoming_results or [])
-        new_main = list(app._batch_all_results or [])
-        for row in results:
-            code = row.get("bond_code")
-            if not code:
-                continue
-            if code in main_by_code:
-                new_main[main_by_code[code]] = row
-            elif code in upcoming_by_code:
-                new_upcoming[upcoming_by_code[code]] = row
-            else:
-                new_upcoming.append(row)
+        ok_rows = [r for r in results if r.get("status") == "ok"]
+        if not ok_rows:
+            # 全失败守卫 (照主表 worker 的既有做法): 不覆盖内存、不写盘。
+            # 原先无条件报「⚡ 已刷新关注池 N 只」并用一批 nan 行盖掉内存里已有的好行 ——
+            # 一次网络抖动就把昨天算好的价抹平, 而状态栏说的是成功。
+            stale_date = _cached_valuation_label(app)
+            app.after(0, lambda: app.v_batch_status.set(
+                f"⚠ 今日取价失败 ({provider.name}) — 表内仍是{stale_date}的价"))
+            return
+
+        val_date = market_today()
+        anchor = cross_section_anchor_from(app._batch_all_results or [])
+        new_main, new_upcoming = merge_watchlist_pricing(
+            app._batch_all_results or [], app._batch_upcoming_results or [], results)
+
+        try:
+            save_watchlist_pricing(
+                ok_rows,
+                valuation_date=val_date,
+                source=provider.name,
+                params=params,
+                cross_section=({"market_median_deviation": anchor,
+                                "from": "batch_pricing_cache.rows",
+                                "from_valuation_date": val_date.isoformat(),
+                                "n": len(app._batch_all_results or [])}
+                               if anchor is not None else None),
+                origin="watchlist_worker",
+            )
+        except Exception:
+            # 落盘只是让下次开页有数, 失败不该让这一轮的结果丢掉
+            logger.warning("关注池行情落盘失败 (本轮结果仍在内存里)", exc_info=True)
 
         app._batch_all_results = sort_batch_results_for_review(new_main)
         app._batch_upcoming_results = new_upcoming
-        app.after(0, lambda: _render_batch_views(app))
-        app.after(0, lambda: app.v_batch_status.set(
-            f"⚡ 已刷新关注池 {len(codes)} 只 (主表 {sum(1 for c in codes if c in main_by_code)} / 关注 {len(codes) - sum(1 for c in codes if c in main_by_code)})"))
+        app._watchlist_price_cache = load_watchlist_pricing()
+        # 两页都要刷: 主表读 _batch_all_results, 主页读三级取价表, 各有各的入口。
+        # 只刷一边的表现是"算完了但表还是旧值", 正是 AGENTS 记的那个陷阱。
+        app.after(0, lambda: _render_batch_views(app, refresh_home_table=False))
+        app.after(0, lambda: refresh_home(app))
+        n_main = sum(1 for c in codes if c in {r.get("bond_code") for r in (app._batch_all_results or [])})
+        n_failed = len(results) - len(ok_rows)
+        msg = f"⚡ 已刷新关注池 {len(ok_rows)}/{len(codes)} 只"
+        if n_failed:
+            msg += f" (失败 {n_failed})"
+        app.after(0, lambda: app.v_batch_status.set(msg))
     except Exception as exc:
         app.after(0, lambda exc=exc: app.v_batch_status.set(f"❌ 关注池定价失败: {exc}"))
         if not quiet:
             app.after(0, lambda exc=exc: messagebox.showerror("关注池定价失败", str(exc)))
     finally:
         app._watchlist_pricing_running = False
-        app.after(0, app._stop_progress)
-        app.after(0, lambda: app.btn_batch_refresh_watch.configure(state="normal"))
+        if not quiet:
+            app.after(0, app._stop_progress)
+            app.after(0, lambda: _set_watch_button_state(app, "normal"))
 
 
 # ── 加入 / 移除 / 渲染 ───────────────────────────────────────
@@ -394,7 +590,7 @@ def _add_selection_to_watchlist(app):
     if not new_items:
         return
     app._batch_watchlist, added = add_to_watchlist(new_items)
-    _render_watchlist_table(app)
+    refresh_home(app)
     skipped = len(new_items) - added
     msg = f"已加入关注池: {added} 只"
     if skipped:
@@ -413,44 +609,139 @@ def _remove_selected_from_watchlist(app):
     if not codes:
         return
     app._batch_watchlist = remove_from_watchlist(codes)
-    _render_watchlist_table(app)
+    refresh_home(app)
     app.v_batch_status.set(f"已从关注池移除 {len(codes)} 只")
 
 
-def _watchlist_display_rows(app):
-    """合并主批量定价结果 + 关注池额外定价结果, 生成关注池表展示行.
+#: 从定价结果行合并进关注池展示行的字段。**新增列的数据来源都要先登记在这里** ——
+#: 漏掉不会报错, 只是那一列恒空 (这一处没有守护测试能替你发现)。
+_PRICED_MERGE_FIELDS = (
+    # 身份与条款
+    "bond_name", "stock_code", "underlying_name", "K", "credit_rating",
+    "maturity_date", "listing_date", "tradable_date",
+    "is_tradable", "trading_status", "outstanding_balance",
+    # 定价主结果
+    "status", "theoretical_price", "deviation", "parity", "conversion_premium",
+    # 研究信号
+    "opportunity_score", "quality_score", "double_low", "confidence",
+    "sensitivity_status", "risk_tags", "review_bucket", "review_notes",
+    "event_flags", "down_reset_trigger_gap", "down_reset_robust_edge_value",
+    # 横截面 (小批量标注时为 None, 展示层打「—」而不是打一个假名次)
+    "relative_deviation", "cheapness_rank", "cheapness_percentile",
+    "cheapness_rank_total",
+    # 溯源
+    "valuation_date", "priced_at", "origin",
+    "market_price_as_of", "market_price_source",
+)
 
-    取价必须用 ``_batch_all_results`` (**全池**) 而不是 ``_batch_results`` —— 后者是
-    :func:`_render_batch_views` 按当前视图过滤后的子集。关注的债多半不在「低估候选」
-    这类窄视图里 (实测视图 40/284 只, 中仑/派克/先锋三只在池内定价成功却都不在视图中),
-    于是关注池整行显示成「—」, 且理论价会随主表视图开关忽有忽无。
-    ``_watchlist_pricing_worker`` 重算主池标的时写的也是 ``_batch_all_results``, 读错变量
-    会让「⚡ 关注池重算」对这些行**永远无效** —— 状态栏报"主表 3 / 关注 3", 表里却只有
-    走 ``_batch_upcoming_results`` 的那 3 只出得来价。
+#: ``market_price`` 单拎出来: 它**同时**存在于 watchlist.json 的 metadata 白名单
+#: (无 as-of 戳, 可能是几天前扫新债时写的) 与定价结果行里。放进上面那个元组会走
+#: "value is not None 才覆盖"的规则 —— 于是定价行明明算出"今天没有市价"(None) 时,
+#: entry 里那个陈旧值会静默胜出, 表上看不出任何区别。
+_PRICE_FIELD = "market_price"
+
+
+_EMPTY_PRICE_CACHE: dict = {"meta": {}, "rows": {}}
+
+
+def load_price_cache_into(app) -> dict:
+    """读关注池行情热缓存并挂到 app 上; 由**启动路径**显式调用.
+
+    读盘刻意留在这里而不是让 ``_price_cache`` 惰性去读 —— 展示层一旦会隐式碰
+    真实磁盘, 用例就变成"过不过取决于你上次开 GUI 点没点刷新"。这正是
+    ``sync_cb_events`` 那批用例踩过的坑 (真实 code + 真实 cb_data → 一次纯数据
+    提交就让套件转红), 不要在新代码里重演。
+
+    挂在**独立属性**上而不是塞进 ``app._batch_watchlist`` 的元素里:
+    ``_auto_add_upcoming_to_watchlist`` 会用磁盘值整体重置那个列表 (三处调用),
+    任何挂在其元素上的内存态增强都会在下一次扫新债时无声蒸发。
     """
-    by_code = {row.get("bond_code"): row
-               for row in (getattr(app, "_batch_all_results", None) or [])}
-    for row in (getattr(app, "_batch_upcoming_results", None) or []):
-        code = row.get("bond_code")
-        if code and code not in by_code:
-            by_code[code] = row
+    try:
+        cache = load_watchlist_pricing()
+    except Exception:
+        logger.debug("关注池热缓存读取失败, 按空处理", exc_info=True)
+        cache = dict(_EMPTY_PRICE_CACHE)
+    app._watchlist_price_cache = cache
+    return cache
+
+
+def _price_cache(app) -> dict:
+    """已挂在 app 上的热缓存; 没有就当空 —— **不读盘**, 理由见 load_price_cache_into."""
+    return getattr(app, "_watchlist_price_cache", None) or _EMPTY_PRICE_CACHE
+
+
+def _priced_rows_by_code(app) -> dict[str, dict]:
+    """三级兜底的取价表, 优先级由低到高.
+
+    1. **磁盘热缓存** —— 开页立刻有数的那一层。没有它, 关注池的理论价就完全寄生在
+       "你这次开机有没有跑过全市场"上 (实测缓存 ``n_upcoming_results=0`` 时, 三只
+       在途新债连着几天没有理论价)。
+    2. ``_batch_upcoming_results`` —— 本轮算出来的主池外结果。
+    3. ``_batch_all_results`` —— **全池**, 不是 ``_batch_results`` (那是视图子集,
+       关注的债多半不在「低估候选」这类窄视图里, 读错会让整行随视图开关忽有忽无)。
+
+    内存永远压过磁盘: 磁盘是"上次算的", 内存是"这次算的"。
+    """
+    by_code: dict[str, dict] = {}
+    for code, row in (_price_cache(app).get("rows") or {}).items():
+        if code:
+            by_code[str(code)] = row
+    for source in (getattr(app, "_batch_upcoming_results", None) or [],
+                   getattr(app, "_batch_all_results", None) or []):
+        for row in source:
+            code = row.get("bond_code")
+            if code:
+                by_code[str(code)] = row
+    return by_code
+
+
+def _derive_price_state(merged: dict, priced: dict | None, today) -> str:
+    """这一行的取价状态, 六选一.
+
+    今天三种「—」在表上长得一模一样, 而成因完全不同 (实测同一份关注池里同时存在):
+    ``unpriced`` 是没算过, ``no_market`` 是算了但数据源没给市价 (118076.SH 先锋转债),
+    ``failed`` 是算了但失败。分不开就没法判断"要不要点刷新"。
+    """
+    if priced is None:
+        return "unpriced"
+    if str(priced.get("status") or "") != "ok":
+        return "failed"
+    if not _is_finite(merged.get(_PRICE_FIELD)):
+        return "no_market"
+    value = priced.get("valuation_date")
+    try:
+        if value is None or _parse_watchlist_date(value) != today:
+            return "stale"
+    except (TypeError, ValueError):
+        return "stale"
+    return "ok"
+
+
+def _watchlist_display_rows(app, *, today=None):
+    """合并关注池意图层 + 三级取价, 生成关注池表展示行.
+
+    ``entry`` (来自 watchlist.json) 是**基座**, 定价行覆盖在上面。基座这个位置很关键:
+    所有上层都缺值时它一定胜出 —— 所以 ``market_price`` 这种"两边都有、但一边没有
+    as-of 戳"的字段必须显式处理, 见 ``_PRICE_FIELD``。
+    """
+    today = today or market_today()
+    by_code = _priced_rows_by_code(app)
     rows = []
     for entry in app._batch_watchlist:
         code = entry.get("bond_code")
         merged = dict(entry)
         priced = by_code.get(code)
         if priced:
-            for key in ("bond_name", "stock_code", "K", "theoretical_price",
-                        "market_price", "deviation", "credit_rating", "status",
-                        "parity", "conversion_premium", "opportunity_score",
-                        "confidence", "risk_tags", "sensitivity_status",
-                        "review_bucket", "review_notes", "listing_date",
-                        "tradable_date", "is_tradable", "trading_status",
-                        "underlying_name", "outstanding_balance",
-                        "maturity_date"):
+            for key in _PRICED_MERGE_FIELDS:
                 value = priced.get(key)
                 if value is not None:
                     merged[key] = value
+            # 有定价行时市价**一律**以它为准 (包括算出来是 None 的情况) ——
+            # 否则 entry 里那个无戳的旧价会在"今天没市价"时静默顶上来。
+            merged[_PRICE_FIELD] = priced.get(_PRICE_FIELD)
+            if merged.get("market_price_source") is None and _is_finite(merged[_PRICE_FIELD]):
+                merged["market_price_source"] = "unstamped"
+        merged["_price_state"] = _derive_price_state(merged, priced, today)
         rows.append(merged)
     return rows
 
@@ -607,6 +898,17 @@ def _render_watchlist_table(app):
     _TREE_ATTRS.add("_batch_watchlist_tree")
     _attach_watchlist_context_menu(app, tree)
     _refresh_watchlist_summary(app, rows)
+
+
+def refresh_home(app) -> None:
+    """主页数据变了就调这一下: 表 + 摘要 + 事件横幅.
+
+    横幅的刷新**从 ``_render_watchlist_table`` 末尾提到这里**。原先它寄生在表渲染
+    里且是全仓库唯一调用点 —— 于是任何"少画一次表"的优化都会顺手把横幅一起停掉,
+    而横幅失败是静默的 (拿不到 label/var 直接 return)。它的扫描集本来也不只是关注池
+    (``_banner_scan_codes`` = 关注池 ∪ 主池全量), 挂在关注池表的渲染上本就不合理。
+    """
+    _render_watchlist_table(app)
     _refresh_events_banner(app)
 
 
@@ -799,7 +1101,9 @@ def _refresh_events_banner(app, *, window_days: int = 30, head: int = 5):
     groups = _group_banner_entries(upcoming, names)
     parts = groups[:head]
     suffix = f"  ·  ...展开 {len(upcoming)} 件" if len(groups) > head else ""
-    var.set(f"⚠ 主池近 {window_days} 天事件 {len(upcoming)} 件 (单击查看全部): "
+    # 文案要跟 _banner_scan_codes 的实际扫描集对上 (关注池 ∪ 主池全量), 尤其是这块
+    # 现在挂在「⭐ 我的关注池」主页上 —— 写"主池"会让人以为它漏了自己关注的债。
+    var.set(f"⚠ 近 {window_days} 天事件 {len(upcoming)} 件 (关注池+主池, 单击查看全部): "
             + "  ·  ".join(parts) + suffix)
     label.grid()
 
@@ -836,7 +1140,7 @@ def _show_events_banner_full(app):
     if not full:
         return
     win = ctk.CTkToplevel(app)
-    win.title(f"主池近 30 天事件 ({len(full)} 件)")
+    win.title(f"近 30 天事件 ({len(full)} 件, 关注池+主池)")
     win.geometry("520x420")
     win.transient(app)
     body = ctk.CTkScrollableFrame(win, fg_color=BG_CARD)
