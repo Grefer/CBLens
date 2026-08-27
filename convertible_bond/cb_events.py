@@ -1009,6 +1009,45 @@ def event_short_label(event_type: str) -> str:
     return EVENT_TYPE_SHORT_LABEL.get(event_type, event_type or "其他")
 
 
+#: 事件类型 → badge 颜色。与 EVENT_TYPE_SHORT_LABEL 并列为展示层的单一事实源 ——
+#: GUI 曾自带一份只覆盖 14/18 的私有配色表, 剩下 4 类 (balance_change /
+#: conversion_suspension / conversion_resume / unknown) 全渲染成同一个灰色。
+#: 这与"GUI 自带一份短标签表并把暂停转股和恢复转股同显 conv"是同一类分叉:
+#: **展示词表只许有一份**, 否则加事件类型时总会漏掉某一份。
+#: 有守护测试比对 EVENT_TYPES 全覆盖。
+EVENT_TYPE_COLOR: dict[str, str] = {
+    # 下修一族: 提议=黄(待表决) / 通过=绿(利好落地) / 否决=红 / 触发提示=橙
+    "down_reset_proposed":        "#e6a700",
+    "down_reset_approved":        "#40a02b",
+    "down_reset_rejected":        "#d20f39",
+    "down_reset_trigger_notice":  "#df8e1d",
+    "conversion_price_adjusted":  "#179299",
+    # 强赎一族: 赎回=红(硬退出期限) / 不赎=绿(上限解除)
+    "call_redemption":            "#d20f39",
+    "call_no_redemption":         "#40a02b",
+    "putback":                    "#7287fd",
+    # 状态类
+    "rating_change":              "#df8e1d",
+    "delisting":                  "#8839ef",
+    "suspension":                 "#fe640b",
+    "conversion_suspension":      "#fe640b",   # 与停牌同族: 暂时不能转
+    "conversion_resume":          "#40a02b",   # 相反的意思, 必须是相反的颜色
+    "balance_change":             "#179299",
+    # 正股类
+    "underlying_suspension":      "#fe640b",
+    "underlying_st_risk":         "#d20f39",
+    "underlying_st_clear":        "#40a02b",
+    "unknown":                    "#6c6f85",
+}
+
+#: 未登记类型的兜底色 (中性灰)。
+EVENT_TYPE_COLOR_FALLBACK = "#6c6f85"
+
+
+def event_type_color(event_type: str) -> str:
+    return EVENT_TYPE_COLOR.get(event_type, EVENT_TYPE_COLOR_FALLBACK)
+
+
 def event_actionability(event_type: str, *, is_end: bool = False) -> int:
     """事件类型 → 可操作性次序 (小 = 更该先看见)。
 

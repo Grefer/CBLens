@@ -257,14 +257,23 @@ def test_banner_groups_repeats_so_the_urgent_one_survives():
     assert len(parts) == 2                       # 12 条压成 2 段, 紧急那条不会被挤掉
 
 
-def test_banner_scan_codes_cover_the_whole_main_pool():
-    from convertible_bond.gui.tabs.batch_watchlist import _banner_scan_codes
+def test_banner_scan_sets_are_split_but_neither_is_dropped():
+    """横幅搬到关注池主页后, 扫描集拆成两个:
+
+    - 关注池是**主**扫描集 ("我在盯的这几只今天有什么事")
+    - 全池仍在, 但从"铺满横幅"降级成"末尾一句计数 + 单击展开" ——
+      原来那条理由 ("横幅真正的用处是告诉你**还不知道的那些**") 依然成立,
+      不能因为换了页面就把全池那 50 多件事整个丢掉。
+    """
+    from convertible_bond.gui.tabs.batch_watchlist import (
+        _pool_scan_codes, _watchlist_scan_codes)
 
     class _App:
         _batch_watchlist = [{"bond_code": "W.SH"}]
         _batch_all_results = [{"bond_code": "M1.SH"}, {"bond_code": "M2.SH"}, {}]
 
-    assert _banner_scan_codes(_App()) == {"W.SH", "M1.SH", "M2.SH"}
+    assert _watchlist_scan_codes(_App()) == {"W.SH"}
+    assert _pool_scan_codes(_App()) == {"M1.SH", "M2.SH"}
 
 
 # ── 扫新债: 窄同步 → 扫描 ──
@@ -818,3 +827,217 @@ def test_star_import_exemption_only_shields_real_theme_names():
     assert not unknown, (
         "以下名字既不是 theme 的导出、也没有在本模块定义 —— star import 豁免正在替它们打掩护, "
         "运行期会抛 NameError:\n  " + "\n  ".join(unknown))
+
+
+# ── 列换血 / 数据列 / 涨跌基准 (S8) ─────────────────────────────
+
+def test_column_definition_is_a_single_source_of_truth():
+    """表头 / 列宽 / 拉伸权重三者的键集必须完全一致.
+
+    权重表按**表头文本**索引: 删列留死条目、加列查不到会走 batch_common 的默认 1.0
+    (与"名称"同级), 窗口一拉宽就把富余宽度均摊给窄数字列。不报错、不红测试。
+    """
+    headers, widths = watchlist_tab.watchlist_columns()
+    assert len(headers) == len(widths)
+    assert set(headers) == set(watchlist_tab._WATCHLIST_COL_STRETCH_WEIGHTS)
+    assert len(set(headers)) == len(headers), "表头有重复"
+
+
+def test_change_column_header_names_the_baseline_date():
+    """表头不说清是跟哪天比, 这一列就是个没法核对的数字 ——
+    周一/长假后它其实是 3 天涨跌。"""
+    assert watchlist_tab.change_column_label(None) == watchlist_tab.CHANGE_COLUMN_KEY
+    label = watchlist_tab.change_column_label({"valuation_date": date(2026, 8, 25)})
+    assert label == "涨跌 vs 08-25"
+    headers, _ = watchlist_tab.watchlist_columns(label)
+    assert label in headers and watchlist_tab.CHANGE_COLUMN_KEY not in headers
+
+
+def test_dropped_columns_are_really_gone():
+    """按用户决策: 砍「可信」留「敏感性」; 上市日/可交易日/距交易/机会分折进别处;
+    「加入时偏差」「市价变化」锚的是加入瞬间, 与选定的"vs 上一交易日"口径不是一回事。"""
+    weights = set(watchlist_tab._WATCHLIST_COL_STRETCH_WEIGHTS)
+    for gone in ("可信", "上市日", "可交易日", "距交易", "机会分",
+                 "加入时偏差(%)", "市价变化(%)", "状态"):
+        assert gone not in weights, f"{gone} 应该已经砍掉"
+    assert "敏感性" in weights and "数据" in weights
+
+
+@pytest.mark.parametrize("state,extra,expected", [
+    ("ok", {}, "✓ 今日"),
+    ("stale", {}, "昨日"),
+    ("no_market", {}, "无市价"),
+    ("failed", {"status": "provider error: timeout"}, "失败 · provider error: ti"),
+    ("unpriced", {}, "未定价"),
+])
+def test_row_data_label(state, extra, expected):
+    entry = {"bond_code": "X", "_price_state": state, **extra}
+    assert watchlist_tab._row_data_label(entry) == expected
+
+
+def test_data_label_flags_a_price_older_than_the_valuation_date():
+    """停牌/节假日会让最近一笔收盘价落在几天前 —— 那和"今天的价"不是一回事."""
+    entry = {"bond_code": "X", "_price_state": "ok",
+             "valuation_date": date(2026, 8, 26),
+             "market_price_as_of": date(2026, 8, 21),
+             "market_price_source": "history"}
+    assert watchlist_tab._row_data_label(entry) == "✓ 今日 · 价 08-21"
+
+
+def test_data_label_flags_the_unstamped_fallback():
+    """terms.close 兜底那一档没有 as-of, 可以任意旧 (日升转债库里的是 2021 年的值)."""
+    entry = {"bond_code": "X", "_price_state": "ok",
+             "market_price_source": "terms_close"}
+    assert watchlist_tab._row_data_label(entry) == "✓ 今日 · 无戳"
+
+
+def test_unpriced_label_uses_pool_exclusion_reason_not_view_reason():
+    """「已发行未上市」这类文案来自 batch_pricing_exclusion_reason.
+
+    接 view_exclusion_reason 是错的: 它返回视图口径文案 (「相对市场中位 +17.9pp,
+    未便宜过 5pp」), 而且要收一个 view 参数 —— 主页根本没有视图选择器。
+    """
+    class _Cache:
+        def get(self, code):
+            return object()
+
+    calls = []
+
+    def fake_reason(code, terms, **kw):
+        calls.append(code)
+        return "已发行未上市"
+
+    import convertible_bond.gui.tabs.batch_watchlist as mod
+    original = mod.batch_pricing_exclusion_reason
+    mod.batch_pricing_exclusion_reason = fake_reason
+    try:
+        label = mod._row_data_label({"bond_code": "123284.SZ", "_price_state": "unpriced"},
+                                    terms_cache=_Cache())
+    finally:
+        mod.batch_pricing_exclusion_reason = original
+    assert label == "未定价 · 已发行未上市"
+    assert calls == ["123284.SZ"]
+
+
+@pytest.mark.parametrize("cur,base,expected", [
+    (110.0, 100.0, 10.0),
+    (90.0, 100.0, -10.0),
+    (100.0, None, None),
+    (None, 100.0, None),
+    (100.0, 0.0, None),
+    (float("nan"), 100.0, None),
+])
+def test_pct_change_returns_none_not_zero_when_there_is_no_base(cur, base, expected):
+    """没有基准就返回 None 显示「—」, **不是 0.0** —— "没有基准"和"确实没变"
+    必须分得开, 否则用户会把"我昨天没开过 GUI"读成"今天没动"。"""
+    got = watchlist_tab._pct_change(cur, base)
+    if expected is None:
+        assert got is None
+    else:
+        assert got == pytest.approx(expected)
+
+
+# ── 事件区双向化 (S9) ────────────────────────────────────────────
+
+class _FakeEventStore:
+    def __init__(self, by_code):
+        self._by_code = by_code
+
+    def list_events(self, bond_code=None):
+        return self._by_code.get(bond_code, [])
+
+
+class _BannerEv:
+    def __init__(self, event_type, day):
+        self.event_type = event_type
+        self.event_date = day
+        self.effective_start = None
+        self.effective_end = None
+
+
+class _BannerApp:
+    def __init__(self, watchlist, store, pool=()):
+        self._batch_watchlist = [{"bond_code": c, "bond_name": c} for c in watchlist]
+        self._batch_all_results = [{"bond_code": c, "bond_name": c} for c in pool]
+        self.event_store = store
+        self.v_batch_events_banner = _StrVar()
+        self.lbl_batch_events_banner = _FakeLabel()
+        self._batch_events_banner_full = []
+
+
+class _StrVar:
+    def __init__(self):
+        self._v = ""
+
+    def get(self):
+        return self._v
+
+    def set(self, v):
+        self._v = v
+
+
+class _FakeLabel:
+    def __init__(self):
+        self.shown = None
+
+    def grid(self):
+        self.shown = True
+
+    def grid_remove(self):
+        self.shown = False
+
+
+def test_events_banner_shows_an_explicit_empty_state(monkeypatch):
+    """空是**常态**不是异常 —— 实测今天关注池近 7 天与未来 30 天都是 0 件.
+
+    藏起控件会重演「低估候选默认打开是空表、用户以为坏了」那次: 一个消失的控件
+    和一个坏掉的控件长得一模一样。
+    """
+    monkeypatch.setattr(watchlist_tab, "market_today", lambda: date(2026, 8, 26))
+    app = _BannerApp(["A.SH", "B.SH"], _FakeEventStore({}))
+    watchlist_tab._refresh_events_banner(app)
+    assert app.lbl_batch_events_banner.shown is True, "空态不许 grid_remove"
+    assert "已扫 2 只" in app.v_batch_events_banner.get()
+    assert "无日程事件" in app.v_batch_events_banner.get()
+
+
+def test_events_banner_splits_past_and_future(monkeypatch):
+    today = date(2026, 8, 26)
+    monkeypatch.setattr(watchlist_tab, "market_today", lambda: today)
+    store = _FakeEventStore({
+        "A.SH": [_BannerEv("call_redemption", today - timedelta(days=3))],
+        "B.SH": [_BannerEv("putback", today + timedelta(days=10))],
+    })
+    watchlist_tab._refresh_events_banner(_app := _BannerApp(["A.SH", "B.SH"], store))
+    text = _app.v_batch_events_banner.get()
+    assert "近 7 天 1 件" in text
+    assert "未来 30 天 1 件" in text
+    # 明细一条不少地留给弹窗, 过去的排在前面 (它们是"已经发生了而你可能没看见")
+    assert len(_app._batch_events_banner_full) == 2
+    assert _app._batch_events_banner_full[0][0] == "A.SH"
+
+
+def test_events_banner_keeps_the_pool_wide_count(monkeypatch):
+    """全池那条线索没被丢掉, 只是从"铺满横幅"降级成"末尾一句计数"。
+
+    原来的理由 —— "横幅真正的用处是告诉你**还不知道的那些**" —— 依然成立。
+    """
+    today = date(2026, 8, 26)
+    monkeypatch.setattr(watchlist_tab, "market_today", lambda: today)
+    store = _FakeEventStore({
+        "P1.SH": [_BannerEv("call_redemption", today + timedelta(days=5))],
+        "P2.SH": [_BannerEv("putback", today + timedelta(days=6))],
+    })
+    app = _BannerApp(["A.SH"], store, pool=["P1.SH", "P2.SH"])
+    watchlist_tab._refresh_events_banner(app)
+    text = app.v_batch_events_banner.get()
+    assert "全池另有 2 件" in text
+    assert "无日程事件" in text          # 关注池自己那一半仍然显式说空
+
+
+def test_events_banner_survives_a_missing_store():
+    app = _BannerApp(["A.SH"], None)
+    app.event_store = None
+    watchlist_tab._refresh_events_banner(app)
+    assert app.lbl_batch_events_banner.shown is True
+    assert app.v_batch_events_banner.get() == "事件表未载入"

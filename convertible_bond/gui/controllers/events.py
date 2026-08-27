@@ -18,6 +18,7 @@ from ...cb_events import (
     CBEvent,
     CBEventStore,
     event_short_label,
+    event_type_color,
     project_events_path,
     reload_default_event_store,
 )
@@ -234,22 +235,11 @@ class EventsMixin:
 
     @staticmethod
     def _event_type_color(event_type: str) -> str:
-        return {
-            "down_reset_proposed": "#e6a700",   # 黄
-            "down_reset_approved": "#40a02b",   # 绿
-            "down_reset_trigger_notice": "#df8e1d",
-            "conversion_price_adjusted": "#179299",
-            "down_reset_rejected": "#d20f39",   # 红
-            "call_redemption":     "#d20f39",
-            "call_no_redemption":  "#40a02b",
-            "putback":             "#7287fd",
-            "rating_change":       "#df8e1d",
-            "delisting":           "#8839ef",
-            "suspension":          "#fe640b",
-            "underlying_suspension": "#fe640b",
-            "underlying_st_risk":    "#d20f39",
-            "underlying_st_clear":   "#40a02b",
-        }.get(event_type, "#6c6f85")
+        # 配色表已收到 cb_events.EVENT_TYPE_COLOR (单一事实源)。这里曾自带一份,
+        # 只覆盖 14/18 个类型 —— balance_change / conversion_suspension /
+        # conversion_resume / unknown 全渲染成同一个灰色, 而暂停转股与恢复转股
+        # 是相反的意思。与短标签表那次分叉 (badge 显示 bala/conv/unkn) 同源。
+        return event_type_color(event_type)
 
     @staticmethod
     def _event_type_short(event_type: str) -> str:

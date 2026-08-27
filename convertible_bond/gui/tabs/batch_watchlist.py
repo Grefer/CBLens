@@ -18,6 +18,7 @@ import customtkinter as ctk
 from ..theme import *  # noqa: F401,F403  保持与 batch.py 一致的颜色 / 字体常量入口
 from ...batch_pricing import (
     average_rating_label,
+    batch_pricing_exclusion_reason,
     build_batch_provider,
     cross_section_anchor_from,
     list_upcoming_tradable_from_cache,
@@ -35,6 +36,7 @@ from ...watchlist import (
     remove_from_watchlist,
 )
 from ...watchlist_cache import (
+    latest_daily_before,
     load_watchlist_pricing,
     save_watchlist_pricing,
 )
@@ -54,24 +56,26 @@ from .batch_common import (
 from ...market_time import market_today
 from ...data_providers import wind_is_ready
 
+#: 列宽拉伸权重。**改 headers 必须同步改这里** —— 它按表头文本索引, 删掉的键会变成
+#: 死条目、新增的列查不到会走 batch_common 的默认 1.0 (与"名称"同级), 于是窗口一拉宽
+#: 就把富余宽度均摊给窄数字列。不报错、不红测试, 只是越拉越难看。
+#: 有守护测试比对两边的键集。
 _WATCHLIST_COL_STRETCH_WEIGHTS = {
     "代码": 0.5,
     "名称": 1.0,
     "正股": 0.6,
-    "上市日": 0.75,
-    "可交易日": 0.75,
-    "距交易": 0.25,
-    "机会分": 0.35,
-    "可信": 0.2,
-    "理论价": 0.35,
+    "事件": 1.6,
     "市价": 0.35,
+    "涨跌(%)": 0.4,
+    "理论价": 0.35,
     "偏差(%)": 0.35,
-    "加入时偏差(%)": 0.45,
-    "市价变化(%)": 0.45,
+    "偏差Δ(pp)": 0.45,
+    "相对偏差": 0.4,
+    "双低": 0.3,
     "敏感性": 0.8,
     "标签": 2.0,
-    "状态": 0.25,
-    "加入时间": 1.4,
+    "数据": 0.7,
+    "加入时间": 1.2,
 }
 
 
@@ -805,6 +809,117 @@ def _format_days_to_trade(entry):
     return f"+{days}"
 
 
+#: 关注池表的列定义 —— **单一事实源**。表头文本、列宽、拉伸权重三者必须同步,
+#: 而权重表是按表头**文本**索引的: 删列会留下死条目、加列查不到会走 batch_common 的
+#: 默认 1.0 (与"名称"同级), 于是窗口一拉宽就把富余宽度均摊给窄数字列。不报错、
+#: 不红测试, 只是越拉越难看。有守护测试比对三边的键集。
+_WATCHLIST_COLUMNS: tuple[tuple[str, int], ...] = (
+    ("代码", 100), ("名称", 90), ("正股", 80), ("事件", 150),
+    ("市价", 70), ("涨跌(%)", 95), ("理论价", 70), ("偏差(%)", 70),
+    ("偏差Δ(pp)", 80), ("相对偏差", 75), ("双低", 55), ("敏感性", 90),
+    ("标签", 170), ("数据", 110), ("加入时间", 130),
+)
+
+#: 「涨跌」列在 ``_WATCHLIST_COLUMNS`` 里的固定键。表头实际显示的是**动态日期**
+#: (见 :func:`change_column_label`), 查权重表时要归一化回这个键。
+CHANGE_COLUMN_KEY = "涨跌(%)"
+
+
+def change_column_label(prev_snapshot) -> str:
+    """「涨跌」列的表头文本.
+
+    写**动态日期**而不是写死"日涨跌": 基准由盘上有没有那天的窄快照决定 —— 周一/长假后
+    它其实是 3 天涨跌, 而你没开过 GUI 的那些天更是直接跳过去。表头不说清是跟哪天比,
+    这一列就是个没法核对的数字。
+    """
+    day = (prev_snapshot or {}).get("valuation_date")
+    return f"涨跌 vs {day.strftime('%m-%d')}" if day is not None else CHANGE_COLUMN_KEY
+
+
+def watchlist_columns(change_label: str | None = None):
+    """(表头, 列宽); *change_label* 用来替换涨跌列的动态表头."""
+    headers = [name for name, _ in _WATCHLIST_COLUMNS]
+    widths = [width for _, width in _WATCHLIST_COLUMNS]
+    if change_label:
+        headers[headers.index(CHANGE_COLUMN_KEY)] = change_label
+    return headers, widths
+
+
+#: 「数据」列的取值 —— 取代原来的「状态」列。今天三种「—」在表上长得一模一样,
+#: 而成因完全不同 (实测同一份关注池里三种同时存在), 分不开就没法判断要不要点刷新。
+_PRICE_STATE_LABEL = {
+    "ok": "✓ 今日",
+    "stale": "昨日",
+    "no_market": "无市价",
+    "unpriced": "未定价",
+    "failed": "失败",
+}
+
+
+def _previous_daily_snapshot():
+    """上一交易日的窄快照; 没有就 None.
+
+    「上一交易日」由**盘上有没有那天的文件**定义, 不靠日历倒推 —— 前者天然处理周末
+    与节假日。代价是你没开过 GUI 的那些天不会有文件, 基准会跳到更早的一天, 所以
+    表头必须写动态日期。
+    """
+    try:
+        return latest_daily_before(market_today())
+    except Exception:
+        logger.debug("读上一交易日窄快照失败 (忽略)", exc_info=True)
+        return None
+
+
+def _row_data_label(entry, *, terms_cache=None, admission_config=None) -> str:
+    """这一行的数据状态, 附上"为什么没有"的具体原因."""
+    state = entry.get("_price_state")
+    if state == "unpriced":
+        # 主池剔除原因 (「已发行未上市」这类) 比一句"未定价"有用得多。
+        # **注意用 batch_pricing_exclusion_reason 而不是 view_exclusion_reason** ——
+        # 后者返回的是视图口径文案 (「相对市场中位 +17.9pp, 未便宜过 5pp」),
+        # 而且要收一个 view 参数, 主页根本没有视图选择器。
+        code = entry.get("bond_code")
+        if code and terms_cache is not None:
+            try:
+                reason = batch_pricing_exclusion_reason(
+                    code, _cached_terms_for(terms_cache, code),
+                    admission_config=admission_config)
+            except Exception:
+                reason = None
+            if reason:
+                return f"未定价 · {reason}"
+        return "未定价"
+    if state == "failed":
+        status = str(entry.get("status") or "").strip()
+        # 状态列此前直接把 status 原文塞进表格, 于是一条裸异常串能把整行撑爆
+        return f"失败 · {status[:18]}" if status and status != "failed" else "失败"
+    label = _PRICE_STATE_LABEL.get(state, "—")
+    if state in {"ok", "stale"}:
+        source = entry.get("market_price_source")
+        if source == "terms_close":
+            # 条款库兜底那一档没有 as-of, 可以任意旧 (日升转债库里的 close 是 2021 年的)
+            label += " · 无戳"
+        else:
+            as_of = _parse_watchlist_date(entry.get("market_price_as_of"))
+            val_date = _parse_watchlist_date(entry.get("valuation_date"))
+            if as_of and val_date and as_of < val_date:
+                label += f" · 价 {as_of.strftime('%m-%d')}"
+    return label
+
+
+def _cached_terms_for(terms_cache, code):
+    try:
+        return terms_cache.get(code)
+    except Exception:
+        return None
+
+
+def _pct_change(current, base):
+    if not (_is_finite(current) and _is_finite(base)) or float(base) == 0:
+        return None
+    return (float(current) - float(base)) / float(base) * 100.0
+
+
 def _render_watchlist_table(app):
     frame = getattr(app, "batch_watchlist_table_frame", None)
     if frame is None:
@@ -813,10 +928,9 @@ def _render_watchlist_table(app):
         child.destroy()
 
     rows = _watchlist_display_rows(app)
-    headers = ["代码", "名称", "正股", "上市日", "可交易日", "距交易",
-               "机会分", "可信", "理论价", "市价", "偏差(%)",
-               "加入时偏差(%)", "市价变化(%)", "敏感性", "标签", "状态", "加入时间"]
-    col_widths = [100, 90, 80, 90, 90, 58, 70, 45, 70, 70, 70, 95, 95, 90, 160, 50, 150]
+    prev_snapshot = _previous_daily_snapshot()
+    prev_label = change_column_label(prev_snapshot)
+    headers, col_widths = watchlist_columns(prev_label)
     columns = [f"w{i}" for i in range(len(headers))]
 
     _configure_tree_style()
@@ -842,14 +956,20 @@ def _render_watchlist_table(app):
     y_scroll.grid(row=0, column=1, sticky="ns", pady=(6, 0), padx=(0, 10))
     x_scroll.grid(row=1, column=0, sticky="ew", padx=(10, 0), pady=(0, 8))
 
+    # 涨跌列的表头带动态日期, 权重表里查不到 —— 归一化成固定键再查, 否则它会走默认
+    # 1.0 而不是 0.4。
+    weights = dict(_WATCHLIST_COL_STRETCH_WEIGHTS)
+    if prev_label != CHANGE_COLUMN_KEY:
+        weights[prev_label] = weights[CHANGE_COLUMN_KEY]
     _configure_responsive_columns(
         tree, columns, headers, col_widths,
-        stretch_weights=_WATCHLIST_COL_STRETCH_WEIGHTS,
+        stretch_weights=weights,
     )
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
-    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签"})
+    _attach_cell_tooltip(tree, columns, headers,
+                         tooltip_headers={"标签", "事件", "数据"})
 
     if not rows:
         placeholder = ctk.CTkLabel(
@@ -860,42 +980,58 @@ def _render_watchlist_table(app):
         )
         placeholder.grid(row=2, column=0, sticky="w", padx=12, pady=(2, 8))
 
+    admission_config = None
+    terms_cache = getattr(app, "terms_cache", None)
+    if terms_cache is not None:
+        try:
+            from .batch import _batch_admission_config
+            admission_config = _batch_admission_config(app)
+        except Exception:
+            admission_config = None
+    prev_rows = (prev_snapshot or {}).get("rows") or {}
+
     for entry in rows:
         code = entry.get("bond_code", "")
-        dev = entry.get("deviation", float("nan"))
-        dev_str = f"{float(dev) * 100:+.2f}" if _is_finite(dev) else "—"
-        snap_dev = entry.get("snapshot_deviation")
-        snap_dev_str = f"{float(snap_dev) * 100:+.2f}" if _is_finite(snap_dev) else "—"
-        # 市价变化 = (current − snapshot) / snapshot, 老条目无快照时显示 "—"
-        cur_mkt = entry.get("market_price")
-        snap_mkt = entry.get("snapshot_market_price")
-        if _is_finite(cur_mkt) and _is_finite(snap_mkt) and float(snap_mkt) > 0:
-            mkt_chg_str = f"{(float(cur_mkt) - float(snap_mkt)) / float(snap_mkt) * 100:+.2f}"
-        else:
-            mkt_chg_str = "—"
+        prev = prev_rows.get(code) or {}
         is_ok = entry.get("status") == "ok"
-        score = entry.get("opportunity_score")
+
+        dev = entry.get("deviation")
+        dev_str = f"{float(dev) * 100:+.2f}" if _is_finite(dev) else "—"
+
+        # 涨跌 / 偏差Δ 都锚**上一交易日的窄快照**。快照缺失时返回 None 显示「—」,
+        # 不是 0.0 —— "没有基准"和"确实没变"必须分得开。
+        chg = _pct_change(entry.get("market_price"), prev.get("market_price"))
+        chg_str = f"{chg:+.2f}" if chg is not None else "—"
+        prev_dev = prev.get("deviation")
+        dev_delta_str = (f"{(float(dev) - float(prev_dev)) * 100:+.2f}"
+                         if _is_finite(dev) and _is_finite(prev_dev) else "—")
+
+        rel = entry.get("relative_deviation")
+        rel_str = f"{float(rel) * 100:+.1f}" if _is_finite(rel) else "—"
+        dbl = entry.get("double_low")
+        dbl_str = f"{float(dbl):.0f}" if _is_finite(dbl) else "—"
+
         vals = [
             code,
             entry.get("bond_name", "") or "",
             entry.get("stock_code", "") or "",
-            _format_listing_cell(entry, "listing_date"),
-            _format_listing_cell(entry, "tradable_date"),
-            _format_days_to_trade(entry),
-            f"{float(score):.1f}" if _is_finite(score) else "—",
-            entry.get("confidence", "") if is_ok else "—",
+            # 事件旗标已按可操作性排好序 (batch_pricing.event_flags), 全列不截断
+            " / ".join(entry.get("event_flags") or []) or "—",
             # 一律用 _is_finite 而不是 `is not None`: 落盘的 None 读回来是 **NaN**
             # (与内存路径一致, 见 watchlist_cache._NAN_FIELDS), 而 NaN is not None 为真 ——
             # 于是"今天没有市价"会被渲染成字面的 "nan"。实测三只未上市新债全中。
-            f"{float(entry['theoretical_price']):.2f}" if is_ok and _is_finite(entry.get("theoretical_price")) else "—",
             f"{float(entry['market_price']):.2f}" if _is_finite(entry.get("market_price")) else "—",
+            chg_str,
+            f"{float(entry['theoretical_price']):.2f}" if is_ok and _is_finite(entry.get("theoretical_price")) else "—",
             dev_str,
-            snap_dev_str,
-            mkt_chg_str,
+            dev_delta_str,
+            rel_str,
+            dbl_str,
             entry.get("sensitivity_status", "") if is_ok else "—",
             _format_tags(entry.get("risk_tags")),
-            "✓" if is_ok else (entry.get("status") or "—"),
-            entry.get("added_at", "") or "",
+            _row_data_label(entry, terms_cache=terms_cache,
+                            admission_config=admission_config),
+            (entry.get("added_at", "") or "")[:10],
         ]
         row_tag = _resolve_row_tag(entry)
         tags = [row_tag] if row_tag else []
@@ -913,7 +1049,7 @@ def refresh_home(app) -> None:
     横幅的刷新**从 ``_render_watchlist_table`` 末尾提到这里**。原先它寄生在表渲染
     里且是全仓库唯一调用点 —— 于是任何"少画一次表"的优化都会顺手把横幅一起停掉,
     而横幅失败是静默的 (拿不到 label/var 直接 return)。它的扫描集本来也不只是关注池
-    (``_banner_scan_codes`` = 关注池 ∪ 主池全量), 挂在关注池表的渲染上本就不合理。
+    (关注池为主 + 全池计数), 挂在关注池表的渲染上本就不合理。
     """
     _render_watchlist_table(app)
     _refresh_events_banner(app)
@@ -1007,13 +1143,21 @@ def _refresh_watchlist_summary(app, rows):
     summary_var.set("  ·  ".join(parts))
 
 
-def _banner_scan_codes(app) -> set[str]:
-    """横幅要扫的代码集 = **主池全量** + 关注池。
+def _watchlist_scan_codes(app) -> set[str]:
+    """横幅的**主**扫描集 = 关注池。这块挂在「⭐ 我的关注池」主页上, 首要问题是
+    "我在盯的这几只今天有什么事"。"""
+    return {e.get("bond_code") for e in (app._batch_watchlist or []) if e.get("bond_code")}
 
-    此前只扫关注池, 于是主池里昨天出的下修提议不会浮出来 —— 除非你已经在关注它。
-    而"已经在关注"恰恰意味着你已经知道了; 横幅真正的用处是告诉你**还不知道的那些**。
+
+def _pool_scan_codes(app) -> set[str]:
+    """全池代码集, 用来报**计数**而不是铺明细.
+
+    横幅原本扫的是主池全量, 理由是"横幅真正的用处是告诉你**还不知道的那些**"——
+    你已经在关注的债, 你本来就知道。那个理由仍然成立, 所以它没有被删掉, 只是从
+    "铺满横幅"降级成"末尾一句计数 + 单击展开": 主页的第一屏该先回答关注池的事,
+    但不能让全池那 50 多件事就此消失。
     """
-    codes = {e.get("bond_code") for e in (app._batch_watchlist or []) if e.get("bond_code")}
+    codes = set()
     for row in (getattr(app, "_batch_all_results", None) or []):
         code = row.get("bond_code")
         if code:
@@ -1080,38 +1224,63 @@ def collect_upcoming_events(store, codes, today, horizon):
     return [(code, text, day) for _rank, day, code, text in collected]
 
 
-def _refresh_events_banner(app, *, window_days: int = 30, head: int = 5):
-    """扫描主池+关注池在未来 window_days 天的事件, 按可操作性拼成横幅; 无事件时隐藏."""
+def _refresh_events_banner(app, *, past_days: int = 7, window_days: int = 30,
+                           head: int = 5):
+    """关注池的事件区: 「近 N 天已发生」+「未来 M 天」, 末尾带全池计数.
+
+    **空态显式写文案, 不 grid_remove**。实测今天关注池两条**都是空**
+    (全池同口径分别是 52 / 20 件), 也就是说"空"是常态而不是异常 —— 把控件藏起来
+    会重演「低估候选默认打开是空表、用户以为坏了」那次: 一个消失的控件和一个坏掉的
+    控件长得一模一样。
+    """
     label = getattr(app, "lbl_batch_events_banner", None)
     var = getattr(app, "v_batch_events_banner", None)
     if label is None or var is None:
         return
 
     store = getattr(app, "event_store", None)
+    watch_codes = _watchlist_scan_codes(app)
     if store is None:
-        label.grid_remove()
+        var.set("事件表未载入")
+        app._batch_events_banner_full = []
+        label.grid()
         return
 
     today = market_today()
-    upcoming = collect_upcoming_events(
-        store, _banner_scan_codes(app), today, today + timedelta(days=window_days))
-
-    if not upcoming:
-        var.set("")
-        app._batch_events_banner_full = []
-        label.grid_remove()
-        return
+    past = collect_upcoming_events(
+        store, watch_codes, today - timedelta(days=past_days), today)
+    future = collect_upcoming_events(
+        store, watch_codes, today, today + timedelta(days=window_days))
 
     names = {row.get("bond_code"): row.get("bond_name")
              for row in (getattr(app, "_batch_all_results", None) or [])}
-    app._batch_events_banner_full = list(upcoming)      # 明细留给弹窗, 一条不少
-    groups = _group_banner_entries(upcoming, names)
-    parts = groups[:head]
-    suffix = f"  ·  ...展开 {len(upcoming)} 件" if len(groups) > head else ""
-    # 文案要跟 _banner_scan_codes 的实际扫描集对上 (关注池 ∪ 主池全量), 尤其是这块
-    # 现在挂在「⭐ 我的关注池」主页上 —— 写"主池"会让人以为它漏了自己关注的债。
-    var.set(f"⚠ 近 {window_days} 天事件 {len(upcoming)} 件 (关注池+主池, 单击查看全部): "
-            + "  ·  ".join(parts) + suffix)
+    for entry in (app._batch_watchlist or []):
+        code, name = entry.get("bond_code"), entry.get("bond_name")
+        if code and name and code not in names:
+            names[code] = name
+
+    # 明细留给弹窗, 一条不少; 过去的排在前面 (它们是"已经发生了而你可能没看见")
+    app._batch_events_banner_full = list(past) + list(future)
+
+    segments = []
+    if past:
+        segments.append(f"近 {past_days} 天 {len(past)} 件: "
+                        + "  ·  ".join(_group_banner_entries(past, names)[:head]))
+    if future:
+        segments.append(f"未来 {window_days} 天 {len(future)} 件: "
+                        + "  ·  ".join(_group_banner_entries(future, names)[:head]))
+    if not segments:
+        segments.append(f"已扫 {len(watch_codes)} 只 · 近 {past_days} 天与未来 "
+                        f"{window_days} 天均无日程事件")
+
+    pool_extra = _pool_scan_codes(app) - watch_codes
+    if pool_extra:
+        n_pool = len(collect_upcoming_events(
+            store, pool_extra, today, today + timedelta(days=window_days)))
+        if n_pool:
+            segments.append(f"全池另有 {n_pool} 件 (单击查看全部)")
+
+    var.set("⚠ 关注池事件  |  " + "  |  ".join(segments))
     label.grid()
 
 

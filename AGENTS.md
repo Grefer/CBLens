@@ -158,6 +158,34 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   ③ `_render_batch_views(refresh_home_table=False)` **只给纯展示操作用**
   (切视图 / 切列预设): 那时 `_batch_all_results` 一个字节没变, 而重画会把主页那棵
   17 列的树整个 destroy 重建, 排序/选中/滚动全丢。凡是数据变了的路径都要保持 True。
+- **关注池表的列定义是单一事实源 `_WATCHLIST_COLUMNS`**。表头文本 / 列宽 / 拉伸权重
+  三者必须同步, 而权重表是按表头**文本**索引的: 删列留死条目、加列查不到会走
+  `batch_common` 的默认 1.0 (与「名称」同级), 窗口一拉宽就把富余宽度均摊给窄数字列。
+  不报错、不红测试, 只是越拉越难看。「涨跌」列的表头带**动态日期**
+  (`change_column_label`), 查权重时要归一化回 `CHANGE_COLUMN_KEY`。
+  写死「日涨跌」是错的: 基准由盘上有没有那天的窄快照决定 —— 周一/长假后它其实是
+  3 天涨跌, 而你没开过 GUI 的那些天更是直接跳过去。
+- **「涨跌」「偏差Δ」缺基准时返回 None 显示「—」, 不是 0.0**。"没有基准"和"确实没变"
+  必须分得开, 否则用户会把"我昨天没开过 GUI"读成"今天没动"。
+- **事件横幅的空是常态, 不许 `grid_remove`**。实测关注池近 7 天与未来 30 天**都是
+  0 件** (全池同口径 52 / 20)。藏起控件会重演「低估候选默认打开是空表、用户以为坏了」
+  那次 —— 一个消失的控件和一个坏掉的控件长得一模一样, 所以空态要显式写
+  「已扫 N 只 · 近 7 天与未来 30 天均无日程事件」。扫描集拆成两个:
+  `_watchlist_scan_codes` 是主集 (铺明细), `_pool_scan_codes` 只报计数 ——
+  原来那条理由 (「横幅真正的用处是告诉你**还不知道的那些**」) 依然成立, 不能因为
+  换了页面就把全池那 50 多件事整个丢掉。
+- **事件展示表只许有一份**: `EVENT_TYPE_SHORT_LABEL` / `EVENT_ACTIONABILITY` /
+  `EVENT_END_LABEL` / **`EVENT_TYPE_COLOR`** 全在 `cb_events.py`。GUI 曾自带一份私有
+  配色表只覆盖 14/18, 剩下 4 类 (balance_change / conversion_suspension /
+  conversion_resume / unknown) 全渲染成同一个中性灰 —— 而暂停转股与恢复转股是**相反**
+  的意思。这与"GUI 自带短标签表、badge 渲染出 bala/conv/unkn"是同一次分叉的两半。
+  守护测试比对 `EVENT_TYPES` 全覆盖 + 相反事件不同色。
+- **市价的 as-of 与估值日不是一回事**。`market_price_as_of` / `market_price_source`
+  由 `pricing_api._latest_bond_close_with_provenance` 产出, 三档: `history` (行情序列,
+  日期真实, **可能早于估值日** —— 停牌/节假日) / `terms_close` (条款库兜底, **没有
+  as-of**, 可以任意旧: 日升转债库里的 `close=99.994` 是 2021 年撤销发行前的值) / `None`。
+  陈旧**只标注不拒绝** —— 拒绝旧值会让那一行回到整行「—」, 而"空表"和"真的没数据"
+  长得一模一样。展示层由「数据」列承载 (`_row_data_label` 五档)。
 - **行情源全局只有一个下拉 (顶栏)**。`v_batch_source` 就是 `v_data_source` **本身**
   (同一个 StringVar 对象, 在 `_build_vars` 里赋), 不是两个 var 互相同步 —— 同步总会漏掉
   某条路径, 而漏掉的表现是"两页显示的源不一样", 用户无从判断哪个说了算。此前有三个下拉

@@ -879,3 +879,42 @@ def test_commitment_expiry_outranks_the_commitment_announcement():
         event_actionability("call_no_redemption")
     # 强赎始终是最高档, 不因 is_end 变化
     assert event_actionability("call_redemption", is_end=True) == 0
+
+
+def test_every_event_type_has_a_badge_color():
+    """配色表也要 18/18 全覆盖.
+
+    GUI 曾自带一份私有配色表只覆盖 14/18 —— balance_change /
+    conversion_suspension / conversion_resume / unknown 全渲染成同一个中性灰。
+    与短标签表那次分叉 (badge 显示 bala/conv/unkn) 同源: **展示词表只许有一份**。
+    """
+    from convertible_bond.cb_events import (
+        EVENT_TYPES, EVENT_TYPE_COLOR, EVENT_TYPE_COLOR_FALLBACK, event_type_color)
+    assert set(EVENT_TYPE_COLOR) == set(EVENT_TYPES)
+    for event_type in EVENT_TYPES:
+        if event_type == "unknown":
+            continue
+        assert event_type_color(event_type) != EVENT_TYPE_COLOR_FALLBACK, (
+            f"{event_type} 还在走兜底灰")
+
+
+def test_opposite_events_do_not_share_a_color():
+    """暂停转股与恢复转股是相反的意思, 必须是相反的颜色 (它们曾同显一个词)."""
+    from convertible_bond.cb_events import event_type_color
+    for a, b in (("conversion_suspension", "conversion_resume"),
+                 ("call_redemption", "call_no_redemption"),
+                 ("down_reset_approved", "down_reset_rejected"),
+                 ("underlying_st_risk", "underlying_st_clear")):
+        assert event_type_color(a) != event_type_color(b), f"{a} 与 {b} 同色"
+
+
+def test_gui_badge_delegates_to_the_shared_color_table():
+    import inspect
+    from convertible_bond.cb_events import event_type_color
+    from convertible_bond.gui.controllers.events import EventsMixin
+    import re
+    src = inspect.getsource(EventsMixin._event_type_color)
+    assert "event_type_color(" in src
+    assert not re.search(r'"#[0-9a-fA-F]{3,6}"', src), "GUI 里又出现了硬编码颜色字面量"
+    for event_type in ("balance_change", "conversion_resume", "unknown"):
+        assert EventsMixin._event_type_color(event_type) == event_type_color(event_type)

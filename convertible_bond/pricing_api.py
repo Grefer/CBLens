@@ -57,7 +57,13 @@ DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND = 0.15
 DEFAULT_PDE_SIGNAL_SPREAD_BAND = 0.01
 
 
-def _latest_price_on_or_before(history, on_date: date) -> float | None:
+def _latest_price_with_date(history, on_date: date) -> tuple[float | None, date | None]:
+    """不晚于 *on_date* 的最近一笔收盘价, **连同它自己的日期**.
+
+    行情序列里最近一条未必就是 *on_date* 那天的 —— 停牌、节假日、数据源延迟都会让它
+    落在几天前。只返回价格 (见 :func:`_latest_price_on_or_before`) 会把这个差异抹掉,
+    于是"今天的市价"和"三天前的市价"在下游长得一模一样。
+    """
     latest: float | None = None
     latest_date: date | None = None
     for d, value in history or []:
@@ -69,7 +75,11 @@ def _latest_price_on_or_before(history, on_date: date) -> float | None:
         if latest_date is None or d >= latest_date:
             latest_date = d
             latest = price
-    return latest
+    return latest, latest_date
+
+
+def _latest_price_on_or_before(history, on_date: date) -> float | None:
+    return _latest_price_with_date(history, on_date)[0]
 
 
 def _provider_attached_store(provider: DataProvider, attr_name: str, required_method: str):
@@ -94,6 +104,24 @@ def _provider_patch_store(provider: DataProvider):
 
 
 def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, fallback) -> float | None:
+    return _latest_bond_close_with_provenance(provider, bond_code, val_date, fallback)[0]
+
+
+def _latest_bond_close_with_provenance(
+    provider: DataProvider, bond_code: str, val_date: date, fallback,
+) -> tuple[float | None, date | None, str | None]:
+    """(市价, 这个价是哪天的, 来自哪一档).
+
+    ``source`` 三档, 展示层据此决定标不标灰:
+
+    - ``"history"``  行情序列, ``as_of`` 是真实日期 (可能早于估值日: 停牌/节假日)
+    - ``"terms_close"``  条款库兜底, **没有 as-of** —— 它可以任意旧, 实测日升转债
+      ``123095.SZ`` 库里的 ``close=99.994`` 是 2021 年撤销发行前的值
+    - ``None``  两边都没有
+
+    陈旧**只标注不拒绝**: 拒绝旧值会让那一行回到整行「—」, 而"空表"和"真的没数据"
+    长得一模一样。
+    """
     fallback_price = finite_float(fallback)
     try:
         history = provider.get_bond_history(
@@ -102,8 +130,13 @@ def _latest_bond_close(provider: DataProvider, bond_code: str, val_date: date, f
             val_date,
         )
     except Exception:
-        return fallback_price
-    return _latest_price_on_or_before(history, val_date) or fallback_price
+        history = None
+    price, as_of = _latest_price_with_date(history, val_date)
+    if price is not None:
+        return price, as_of, "history"
+    if fallback_price is not None:
+        return fallback_price, None, "terms_close"
+    return None, None, None
 
 
 def _rating_spread_floor(rating: Any) -> float | None:
@@ -515,7 +548,8 @@ def price_from_provider(provider: DataProvider, bond_code,
         effective_q = (q_pct / 100.0) if q_pct is not None else 0.0
     else:
         effective_q = float(q)
-    market_price = _latest_bond_close(provider, bond_code, val_date, terms.close)
+    market_price, market_price_as_of, market_price_source = (
+        _latest_bond_close_with_provenance(provider, bond_code, val_date, terms.close))
     risk_warnings = _risk_warnings(terms, val_date)
 
     issue_dt = terms.issue_date
@@ -720,6 +754,10 @@ def price_from_provider(provider: DataProvider, bond_code,
         "bond_name": terms.sec_name,
         "stock_code": stock_code,
         "valuation_date": val_date,
+        # 市价自己是哪天的、来自哪一档 —— 与 valuation_date (请求的日期) 不是一回事:
+        # 停牌/节假日会让最近一笔收盘价落在几天前, 而 terms.close 兜底那一档根本没有日期。
+        "market_price_as_of": market_price_as_of,
+        "market_price_source": market_price_source,
         "S0": S0,
         "K": pricer.K,
         "T": pricer.T,
