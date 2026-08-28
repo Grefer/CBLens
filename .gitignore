@@ -46,3 +46,4 @@ data/strategy_backtest_cache/
 
 # 个人本地 agent 备忘 (仅本机, 不入版本库)
 CLAUDE.local.md
+docs/pde-engine-explained.md
