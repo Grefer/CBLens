@@ -78,6 +78,10 @@ CACHE_FIELDS: tuple[str, ...] = (
     # 横截面 (只有拿到主池锚时才有值, 见 save_watchlist_pricing 的 cross_section)
     "relative_deviation", "cheapness_rank", "cheapness_rank_total",
     "cheapness_percentile", "cross_section_origin",
+    # 锚值与**锚自己的估值日**: 相对偏差是 deviation 减去这个中位, 而中位的水平
+    # 时变 (cb_valuation_history 20 期实测摆幅 21.2pp)。不落盘就等于读回来一个
+    # 没有分母出处的横截面量, 展示层也判不出该不该灰掉那两列。
+    "market_median_deviation", "market_median_deviation_as_of",
     # 溯源三件套
     "valuation_date", "priced_at", "origin",
     "market_price_as_of", "market_price_source",
@@ -99,7 +103,7 @@ _NAN_FIELDS = frozenset({
     "theoretical_price", "market_price", "deviation", "K", "parity",
     "conversion_premium", "double_low", "quality_score", "opportunity_score",
     "down_reset_trigger_gap", "down_reset_robust_edge_value",
-    "relative_deviation", "cheapness_percentile",
+    "relative_deviation", "cheapness_percentile", "market_median_deviation",
 })
 
 #: 读回时还原成 ``date`` 对象的字段。**必须还原** —— ``market_price_as_of <
@@ -108,6 +112,7 @@ _NAN_FIELDS = frozenset({
 _DATE_FIELDS = frozenset({
     "valuation_date", "market_price_as_of",
     "maturity_date", "listing_date", "tradable_date",
+    "market_median_deviation_as_of",
 })
 
 #: 横截面锚的有效期 (交易日)。中位偏差水平是时变的 —— ``cb_valuation_history``
@@ -453,6 +458,20 @@ def _trading_days_between(start: date, end: date) -> int:
     return days
 
 
+def anchor_age_is_stale(anchored: date | None, today: date, *,
+                        max_trading_days: int = DEFAULT_ANCHOR_MAX_TRADING_DAYS) -> bool:
+    """锚的**日期**是不是已经旧到不该再用; ``None`` 一律算陈旧.
+
+    与 :func:`anchor_is_stale` 的分工: 那个查热缓存 ``_meta`` 里的锚 (描述的是
+    热缓存**这一批**), 这个只判年龄, 供展示层**逐行**判断 —— 关注池表上的行是
+    主池行 / upcoming 行 / 热缓存行的混合, 各自的锚来自不同批次, 只查单个 ``_meta``
+    会把它们一概而论。
+    """
+    if anchored is None:
+        return True
+    return _trading_days_between(anchored, today) > max_trading_days
+
+
 def anchor_is_stale(meta: dict | None, today: date, *,
                     max_trading_days: int = DEFAULT_ANCHOR_MAX_TRADING_DAYS) -> bool:
     """横截面锚是不是已经旧到不该再用.
@@ -470,4 +489,4 @@ def anchor_is_stale(meta: dict | None, today: date, *,
         anchored = _as_date(raw)
     except (TypeError, ValueError):
         return True
-    return _trading_days_between(anchored, today) > max_trading_days
+    return anchor_age_is_stale(anchored, today, max_trading_days=max_trading_days)

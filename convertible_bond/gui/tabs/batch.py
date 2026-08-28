@@ -22,6 +22,7 @@ from ...batch_pricing import (
     annotate_batch_results,
     batch_pricing_exclusion_reason,
     build_batch_provider,
+    cross_section_anchor_as_of,
     cross_section_anchor_from,
     filter_batch_results_by_view,
     load_batch_results_cache,
@@ -757,7 +758,7 @@ def _export_csv(app):
 def _annotate_off_pool(rows, pool_results):
     """给**主池外**的一小撮结果 (新债 / 只在关注池里的债) 补研究字段.
 
-    两件事必须同时做, 缺一个都会静默算错:
+    三件事必须同时做, 缺一个都会静默算错:
 
     1. 锚用主池的中位偏差, 不要让这几行自算 —— ``median_deviation_of`` 样本 <30 时
        返回 None, ``annotate_batch_result`` 随即退回绝对阈值; 而真自算出来更糟:
@@ -765,6 +766,8 @@ def _annotate_off_pool(rows, pool_results):
        中位的量 (实测 +20.9pp), 数字看上去完全正常。
     2. ``rank_scope=False`` —— 传锚**修不了秩**, 名次是在传进来的这一批内部排的。
        实测 123281.SZ 全池 ``cheapness_percentile=0.8794``, 6 行子集单独算变 0.0。
+    3. 锚的 **as-of** 也盖上 —— 这几行拿的是**别人的**锚, 与主池行"锚天然与自己
+       同日"不是一回事。展示层靠它判断该不该把「相对偏差 / 双低」灰掉。
 
     这一档尤其容易被漏, 因为它没有自愈路径: ``_batch_all_results`` 每次都过
     ``sort_batch_results_for_review`` 在全池上重标注, 错了下一轮就修回来; 而
@@ -772,11 +775,21 @@ def _annotate_off_pool(rows, pool_results):
     """
     if not rows:
         return []
-    return annotate_batch_results(
+    pool = pool_results or []
+    annotated = annotate_batch_results(
         rows,
-        market_median_deviation=cross_section_anchor_from(pool_results or []),
+        market_median_deviation=cross_section_anchor_from(pool),
         rank_scope=False,
     )
+    # 3. 锚的 **as-of** 也要跟着盖上。这几行是拿**别人的**锚标注的, 与主池行
+    #    "锚天然与自己同日"不是一回事 —— 主池缓存可能是几天前跑的 (实测热缓存
+    #    2026-08-28, 锚源行 08-26)。展示层靠这个戳决定该不该把「相对偏差 / 双低」
+    #    灰掉; 没有它, 锚的年龄在盘上恒为 0, 口径5 接上了也判不出陈旧。
+    anchor_as_of = cross_section_anchor_as_of(pool)
+    if anchor_as_of is not None:
+        for row in annotated:
+            row["market_median_deviation_as_of"] = anchor_as_of
+    return annotated
 
 
 def _filter_nonstandard_results(results, terms_cache=None, admission_config=None):

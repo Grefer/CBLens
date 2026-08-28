@@ -94,21 +94,45 @@ def _coerce_bool(value) -> bool | None:
 
 
 def _is_new_bond(row) -> bool:
-    """新债判定: 未上市 / 尚不可自由交易才标记, 已上市标的不再按天数染色."""
+    """新债判定: 未上市 / 尚不可自由交易才标记, 已上市标的不再按天数染色.
+
+    **日期是硬证据, 压过 ``is_tradable`` / ``trading_status``**。后两个是派生字段
+    (公募转债的数据源根本不提供, Wind ``get_admission_status`` 对它们显式返回 None),
+    在关注池里更是**加入那一刻冻结的快照** —— 一只债在"已发行未上市"时被扫进关注池,
+    此后即便真的挂牌上市, ``watchlist.json`` 里那个 ``pending`` 也不会自己翻回来
+    (实测中仑转债 08-24 上市 / 派克转债 08-25 上市, 条目里至今写着
+    ``is_tradable: false``)。而**已经过去的上市日**是"这只债确实挂牌了"的正面证据。
+
+    这与 AGENTS 里那条库内判据同源: "成交额 > 0 却 ``is_tradable=False`` 是自相矛盾"
+    —— 硬事实与派生标记冲突时, 信硬事实。
+
+    此前判据顺序反着来, 但被一个巧合挡住了: 关注池取价原本让全池行无条件覆盖,
+    而全池行带着刚推断出来的 ``is_tradable=True``。取价改成按新鲜度择优之后, 热缓存行
+    (``CACHE_FIELDS`` **故意不收**这两个派生字段) 胜出, 冻结值立刻浮上来, 表现为
+    整张关注池表全部染成新债色, 原本的高估/离群区分一起消失。
+    """
+    today = market_today()
+
+    # ① 日期证据
+    listed = False
+    for key in ("tradable_date", "listing_date"):
+        d = _coerce_date(row.get(key))
+        if d is None:
+            continue
+        if d > today:
+            return True          # 可交易日还没到 —— 确实还买不到
+        listed = True            # 日子已经过了 —— 已经挂牌
+    if listed:
+        return False
+
+    # ② 一个日期都没有时才回落到派生字段。"已发行未上市"正是这一档:
+    #    连上市日都还没公告, 除了 pending 没有别的线索。
     is_tradable = _coerce_bool(row.get("is_tradable"))
     status = str(row.get("trading_status") or "").strip().lower()
     if is_tradable is True or status in {"tradable", "private_tradable"}:
         return False
     if is_tradable is False or status in {"pending", "private_pending"}:
         return True
-
-    today = market_today()
-    for key in ("tradable_date", "listing_date"):
-        d = _coerce_date(row.get(key))
-        if d is None:
-            continue
-        if d > today:
-            return True
     return False
 
 

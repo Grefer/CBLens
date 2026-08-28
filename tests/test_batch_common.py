@@ -865,7 +865,8 @@ def test_dropped_columns_are_really_gone():
 
 @pytest.mark.parametrize("state,extra,expected", [
     ("ok", {}, "✓ 今日"),
-    ("stale", {}, "昨日"),
+    ("stale", {}, "旧"),
+    ("stale", {"valuation_date": date(2026, 8, 26)}, "旧 · 08-26"),
     ("no_market", {}, "无市价"),
     ("failed", {"status": "provider error: timeout"}, "失败 · provider error: ti"),
     ("unpriced", {}, "未定价"),
@@ -873,6 +874,18 @@ def test_dropped_columns_are_really_gone():
 def test_row_data_label(state, extra, expected):
     entry = {"bond_code": "X", "_price_state": state, **extra}
     assert watchlist_tab._row_data_label(entry) == expected
+
+
+def test_stale_label_never_asserts_a_day_it_did_not_check():
+    """「昨日」是写死的文案时, 出差一周回来六行仍全写「昨日」.
+
+    _derive_price_state 只判"是不是今天"、不算天数, 所以标签**不能**替它断言差几天。
+    有估值日就拼真实日期; 没有才退回一个不承诺任何天数的「旧」。
+    """
+    label = watchlist_tab._row_data_label(
+        {"bond_code": "X", "_price_state": "stale", "valuation_date": "2026-08-14"})
+    assert label == "旧 · 08-14"
+    assert "昨日" not in label
 
 
 def test_data_label_flags_a_price_older_than_the_valuation_date():
@@ -1041,3 +1054,203 @@ def test_events_banner_survives_a_missing_store():
     watchlist_tab._refresh_events_banner(app)
     assert app.lbl_batch_events_banner.shown is True
     assert app.v_batch_events_banner.get() == "事件表未载入"
+
+
+# ── 日期口径的四道闸 (A1 / A2 / B1 / B2) ──────────────────────────
+class _PricedSourcesApp:
+    """只带取价三路来源的最小 app 替身 (名字别撞上文件里已有的 _FakeApp)."""
+
+    def __init__(self, cache_rows=None, upcoming=None, pool=None):
+        self._watchlist_price_cache = {"meta": {}, "rows": cache_rows or {}}
+        self._batch_upcoming_results = upcoming or []
+        self._batch_all_results = pool or []
+
+
+def test_priced_rows_prefer_the_freshest_source_not_the_last_one():
+    """更旧的全池缓存不得整行盖掉更新的关注池热缓存.
+
+    实测事故形态: 热缓存 08-28 (派克 160.347 / 先锋 177.259), 而
+    `_batch_all_results` 是 `_load_result_cache` 在 `app.after(80)` 里从
+    batch_pricing_cache.json 读回来的**另一份磁盘**, 估值日 08-26 且先锋那行
+    market_price=None。主页先画 08-28, 80ms 后被 08-26 顶掉 —— 涨跌符号当场反转,
+    先锋的市价/涨跌/偏差三列一起退化成「—」。
+    """
+    app = _PricedSourcesApp(
+        cache_rows={
+            # 带 priced_at: 热缓存行落盘时一定有这个戳, 而定价结果行一个都没有
+            # (实测 batch_pricing_cache.json 284/284 无)。fixture 漏掉它, 这两条
+            # 用例就都在测一个现实中不存在的形态。
+            "111026.SH": {"bond_code": "111026.SH", "market_price": 160.347,
+                          "valuation_date": date(2026, 8, 28),
+                          "priced_at": "2026-08-27T20:11:35"},
+            "118076.SH": {"bond_code": "118076.SH", "market_price": 177.259,
+                          "valuation_date": date(2026, 8, 28),
+                          "priced_at": "2026-08-27T20:11:35"},
+        },
+        pool=[
+            {"bond_code": "111026.SH", "market_price": 155.7155,
+             "valuation_date": date(2026, 8, 26)},
+            {"bond_code": "118076.SH", "market_price": None,
+             "valuation_date": date(2026, 8, 26)},
+        ],
+    )
+    got = watchlist_tab._priced_rows_by_code(app)
+    assert got["111026.SH"]["market_price"] == 160.347
+    assert got["118076.SH"]["market_price"] == 177.259
+
+
+def test_priced_rows_still_let_memory_win_on_the_same_day():
+    """同一天则"这次算的"压过"上次算的" —— 原优先级正确, 不要一起改掉.
+
+    ⚠️ 热缓存行**必须带 priced_at**, 内存行**必须不带** —— 这就是生产形态
+    (``to_cache_row`` 落盘时无条件盖戳; 定价结果行没有任何写入点)。曾拿
+    ``priced_at`` 当同日 tie-break, 缺失方恒为 "" 恒排最旧, 于是磁盘永远赢内存:
+    上午点过 ⚡、下午跑全量重算后主页仍显示上午的价, 而批量页是下午的。
+    两边都不带戳的 fixture 会让这个回归全程绿灯 —— 它正是这么溜过去的。
+    """
+    day = date(2026, 8, 28)
+    app = _PricedSourcesApp(
+        cache_rows={"X": {"bond_code": "X", "market_price": 100.0, "valuation_date": day,
+                          "priced_at": "2026-08-28T09:30:00"}},
+        pool=[{"bond_code": "X", "market_price": 101.0, "valuation_date": day}],
+    )
+    assert watchlist_tab._priced_rows_by_code(app)["X"]["market_price"] == 101.0
+
+
+def test_freshness_key_never_depends_on_a_field_only_one_source_has():
+    """新鲜度的 tie-break 不得架在 priced_at 这类**单边字段**上.
+
+    守的是判据本身而不是某一次的取值: 只要 _row_freshness 的返回值随 priced_at
+    变化, 同日比较就会被"谁有这个戳"决定, 而不是被来源决定。
+    """
+    day = date(2026, 8, 28)
+    base = {"bond_code": "X", "valuation_date": day}
+    stamped = {**base, "priced_at": "2026-08-28T09:30:00"}
+    rank = watchlist_tab._SOURCE_RANK_CACHE
+    assert watchlist_tab._row_freshness(base, rank) == watchlist_tab._row_freshness(stamped, rank)
+    # 来源序号必须真的参与排序
+    assert (watchlist_tab._row_freshness(base, watchlist_tab._SOURCE_RANK_POOL)
+            > watchlist_tab._row_freshness(stamped, watchlist_tab._SOURCE_RANK_CACHE))
+
+
+@pytest.mark.parametrize("row_date,base_date,usable", [
+    (date(2026, 8, 28), date(2026, 8, 26), True),    # 正常: 当前更新
+    (date(2026, 8, 26), date(2026, 8, 28), False),   # 反着比 → 符号相反的涨跌
+    (date(2026, 8, 28), date(2026, 8, 28), False),   # 同日 → 恒 0, 冒充"今天没动"
+    (None, date(2026, 8, 26), False),                # 没被定价过的行
+    (date(2026, 8, 28), None, False),                # 没有基准快照
+])
+def test_change_columns_require_the_row_to_be_newer_than_the_baseline(row_date, base_date, usable):
+    """「涨跌」「偏差Δ」的基准判据必须带日期.
+
+    只看"两边都有限"会让 08-26 的行去比 08-28 的基准, 算出 −2.89 而表头写着
+    「涨跌 vs 08-28」—— 一个倒着算出来的跌幅, 看上去完全正常。
+    """
+    entry = {"bond_code": "X", "valuation_date": row_date}
+    assert watchlist_tab._baseline_is_usable(entry, base_date) is usable
+
+
+def test_cross_section_columns_go_dark_when_the_anchor_is_old():
+    """口径5: 锚超过 5 个交易日, 「相对偏差 / 双低」不再显示.
+
+    中位偏差的水平时变 (cb_valuation_history 20 期实测摆幅 21.2pp), 用几周前的
+    市场水平算出来的"比中位便宜 5pp"是个看上去完全正常的数字。
+    """
+    today = date(2026, 8, 28)
+    fresh = {"market_median_deviation": 0.2089,
+             "market_median_deviation_as_of": date(2026, 8, 26)}
+    assert watchlist_tab._cross_section_is_stale(fresh, today) is False
+
+    old = {"market_median_deviation": 0.2089,
+           "market_median_deviation_as_of": date(2026, 7, 1)}
+    assert watchlist_tab._cross_section_is_stale(old, today) is True
+
+    # 锚值缺失 (小批量标注时主池为空) 同样不可比
+    assert watchlist_tab._cross_section_is_stale({"valuation_date": today}, today) is True
+
+
+def test_anchor_as_of_falls_back_to_the_rows_own_valuation_date():
+    """没有显式戳 = 锚是与这行同一批自算的, as-of 就是这行自己的估值日.
+
+    主池行走的正是这条路 (annotate_batch_results 默认自算), 不能把它们一律当成
+    "锚来历不明"而灰掉。
+    """
+    assert watchlist_tab._anchor_as_of({"valuation_date": date(2026, 8, 26)}) == date(2026, 8, 26)
+    assert watchlist_tab._anchor_as_of(
+        {"valuation_date": date(2026, 8, 26),
+         "market_median_deviation_as_of": date(2026, 8, 20)}) == date(2026, 8, 20)
+    assert watchlist_tab._anchor_as_of({}) is None
+
+
+def test_absolute_fallback_anchor_is_not_shown_as_a_cross_section_number():
+    """主池为空时 anchor 回落 0.0, relative_deviation 恒等于绝对偏差.
+
+    数值保留 (改它就是默认选债行为变更), 但展示层不能把它当横截面量渲染 ——
+    实测派克转债 有锚 +26.7 / 无锚 +47.5, 后者是个看上去完全正常的数字。
+    """
+    today = date(2026, 8, 28)
+    entry = {"market_median_deviation": 0.0,
+             "cross_section_origin": "absolute_fallback",
+             "valuation_date": today}
+    assert watchlist_tab._cross_section_is_stale(entry, today) is True
+
+
+def test_fallback_anchor_is_never_picked_up_as_a_real_anchor():
+    """假的 0.0 锚不得被 cross_section_anchor_from 捡走传给下一批标注."""
+    from convertible_bond import batch_pricing
+
+    rows = [{"bond_code": "A", "status": "ok", "deviation": 0.4,
+             "market_median_deviation": 0.0,
+             "cross_section_origin": "absolute_fallback",
+             "valuation_date": date(2026, 8, 26)}]
+    assert batch_pricing.cross_section_anchor_from(rows) is None
+
+    # 存量行没有 cross_section_origin —— 按真锚处理, 否则关注池整页立刻空掉
+    legacy = [{"bond_code": "A", "status": "ok", "deviation": 0.4,
+               "market_median_deviation": 0.2089,
+               "valuation_date": date(2026, 8, 26)}]
+    assert batch_pricing.cross_section_anchor_from(legacy) == pytest.approx(0.2089)
+    assert batch_pricing.cross_section_anchor_as_of(legacy) == date(2026, 8, 26)
+
+
+def test_a_listed_bond_is_not_new_even_if_the_watchlist_froze_it_as_pending():
+    """关注池条目里的 is_tradable/trading_status 是**加入那一刻**冻结的.
+
+    实测形态: 中仑转债 08-24 上市、派克转债 08-25 上市, 而 watchlist.json 里至今
+    写着 is_tradable=False / trading_status=pending —— 它们是"已发行未上市"时被扫
+    进来的, 上市之后没有任何路径回填。日期已过是"确实挂牌了"的正面证据, 必须压过
+    这两个派生标记。
+
+    这个坑原本被一个巧合挡着: 取价让全池行无条件覆盖, 而全池行带着刚推断出来的
+    is_tradable=True。改成按新鲜度择优后热缓存行胜出 (CACHE_FIELDS 故意不收这两个
+    派生字段), 冻结值浮上来, 整张关注池表全染成新债色, 高估/离群的区分一起消失。
+    """
+    row = {
+        "bond_code": "123281.SZ", "status": "ok",
+        "is_tradable": False, "trading_status": "pending",   # 冻结的旧值
+        "listing_date": market_today() - timedelta(days=4),  # 但它早就上市了
+        "deviation": 0.41, "risk_tags": ["模型高估离群"],
+    }
+    assert _is_new_bond(row) is False
+    assert _resolve_row_tag(row) == "anomaly"
+
+
+def test_a_future_listing_date_still_wins_over_a_tradable_flag():
+    """反方向也要成立: 上市日在未来 → 还是新债, 别被一个乐观的 is_tradable 骗过去."""
+    row = {
+        "bond_code": "123999.SZ", "status": "ok",
+        "is_tradable": True, "trading_status": "tradable",
+        "listing_date": market_today() + timedelta(days=3),
+    }
+    assert _is_new_bond(row) is True
+
+
+def test_issued_pending_listing_still_falls_back_to_the_derived_flags():
+    """一个日期都没有时才回落到派生字段 —— 「已发行未上市」正是这一档,
+    连上市日都还没公告, 除了 pending 没有别的线索。"""
+    row = {
+        "bond_code": "123284.SZ", "status": "ok",
+        "is_tradable": False, "trading_status": "pending",
+        "listing_date": None, "tradable_date": None,
+    }
+    assert _is_new_bond(row) is True

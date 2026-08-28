@@ -964,6 +964,20 @@ def annotate_batch_result(row: dict, *,
         # 因此「低估候选」视图与排序都锚在它上面 (见 MIN_RELATIVE_CHEAPNESS)。
         out["relative_deviation"] = gap
         out["market_median_deviation"] = anchor
+        # **出处要留痕**: anchor 回落 0.0 时 gap 恒等于 deviation —— 一个绝对量顶着
+        # 横截面量的名字, 而且看上去完全正常 (实测派克转债 有锚 +26.7 / 无锚 +47.5)。
+        #
+        # 数值本身**一个字节不动**: 把它改写成 NaN 会连带关掉小批量的「低估候选」
+        # 视图与便宜度秩 (_cross_sectional_cheapness_gate 直接报「缺少相对偏差」),
+        # 那是默认选债行为变更 —— 实测三条现存用例当场变红。所以只加一个出处标记,
+        # 由两类消费者各自决定要不要信:
+        #   · cross_section_anchor_from —— 跳过这种行, 否则那个假的 0.0 会被当成真锚
+        #     捡走, 把污染传给下一批标注;
+        #   · 关注池展示层 —— 打「—」而不是打一个没有分母出处的横截面数字。
+        # cross_section_origin 早就登记在 watchlist_cache.CACHE_FIELDS 里, 只是从来
+        # 没有生产代码写过它。
+        out["cross_section_origin"] = ("market_median" if market_median_deviation is not None
+                                       else "absolute_fallback")
         if gap >= DEVIATION_ANOMALY_THRESHOLD:
             risk_tags.append("模型高估离群")
             confidence_points -= 25
@@ -1224,10 +1238,62 @@ def cross_section_anchor_from(results: Sequence[dict]) -> float | None:
     自算中位, 与本函数要解决的问题完全一样。
     """
     for row in results or ():
+        if not _anchor_is_market_wide(row):
+            continue
         value = finite_float(row.get("market_median_deviation"))
         if value is not None:
             return value
     return median_deviation_of(results or ())
+
+
+def _anchor_is_market_wide(row: dict) -> bool:
+    """这一行的 ``market_median_deviation`` 是真锚, 还是绝对阈值兜底留下的 0.0.
+
+    缺 ``cross_section_origin`` 的行按**真锚**处理: 那是本字段落地之前写的存量
+    结果 (``batch_pricing_cache.json`` 里全是这种), 而它们绝大多数确实是全池标注
+    出来的。反过来把它们一律判成假锚会让关注池整页的「相对偏差」立刻空掉。
+    """
+    return str(row.get("cross_section_origin") or "market_median") != "absolute_fallback"
+
+
+def cross_section_anchor_as_of(results: Sequence[dict]) -> date | None:
+    """``cross_section_anchor_from`` 取回的那个锚, **它自己**是哪一天的.
+
+    判据与那个函数逐行对齐: 锚来自第一个带 ``market_median_deviation`` 的行, 所以
+    as-of 就是**那一行**的估值日; 走自算兜底时锚是这批行的中位, as-of 取这批里
+    第一个有估值日的行。
+
+    单独成一个函数而不是让 ``cross_section_anchor_from`` 多返回一个值, 是因为后者
+    已有两个调用方 —— 而这个日期只有落盘与展示需要。
+
+    **不要用 ``market_today()`` 代替它**: 锚来自 ``batch_pricing_cache.json`` 里
+    上一次全市场重算的行, 那可能是几天前 (实测热缓存记着 2026-08-28, 锚源行是
+    08-26)。把今天的日期盖上去, 锚的年龄在盘上恒为 0, 于是 ``anchor_is_stale``
+    接上了也判不出陈旧 —— 恰好在"天天点 ⚡ 但久不跑全量重算"这个常态用法上失效。
+    """
+    fallback: date | None = None
+    for row in results or ():
+        day = _coerce_valuation_date(row.get("valuation_date"))
+        if (_anchor_is_market_wide(row)
+                and finite_float(row.get("market_median_deviation")) is not None):
+            return day
+        if fallback is None:
+            fallback = day
+    return fallback
+
+
+def _coerce_valuation_date(value: Any) -> date | None:
+    """宽松解析估值日: 落盘走 ISO 字符串, 内存里是 date."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def annotate_batch_results(results: Sequence[dict], *,
@@ -1251,10 +1317,18 @@ def annotate_batch_results(results: Sequence[dict], *,
     长度上限就依赖它。因此**视图过滤前必须先过这个函数**
     (``filter_batch_results_by_view`` 经 ``sort_batch_results_for_review`` 保证了这点)。
     """
+    # 自算 = 锚就是**这一批**自己的中位, 于是锚与行同日。行里可能还留着上一轮
+    # 小批量标注盖上的 market_median_deviation_as_of (关注池 worker 的结果会经
+    # merge_watchlist_pricing 回流进主池列表, 再被这里整体重标注), 那个戳此刻已经
+    # 过期 —— 不清掉会让刚用今天的池子重标注过的行显示成"锚是几天前的"。
+    self_anchored = market_median_deviation is None
     if market_median_deviation is None:
         market_median_deviation = median_deviation_of(results)
     annotated = [annotate_batch_result(row, market_median_deviation=market_median_deviation)
                  for row in results]
+    if self_anchored:
+        for row in annotated:
+            row.pop("market_median_deviation_as_of", None)
     if not rank_scope:
         # review_bucket 保留单行标注的结果: 没有 population 就没有"长度上限"这回事,
         # 只有相对便宜度下限生效 —— 那正是单行版本已经算好的语义。

@@ -20,6 +20,7 @@ from ...batch_pricing import (
     average_rating_label,
     batch_pricing_exclusion_reason,
     build_batch_provider,
+    cross_section_anchor_as_of,
     cross_section_anchor_from,
     list_upcoming_tradable_from_cache,
     sort_batch_results_for_review,
@@ -36,6 +37,8 @@ from ...watchlist import (
     remove_from_watchlist,
 )
 from ...watchlist_cache import (
+    anchor_age_is_stale,
+    anchor_is_stale,
     latest_daily_before,
     load_watchlist_pricing,
     save_watchlist_pricing,
@@ -511,7 +514,13 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
             return
 
         val_date = market_today()
-        anchor = cross_section_anchor_from(app._batch_all_results or [])
+        pool_rows = app._batch_all_results or []
+        anchor = cross_section_anchor_from(pool_rows)
+        # 锚来自**主池缓存的行**, 那可能是几天前跑的 —— 实测热缓存记 2026-08-28
+        # 而锚源行是 08-26。此前这里写的是 val_date (=今天), 于是锚的年龄在盘上
+        # 恒为 0, anchor_is_stale 接上了也判不出陈旧, 恰好在"天天点 ⚡ 但久不跑
+        # 全量重算"这个常态用法上失效。
+        anchor_as_of = cross_section_anchor_as_of(pool_rows)
         new_main, new_upcoming = merge_watchlist_pricing(
             app._batch_all_results or [], app._batch_upcoming_results or [], results)
 
@@ -523,8 +532,8 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
                 params=params,
                 cross_section=({"market_median_deviation": anchor,
                                 "from": "batch_pricing_cache.rows",
-                                "from_valuation_date": val_date.isoformat(),
-                                "n": len(app._batch_all_results or [])}
+                                "from_valuation_date": (anchor_as_of or val_date).isoformat(),
+                                "n": len(pool_rows)}
                                if anchor is not None else None),
                 origin="watchlist_worker",
             )
@@ -637,6 +646,10 @@ _PRICED_MERGE_FIELDS = (
     # 横截面 (小批量标注时为 None, 展示层打「—」而不是打一个假名次)
     "relative_deviation", "cheapness_rank", "cheapness_percentile",
     "cheapness_rank_total",
+    # 锚值与**锚自己的估值日** —— 「相对偏差」的分母出处。少登记它们, 展示层就判
+    # 不出该不该把那两列灰掉 (漏登记不报错, 只是那一列恒空)。
+    "market_median_deviation", "market_median_deviation_as_of",
+    "cross_section_origin",
     # 溯源
     "valuation_date", "priced_at", "origin",
     "market_price_as_of", "market_price_source",
@@ -678,29 +691,75 @@ def _price_cache(app) -> dict:
     return getattr(app, "_watchlist_price_cache", None) or _EMPTY_PRICE_CACHE
 
 
+#: 取价来源的优先级 (数值越大越优先), 用作**同一估值日**下的 tie-break。
+#: 顺序即 ``_priced_rows_by_code`` 里三路来源的遍历顺序: 磁盘热缓存 < upcoming < 全池。
+_SOURCE_RANK_CACHE, _SOURCE_RANK_UPCOMING, _SOURCE_RANK_POOL = 0, 1, 2
+
+
+def _row_freshness(row: dict, source_rank: int) -> tuple[date, int]:
+    """取价行的新鲜度排序键: 先市场口径的估值日, 同日再比**来源**.
+
+    缺估值日的行排最旧 —— 那说明它从没被定价路径写过, 只是 watchlist.json 的
+    条款元数据。
+
+    **同日的 tie-break 必须是来源, 不能是 ``priced_at``**。那个戳只有磁盘热缓存行
+    才有 (``watchlist_cache.to_cache_row`` 落盘时盖的); 定价结果行从头到尾没人写它
+    (实测 ``batch_pricing_cache.json`` 284 行**一行都没有**, 而热缓存 6 行全有)。
+    拿它当键, 缺失方恒为 ``""``、恒排最旧, 于是同日**磁盘永远赢内存** —— 与本函数
+    要保证的语义正好相反, 而且比改动前 (内存无条件覆盖) 更差: 上午点过「⚡ 关注池
+    重算」、下午跑一轮全量批量重算之后, 主页仍显示上午那一份价, 批量页却是下午的,
+    两页对同一只债给出不同数字而「数据」列两边都写「✓ 今日」。
+
+    内存在同日一定不比热缓存旧: ⚡ 的 worker 会把自己的结果 ``merge_watchlist_pricing``
+    回 ``_batch_all_results`` 再落盘, 两边同源; 而全量重算只更新内存、不写热缓存。
+    """
+    return (_parse_watchlist_date(row.get("valuation_date")) or date.min, source_rank)
+
+
 def _priced_rows_by_code(app) -> dict[str, dict]:
-    """三级兜底的取价表, 优先级由低到高.
+    """三路取价来源, **按新鲜度择优**, 同新时后来者胜.
 
     1. **磁盘热缓存** —— 开页立刻有数的那一层。没有它, 关注池的理论价就完全寄生在
        "你这次开机有没有跑过全市场"上 (实测缓存 ``n_upcoming_results=0`` 时, 三只
        在途新债连着几天没有理论价)。
-    2. ``_batch_upcoming_results`` —— 本轮算出来的主池外结果。
+    2. ``_batch_upcoming_results`` —— 主池外结果。
     3. ``_batch_all_results`` —— **全池**, 不是 ``_batch_results`` (那是视图子集,
        关注的债多半不在「低估候选」这类窄视图里, 读错会让整行随视图开关忽有忽无)。
 
-    内存永远压过磁盘: 磁盘是"上次算的", 内存是"这次算的"。
+    **这里曾按"后写的覆盖先写的"排优先级, 前提写的是"内存永远压过磁盘"** —— 那个
+    前提是错的: 启动路径上的 ``_batch_all_results`` 本身就是 ``_load_result_cache``
+    从 ``batch_pricing_cache.json`` 读回来的**另一份磁盘缓存**, 而且它排在
+    ``home_tab.build`` 之后 (``app.after(80, ...)``)。实测两份盘的日期差两天:
+    热缓存 08-28 / 全池 08-26。于是主页先用 08-28 画出「派克 160.35」, 80ms 后被
+    08-26 的 155.72 顶掉, 涨跌符号当场反转; 先锋转债更狠 —— 177.259 被一行
+    ``market_price=None`` 的全池行覆盖, 市价/涨跌/偏差三列一起退化成「—」。
+    页面上没有任何线索说这两个数来自不同日期。
+
+    同一天则仍让后来者 (内存) 胜出: 那是"这次算的" vs "上次算的", 原优先级正确。
+    这条 tie-break 由**显式的来源序号**保证, 不要改回按行里的时间戳比 —— 理由见
+    ``_row_freshness``。
     """
-    by_code: dict[str, dict] = {}
+    by_code: dict[str, tuple[tuple[date, int], dict]] = {}
+
+    def _offer(code, row: dict, source_rank: int) -> None:
+        code = str(code)
+        key = _row_freshness(row, source_rank)
+        current = by_code.get(code)
+        if current is None or key >= current[0]:
+            by_code[code] = (key, row)
+
     for code, row in (_price_cache(app).get("rows") or {}).items():
         if code:
-            by_code[str(code)] = row
-    for source in (getattr(app, "_batch_upcoming_results", None) or [],
-                   getattr(app, "_batch_all_results", None) or []):
+            _offer(code, row, _SOURCE_RANK_CACHE)
+    for source, rank in ((getattr(app, "_batch_upcoming_results", None) or [],
+                          _SOURCE_RANK_UPCOMING),
+                         (getattr(app, "_batch_all_results", None) or [],
+                          _SOURCE_RANK_POOL)):
         for row in source:
             code = row.get("bond_code")
             if code:
-                by_code[str(code)] = row
-    return by_code
+                _offer(code, row, rank)
+    return {code: row for code, (_key, row) in by_code.items()}
 
 
 def _derive_price_state(merged: dict, priced: dict | None, today) -> str:
@@ -849,7 +908,12 @@ def watchlist_columns(change_label: str | None = None):
 #: 而成因完全不同 (实测同一份关注池里三种同时存在), 分不开就没法判断要不要点刷新。
 _PRICE_STATE_LABEL = {
     "ok": "✓ 今日",
-    "stale": "昨日",
+    # 「旧」只是估值日缺失时的兜底 —— 有估值日就拼真实日期, 见 _row_data_label。
+    # 此前这里写死「昨日」, 而 _derive_price_state 只判"是不是今天"、不算天数:
+    # 出差一周回来六行仍全写「昨日」, 而真实估值日在整个主页只有一个出口
+    # (取价**失败**时那句「表内仍是 X 的价」)。这一列的存在理由就是把三种长得
+    # 一样的「—」分开, 它自己断言一个错误的日期比笼统写「旧」更糟。
+    "stale": "旧",
     "no_market": "无市价",
     "unpriced": "未定价",
     "failed": "失败",
@@ -894,6 +958,10 @@ def _row_data_label(entry, *, terms_cache=None, admission_config=None) -> str:
         # 状态列此前直接把 status 原文塞进表格, 于是一条裸异常串能把整行撑爆
         return f"失败 · {status[:18]}" if status and status != "failed" else "失败"
     label = _PRICE_STATE_LABEL.get(state, "—")
+    if state == "stale":
+        val_date = _parse_watchlist_date(entry.get("valuation_date"))
+        if val_date is not None:
+            label += f" · {val_date.strftime('%m-%d')}"
     if state in {"ok", "stale"}:
         source = entry.get("market_price_source")
         if source == "terms_close":
@@ -905,6 +973,66 @@ def _row_data_label(entry, *, terms_cache=None, admission_config=None) -> str:
             if as_of and val_date and as_of < val_date:
                 label += f" · 价 {as_of.strftime('%m-%d')}"
     return label
+
+
+def _anchor_as_of(entry):
+    """这一行的横截面锚是哪一天的.
+
+    显式戳优先 (``_annotate_off_pool`` 给主池外的行盖的, 那是**主池那一批**的
+    日子); 没有戳说明锚是与这行同一批自算的 —— ``annotate_batch_results`` 的默认
+    路径 —— 此时锚的 as-of 就是这行自己的估值日。
+    """
+    return (_parse_watchlist_date(entry.get("market_median_deviation_as_of"))
+            or _parse_watchlist_date(entry.get("valuation_date")))
+
+
+def _cross_section_is_stale(entry, today, *, cache_meta=None) -> bool:
+    """这一行的横截面口径还能不能用 —— 决定「相对偏差」「双低」显不显示.
+
+    落地的是 2026-08-25 拍板的第 5 条: 锚超过 5 个交易日就不再拿它当今天的基准。
+    判据在 ``watchlist_cache`` 里躺了一轮没人调, 而中位偏差的水平是时变的
+    (``cb_valuation_history`` 20 期实测摆幅 21.2pp) —— 用几周前的市场水平算出来的
+    「比中位便宜 5pp」是个看上去完全正常的数字。
+
+    锚值只是绝对阈值兜底留下的 0.0 (``cross_section_origin == "absolute_fallback"``,
+    主池为空时的小批量标注) 同样算不能用 —— 那时 ``relative_deviation`` 恒等于绝对
+    偏差, 只是顶着横截面量的名字。
+
+    行里**完全没有锚的痕迹**时退回 *cache_meta* 里那一份 (它描述的正是热缓存这批行),
+    而不是一律判成过期: ``market_median_deviation`` 是随本次改动才进 ``CACHE_FIELDS``
+    的, 存量热缓存行一个都没有 —— 一律判过期会让升级后第一次开页整列全空, 要点一次
+    「⚡ 关注池重算」才回来, 而那与"锚真的旧了"在表上长得一模一样。
+    """
+    if str(entry.get("cross_section_origin") or "") == "absolute_fallback":
+        return True
+    if _is_finite(entry.get("market_median_deviation")):
+        return anchor_age_is_stale(_anchor_as_of(entry), today)
+    if cache_meta is not None:
+        return anchor_is_stale(cache_meta, today)
+    return True
+
+
+# ── A2: 变化列的基准可用性 ──────────────────────────────────────
+def _baseline_is_usable(entry, base_date) -> bool:
+    """当前行必须**严格晚于**基准快照, 「涨跌」「偏差Δ」才有意义.
+
+    两个失败形态都会渲染成一个看上去完全正常的数字:
+
+    - **当前行更旧** —— 跨日反着比, 给出符号相反的变化。实测 08-26 的派克行
+      (155.7155) 对 08-28 的基准 (160.347) 算出 −2.89, 而表头明明写着
+      「涨跌 vs 08-28」。
+    - **当前行与基准同日** —— 差恒为 0, 把"我没有新数据"渲染成"今天没动"。
+
+    两侧都取 ``valuation_date`` 而不是 ``market_price_as_of``: 后者可以合法地早于
+    估值日 (停牌/节假日), 而那种情况下"价确实没动"该照常显示 —— 陈旧性由「数据」
+    列的「· 价 MM-DD」承载, 不该在这里再拦一次。
+
+    这是 AGENTS「缺基准返回 None 不是 0.0」那条约定在日期维度上的补全。
+    """
+    if base_date is None:
+        return False
+    row_date = _parse_watchlist_date(entry.get("valuation_date"))
+    return row_date is not None and row_date > base_date
 
 
 def _cached_terms_for(terms_cache, code):
@@ -989,10 +1117,20 @@ def _render_watchlist_table(app):
         except Exception:
             admission_config = None
     prev_rows = (prev_snapshot or {}).get("rows") or {}
+    prev_date = _parse_watchlist_date((prev_snapshot or {}).get("valuation_date"))
+    today = market_today()
+    cache_meta = _price_cache(app).get("meta") or {}
+    n_anchor_stale = 0
 
     for entry in rows:
         code = entry.get("bond_code", "")
+        # 基准整体判一次, 不可比就把 prev 清空 —— 两列一起退回「—」。清 dict 而不是
+        # 各列自己判, 是为了让"漏掉其中一列"在结构上不可能 (它们共用同一份快照)。
         prev = prev_rows.get(code) or {}
+        if not _baseline_is_usable(entry, prev_date):
+            prev = {}
+        anchor_stale = _cross_section_is_stale(entry, today, cache_meta=cache_meta)
+        n_anchor_stale += 1 if anchor_stale else 0
         is_ok = entry.get("status") == "ok"
 
         dev = entry.get("deviation")
@@ -1006,10 +1144,14 @@ def _render_watchlist_table(app):
         dev_delta_str = (f"{(float(dev) - float(prev_dev)) * 100:+.2f}"
                          if _is_finite(dev) and _is_finite(prev_dev) else "—")
 
+        # 「相对偏差」与「双低」都只在横截面口径下可读: 前者的分母就是锚, 后者是
+        # 一个只有靠全市场分布才解释得动的排序量。锚过期就一起打「—」(口径5)。
         rel = entry.get("relative_deviation")
-        rel_str = f"{float(rel) * 100:+.1f}" if _is_finite(rel) else "—"
+        rel_str = ("—" if anchor_stale
+                   else (f"{float(rel) * 100:+.1f}" if _is_finite(rel) else "—"))
         dbl = entry.get("double_low")
-        dbl_str = f"{float(dbl):.0f}" if _is_finite(dbl) else "—"
+        dbl_str = ("—" if anchor_stale
+                   else (f"{float(dbl):.0f}" if _is_finite(dbl) else "—"))
 
         vals = [
             code,
@@ -1040,7 +1182,7 @@ def _render_watchlist_table(app):
     app._batch_watchlist_tree = tree
     _TREE_ATTRS.add("_batch_watchlist_tree")
     _attach_watchlist_context_menu(app, tree)
-    _refresh_watchlist_summary(app, rows)
+    _refresh_watchlist_summary(app, rows, anchor_stale_rows=n_anchor_stale)
 
 
 def refresh_home(app) -> None:
@@ -1106,8 +1248,14 @@ def _load_watchlist_selection_in_pricing_tab(app):
 
 
 # ── 摘要条 / 事件横幅 ─────────────────────────────────────────
-def _refresh_watchlist_summary(app, rows):
-    """汇总关注池: 持仓数 / 等权偏差中位 / 平均机会分 / 平均评级 / 异常计数."""
+def _refresh_watchlist_summary(app, rows, *, anchor_stale_rows: int = 0):
+    """汇总关注池: 持仓数 / 等权偏差中位 / 平均机会分 / 平均评级 / 异常计数.
+
+    末尾还带两条**口径出处**, 它们是表上唯一说清"这些数是哪天的"的地方:
+    「估值日 MM-DD」(取展示行里出现最多的那个估值日) 与锚过期时的一句提示。
+    没有它们, 「数据」列写「旧 · 08-26」而摘要条只字不提, 用户仍然要逐行看才知道
+    整页是不是都陈旧了。
+    """
     summary_var = getattr(app, "v_batch_watchlist_summary", None)
     if summary_var is None:
         return
@@ -1140,6 +1288,17 @@ def _refresh_watchlist_summary(app, rows):
         parts.append(f"平均评级 {rating_label}")
     if anomaly_count:
         parts.append(f"⚠ 异常 {anomaly_count}")
+
+    val_dates = [d for d in (_parse_watchlist_date(r.get("valuation_date")) for r in rows)
+                 if d is not None]
+    if val_dates:
+        # 众数而不是 max: 一行刚补过价不代表整页都是今天的。
+        # 平局取**较晚**那个而不是让 set 的迭代序决定 —— date 的 hash 受
+        # PYTHONHASHSEED 随机化, 否则同一份数据每次开页可能报不同的估值日。
+        dominant = max(set(val_dates), key=lambda d: (val_dates.count(d), d))
+        parts.append(f"估值日 {dominant.strftime('%m-%d')}")
+    if anchor_stale_rows:
+        parts.append(f"⚠ 横截面锚已过期 {anchor_stale_rows} 行 (相对偏差/双低暂不可比)")
     summary_var.set("  ·  ".join(parts))
 
 
