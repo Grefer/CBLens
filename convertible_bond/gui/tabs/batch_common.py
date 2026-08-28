@@ -15,22 +15,61 @@ import customtkinter as ctk
 from ..theme import (
     BG_CARD, BG_INPUT, BORDER,
     FONT_FAMILY, FONT_MONO,
-    GREEN, MAUVE, ORANGE, RED, TEXT, TEXT_DIM,
+    MAUVE, RED, TEXT, TEXT_DIM,
     TABLE_SELECTED_BG, TABLE_SELECTED_TEXT,
     TABLE_FONT_SIZE, TABLE_ROW_HEIGHT,
     get_color,
 )
+from ...batch_pricing import DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS
 from ...market_time import market_today
 
 
 # ── Treeview 行标签颜色 (主表 + 关注池表共用) ──────────────────
+#
+# **整行颜色是全表最贵的通道, 只回答一件事: 这一行的话能不能听。**
+# 它不表达贵/便宜, 两条独立的理由:
+#
+# ① 便宜度已经被**行位置**编码完了。``sort_batch_results_for_view`` 对
+#    「综合机会/低估候选/转股折价」一律按 ``relative_deviation`` 升序, 而
+#    「低估候选」的准入判据本身就是 ``rel < −5pp`` —— 任何架在便宜度上的行色
+#    在默认落地页上都是整表同色 (实测 40/40)。换阈值救不了, 换的是同一个病。
+# ② 旧的绝对阈值绿线 ``dev < −3%`` 换算到相对轴是 ``rel < −(3% + 中位)``,
+#    而橙线 ``|rel| ≥ 20pp`` 优先级更高 —— ``绿 ⊂ 橙 ⟺ 当期中位 ≥ 17%``。
+#    实测中位 +20.86% 时 ``underpriced`` 渲染 **0/284** (独立判据其实命中
+#    侨银/万讯/宝莱 3 只, 全被橙吃掉), ``overpriced`` 占 75.4% —— 颜色通道
+#    近乎常量。更糟的是「低估候选」40 行里有 2 只被染红 (长汽 rel=−15.46pp、
+#    长海 −15.73pp): 页面说"这是最便宜的 40 只", 颜色说其中 2 只贵。
+#
+# 红绿轴因此整体退出这两张表: ``theme.GREEN`` 在本项目已有 4 种含义 (策略页
+# 收益为正 / 数据源可信 / 这里的"便宜" / 用户每天看的 A 股行情软件里的"跌"),
+# 而关注池「涨跌」列带动态日期表头, 是全 app 最像行情软件的一格 —— 一旦上色,
+# 同一行会同时出现"红=涨(好)"与"红=贵(差)"。选边站解决不了, 只能让它退出。
+#
+# 两个拦截维度**不共用一个警报色**: ``blocked`` (可交易性) 是关于**这只债**的事实、
+# 需要动作 (临近摘牌 = 30 天内必须卖掉); ``nodata`` (数据质量 ∪ 定价失败) 是关于
+# **数据管线**的事实, 在选债页上无事可做, 该去跑 ``cb-data-doctor``。所以是
+# **警报 vs 静音**而不是两个红 —— 数据源抖一下「无市价」能一次命中几百行, 共用红色
+# 会让一屏红被读成"市场出事了", 而真相是"取数挂了"。
 _TAG_COLORS: dict[str, tuple[str, str]] = {
-    "new":         MAUVE,    # 未上市 / 尚不可自由交易的新债
-    "underpriced": GREEN,
-    "overpriced":  RED,
-    "anomaly":     ORANGE,
-    "failed":      TEXT_DIM,
+    "new":     MAUVE,      # 还没进入市场 —— 所有价格类判据一律不适用
+    "blocked": RED,        # 可交易性: 买不到 / 快买不到了
+    "nodata":  TEXT_DIM,   # 数据质量 / 定价失败: 这行数字是坏的
 }
+
+#: 行色图例文案 —— 键集必须与 ``_TAG_COLORS`` 相等 (有守护测试比对集合)。
+_TAG_LEGEND: dict[str, str] = {
+    "new":     "未上市",
+    "blocked": "不可交易",
+    "nodata":  "数据缺失/失败",
+}
+
+#: 非颜色的第二通道。颜色是最不可靠的那条: 实测灰阶下浅色 ``new`` 与旧的
+#: ``overpriced`` 亮度比 **1.00** (灰值都是 106) —— 截图、单色打印、红绿色觉
+#: 缺陷 (约 8% 男性) 拿到的信息量正好是 0。字重/字形不依赖色相。
+#: ``nodata`` 尤其需要: ``TEXT_DIM`` 与 ``TEXT`` 在浅色下只差 7.06:1 → 4.37:1,
+#: 光靠"淡一点"分不出来。
+_BOLD_TAGS = frozenset({"blocked"})
+_ITALIC_TAGS = frozenset({"nodata"})
 
 # 已注册到 app 的 Treeview 实例属性名, 主题切换时统一刷新.
 # 模块级集合: 假定单进程单 GUI 实例; 多实例场景下旧属性名会残留,
@@ -137,36 +176,71 @@ def _is_new_bond(row) -> bool:
 
 
 def _resolve_row_tag(row) -> str | None:
-    """决定 Treeview 行染色: 新债 > failed > 偏离离群 > underpriced/overpriced.
+    """决定 Treeview 行染色: 新债 > 不可交易 > 数据坏了 > 无色.
 
-    新债优先级最高, 让"扫新债"加入的标的即使尚未定价 (status=None) 也能醒目标识.
+    三档**都与价格无关** —— 理由见 ``_TAG_COLORS`` 上方那段。
+
+    优先级逐条都有理由:
+
+    - **新债最高**: 语义是"这只债还没进入市场, 价格类判据一律不适用"。而且未上市
+      新债天然带着「无市价」「无偏差」(数据质量维), 没有这道优先级它们会被误染成
+      ``nodata`` —— 但"还没挂牌所以没有价"不是数据坏了, 是天然状态。
+    - **可交易性压过数据质量**: 一只「临近摘牌」且当天恰好取不到价的债, 该看见的
+      是"30 天内必须卖掉", 不是"数据缺了" (实测今天 0 行同时命中, 但优先级必须
+      是显式的)。
+
+    判据读 ``batch_pricing`` 的两个维度常量, **不在这里另抄一份清单**: 它们的并集
+    还驱动 ``view_exclusion_reason`` 与 ``_review_bucket``, 抄第二份之后两边的分叉
+    是静默的 (与"GUI 自带一份只覆盖 14/18 的事件配色表"同源)。模型适用性 / 标的
+    风险两个维度**刻意都不在内** —— 它们是永久属性, 查完还是那样 (实测模型适用性
+    在 72% 的债上都亮), 收进来行色就变回 79% 的垃圾桶。
+
+    "无色"是**有含义的一档**: 没有否决理由。默认落地视图「低估候选」里三档全为 0
+    (该视图本身就排除了拦截标签与低置信), 所以一页全无色是设计意图 —— 必须配图例
+    把这句话说出来, 否则它和"配色坏了"长得一模一样。
+
+    没有 ``status`` 键的行 (关注池从没算过的那一档) 不染色: "从没算过"不是"这行
+    数字是坏的", 那两档的区分由「数据」列的五档文案承载。
     """
     if _is_new_bond(row):
         return "new"
-    status = row.get("status")
-    if status and status != "ok":
-        return "failed"
-    if status != "ok":
-        return None  # 关注池未定价行 (无 status), 不染色
     risk_tags = set(row.get("risk_tags") or [])
-    # 标签名从对称的「偏差异常」拆成了方向明确的两个; 这里是**字面量直读**,
-    # 漏改不会报错也不会红测试, 只会永远不亮 —— 见 batch_pricing.RISK_TAG_DIMENSION。
-    if risk_tags & {"模型高估离群", "深度低估待核", "偏差异常"}:
-        return "anomaly"
-    dev = row.get("deviation")
-    if _is_finite(dev):
-        d = float(dev)
-        if d < -0.03:
-            return "underpriced"
-        if d > 0.05:
-            return "overpriced"
+    if risk_tags & TRADABILITY_RISK_TAGS:
+        return "blocked"
+    status = row.get("status")
+    if status is not None and str(status) != "ok":
+        return "nodata"
+    if risk_tags & DATA_QUALITY_RISK_TAGS:
+        return "nodata"
     return None
 
 
 def _apply_tag_colors(tree: ttk.Treeview) -> None:
-    """将 ``_TAG_COLORS`` 中的标签颜色写入 *tree*."""
+    """将 ``_TAG_COLORS`` 中的标签颜色写入 *tree*.
+
+    加粗档的字号要跟着响应式字号走: ``_apply_responsive_tree_font`` 改的是全局
+    ``"Treeview"`` style 的 font, 而 tag 上的 font 会盖住它 —— 写死字号的话,
+    窗口一拉宽 blocked 行就比周围小一号。所以两边都要能触发重写。
+    """
+    size = getattr(tree, "_responsive_font_size", None) or TABLE_FONT_SIZE
     for tag, color in _TAG_COLORS.items():
-        tree.tag_configure(tag, foreground=get_color(color))
+        style = ("bold" if tag in _BOLD_TAGS
+                 else "italic" if tag in _ITALIC_TAGS else None)
+        if style:
+            tree.tag_configure(tag, foreground=get_color(color),
+                               font=(FONT_MONO, size, style))
+        else:
+            tree.tag_configure(tag, foreground=get_color(color))
+
+
+def row_colour_legend() -> str:
+    """行色图例 —— 两页共用一份文案.
+
+    与 ``WATCH_REFRESH_LABEL`` 那条同构: 用户看得见的名字必须有单一事实源, 否则
+    改了 tag 之后图例里会留着一个**过期**的档位名, 用户对着表找一个不存在的颜色。
+    """
+    parts = " · ".join(f"{label}" for label in _TAG_LEGEND.values())
+    return f"行色: {parts} · 无色 = 无否决理由"
 
 
 def _configure_tree_style() -> None:
@@ -280,14 +354,34 @@ def _configure_responsive_columns(
 
 
 def refresh_theme(app) -> None:
-    """主题切换后刷新 Treeview 样式 + 给所有已注册树重新染色."""
+    """主题切换后刷新 Treeview 样式 + 给所有已注册树重新染色.
+
+    **每棵树各自兜住 ``TclError``, 并把死掉的那个从注册表里摘掉。**
+    ``getattr(app, attr, None) is not None`` 拦不住已 ``destroy`` 的控件 —— 它还是
+    个对象, 而 Tk 8.6.15 实测在 ``tag_configure`` 上抛
+    ``TclError: invalid command name ".!frame.!treeview"``。触发链今天就成立:
+    默认落地「低估候选」(40 行) → 切「下修优势」或「转股折价」(**实测都是 0 行**)
+    → 切主题 (app.py) 或跨响应式档位。
+
+    真正难查的是后果而不是异常本身: 它从 ``for attr in _TREE_ATTRS`` 抛出会**中断
+    整轮循环**, 而 ``_TREE_ATTRS`` 是 ``set``、遍历顺序随 ``PYTHONHASHSEED`` 随机
+    —— 用户看到的不是崩溃, 是"切了一下主题, 有些表变了色有些没变, 而且每次开机变的
+    不是同一批"。
+    """
     _configure_tree_style()
-    for attr in _TREE_ATTRS:
+    dead: list[str] = []
+    for attr in tuple(_TREE_ATTRS):
         tree = getattr(app, attr, None)
-        if tree is not None:
+        if tree is None:
+            continue
+        try:
             _apply_tag_colors(tree)
             tree._responsive_font_size = None  # type: ignore[attr-defined]
             _apply_responsive_tree_font(tree)
+        except tk.TclError:
+            dead.append(attr)
+    for attr in dead:
+        _TREE_ATTRS.discard(attr)
 
 
 # ── 表头点击排序 ─────────────────────────────────────────────
@@ -490,6 +584,15 @@ def _create_table_section(parent, *, row, title, with_summary=False):
             header, textvariable=summary_var,
             font=(FONT_FAMILY, 11), text_color=TEXT_DIM, anchor="e",
         ).grid(row=0, column=1, sticky="e", padx=(12, 0))
+
+    # 行色图例 —— 两页共用一份文案, 挂在共用的表区里而不是各页各写一份。
+    # 这一维不进 CSV、不能排序, 且默认落地视图里往往一行都不染 (「低估候选」的
+    # 判据本身就排除了拦截标签) —— 没有这句话, "一页全无色"和"配色坏了"长得
+    # 一模一样。与事件横幅空态那条同源: 要的是显式空态文案。
+    ctk.CTkLabel(
+        header, text=row_colour_legend(),
+        font=(FONT_FAMILY, 10), text_color=TEXT_DIM, anchor="w",
+    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     body_row = 1
     section.grid_rowconfigure(body_row, weight=1)

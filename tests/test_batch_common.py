@@ -1232,7 +1232,9 @@ def test_a_listed_bond_is_not_new_even_if_the_watchlist_froze_it_as_pending():
         "deviation": 0.41, "risk_tags": ["模型高估离群"],
     }
     assert _is_new_bond(row) is False
-    assert _resolve_row_tag(row) == "anomaly"
+    # 这条钉的是 _is_new_bond 的日期优先级, 不是某个具体颜色: 只要它没被误判成
+    # 新债, 行色就该由后续判据说了算 (这一行没有拦截标签, 所以是无色)。
+    assert _resolve_row_tag(row) is None
 
 
 def test_a_future_listing_date_still_wins_over_a_tradable_flag():
@@ -1254,3 +1256,269 @@ def test_issued_pending_listing_still_falls_back_to_the_derived_flags():
         "listing_date": None, "tradable_date": None,
     }
     assert _is_new_bond(row) is True
+
+
+# ── 行染色的六道闸 ──────────────────────────────────────────────
+#
+# 这一族测试补在配色链**零覆盖**的事实之上: 改动前 `_TAG_COLORS` /
+# `_apply_tag_colors` / `_configure_tree_style` / `_TREE_ATTRS` 在 tests/ 里
+# 一处引用都没有 —— 实测把行色口径从绝对偏差换成相对偏差 (重着色 261→194 行、
+# 绿色 0→81 只) 全套 915 个测试照样全绿。
+import tkinter as tk
+
+from convertible_bond.batch_pricing import (
+    BLOCKING_RISK_TAGS,
+    DATA_QUALITY_RISK_TAGS,
+    RISK_TAG_DIMENSION,
+    TRADABILITY_RISK_TAGS,
+)
+from convertible_bond.gui.tabs import batch_common
+from convertible_bond.gui.tabs.batch_common import (
+    _TAG_COLORS,
+    _TAG_LEGEND,
+    _TREE_ATTRS,
+    row_colour_legend,
+)
+
+
+def test_row_colour_never_depends_on_how_cheap_the_bond_looks():
+    """整行颜色不许表达贵/便宜 —— 喂遍偏差字段全域, tag 必须一动不动.
+
+    钉住两个真实故障形态:
+
+    ① **绿色结构性不可达**。绝对绿线 ``dev < −3%`` 换算到相对轴是
+       ``rel < −(3% + 中位)``, 而橙线是 ``|rel| ≥ 20pp``
+       (``DEVIATION_ANOMALY_THRESHOLD``) 且优先级更高 —— 于是
+       ``绿 ⊂ 橙 ⟺ 当期中位 ≥ 17%``。实测中位 +20.86% 时 ``underpriced``
+       渲染 **0/284**, 而独立判据其实命中 3 只 (侨银 −5.03% / 万讯 −3.93% /
+       宝莱 −3.24%), 全被橙色吃掉; 20 期估值基线里 5 期都在这一档。
+
+    ② **颜色是渲染排序键的单调函数**。``sort_batch_results_for_view`` 对
+       「综合机会/低估候选/转股折价」一律按 ``relative_deviation`` **升序**,
+       而「低估候选」的准入判据本身就是 ``rel < −5pp`` —— 任何架在便宜度上的
+       行色在那一页上都是整表同色 (实测 40/40)。便宜度已经被行位置编码完了。
+
+    所以这条不是"换个阈值", 是**便宜度整体退出行色通道**。
+    """
+    base = {"bond_code": "123456.SZ", "status": "ok", "risk_tags": []}
+    baseline = _resolve_row_tag(base)
+
+    for field in ("deviation", "relative_deviation", "cheapness_percentile"):
+        for value in (-0.50, -0.2386, -0.05, -0.03, 0.0, 0.05, 0.15,
+                      0.2086, 2.50, None, float("nan")):
+            row = dict(base, **{field: value})
+            assert _resolve_row_tag(row) == baseline, (
+                f"{field}={value!r} 改变了行色 —— 便宜度不该进这个通道")
+
+
+def test_two_tags_that_mean_opposite_things_never_share_one_visual_output():
+    """「深度低估待核」与「模型高估离群」必须区分得开.
+
+    它们由 ``batch_pricing`` 按 gap 符号显式拆成两个方向明确的标签
+    (实测相对偏差中位 **−21.95pp** vs **+27.76pp**), 而且分属**两个不同维度**
+    (机会信号 / 模型适用性) —— 老代码用一个字面量集合把它们合回同一个 ORANGE,
+    「低估候选」40 行里被染橙的 16 只全部是深度低估待核。
+
+    这是 AGENTS 里「暂停转股与恢复转股是相反的意思, 必须是相反的颜色」那次事故
+    在行色上的复发。判据要落在**能区分**上, 而不是"必须各有一个颜色" —— 两个都
+    不占用行色、由「标签」列的文字承载, 同样满足。
+    """
+    cheap = {"bond_code": "A", "status": "ok", "risk_tags": ["深度低估待核"]}
+    rich = {"bond_code": "B", "status": "ok", "risk_tags": ["模型高估离群"]}
+
+    assert RISK_TAG_DIMENSION["深度低估待核"] != RISK_TAG_DIMENSION["模型高估离群"]
+
+    same_colour = _resolve_row_tag(cheap) == _resolve_row_tag(rich)
+    same_text = (batch_common._format_tags(cheap["risk_tags"])
+                 == batch_common._format_tags(rich["risk_tags"]))
+    assert not (same_colour and same_text), "方向相反的两个标签在表上完全同形"
+
+
+def test_every_row_colour_has_a_text_exit():
+    """每个 tag 都要有一条非颜色出口 —— 颜色是最不可靠的那条通道.
+
+    实测灰阶下浅色 ``new`` 与 ``overpriced`` 的亮度比 **1.00** (灰值都是 106)、
+    深色 ``underpriced`` 与普通文字 **1.03**: 截图、单色打印、红绿色觉缺陷
+    (约 8% 男性) 拿到的信息量正好是 0。这条比任何 ΔE 阈值稳, 因为它不依赖
+    某一份色觉仿真实现。
+    """
+    plain = {"bond_code": "P", "status": "ok", "risk_tags": []}
+    samples = {
+        "new": {"bond_code": "N", "status": "ok", "risk_tags": ["无市价", "无偏差"],
+                "trading_status": "pending", "is_tradable": False,
+                "listing_date": None, "tradable_date": None},
+        "blocked": {"bond_code": "B", "status": "ok", "risk_tags": ["临近摘牌"]},
+        "nodata": {"bond_code": "D", "status": "ok", "risk_tags": ["无市价"]},
+    }
+    assert set(samples) == set(_TAG_COLORS), "新增 tag 时要同步补一条文字出口的样例"
+
+    for tag, row in samples.items():
+        assert _resolve_row_tag(row) == tag
+        text_cells = {
+            name: getter(row)
+            for name, getter in batch_tab._BATCH_COL_GETTERS.items()
+            if name in {"标签", "状态", "市价", "可信"}
+        }
+        plain_cells = {
+            name: getter(plain)
+            for name, getter in batch_tab._BATCH_COL_GETTERS.items()
+            if name in {"标签", "状态", "市价", "可信"}
+        }
+        assert text_cells != plain_cells, f"{tag} 这一档只有颜色说得出来"
+
+
+def test_refresh_theme_survives_a_tree_that_was_already_destroyed():
+    """空结果视图留下的悬垂 Treeview 不许打断整轮重染.
+
+    触发链今天就成立: 默认落地「低估候选」(40 行, 注册树) → 切「下修优势」
+    (**实测 0 行**) 或「转股折价」(**实测 0 行**) → 切主题 (app.py:996) 或跨响应式
+    档位 (app.py:748)。真机 Tk **8.6.15** 实测 ``tag_configure`` 抛
+    ``TclError: invalid command name ".!frame.!treeview"`` —— 而
+    ``getattr(app, attr, None) is not None`` 拦不住已 destroy 的控件 (它还是个对象)。
+
+    更隐蔽的是后果: 异常从 ``for attr in _TREE_ATTRS`` 里抛出会**中断循环**, 而
+    ``_TREE_ATTRS`` 是 ``set``、遍历顺序随 ``PYTHONHASHSEED`` 随机 —— 用户看到的
+    不是崩溃对话框, 是"切了一下主题, 有些表变了色有些没变, 而且每次开机变的不是
+    同一批"。所以这条要同时断言: **不抛** + **活树照常刷到** + 悬垂项被摘掉。
+    """
+    class _DeadTree:
+        def tag_configure(self, *a, **kw):
+            raise tk.TclError('invalid command name ".!frame.!treeview"')
+
+        def winfo_width(self):
+            raise tk.TclError('invalid command name ".!frame.!treeview"')
+
+    class _LiveTree:
+        def __init__(self):
+            self.tags = {}
+
+        def tag_configure(self, tag, **kw):
+            self.tags[tag] = kw
+
+        def winfo_width(self):
+            return 1  # ≤1 → _apply_responsive_tree_font 直接返回, 不碰 ttk.Style
+
+    class _App:
+        pass
+
+    app = _App()
+    app._dead_tree = _DeadTree()
+    app._live_tree = _LiveTree()
+    saved = set(_TREE_ATTRS)
+    _TREE_ATTRS.update({"_dead_tree", "_live_tree"})
+    try:
+        batch_common.refresh_theme(app)          # 不许抛
+        assert app._live_tree.tags, "悬垂树把活树的重染一起带走了"
+        assert set(app._live_tree.tags) == set(_TAG_COLORS)
+        assert "_dead_tree" not in _TREE_ATTRS, "死树没被摘掉, 下一轮还会再抛一次"
+    finally:
+        _TREE_ATTRS.clear()
+        _TREE_ATTRS.update(saved)
+
+
+def test_each_blocking_dimension_reads_its_own_shared_tag_set():
+    """两个拦截维度各有各的颜色, 判据都不许在 GUI 里另抄一份清单.
+
+    ``BLOCKING_RISK_TAGS`` 是两者的并集, 同时驱动 ``view_exclusion_reason`` 与
+    ``_review_bucket``; 行色再抄一份, 下一次调维度时两边就会静默分叉 —— 与
+    「GUI 曾自带一份只覆盖 14/18 的事件配色表」同源。
+    模型适用性/标的风险**都不在**内: 它们是永久属性, 查完还是那样 (实测模型适用性
+    在 72% 的债上都亮), 收进来行色就变回 79% 的垃圾桶。
+    """
+    assert TRADABILITY_RISK_TAGS | DATA_QUALITY_RISK_TAGS == BLOCKING_RISK_TAGS
+    assert not (TRADABILITY_RISK_TAGS & DATA_QUALITY_RISK_TAGS)
+
+    for tag in sorted(TRADABILITY_RISK_TAGS):
+        row = {"bond_code": "X", "status": "ok", "risk_tags": [tag]}
+        assert _resolve_row_tag(row) == "blocked", f"{tag} 属可交易性维却没染上 blocked"
+
+    for tag in sorted(DATA_QUALITY_RISK_TAGS):
+        row = {"bond_code": "X", "status": "ok", "risk_tags": [tag]}
+        assert _resolve_row_tag(row) == "nodata", f"{tag} 属数据质量维却没染上 nodata"
+
+    for tag in sorted(RISK_TAG_DIMENSION):
+        if tag in BLOCKING_RISK_TAGS:
+            continue
+        row = {"bond_code": "X", "status": "ok", "risk_tags": [tag]}
+        assert _resolve_row_tag(row) is None, f"{tag} 不属拦截集却染了色"
+
+
+def test_a_broken_pipeline_does_not_look_like_a_dying_market():
+    """数据质量必须**静音**, 不许跟可交易性共用警报色.
+
+    频次上今天只有 3 : 1 (临近摘牌 3 只 / 先锋转债的 无偏差+无市价 1 只), 分不分
+    看着无所谓 —— 真正的理由是**降级场景**: 数据源抖一下, ``无市价`` 可以一次命中
+    几百行。它们要是和 ``临近摘牌`` 共用红粗体, 一屏红色会被读成"市场出事了",
+    而真相是"取数挂了, 去跑 cb-data-doctor"。
+
+    方向也必须是静音而不是第二个警报色: 数据质量行在这一页上无事可做 (是噪声),
+    可交易性行则是最需要动作的一档 (临近摘牌 = 30 天内必须卖掉)。
+    """
+    trading_risk = {"bond_code": "A", "status": "ok", "risk_tags": ["临近摘牌"]}
+    broken_data = {"bond_code": "B", "status": "ok", "risk_tags": ["无市价"]}
+    assert _resolve_row_tag(trading_risk) != _resolve_row_tag(broken_data)
+    assert _resolve_row_tag(broken_data) == "nodata"
+
+    # 定价失败是数据质量的极端档 —— 整行一个数字都没有, 同样归静音。
+    # (老代码里 `failed` 本来就是 TEXT_DIM, 这是恢复而不是新发明。)
+    assert _resolve_row_tag(
+        {"bond_code": "C", "status": "provider error: timeout"}) == "nodata"
+
+
+def test_tradability_outranks_a_data_gap_on_the_same_row():
+    """同时命中两维时染可交易性 —— 可动作的那条压过维护提示.
+
+    实测今天 0 行同时命中, 但优先级必须是显式的: 一只 ``临近摘牌`` 且当天恰好
+    取不到价的债, 该看见的是"30 天内必须卖掉", 不是"数据缺了"。
+    """
+    row = {"bond_code": "X", "status": "ok",
+           "risk_tags": ["无市价", "临近摘牌"]}
+    assert _resolve_row_tag(row) == "blocked"
+
+
+def test_a_never_priced_watchlist_row_is_not_painted_as_broken():
+    """"从没算过"不是"这行数字是坏的" —— 关注池未定价行必须保持无色.
+
+    ``no_market`` / ``unpriced`` 明确不进行色: 未上市新债没有市价是**天然状态**
+    (实测关注池 6 行里有 3 只), 把它染成"别信它"就是把 ``_resolve_row_tag`` 里
+    那条刻意的"没有 status 就 return None"拿掉。这两档的区分由「数据」列的
+    五档文案承载 —— 那正是 ``_price_state`` 存在的理由。
+    """
+    never_priced = {"bond_code": "123999.SZ", "bond_name": "未算转债",
+                    "listing_date": market_today() - timedelta(days=90)}
+    assert never_priced.get("status") is None
+    assert _resolve_row_tag(never_priced) is None
+
+    failed = dict(never_priced, status="provider error: timeout")
+    assert _resolve_row_tag(failed) == "nodata"
+
+
+def test_row_colour_treats_nan_as_missing():
+    """落盘 ``null`` 读回来是 **NaN**, 而 ``NaN is not None`` 为真.
+
+    ``watchlist_cache._NAN_FIELDS`` 收了 ``cheapness_percentile``, 实测关注池
+    热缓存 6 行该字段全是 ``nan``。与 ``safe_date`` / ``pandas.NaT`` 那条约定
+    (NaT 是 datetime 子类且 ``bool(NaT)`` 为真) 是同一个坑的又一次出现。
+    """
+    row = {"bond_code": "X", "status": "ok", "risk_tags": [],
+           "deviation": float("nan"), "relative_deviation": float("nan"),
+           "cheapness_percentile": float("nan")}
+    assert _resolve_row_tag(row) is None
+
+
+def test_legend_names_exactly_the_colours_the_table_can_show():
+    """图例与 ``_TAG_COLORS`` 键集必须同步, 且要显式解释"无色".
+
+    与 ``WATCH_REFRESH_LABEL`` 那次同构: 改了 tag 但图例里留着一个**过期**的
+    档位名, 用户对着表找一个不存在的颜色。所以比对的是**集合相等**而不是扫字面量
+    —— 扫字面量抓不到"留着旧名字"这种真实形态。
+
+    "无色"那一句是硬要求: 默认落地视图「低估候选」里 ``blocked`` 恒为 0
+    (该视图本身就排除了拦截标签与低置信), 一页全无色是**设计意图**; 没有这句话,
+    它和"配色坏了"长得一模一样 —— 与事件横幅空态那条同源。
+    """
+    assert set(_TAG_LEGEND) == set(_TAG_COLORS)
+    legend = row_colour_legend()
+    for label in _TAG_LEGEND.values():
+        assert label in legend
+    assert "无色" in legend

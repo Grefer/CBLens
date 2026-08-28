@@ -195,7 +195,11 @@ def build(app, tab):
     # 行情源在顶栏 (app.v_data_source, v_batch_source 就是它本身), 页内不再摆第二个。
     # v_batch_status 同理已提到 app._build_vars —— 主页比批量页先 build, 谁也不能
     # 再假设自己是创建方。
-    # 默认进入"低估候选"视图: 评分高、可信度高、无硬复核风险的精选 (偏差异常自动排除)
+    # 默认进入「低估候选」视图: 比全市场中位便宜 ≥5pp **且**排进当期最便宜的 15%,
+    # 并排除拦截标签 (数据质量 / 可交易性) 与低置信。
+    # **偏差类标签不被排除** —— 「模型高估离群」「深度低估待核」都属模型适用性/机会信号,
+    # 不在 BLOCKING_RISK_TAGS 里; 实测这 40 行里有 16 行带「深度低估待核」。
+    # 原注释写着"偏差异常自动排除", 与 view_exclusion_reason 的实际判据对不上。
     # canonical 名 (v_batch_view) 永远是 BATCH_REVIEW_VIEWS 之一; 菜单显示带 "(N)" 计数
     # 后缀的 display var 与之分离, 避免回写 canonical 引发字符串不一致.
     app.v_batch_view = ctk.StringVar(value="低估候选")
@@ -617,10 +621,12 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     for child in app.batch_table_frame.winfo_children():
         child.destroy()
 
-    if not results:
-        app.v_batch_status.set("无结果")
-        return
-
+    # 空结果**照样建表** —— 不再早返回。早返回留下的是一个已 destroy 却还挂在
+    # ``app._batch_main_tree`` / ``_TREE_ATTRS`` 上的悬垂 Treeview, 下一次
+    # ``refresh_theme`` 在它上面抛 TclError (真机 Tk 8.6.15 实测)。触发链是现成的:
+    # 默认落地「低估候选」(40 行) → 切「下修优势」或「转股折价」(实测都是 0 行) →
+    # 切主题。``refresh_theme`` 那边也补了兜底, 但两道都要有: 空视图整块消失还会
+    # 让页面高度跳变, 而关注池的空态一直是"留着表 + 一句占位文案"。
     cols_preset = (app.v_batch_cols.get()
                    if hasattr(app, "v_batch_cols") else "简洁")
     schema = _BATCH_COLS_SIMPLE if cols_preset == "简洁" else _BATCH_COLS_FULL
@@ -669,6 +675,17 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         tags = [row_tag] if row_tag else []
         tree.insert("", "end", iid=str(idx), values=vals, tags=tags)
 
+    if not results:
+        # 「下修优势」「转股折价」实测今天都是 0 行 —— 空视图是信号在说话, 不是
+        # 判据坏了 (见 README 的模型边界一节)。所以要显式写出来: 一个消失的控件
+        # 和一个坏掉的控件长得一模一样。
+        ctk.CTkLabel(
+            app.batch_table_frame,
+            text=f"「{view or '综合机会'}」当前没有标的 — 这一档的判据今天没有命中任何债, "
+                 f"换个视图或点「🔄 刷新重算」",
+            font=(FONT_FAMILY, 12), text_color=TEXT_DIM,
+        ).grid(row=2, column=0, sticky="w", padx=12, pady=(2, 8))
+
     summary = summarize_batch_results(results)
     total = total_results if total_results is not None else summary["total"]
     view_name = view or "综合机会"
@@ -679,7 +696,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     if excluded_count:
         parts.append(f"公开交易过滤 {excluded_count} 只")
     app.v_batch_status.set("  |  ".join(parts))
-    app.btn_batch_export.configure(state="normal")
+    app.btn_batch_export.configure(state="normal" if results else "disabled")
 
     # 缓存时效信息搬到状态栏 (左侧 _data_freshness 区), 不再挤占复核状态行
     saved_at_iso: str | None = None

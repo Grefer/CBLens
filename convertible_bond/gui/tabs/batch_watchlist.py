@@ -17,6 +17,9 @@ import customtkinter as ctk
 
 from ..theme import *  # noqa: F401,F403  保持与 batch.py 一致的颜色 / 字体常量入口
 from ...batch_pricing import (
+    DEEP_UNDERVALUED_TAGS,
+    LEGACY_DEVIATION_OUTLIER_TAGS,
+    MODEL_OVERVALUED_TAGS,
     average_rating_label,
     batch_pricing_exclusion_reason,
     build_batch_provider,
@@ -1273,9 +1276,15 @@ def _refresh_watchlist_summary(app, rows, *, anchor_stale_rows: int = 0):
 
     rating_label = average_rating_label(r.get("credit_rating") for r in priced) or "—"
 
-    _ANOMALY_TAGS = {"模型高估离群", "深度低估待核", "偏差异常"}   # 含 legacy 名
-    anomaly_count = sum(1 for r in priced
-                        if _ANOMALY_TAGS & set(r.get("risk_tags") or []))
+    # 偏差离群的**两个方向分开报**。这里曾是一份与 batch_common 行色判据一模一样的
+    # 私有字面量集合, 把相对偏差中位 −21.95pp 与 +27.76pp 的两族合成一句「⚠ 异常 N」
+    # —— 两边同时抄、同时错, 而它们分属机会信号与模型适用性两个不同维度。
+    def _count(tags: frozenset[str]) -> int:
+        return sum(1 for r in priced if tags & set(r.get("risk_tags") or []))
+
+    n_overvalued = _count(MODEL_OVERVALUED_TAGS)
+    n_undervalued = _count(DEEP_UNDERVALUED_TAGS)
+    n_legacy_outlier = _count(LEGACY_DEVIATION_OUTLIER_TAGS)
 
     parts = [f"持仓 {n}"]
     if priced:
@@ -1286,8 +1295,12 @@ def _refresh_watchlist_summary(app, rows, *, anchor_stale_rows: int = 0):
         parts.append(f"机会分均值 {mean_score:.1f}")
     if rating_label != "—":
         parts.append(f"平均评级 {rating_label}")
-    if anomaly_count:
-        parts.append(f"⚠ 异常 {anomaly_count}")
+    if n_overvalued:
+        parts.append(f"⚠ 模型高估 {n_overvalued}")
+    if n_undervalued:
+        parts.append(f"⚠ 深度低估待核 {n_undervalued}")
+    if n_legacy_outlier:
+        parts.append(f"⚠ 偏差离群(旧口径) {n_legacy_outlier}")
 
     val_dates = [d for d in (_parse_watchlist_date(r.get("valuation_date")) for r in rows)
                  if d is not None]

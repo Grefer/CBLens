@@ -151,7 +151,32 @@ def tags_in(*dimensions: str) -> frozenset[str]:
     return frozenset(t for t, d in RISK_TAG_DIMENSION.items() if d in wanted)
 
 
-_BLOCKING_TAGS = tags_in(DIM_DATA, DIM_TRADABILITY)
+#: 两个拦截维度**分开公开**: 行色给它们不同的视觉语言, 判据不许在 GUI 里另抄一份。
+#:
+#: 分开的理由不是频次 (实测主池 可交易性 3 只 / 数据质量 1 只), 是**降级场景**:
+#: 数据源抖一下, 「无市价」可以一次命中几百行 —— 它们要是和「临近摘牌」共用同一个
+#: 警报色, 一屏红色会被读成"市场出事了", 而真相是"取数挂了, 去跑 cb-data-doctor"。
+#: 方向也不对称: 数据质量行在选债页上无事可做 (是噪声, 该静音), 可交易性行则是最
+#: 需要动作的一档 (临近摘牌 = 30 天内必须卖掉)。
+TRADABILITY_RISK_TAGS = tags_in(DIM_TRADABILITY)
+DATA_QUALITY_RISK_TAGS = tags_in(DIM_DATA)
+
+#: 两者的并集 —— ``view_exclusion_reason`` / ``_review_bucket`` 用的是这个口径
+#: (进不进得了主池不看是哪一维), 行色才按维度分。
+BLOCKING_RISK_TAGS = TRADABILITY_RISK_TAGS | DATA_QUALITY_RISK_TAGS
+
+
+# ── 模型偏差离群的两个方向 ──────────────────────────────────────
+# 这两族**方向相反**, 分属两个不同维度 (机会信号 / 模型适用性), 实测相对偏差中位
+# −21.95pp vs +27.76pp。GUI 曾用一个字面量集合把它们合成同一个橙色行, 而
+# ``batch_watchlist`` 的摘要条又抄了第二份一模一样的字面量 —— 与「暂停转股与恢复
+# 转股是相反的意思却同色」是同一次分叉的两半。展示层要报计数就分开报。
+MODEL_OVERVALUED_TAGS = frozenset({"模型高估离群"})
+DEEP_UNDERVALUED_TAGS = frozenset({"深度低估待核"})
+
+#: 拆分前的**对称**旧名, 不带方向, 所以归不进上面任何一族 (实测当前全库 0 条,
+#: 只可能出现在旧缓存里)。要报就单独报, 不要猜一个方向塞进去。
+LEGACY_DEVIATION_OUTLIER_TAGS = frozenset({"偏差异常"})
 
 
 HARD_REVIEW_TAGS = {
@@ -1467,7 +1492,7 @@ def view_exclusion_reason(
             return "置信度不足"
         if "转股折价" in tags:
             return "转股折价单独归类"
-        blocking = tags & _BLOCKING_TAGS
+        blocking = tags & BLOCKING_RISK_TAGS
         if blocking:
             return "拦截标签 " + "/".join(sorted(blocking))
         return None
@@ -1488,7 +1513,7 @@ def view_exclusion_reason(
             cutoff = _selection_cutoff(int(total), DEFAULT_DOWN_RESET_EDGE_PERCENTILE)
             if rank >= cutoff:
                 return f"优势排第 {int(rank) + 1}/{int(total)}, 不在最强的 {cutoff} 名内"
-        blocking = tags & _BLOCKING_TAGS
+        blocking = tags & BLOCKING_RISK_TAGS
         if blocking:
             return "拦截标签 " + "/".join(sorted(blocking))
         return None
@@ -1506,7 +1531,7 @@ def view_exclusion_reason(
                 return f"双低 {value:.0f} 排第 {int(rank) + 1}/{int(total)}, 不在最低 {cutoff} 名内"
         # 双低是纯市场量 (价格 + 溢价), 不含模型输出, 因此**不**加置信度闸 ——
         # 那是模型可信度, 与这个筛子无关。可交易性/数据质量的拦截标签仍然生效。
-        blocking = tags & _BLOCKING_TAGS
+        blocking = tags & BLOCKING_RISK_TAGS
         if blocking:
             return "拦截标签 " + "/".join(sorted(blocking))
         return None
@@ -1515,7 +1540,7 @@ def view_exclusion_reason(
             return "定价未成功"
         return None if "转股折价" in tags else "未出现转股折价标签"
     if view_name == "需复核":
-        if not ok or (tags & _BLOCKING_TAGS) or row.get("confidence") == "低":
+        if not ok or (tags & BLOCKING_RISK_TAGS) or row.get("confidence") == "低":
             return None
         return "不属于复核池"
     return None
@@ -1818,7 +1843,7 @@ def _review_bucket(row: dict) -> str:
     tags = set(row.get("risk_tags") or [])
     if row.get("status") != "ok":
         return "需复核"
-    if tags & _BLOCKING_TAGS or row.get("confidence") == "低":
+    if tags & BLOCKING_RISK_TAGS or row.get("confidence") == "低":
         return "需复核"
     if tags & tags_in(DIM_MODEL):
         # 模型在这只债上不可靠, 但不是"去做点什么"就能解决的 —— 它是永久属性, 该单列

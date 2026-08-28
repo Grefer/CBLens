@@ -35,6 +35,7 @@ from ..theme import (
     BTN_CTRL, BTN_HOVER,
     FONT_FAMILY,
     ORANGE, TEXT, TEXT_DIM,
+    badge_text_color,
 )
 from ..widgets import Tooltip, create_card
 from ...market_time import market_today
@@ -115,7 +116,7 @@ class EventsMixin:
             type_color = self._event_type_color(ev.event_type)
             type_label = self._event_type_short(ev.event_type)
             badge = ctk.CTkLabel(
-                row_frame, text=type_label, text_color="#ffffff",
+                row_frame, text=type_label, text_color=badge_text_color(type_color),
                 fg_color=type_color, corner_radius=4,
                 font=(FONT_FAMILY, 10, "bold"), width=52, height=18)
             badge.grid(row=0, column=0, padx=(6, 4), pady=4, sticky="w")
@@ -167,9 +168,10 @@ class EventsMixin:
             row_frame.grid(row=start_row + j, column=0, sticky="ew", padx=2, pady=2)
             row_frame.grid_columnconfigure(1, weight=1)
             self._event_widgets.append(row_frame)
+            patch_color = event_type_color("balance_change")   # 条款影响与余额变动同族
             badge = ctk.CTkLabel(
-                row_frame, text="条款", text_color="#ffffff",
-                fg_color="#179299", corner_radius=4,
+                row_frame, text="条款", text_color=badge_text_color(patch_color),
+                fg_color=patch_color, corner_radius=4,
                 font=(FONT_FAMILY, 10, "bold"), width=52, height=18)
             badge.grid(row=0, column=0, padx=(6, 4), pady=4, sticky="w")
             text = (

@@ -918,3 +918,33 @@ def test_gui_badge_delegates_to_the_shared_color_table():
     assert not re.search(r'"#[0-9a-fA-F]{3,6}"', src), "GUI 里又出现了硬编码颜色字面量"
     for event_type in ("balance_change", "conversion_resume", "unknown"):
         assert EventsMixin._event_type_color(event_type) == event_type_color(event_type)
+
+
+def test_every_event_badge_is_legible_against_its_own_background():
+    """badge 的前景色要跟着底色走, 不许写死白字.
+
+    ``EVENT_TYPE_COLOR`` 的 18 个类型共 9 个色值, 全是 Catppuccin **Latte**
+    (浅色) 档 —— 当 badge 底色配写死的 ``#ffffff`` 时实测 **13/18 低于
+    WCAG AA 的 4.5:1, 其中 6 个连 3:1 都不到**, 最差的
+    ``down_reset_proposed`` (#e6a700 下修提议) 只有 **2.12:1**。
+
+    而"下修提议"恰恰是这张表上最该被读到的一类 —— 它是**在途**事件, 意味着
+    还有时间做点什么。判据落在算出来的对比度上而不是色值清单上: 换色值时测试
+    要跟着色值走, 不是跟着一份会过期的白名单走。
+    """
+    from convertible_bond.cb_events import EVENT_TYPE_COLOR, EVENT_TYPE_COLOR_FALLBACK
+    from convertible_bond.gui.theme import badge_text_color, contrast_ratio
+
+    for bg in list(EVENT_TYPE_COLOR.values()) + [EVENT_TYPE_COLOR_FALLBACK]:
+        fg = badge_text_color(bg)
+        ratio = contrast_ratio(fg, bg)
+        assert ratio >= 4.5, f"badge {bg} 配 {fg} 只有 {ratio:.2f}:1"
+
+
+def test_badge_text_colour_picks_the_better_of_the_two_ends():
+    """``badge_text_color`` 是在深浅两端里挑对比度更高的那个, 不是按色相猜."""
+    from convertible_bond.gui.theme import badge_text_color, contrast_ratio
+    for bg in ("#e6a700", "#d20f39", "#40a02b", "#11111b", "#ffffff"):
+        chosen = badge_text_color(bg)
+        other = "#11111b" if chosen == "#ffffff" else "#ffffff"
+        assert contrast_ratio(chosen, bg) >= contrast_ratio(other, bg)

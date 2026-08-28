@@ -74,6 +74,45 @@ def get_color(color_val):
         return color_val[1] if ctk.get_appearance_mode() == "Dark" else color_val[0]
     return color_val
 
+
+# ── 对比度 ──────────────────────────────────────────────────────
+# badge 这类"底色由数据决定"的控件不能写死前景色: EVENT_TYPE_COLOR 的 9 个色值
+# 全是 Latte(浅色) 档, 配写死的白字实测 13/18 低于 WCAG AA 的 4.5:1、6 个连 3:1
+# 都不到 (最差 #e6a700 下修提议只有 2.12:1) —— 而"下修提议"是在途事件, 恰恰是
+# 最该被读到的一类。
+
+BADGE_TEXT_LIGHT = "#ffffff"
+BADGE_TEXT_DARK = "#11111b"      # Crust, 与 BG_APP 深色档同色
+
+
+def _relative_luminance(hex_color: str) -> float:
+    """WCAG 2.x 相对亮度。"""
+    raw = hex_color.lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    channels = []
+    for i in (0, 2, 4):
+        c = int(raw[i:i + 2], 16) / 255.0
+        channels.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    r, g, b = channels
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG 对比度 (1.0 ~ 21.0)。正文 4.5:1 达 AA, 大字 3:1。"""
+    lo, hi = sorted((_relative_luminance(fg), _relative_luminance(bg)))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def badge_text_color(bg: str) -> str:
+    """badge 前景色: 在深浅两端里挑对比度更高的那个。
+
+    不按色相猜 —— 挑法必须跟着色值走, 否则换一个色值就要有人记得回来改前景。
+    """
+    if contrast_ratio(BADGE_TEXT_LIGHT, bg) >= contrast_ratio(BADGE_TEXT_DARK, bg):
+        return BADGE_TEXT_LIGHT
+    return BADGE_TEXT_DARK
+
 _WIN_EMOJI_FALLBACK = {
     "📦 ": "", "⚡ ": "", "📈 ": "", "🎯 ": "", "🔥 ": "",
     "🌐 ": "", "📥 ": "", "🆕 ": "", "⭐ ": "", "📝 ": "", 
