@@ -793,7 +793,8 @@ class StrategyAnalysisRenderMixin:
             "pde_valuation": "估值偏差",
         }.get(strategy_type, "旧策略(兼容)")
         strategy_text = f"{strategy_name} · {freq_text}"
-        rank_signal = str(config.get("rank_signal") or "score")
+        # 缺 rank_signal 的旧快照按「估值偏差」读 —— 与 _normalize_rank_signal 同口径
+        rank_signal = str(config.get("rank_signal") or "deviation")
         rank_label = {
             "deviation": "估值偏差",
             "down_reset_edge": "下修优势",

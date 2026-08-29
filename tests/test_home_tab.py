@@ -56,7 +56,7 @@ def test_shared_state_lives_on_the_app_not_a_page():
     假设自己是创建方。
     """
     src = inspect.getsource(app_mod.CBPricerApp._build_vars)
-    for name in ("v_batch_source", "v_batch_status", "_batch_watchlist",
+    for name in ("v_batch_source", "v_batch_status", "v_watchlist_status", "_batch_watchlist",
                  "_watchlist_price_cache"):
         assert f"self.{name}" in src, f"{name} 没提到 _build_vars"
 
@@ -65,7 +65,7 @@ def test_shared_state_lives_on_the_app_not_a_page():
 
 def test_home_owns_the_watchlist_widgets():
     src = inspect.getsource(home_tab)
-    for attr in ("batch_watchlist_table_frame", "v_batch_watchlist_summary",
+    for attr in ("batch_watchlist_table_frame",
                  "btn_batch_refresh_watch", "btn_batch_upcoming",
                  "lbl_batch_events_banner", "v_batch_events_banner"):
         assert f"app.{attr}" in src, f"主页没有建 {attr}"
@@ -263,3 +263,142 @@ def test_price_cells_use_is_finite_not_is_not_none():
         bad = f'entry.get("{field}") is not None'
         assert bad not in src, f"{field} 还在用 `is not None` 判, NaN 会渲染成 'nan'"
         assert f'_is_finite(entry.get("{field}"))' in src
+
+
+def test_watchlist_status_is_not_shared_with_the_batch_page():
+    """两页各有自己的状态行 —— 共用一个 StringVar 时会串台.
+
+    共用的初衷是"⚡ 已刷新关注池 N 只"这类**瞬时**消息在哪页都看得见, 但批量页的
+    **视图摘要**也写在同一个变量里, 而它是**常驻**的 —— 于是关注池主页永久挂着一句
+    「✅ 低估候选: 展示 41/283 只 | 成功 41 失败 0」, 说的是另一页的表。
+
+    划分按**用户触发时在哪一页**: 关注池页的动作 (重算 / 扫新债 / 右键增删 / 自愈)
+    写 ``v_watchlist_status``; 批量页的动作写 ``v_batch_status`` —— 包括
+    「⭐ 加入关注池」, 那个按钮长在批量页上。
+    """
+    import inspect
+
+    from convertible_bond.gui.tabs import batch as batch_tab
+    from convertible_bond.gui.tabs import batch_watchlist as watchlist_tab
+    from convertible_bond.gui.tabs import home as home_tab
+
+    # 主页只挂自己的那个
+    home_src = inspect.getsource(home_tab)
+    assert "textvariable=app.v_watchlist_status" in home_src
+    # 查**控件绑定**而不是裸名字 —— 文件头的结构说明里会提到另一个变量名
+    assert "textvariable=app.v_batch_status" not in home_src
+    assert "app.v_batch_status.set(" not in home_src
+
+    # 批量页只挂自己的那个
+    assert "textvariable=app.v_batch_status" in inspect.getsource(batch_tab)
+
+    # batch_watchlist 里唯一还写 v_batch_status 的必须是「⭐ 加入关注池」——
+    # 那是批量页上的按钮, 反馈该出现在批量页
+    for name, fn in vars(watchlist_tab).items():
+        if not callable(fn) or not getattr(fn, "__module__", "") == watchlist_tab.__name__:
+            continue
+        try:
+            src = inspect.getsource(fn)
+        except (OSError, TypeError):
+            continue
+        if "v_batch_status" in src:
+            assert name == "_add_selection_to_watchlist", (
+                f"{name} 写了 v_batch_status —— 关注池的动作该写 v_watchlist_status")
+
+
+def test_status_line_matches_the_batch_page_format():
+    """关注池状态行与批量页同构: **一行左对齐加粗**, ✅ 开头, ``|`` 分组.
+
+    曾经拆成"左消息 + 右摘要"两半, 而左半在空闲时是空的 —— 看着像右边飘着一段孤字。
+    现在一个变量时分复用: 空闲是摘要, 动作时被消息覆盖, 下一次 refresh_home 摘要回来
+    (worker 里 ``refresh_home`` → ``set(msg)`` 的顺序与批量页 worker 逐字一致)。
+    """
+    import inspect
+
+    from convertible_bond.gui.tabs import batch_watchlist as watchlist_tab
+
+    src = inspect.getsource(home_tab._build_status)
+    assert "textvariable=app.v_watchlist_status" in src
+    assert 'anchor="w"' in src and '"bold"' in src
+    # 摘要不再有独立变量 —— 有的话两者会在同一行抢位置
+    assert not hasattr(app_mod.CBPricerApp, "v_batch_watchlist_summary")
+    assert "v_batch_watchlist_summary" not in inspect.getsource(home_tab)
+    assert "v_batch_watchlist_summary" not in inspect.getsource(watchlist_tab)
+
+    class _Var:
+        def __init__(self):
+            self.value = ""
+
+        def set(self, v):
+            self.value = v
+
+    class _App:
+        v_watchlist_status = _Var()
+
+    app = _App()
+    watchlist_tab._refresh_watchlist_summary(app, [
+        {"bond_code": "X", "status": "ok", "deviation": 0.1,
+         "credit_rating": "AA", "risk_tags": []},
+    ])
+    text = app.v_watchlist_status.value
+    assert text.startswith("✅ 关注池: "), text
+    assert "  |  " in text, "分组分隔符要与批量页一致"
+
+    # 空关注池也要有一句话 —— 空行会让这一行看着像坏了
+    empty = _App()
+    watchlist_tab._refresh_watchlist_summary(empty, [])
+    assert empty.v_watchlist_status.value.startswith("✅ 关注池: 空")
+
+
+def _home_tooltips() -> dict[str, str]:
+    """从源码里取出 ``Tooltip(app.<btn>, "...")`` 的**字符串实参**.
+
+    用 AST 而不是扫源码文本 —— 旁边的代码注释里会写"别再写不需要 Wind", 扫文本会
+    把那句解释也当成提示内容命中。
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(home_tab).lstrip())
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and getattr(node.func, "id", "") == "Tooltip" and node.args):
+            continue
+        target = node.args[0]
+        key = (target.attr if isinstance(target, ast.Attribute) else
+               getattr(target, "id", "?"))
+        text = ""
+        for arg in node.args[1:]:
+            for part in (arg.values if isinstance(arg, ast.JoinedStr) else [arg]):
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    text += part.value
+                elif isinstance(part, ast.JoinedStr):
+                    text += "".join(v.value for v in part.values
+                                    if isinstance(v, ast.Constant))
+        out[key] = text
+    return out
+
+
+def test_action_buttons_have_no_tooltip():
+    """两个按钮**不要 tooltip** —— 按钮文案自己已经说清要做什么.
+
+    此前的提示 ("找出新发/待上市的债, 加进关注池并定价" / "只给关注池这几只定价,
+    跳过全市场") 是把按钮名字换个说法再说一遍, 属于**为了写 tooltip 而写 tooltip**。
+    """
+    tips = _home_tooltips()
+    for key in ("btn_batch_upcoming", "btn_batch_refresh_watch"):
+        assert key not in tips, f"{key} 不该有 tooltip"
+
+
+def test_title_tooltip_stays_short():
+    """标题那条留着 —— 它说的是**表怎么读**, 不是按钮做什么。但也要短.
+
+    实现细节 (三级兜底取价的三层、缓存文件名、akshare 窄同步) 属于代码注释;
+    逐列口径悬停表头看, 这里只留一条最容易读反的 —— `+54.84` 有两种正好相反的读法,
+    而它同时出现在两列上。
+    """
+    title = _home_tooltips()["title"]
+    assert title.count("\n") <= 2 and len(title) <= 110, f"{len(title)} 字"
+    for detail in ("三级兜底", "watchlist_pricing_cache", "akshare", "不需要 Wind"):
+        assert detail not in title, f"{detail} 是实现细节"

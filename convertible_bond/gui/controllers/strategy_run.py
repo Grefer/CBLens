@@ -119,7 +119,6 @@ class StrategyRunMixin:
                 exposure_mode=exposure_mode,
                 rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
                 selection_view="综合机会",
-                min_score=None,
                 min_confidence=policy["min_confidence"],
                 exclude_risk_tags=(
                     PDEStrategyConfig().exclude_risk_tags
@@ -530,7 +529,6 @@ class StrategyRunMixin:
                 "cash_yield_rate": config.cash_yield_rate,
                 "exposure_mode": config.exposure_mode,
                 "top_n_shortfall_policy": _funding_legacy_alias(config.funding_mode),
-                "min_score": config.min_score,
                 "min_confidence": list(config.min_confidence) if config.min_confidence else None,
                 "exclude_risk_tags": list(config.exclude_risk_tags),
                 "min_market_price": config.min_market_price,

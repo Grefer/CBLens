@@ -309,3 +309,81 @@ def test_pricing_tab_add_rederives_stale_trading_metadata(tmp_path, monkeypatch)
     assert "tradable_date" not in entry     # 上市日未公告 → 不该有可交易日
     assert entry["trading_status"] == "pending"
     assert entry["is_tradable"] is False
+
+
+# ── 手删记忆 (dismissed) ────────────────────────────────────────
+def test_auto_scan_must_not_resurrect_a_bond_the_user_removed(tmp_path, monkeypatch):
+    """右键删掉的在途新债, 后台扫描不许加回来.
+
+    这是「新债不自动退出关注池, 只靠右键手删」那条口径的唯一出口。此前
+    remove_from_watchlist 不留痕、add_to_watchlist 对不在池里的 code 无条件 append,
+    于是用户删完、状态栏报「已从关注池移除 1 只」, 下次开 GUI 它就带着新的 added_at
+    回来了 —— 用户的操作被系统无声撤销。
+    """
+    monkeypatch.setattr(watchlist, "watchlist_path", lambda: tmp_path / "w.json")
+    item = {"bond_code": "123284.SZ", "bond_name": "强达转债"}
+
+    watchlist.add_to_watchlist([item], source="auto")
+    assert len(watchlist.load_watchlist()) == 1
+
+    watchlist.remove_from_watchlist(["123284.SZ"])
+    assert watchlist.load_dismissed() == {"123284.SZ"}
+
+    # 后台再扫三轮 (首屏 / 缓存加载 / 批量重算前) 都不许把它加回来
+    for _ in range(3):
+        items, added = watchlist.add_to_watchlist([item], source="auto")
+        assert added == 0 and items == []
+
+
+def test_scanning_for_new_issues_is_an_explicit_action_and_undoes_the_removal(tmp_path, monkeypatch):
+    """「🆕 扫新债」是用户显式点的 —— 它必须能把手删过的债重新加回来,
+    否则手删就是一张没有出口的单程票。"""
+    monkeypatch.setattr(watchlist, "watchlist_path", lambda: tmp_path / "w.json")
+    item = {"bond_code": "123284.SZ", "bond_name": "强达转债"}
+
+    watchlist.add_to_watchlist([item], source="auto")
+    watchlist.remove_from_watchlist(["123284.SZ"])
+
+    items, added = watchlist.add_to_watchlist([item], source="manual")
+    assert added == 1
+    assert [i["bond_code"] for i in items] == ["123284.SZ"]
+    assert watchlist.load_dismissed() == set()      # 手删标记随之解除
+
+
+def test_dismissed_survives_a_plain_save(tmp_path, monkeypatch):
+    """save_watchlist 只关心 items 的调用方不该顺手把手删记录抹掉 ——
+    抹掉的表现就是"我删的债又回来了", 与这个集合要解决的问题一模一样。"""
+    monkeypatch.setattr(watchlist, "watchlist_path", lambda: tmp_path / "w.json")
+    watchlist.add_to_watchlist([{"bond_code": "A"}, {"bond_code": "B"}], source="auto")
+    watchlist.remove_from_watchlist(["A"])
+
+    watchlist.save_watchlist([{"bond_code": "B"}])          # 不传 dismissed
+    assert watchlist.load_dismissed() == {"A"}
+
+
+def test_undo_remove_restores_the_original_added_at(tmp_path, monkeypatch):
+    """撤销走 save_watchlist 原样写回, 不走 add_to_watchlist ——
+    后者会给条目重写 added_at, 把"我什么时候开始关注它"抹掉。"""
+    monkeypatch.setattr(watchlist, "watchlist_path", lambda: tmp_path / "w.json")
+    watchlist.add_to_watchlist([{"bond_code": "A", "bond_name": "甲"}], source="manual")
+    before = watchlist.load_watchlist()
+    original_added_at = before[0]["added_at"]
+
+    watchlist.remove_from_watchlist(["A"])
+    assert watchlist.load_watchlist() == []
+
+    restored = watchlist.undo_remove(before)
+    assert restored[0]["added_at"] == original_added_at
+    assert watchlist.load_dismissed() == set()
+    assert watchlist.load_watchlist()[0]["added_at"] == original_added_at
+
+
+def test_legacy_file_without_dismissed_still_loads(tmp_path, monkeypatch):
+    """存量 watchlist.json 没有 dismissed 键, 读回来必须是空集而不是炸掉."""
+    import json
+    path = tmp_path / "w.json"
+    path.write_text(json.dumps({"saved_at": "x", "items": [{"bond_code": "A"}]}),
+                    encoding="utf-8")
+    monkeypatch.setattr(watchlist, "watchlist_path", lambda: path)
+    assert watchlist.load_dismissed() == set()
+    assert [i["bond_code"] for i in watchlist.load_watchlist()] == ["A"]

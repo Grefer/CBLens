@@ -430,7 +430,16 @@ class CBPricerApp(
         # 那类问题。这里让 v_batch_source 就是 v_data_source 本身 (同一个 StringVar
         # 对象), 于是所有既有的 `app.v_batch_source.get()` 读点自动跟着顶栏走。
         self.v_batch_source = self.v_data_source
+        # **两页各有自己的状态行, 不共用**。曾经共用一个 StringVar (理由是"⚡ 已刷新
+        # 关注池 N 只"这类消息在哪页都看得见), 但批量页的**视图摘要**也写在这里, 而它
+        # 是常驻的 —— 于是关注池主页永久挂着一句「✅ 低估候选: 展示 41/283 只 | 成功
+        # 41 失败 0」, 说的是另一页的表。瞬时消息共用没问题, 常驻摘要共用就是串台。
+        #
+        # 划分按**用户触发时在哪一页**: 批量页的操作 (含「⭐ 加入关注池」) 写
+        # v_batch_status; 关注池页的操作 (重算 / 扫新债 / 右键增删 / 自愈) 写
+        # v_watchlist_status。
         self.v_batch_status = ctk.StringVar(value="")
+        self.v_watchlist_status = ctk.StringVar(value="")
         self._batch_watchlist = load_watchlist()
         self._watchlist_price_cache = None   # 由 home_tab.build 走 load_price_cache_into 填
         self._provider_cache: dict = {}      # name -> 已实例化的 provider (惰性)

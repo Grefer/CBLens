@@ -42302,11 +42302,11 @@
   },
   "123282.SZ": {
     "_meta": {
-      "fetched_at": "2026-08-25T19:42:20",
+      "fetched_at": "2026-08-28T20:22:56",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
         "Wind:admission_status": "2026-08-25T09:31:50",
-        "akshare:new_issues": "2026-08-25T19:42:20"
+        "akshare:new_issues": "2026-08-28T20:22:56"
       },
       "source": "akshare:new_issues"
     },
@@ -42343,7 +42343,7 @@
     "is_tradable": false,
     "issue_date": "2026-08-17",
     "last_trading_date": null,
-    "listing_date": null,
+    "listing_date": "2026-09-02",
     "maturity_date": "2032-08-17",
     "outstanding_balance": 18.8,
     "put_obs_months": 48.0,
@@ -59596,7 +59596,7 @@
   },
   "_bundle_meta": {
     "n_bonds": 1059,
-    "updated_at": "2026-08-25T21:45:58"
+    "updated_at": "2026-08-28T20:22:56"
   },
   "q18082207.IME": {
     "_meta": {

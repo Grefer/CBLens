@@ -933,6 +933,7 @@ class StrategyRenderMixin:
             elif signal == "deviation":
                 value = row.get("deviation")
             else:
+                # 旧快照 (机会分时代) 存过 score; 新快照不再有这个键 → None → 「—」
                 value = row.get("score")
         try:
             number = float(value)

@@ -68,7 +68,7 @@ CACHE_FIELDS: tuple[str, ...] = (
     "status", "theoretical_price", "market_price", "deviation",
     "K", "parity", "conversion_premium",
     # 研究信号
-    "double_low", "quality_score", "opportunity_score",
+    "double_low", "quality_score",
     "confidence", "sensitivity_status", "risk_tags", "event_flags",
     "down_reset_trigger_gap", "down_reset_robust_edge_value",
     # 条款/状态 (只收真实日期与评级, 不收 is_tradable / trading_status ——
@@ -89,6 +89,11 @@ CACHE_FIELDS: tuple[str, ...] = (
 
 #: 按日窄快照的字段。只留"回头算变化"真正要用的那几个 —— 日志是要长期堆积的,
 #: 每多一个字段就是每天多一份存储和一次未来的兼容负担。
+#:
+#: **``deviation`` / ``relative_deviation`` / ``theoretical_price`` 目前没有展示层
+#: 消费者** (关注池的「偏差Δ(pp)」列已删), 但它们要留着: 这个目录是**只追加**的,
+#: 删掉字段就等于把过去那些天的值永久丢掉 —— 将来想画关注池的偏差历史、或者想把
+#: 那一列加回来, 都补不回来。而代价只是每天十几行各多几个 float。
 NARROW_FIELDS: tuple[str, ...] = (
     "bond_code", "status",
     "market_price", "market_price_as_of", "market_price_source",
@@ -101,7 +106,7 @@ NARROW_FIELDS: tuple[str, ...] = (
 #: 不同答案 (内存里是 nan 走 True, 读盘回来是 None 走 False)。
 _NAN_FIELDS = frozenset({
     "theoretical_price", "market_price", "deviation", "K", "parity",
-    "conversion_premium", "double_low", "quality_score", "opportunity_score",
+    "conversion_premium", "double_low", "quality_score",
     "down_reset_trigger_gap", "down_reset_robust_edge_value",
     "relative_deviation", "cheapness_percentile", "market_median_deviation",
 })
@@ -374,7 +379,7 @@ def latest_daily_before(day: date | str, *,
     「上一交易日」由**盘上有没有那天的文件**定义, 而不是靠日历倒推 —— 前者天然
     处理周末与节假日, 后者要维护一份交易日历。代价是: 你没开过 GUI 的那些天不会
     有文件, 于是"涨跌"的基准会跳到更早的一天。所以表头必须写**动态日期**
-    (「涨跌 vs 08-25」) 而不是写死「日涨跌」。
+    (「涨跌% vs 08-25」) 而不是写死「日涨跌」。
     """
     target = _as_date(day)
     earlier = [d for d in list_daily_dates(daily_dir=daily_dir) if d < target]

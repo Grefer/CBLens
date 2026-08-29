@@ -11,12 +11,14 @@ star import 会把本该报 F821 (未定义名) 的错降级成 F405 被豁免�
 文件 ``ruff check --isolated`` 有 84 处告警全被吸收。GUI 在测试环境跑不起来,
 F821 是运行期 NameError 的唯一静态防线, 新页不要把它关掉。
 
-页面结构 (单列纵向):
-    row0  标题 + 关注池摘要
-    row1  工具条 (⚡ 关注池重算 / 🆕 扫新债) —— 行情源在顶栏, 全局共用一个
-    row2  状态行 (与批量页共用 ``v_batch_status``, 两页各挂一个 Label)
-    row3  事件横幅 (默认隐藏, 单击展开)
-    row4  关注池表
+页面结构 **与批量页同构** (那一页是: 控制卡片 → 状态行 → 结果区):
+    row0  控制卡片 (BG_CARD): 标题 + 副标题 + 右侧摘要 / 按钮行
+    row1  状态行 (``v_watchlist_status``; 批量页有自己的 ``v_batch_status``)
+    row2  事件横幅 (默认隐藏, 单击展开)
+    row3  结果区 (关注池表)
+
+标题**必须在卡片里**, 与按钮同属一张 BG_CARD —— 此前标题裸在透明 frame 上、卡片只
+包按钮, 于是两页并排看时关注页像少了一层。
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ from ..theme import (
     BTN_CTRL, BTN_HOVER,
     FONT_FAMILY,
     ORANGE,
-    TEXT, TEXT_DIM,
+    TEXT,
 )
 from ..widgets import Tooltip
 from .batch_common import _create_table_section
@@ -57,14 +59,12 @@ def build(app, tab) -> None:
     顺序反了只会表现为"主页首屏是空的", 没有任何异常。
     """
     tab.grid_columnconfigure(0, weight=1)
-    tab.grid_rowconfigure(0, weight=0)   # 标题
-    tab.grid_rowconfigure(1, weight=0)   # 工具条
-    tab.grid_rowconfigure(2, weight=0)   # 状态行
-    tab.grid_rowconfigure(3, weight=0)   # 事件横幅 (默认隐藏)
-    tab.grid_rowconfigure(4, weight=1)   # 关注池表
+    tab.grid_rowconfigure(0, weight=0)   # 控制卡片 (标题 + 按钮)
+    tab.grid_rowconfigure(1, weight=0)   # 状态行
+    tab.grid_rowconfigure(2, weight=0)   # 事件横幅 (默认隐藏)
+    tab.grid_rowconfigure(3, weight=1)   # 结果区
 
-    _build_header(app, tab)
-    _build_toolbar(app, tab)
+    _build_control_card(app, tab)
     _build_status(app, tab)
     _build_events_banner(app, tab)
     _build_table(app, tab)
@@ -78,65 +78,70 @@ def build(app, tab) -> None:
 
 # ── 分区 ────────────────────────────────────────────────────────
 
-def _build_header(app, tab) -> None:
-    head = ctk.CTkFrame(tab, fg_color="transparent")
-    head.grid(row=0, column=0, sticky="ew", padx=24, pady=(10, 4))
-    head.grid_columnconfigure(1, weight=1)
+def _build_control_card(app, tab) -> None:
+    """控制卡片 —— 与批量页的 ``ctrl`` 同构: 上排标题, 下排按钮, 同在一张 BG_CARD 里."""
+    ctrl = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
+    ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 8), padx=16)
+    ctrl.grid_columnconfigure(0, weight=1)
 
-    title = ctk.CTkLabel(head, text="⭐ 我的关注池",
+    # ── 上排: 标题 + 副标题 + 右侧摘要 ──
+    # 卡片里**只放标题和按钮**。副标题删掉了 (那句"开页即有上次落盘的价 · 要最新点
+    # 「⚡ 关注池重算」"): 按钮自己已经说清要点什么, 而"开页即有价"是这一页的**行为**,
+    # 用一次就知道, 不必每次都读一遍。完整说明留在标题的 Tooltip 里, 要看才看。
+    # 摘要 (持仓/偏差中位/平均评级/估值日) 在状态行右侧 —— 那是逐日变化的**数据**,
+    # 不是这一页"是干什么的"。
+    ch = ctk.CTkFrame(ctrl, fg_color="transparent")
+    ch.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
+
+    title = ctk.CTkLabel(ch, text="⭐ 我的关注池",
                          font=(FONT_FAMILY, 16, "bold"), text_color=TEXT)
-    title.grid(row=0, column=0, sticky="w")
+    title.pack(side="left")
+    # 与 COLUMN_HELP 同一条写法约定: 一句话说清怎么用, 不写实现细节 (三级兜底取价、
+    # 缓存文件名那些属于代码注释)。逐列口径悬停表头看, 这里只留一条最容易读反的 ——
+    # `+54.84` 有两种正好相反的读法, 而它同时出现在两列上。
     Tooltip(title,
-            f"每天开页先看这里: 表里是上次落盘的价 (带估值日), 要最新值点「{WATCH_REFRESH_LABEL}」。\n"
-            "理论价来自三级兜底 —— 磁盘热缓存 → 本轮新债定价 → 全市场批量结果,\n"
-            "所以不跑全市场也有数。\n"
-            "⚠ 这是复核标记而非收益预测, 请结合公告、流动性与组合风险人工判断。")
+            f"表里是上次算好的价, 要最新值点「{WATCH_REFRESH_LABEL}」。\n"
+            "符号: 偏差(%) / 相对偏差(pp) 正 = 市价贵于模型价; 其余各列悬停表头看。\n"
+            "⚠ 复核标记, 不是收益预测。")
 
-    app.v_batch_watchlist_summary = ctk.StringVar(value="")
-    ctk.CTkLabel(head, textvariable=app.v_batch_watchlist_summary,
-                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM, anchor="e").grid(
-                     row=0, column=1, sticky="e", padx=(16, 0))
-
-
-def _build_toolbar(app, tab) -> None:
-    bar = ctk.CTkFrame(tab, fg_color=BG_CARD, corner_radius=12)
-    bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 8))
-
-    row = ctk.CTkFrame(bar, fg_color="transparent")
-    row.grid(row=0, column=0, sticky="ew", padx=16, pady=10)
+    # ── 下排: 按钮 ──
+    cc = ctk.CTkFrame(ctrl, fg_color="transparent")
+    cc.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 10))
 
     # 文案走 WATCH_REFRESH_LABEL 单一事实源 —— 状态栏那句"点「…」再试"引的是同一个常量,
     # 免得按钮改名后消息还指着一个页面上不存在的名字。属性名保持 btn_batch_refresh_watch ——
     # batch_watchlist 的 worker 会跨模块改它的 enabled 状态 (走 _set_watch_button_state,
     # 找不到就静默跳过, 但没必要给自己制造那种缺口)。
     app.btn_batch_refresh_watch = ctk.CTkButton(
-        row, text=WATCH_REFRESH_LABEL, command=lambda: _refresh_watchlist_pricing(app),
+        cc, text=WATCH_REFRESH_LABEL, command=lambda: _refresh_watchlist_pricing(app),
         fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
         font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
     app.btn_batch_refresh_watch.pack(side="left")
-    Tooltip(app.btn_batch_refresh_watch,
-            "只给关注池这几只取数定价, 跳过全市场。\n"
-            "结果会落盘 (data/watchlist_pricing_cache.json), 下次开页直接就有。")
 
     app.btn_batch_upcoming = ctk.CTkButton(
-        row, text="🆕 扫新债", command=lambda: _refresh_watchlist_with_upcoming(app),
+        cc, text="🆕 扫新债", command=lambda: _refresh_watchlist_with_upcoming(app),
         fg_color=BTN_CTRL, hover_color=BTN_HOVER, text_color=TEXT,
         font=(FONT_FAMILY, 12), width=90, height=32, corner_radius=6)
     app.btn_batch_upcoming.pack(side="left", padx=(8, 0))
-    Tooltip(app.btn_batch_upcoming,
-            "同步新债上市日 → 扫描 → 加入关注池 → 立刻定价。\n"
-            "秒级, 不需要 Wind (走 akshare 窄同步)。")
 
     # 行情源**只在顶栏那一个下拉里选**, 页内不再各摆一个 —— 三个下拉控三条链路时,
     # "我明明选了 akshare 怎么还在连 Wind"是找不出原因的那类问题。
 
 
 def _build_status(app, tab) -> None:
-    # 与批量页共用 v_batch_status: 同一个 StringVar 挂两个 Label, Tk 会一起更新,
-    # 于是"⚡ 已刷新关注池 N 只"这类消息在哪一页都看得见。
-    ctk.CTkLabel(tab, textvariable=app.v_batch_status,
+    """状态行 —— **与批量页同格式**: 一行左对齐加粗, 由 ``v_watchlist_status`` 驱动.
+
+    这一行时分复用: 空闲时是关注池摘要 (``_refresh_watchlist_summary`` 写),
+    动作进行/结束时被消息覆盖 (⚡ 已刷新 N 只), 下一次 ``refresh_home`` 摘要再回来。
+    与批量页的 ``v_batch_status`` 逐字同构。
+
+    曾经拆成"左消息 + 右摘要"两半, 而左半在空闲时是空的 —— 看着像右边飘着一段孤字。
+    也曾与批量页**共用**一个变量, 那时批量页的视图摘要会常驻在这里, 主页永久挂着一句
+    「✅ 低估候选: 展示 41/283 只」说的是另一页的表 (见 ``app._build_vars``)。
+    """
+    ctk.CTkLabel(tab, textvariable=app.v_watchlist_status,
                  font=(FONT_FAMILY, 13, "bold"), text_color=TEXT, anchor="w").grid(
-                     row=2, column=0, sticky="ew", padx=24, pady=(0, 8))
+                     row=1, column=0, sticky="ew", padx=24, pady=(2, 8))
 
 
 def _build_events_banner(app, tab) -> None:
@@ -148,7 +153,7 @@ def _build_events_banner(app, tab) -> None:
         fg_color=BG_CARD, corner_radius=12,
         padx=12, pady=8,
         anchor="w", justify="left", wraplength=1080, cursor="hand2")
-    app.lbl_batch_events_banner.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+    app.lbl_batch_events_banner.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
     app.lbl_batch_events_banner.grid_remove()
     app.lbl_batch_events_banner.bind(
         "<Button-1>", lambda _e: _show_events_banner_full(app))
@@ -156,7 +161,7 @@ def _build_events_banner(app, tab) -> None:
 
 def _build_table(app, tab) -> None:
     holder = ctk.CTkFrame(tab, fg_color="transparent")
-    holder.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 6))
+    holder.grid(row=3, column=0, sticky="nsew", padx=16, pady=(0, 6))
     holder.grid_columnconfigure(0, weight=1)
     holder.grid_rowconfigure(0, weight=1)
     app.batch_watchlist_table_frame = _create_table_section(

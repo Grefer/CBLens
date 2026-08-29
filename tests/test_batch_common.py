@@ -5,6 +5,7 @@ import inspect
 
 import pytest
 
+from convertible_bond import batch_pricing
 from convertible_bond.gui.tabs import batch as batch_tab
 from convertible_bond.gui.tabs import batch_watchlist as watchlist_tab
 from convertible_bond.gui.tabs.batch_common import _is_new_bond, _resolve_row_tag
@@ -136,7 +137,7 @@ def test_event_and_trigger_columns_are_present():
     simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
     full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
     assert "事件" in simple, "事件是最该被看见的一类, 不能只在完整视图里"
-    assert "距下修线" in full
+    assert "正股/下修线" in full
 
 
 def test_event_column_never_truncates():
@@ -147,16 +148,366 @@ def test_event_column_never_truncates():
         assert flag in rendered
 
 
-def test_simple_view_leads_with_cross_sectional_signals_not_score():
-    """简洁视图的决策位必须是相对偏差 —— 机会分在 92% 的行上与错定价无关。
-
-    机会分没有删除, 切「完整」仍可查; 但它不该占着人第一眼看的那一列。
-    """
+def test_simple_preset_is_the_decision_view_not_a_diagnostic_one():
+    """简洁 = 决策位。四处刻意的取舍, 每一处都有实测依据 (见预设上方注释)。"""
     simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
-    assert "相对偏差" in simple
-    assert "机会分" not in simple
-    assert "机会分" in [name for name, _ in batch_tab._BATCH_COLS_FULL]
-    assert simple.index("相对偏差") < simple.index("偏差(%)")
+    full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
+
+    # 两个偏差都在简洁里 (按用户决策): 「偏差(%)」跟模型比, 「相对偏差(pp)」跟市场比
+    assert "相对偏差(pp)" in simple and "偏差(%)" in simple
+
+    # 「距下修线」(284/284 有值) 顶掉「下修优势」—— 后者在开页读缓存这条路上整列空
+    assert "正股/下修线" in simple and "下修优势(元)" not in simple
+    assert "下修优势(元)" in full
+
+    # 诊断项只进完整: 理论价可信度在默认视图里结构上只有高/中; 定价状态实测恒 ✓
+    for diagnostic in ("可信度", "定价状态", "转股价值", "正股σ(%)"):
+        assert diagnostic not in simple, f"{diagnostic} 不该占决策位"
+        assert diagnostic in full
+
+    # 挑债时"这是哪家公司"是一等信息 —— 简洁此前完全没有正股
+    assert "正股" in simple
+    assert len(simple) <= 13, f"简洁预设膨胀到 {len(simple)} 列了"
+
+
+def test_header_help_stays_short_and_has_no_orphans():
+    """表头说明的**结构性**守护 —— 覆盖哪几列是编辑决定, 不在这里钉.
+
+    这条曾经是"每列都要有说明", 那正是**为了写 tooltip 而写 tooltip**: 给「评级」凑
+    一句"债项信用评级"、给「市价」凑一句"转债最新收盘价", 读者多读一次什么也没多知道,
+    而真正需要解释的那几条被淹在里面。后来又反过来钉"这 11 列不许有" —— 同样是把
+    一次编辑取舍固化成规则, 人改主意就红。
+
+    所以现在只钉三件跑不掉的:
+      · 无孤儿键 (删了列却留着说明, 不报错也永远不显示)
+      · 够短 (一句话说清怎么读)
+      · 名字里不留方向注释 / 单位留在名字里 (与 COLUMN_HELP 的分工)
+    """
+    headers = set()
+    for preset in (batch_tab._BATCH_COLS_FULL, batch_tab._BATCH_COLS_SIMPLE):
+        headers |= {name for name, _ in preset}
+    headers |= set(watchlist_tab.watchlist_columns()[0])
+    help_map = batch_common.COLUMN_HELP
+
+    assert help_map, "整表空了 —— 大概是回写脚本出错"
+    orphans = set(help_map) - headers
+    assert not orphans, f"说明表里有孤儿键 (列已删): {sorted(orphans)}"
+
+    texts = list(help_map.values())
+    avg = sum(len(t) for t in texts) / len(texts)
+    assert avg <= 36, f"表头说明平均 {avg:.0f} 字, 太啰嗦了"
+    for name, text in help_map.items():
+        assert text.strip(), f"「{name}」是空说明 —— 不写就别留键"
+        assert len(text) <= 110, f"{name} 的说明 {len(text)} 字"
+        assert text.count("\n") <= 2, f"{name} 的说明超过 3 行"
+
+    # 名字里不该留方向注释 —— 那是悬浮的活
+    for name in headers:
+        assert "便宜" not in name and "=" not in name, f"{name} 的方向注释该进 tooltip"
+    # 但单位必须留在名字里
+    for unit_col in ("相对偏差(pp)", "偏差(%)", "剩余(年)", "余额(亿)", "下修优势(元)"):
+        assert unit_col in headers
+
+    # 表头这一路真的接上了 —— 老实现在表头区 identify_row 返回 "" 就直接 _hide 了
+    src = inspect.getsource(batch_common._attach_cell_tooltip)
+    assert "identify_region" in src and '"heading"' in src
+
+
+def test_column_names_name_their_object():
+    """列名要说清**度量的是谁** —— 光换个词不算数.
+
+    「可信」「敏感性」「状态」的毛病不是用词不好, 是**没有对象**: 可信的是什么?
+    什么的稳健性? 谁的状态? 三处都补上了主语:
+
+    - `可信` → **`理论价可信度`**: ``confidence_points`` 的扣分项全在削弱那一个数
+      (数据缺口 −25 算不出 parity / 无偏差 −20 / 无 HV −20 / 高 HV 按 σ 递增 /
+      模型溢价高 −12 / 余额清零 −35), 而 ``model_signal_status`` 也由它推出。
+    - `状态` → **`定价状态`**: 对象是这一行的定价计算。刻意**不叫「数据」** ——
+      关注池那一列已经叫「数据」而语义完全不同 (7 档取价新鲜度), 同名异概念更糟。
+    - `距下修线` → **`正股距下修线`**: 触发线是拿**正股价**比的, 而值写「线上 32%」
+      时"谁在线上"正是要点。两页同步改。
+    - `σ(%)` → **`正股σ(%)`**: 是正股的波动率, 不是转债的。
+    - `下修优势` → **`下修优势(元)`**: 左右两列都带单位, 不写就是个裸数。
+
+    (`敏感性` 没有改名而是**删掉了** —— 见
+    ``test_derivable_columns_are_off_the_batch_table``。)
+    """
+    full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
+    simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
+    for vague in ("可信", "置信度", "状态", "定价", "距下修线", "σ(%)", "下修优势",
+                  "敏感性", "稳健性"):
+        assert vague not in full and vague not in simple, f"{vague} 没有点明对象"
+        assert vague not in batch_tab._BATCH_COL_GETTERS
+        assert vague not in batch_tab._BATCH_COL_STRETCH_WEIGHTS
+    for named in ("定价状态", "正股/下修线", "正股σ(%)", "下修优势(元)"):
+        assert named in full
+    assert "正股/下修线" in simple
+
+    # **对象也可以由列序承载**。「可信度」不写主语, 是因为它紧跟在「理论价」右边 ——
+    # 邻接就是主语。挪走它就必须把名字改回「理论价可信度」, 否则紧挨「评级」时最容易
+    # 被读成信用相关。同一条约定管着关注池的「数据」(紧跟「市价」)。
+    assert full[full.index("可信度") - 1] == "理论价", "「可信度」必须紧跟「理论价」"
+
+    # **关注池的「数据」不靠邻接** —— 它按用户决策放在末尾 (与「加入日」同组)。
+    # 可以这么放是因为七档里有四档说的是**整行** (未定价 / 失败 / 未重算 MM-DD /
+    # 无市价), 只有三档专指市价的 as-of; 而「可信度」是纯粹关于「理论价」那一个数的,
+    # 离开它就必须把主语写回名字 (曾叫「理论价可信度」)。
+    wl = watchlist_tab.watchlist_columns()[0]
+    assert wl[wl.index("数据状态") + 1] == "加入日"
+    # 「定价状态」不靠邻接 —— 对象在名字里, 所以它可以放到末尾与事件/标签同组
+    assert "定价状态" == full[-1]
+
+
+def test_base_terms_come_after_price_and_events():
+    """基础条款排在**后面** —— 盯一只债的次序是: 多少钱 → 便宜吗 → 有什么事 → 条款.
+
+    「剩余(年)」「评级」「余额(亿)」这些是回过头去核对的东西, 不是第一眼要扫的;
+    放在前面会把价格块整体推到右边。
+
+    **「上市日」在关注池是例外**: 未上市新债右半边整片是「—」(市价/偏差/双低全空),
+    而"还有几天挂牌"恰是它们仅有的可操作信息, 所以那一页把它留在左块。
+    """
+    for preset in (batch_tab._BATCH_COLS_FULL, batch_tab._BATCH_COLS_SIMPLE):
+        cols = [name for name, _ in preset]
+        price_end = max(cols.index(c) for c in ("市价", "理论价") if c in cols)
+        events = min(cols.index(c) for c in ("事件", "标签") if c in cols)
+        terms = [cols.index(c) for c in ("剩余(年)", "评级", "余额(亿)", "上市日")
+                 if c in cols]
+        assert price_end < events, "价格块要排在事件之前"
+        assert events < min(terms), (
+            f"基础条款跑到事件前面了: {[cols[i] for i in sorted(terms)]}")
+
+    wl = watchlist_tab.watchlist_columns()[0]
+    assert wl.index("事件") < min(wl.index("剩余(年)"), wl.index("评级"))
+    # 关注池的例外, 连理由一起钉住
+    assert wl.index("上市日") < wl.index("市价"), "未上市新债只有左块有值"
+
+
+def test_column_alignment_matches_between_header_and_content():
+    """表头与内容**必须同向**, 且数值列右对齐.
+
+    此前 ``_configure_responsive_columns`` 写死 ``anchor="w"``, 表头走 ttk 默认
+    (居中) —— 于是短表头居中而值靠左, 整列看着是错位的; 数值列还因为左对齐而
+    **对不上小数点**, 而这几列的全部用途就是比大小。
+    """
+    numeric = {"市价", "理论价", "转股价值", "双低", "偏差(%)", "相对偏差(pp)",
+               "转股溢价(%)", "正股σ(%)", "下修优势(元)", "正股/下修线",
+               "剩余(年)", "余额(亿)"}
+    text = {"代码", "名称", "正股", "事件", "标签", "上市日", "加入日", "数据状态"}
+    for name in numeric:
+        assert batch_common.column_align(name) == "e", f"{name} 该右对齐"
+    for name in text:
+        assert batch_common.column_align(name) == "w", f"{name} 该左对齐"
+    for name in ("可信度", "定价状态", "评级"):
+        assert batch_common.column_align(name) == "center"
+    assert batch_common.column_align("没登记的列") == "w", "默认左对齐"
+
+    # 表头与内容用同一个值 —— 分两处写就会分叉
+    src = inspect.getsource(batch_common._configure_responsive_columns)
+    assert "align = column_align(header)" in src
+    assert "anchor=align" in src.split("tree.heading(")[1]
+    assert "anchor=align" in src.split("tree.column(")[1]
+
+
+def test_right_aligned_cells_get_a_gutter():
+    """右对齐列补尾随留白 —— 否则和右边左对齐列的文字**贴在列边界上**.
+
+    ttk 没有 per-cell padding (Treeview.Cell 元素在 aqua 主题下根本不暴露), 而右对齐
+    把文字钉在右边缘, **加多少列宽都贴着**。实测关注池的「双低→事件」
+    「正股/下修线→标签」两处正是这样。
+
+    留白只加在右对齐那一侧, 不按"下一列是不是左对齐"分情况 —— 后者位置相关, 列序一变
+    就得重算; 而所有右对齐列一起右移同样多, 小数点对齐不受影响。
+    """
+    headers = ["双低", "事件", "相对偏差(pp)", "标签"]
+    padded = batch_common.pad_cells(headers, ["224", "—", "-25.9", "较高HV"])
+    assert padded == ["224" + batch_common.CELL_GUTTER, "—",
+                      "-25.9" + batch_common.CELL_GUTTER, "较高HV"]
+    # 表头之间同样会贴 (实测截图里就是「双低 事件」连成一片)
+    assert batch_common.heading_text("双低").endswith(batch_common.CELL_GUTTER)
+    assert batch_common.heading_text("事件") == "事件"
+    assert batch_common.heading_text("双低", " ↑").startswith("双低 ↑")
+
+    # **留白不许参与任何逻辑** —— 排序与缺失值判定都要 strip 掉
+    assert batch_common._parse_sortable_number("-25.9" + batch_common.CELL_GUTTER) == -25.9
+    assert ("—" + batch_common.CELL_GUTTER).strip() in batch_common._MISSING_TOKENS
+
+    # 两张表插行前都要过这一道
+    for mod in (batch_tab, watchlist_tab):
+        src = inspect.getsource(mod)
+        assert "values=pad_cells(" in src, f"{mod.__name__} 插行没过 pad_cells"
+
+
+def test_column_widths_fit_the_largest_responsive_font():
+    """列宽要按**响应式字号上限**定, 不是基准字号.
+
+    ``_apply_responsive_tree_font`` 会随窗口变宽把字号调到 TABLE_FONT_SIZE+3, 而列宽
+    是写死的 —— 实测 2000px 宽的窗口下「正股/下修线」「相对偏差(pp)」「下修优势(元)」
+    「转股溢价(%)」四个表头全被截断 (截图里读到的是「正股/」)。
+    """
+    import tkinter.font as tkfont
+    from convertible_bond.gui.theme import FONT_FAMILY, TABLE_FONT_SIZE
+    try:
+        font = tkfont.Font(family=FONT_FAMILY, size=TABLE_FONT_SIZE + 3, weight="bold")
+    except Exception:                                    # 无显示环境
+        pytest.skip("需要 Tk 显示环境才能量字体")
+    presets = [list(batch_tab._BATCH_COLS_FULL), list(batch_tab._BATCH_COLS_SIMPLE),
+               list(zip(*watchlist_tab.watchlist_columns()))]
+    for preset in presets:
+        for header, width in preset:
+            need = font.measure(batch_common.heading_text(header)) + 6  # ttk Heading padding
+            assert need <= width, f"「{header}」表头 {need}px 放不进 {width}px"
+
+
+def test_deviation_columns_share_a_decimal_precision():
+    """「偏差(%)」与「相对偏差(pp)」挨着放, 小数位必须一样.
+
+    两列只差一个常数 (全市场当期中位), 一个 2 位一个 1 位时右对齐之后那一位是
+    空的, 很扎眼。0.1pp 的分辨率对筛选足够。两页同口径。
+    """
+    row = {"status": "ok", "deviation": -0.0503, "relative_deviation": -0.259}
+    dev = batch_tab._BATCH_COL_GETTERS["偏差(%)"](row)
+    rel = batch_tab._BATCH_COL_GETTERS["相对偏差(pp)"](row)
+    assert dev == "-5.0" and rel == "-25.9"
+    assert len(dev.split(".")[1]) == len(rel.split(".")[1]) == 1
+    # 关注池那一格是 vals 里的字面表达式, 用源码比对
+    src = inspect.getsource(watchlist_tab._render_watchlist_table)
+    assert "{float(dev) * 100:+.1f}" in src, "关注池的偏差也要 1 位小数"
+
+
+def test_price_columns_stay_in_one_block():
+    """价格块连成一片, 中间不许插别的列.
+
+    读者比的就是 转股价值 / 转股溢价 / 市价 / 理论价 / 可信度 / 偏差 这几个数, 中间隔
+    一列就得来回扫。三条恒等式也因此都落在视线内::
+
+        转股溢价 = 市价 / 转股价值 − 1        偏差 = 市价 / 理论价 − 1
+
+    「双低」「正股σ(%)」「定价状态」此前正好把这一片切成三段, 已挪出去 —— 它们分别是
+    复合指标 / 模型入参 / 行状态, 都不是"这只债值多少钱"的直读。
+    """
+    full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
+    block = ["转股价值", "转股溢价(%)", "市价", "理论价", "可信度",
+             "偏差(%)", "相对偏差(pp)"]
+    idx = [full.index(name) for name in block]
+    assert idx == list(range(idx[0], idx[0] + len(block))), (
+        f"价格块被切断了: {[full[i] for i in range(idx[0], idx[-1] + 1)]}")
+
+    # **两个偏差必须相邻**: 它们只差一个常数 (全市场当期中位, 实测 +20.86pp),
+    # 并排才看得出"本券贵不贵"与"相对全市场贵不贵"是不是同向。
+    for preset in (batch_tab._BATCH_COLS_FULL, batch_tab._BATCH_COLS_SIMPLE):
+        cols = [name for name, _ in preset]
+        assert cols[cols.index("偏差(%)") + 1] == "相对偏差(pp)"
+    wl = watchlist_tab.watchlist_columns()[0]
+    assert wl[wl.index("偏差(%)") + 1] == "相对偏差(pp)"
+
+    # 简洁只留两端, 也要挨着
+    simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
+    assert simple[simple.index("市价"):simple.index("市价") + 3] == ["市价", "理论价", "偏差(%)"]
+
+    # 关注池同理: 市价 → 理论价 → 偏差 → 相对偏差, 中间不插别的
+    wl = watchlist_tab.watchlist_columns()[0]
+    i = wl.index("市价")
+    assert wl[i:i + 4] == ["市价", "理论价", "偏差(%)", "相对偏差(pp)"]
+
+    # 关注池同步 —— 两页共用的列名不许分叉
+    wl_headers, _ = watchlist_tab.watchlist_columns()
+    assert "正股/下修线" in wl_headers and "距下修线" not in wl_headers
+    assert set(wl_headers) == set(watchlist_tab._WATCHLIST_COL_STRETCH_WEIGHTS)
+
+    # 底层字段没动, 只是表头换了
+    row = {"status": "ok", "confidence": "高", "sigma": 0.375}
+    assert batch_tab._BATCH_COL_GETTERS["可信度"](row) == "高"
+    assert batch_tab._BATCH_COL_GETTERS["正股σ(%)"](row) == "37.5"
+    assert batch_tab._BATCH_COL_GETTERS["定价状态"](row) == "✓"
+    assert batch_tab._BATCH_COL_GETTERS["定价状态"]({"status": "timeout"}) == "timeout"
+    # 两页不许同名异概念
+    assert "数据状态" not in full
+
+
+def test_derivable_columns_are_off_the_batch_table():
+    """三列被砍掉是因为**算术上完全可推导**, 实测各 0 例外.
+
+    - 「质量分」= f(评级, 余额≥10亿): 8 个取值 = 5 个评级档 × 2 个余额档, 而评级与
+      余额都是表上的列。
+    - 「复核建议」= f(标签): 38 个标签组合 ↔ 38 个 (标签,建议) 组合, 同一标签组合
+      从不对应多种建议; 而它占 260px, 是完整预设里最宽的一列。
+    - 「正股码」: 与「正股」同一个东西 —— 正股列已改渲染名称 (缺名字才回落代码)。
+    - 「敏感性」= f(标签, 置信度): ``_sensitivity_status(risk_tags, confidence)`` 逐字
+      重算, **0/284 不一致**; 判据是"标签含 {高HV, 模型溢价高} → 波动率敏感; 标签含
+      {余额清零/摘牌线/小余额/短久期/低评级/停牌...} → 条款·流动性敏感; 否则按置信度
+      高/中/低 → 较稳健/一般/需复核"。标签与理论价可信度**都在表上**, 它是纯二次展开。
+
+    「转股溢价(%)」「双低」「偏差(%)」同样可推导却**保留**: 它们是研究口径, 读者不该
+    去心算 168.19/108.62−1。判据是"读者要不要这个数", 不是"能不能算出来"。
+    """
+    full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
+    for gone in ("质量分", "复核建议", "正股码", "敏感性", "稳健性"):
+        assert gone not in full
+        assert gone not in batch_tab._BATCH_COL_GETTERS
+        assert gone not in batch_tab._BATCH_COL_STRETCH_WEIGHTS
+    for kept in ("转股溢价(%)", "双低", "偏差(%)", "评级", "余额(亿)"):
+        assert kept in full
+    # 复核建议不再有列 → 也不该再挂 tooltip
+    src = inspect.getsource(batch_tab)
+    assert 'tooltip_headers={"标签", "事件"}' in src
+
+
+def test_opportunity_score_is_gone_everywhere():
+    """「机会分」已**整体删除** —— 列 / 字段 / 排序信号 / min_score 门槛全部拿掉.
+
+    实测今日截面的依据:
+    - 269/284 (95%) 的行低估项 ``max(0, −deviation)`` 恒为 0, 分数完全由评级/余额加分
+      与风险惩罚决定; Spearman(机会分, 质量分) = +0.517, 而 Spearman(机会分, 偏差)
+      只有 −0.640 (纯错定价排序应为 −1.0)。
+    - 它的非展示消费者当时也已全部不可达: GUI 的排序信号只有三个选项, CLI 默认
+      ``down_reset_robust_edge``, ``_legacy_score_gate`` 生产代码零调用而全池
+      **0/283** 够得着它的 8.0 阈值。
+
+    **保留的是 ``quality_score``** —— 它本来就是从机会分里拆出来单独记账的那一支
+    (评级档 + 大余额加分), 与错定价无关但对审计有用。
+    """
+    for preset in (batch_tab._BATCH_COLS_FULL, batch_tab._BATCH_COLS_SIMPLE):
+        assert "机会分" not in [name for name, _ in preset]
+    assert "机会分" not in batch_tab._BATCH_COL_GETTERS
+    assert "机会分" not in batch_tab._BATCH_COL_STRETCH_WEIGHTS
+
+    # 字段侧: 计算 / 存储 / 导出 / 反序列化 / 关注池白名单全都不许再有它
+    assert not hasattr(batch_pricing, "_legacy_score_gate")
+    assert not hasattr(batch_pricing, "DEFAULT_UNDERVALUED_SCORE_THRESHOLD")
+    assert "opportunity_score" not in batch_pricing.BATCH_RESULT_COLUMNS
+    assert "opportunity_score" not in inspect.getsource(batch_pricing._restore_result_row)
+    from convertible_bond import watchlist as watchlist_mod
+    from convertible_bond import watchlist_cache as wc
+    assert not any("opportunity" in f for f in watchlist_mod._WATCHLIST_SNAPSHOT_FIELDS)
+    assert "opportunity_score" not in wc.CACHE_FIELDS
+
+    # 而 ``quality_score`` **字段**必须还在 —— 它是这次删除刻意保留的那一支。
+    # (它的**列**后来单独砍掉了, 理由不同: 实测 = f(评级, 余额≥10亿), 0 例外,
+    # 而那两列都在表上 —— 见 test_derivable_columns_are_off_the_batch_table。)
+    assert "quality_score" in batch_pricing.BATCH_RESULT_COLUMNS
+
+    # 摘要条查**渲染结果**: 不再有机会分, 「平均评级」照旧
+    class _Var:
+        def __init__(self):
+            self.value = ""
+
+        def set(self, v):
+            self.value = v
+
+    class _App:
+        # 摘要现在写状态行本身 (与批量页同格式), 不再有独立的 summary 变量
+        v_watchlist_status = _Var()
+
+    app = _App()
+    watchlist_tab._refresh_watchlist_summary(app, [
+        {"bond_code": "X", "status": "ok", "deviation": 0.1,
+         "credit_rating": "AA", "risk_tags": []},
+    ])
+    assert app.v_watchlist_status.value
+    assert "机会分" not in app.v_watchlist_status.value
+    assert "平均评级" in app.v_watchlist_status.value
+
 
 
 def test_both_pricing_entries_request_pde_down_reset_signals():
@@ -257,23 +608,60 @@ def test_banner_groups_repeats_so_the_urgent_one_survives():
     assert len(parts) == 2                       # 12 条压成 2 段, 紧急那条不会被挤掉
 
 
-def test_banner_scan_sets_are_split_but_neither_is_dropped():
-    """横幅搬到关注池主页后, 扫描集拆成两个:
+def test_banner_only_covers_the_watchlist():
+    """**横幅只讲关注池的标的** (按用户决策), 池外整段已删除.
 
-    - 关注池是**主**扫描集 ("我在盯的这几只今天有什么事")
-    - 全池仍在, 但从"铺满横幅"降级成"末尾一句计数 + 单击展开" ——
-      原来那条理由 ("横幅真正的用处是告诉你**还不知道的那些**") 依然成立,
-      不能因为换了页面就把全池那 50 多件事整个丢掉。
+    此前末尾挂着一句「全池另有 N 件 (单击查看全部)」, 理由是"横幅真正的用处是告诉你
+    **还不知道的那些**"。那条理由被推翻了 —— 这是**我的**关注池, 池外的债在别的页面
+    找。连带 ``_pool_scan_codes`` 一并删掉, 不留孤儿。
     """
-    from convertible_bond.gui.tabs.batch_watchlist import (
-        _pool_scan_codes, _watchlist_scan_codes)
+    import inspect
+
+    from convertible_bond.gui.tabs.batch_watchlist import _watchlist_scan_codes
 
     class _App:
         _batch_watchlist = [{"bond_code": "W.SH"}]
         _batch_all_results = [{"bond_code": "M1.SH"}, {"bond_code": "M2.SH"}, {}]
 
     assert _watchlist_scan_codes(_App()) == {"W.SH"}
-    assert _pool_scan_codes(_App()) == {"M1.SH", "M2.SH"}
+    assert not hasattr(watchlist_tab, "_pool_scan_codes")
+    # 查**代码标识符**而不是中文词 —— docstring 里会写"此前挂过全池另有 N 件"当背景。
+    # 渲染结果由 test_banner_ignores_bonds_outside_the_watchlist 行为验证。
+    src = inspect.getsource(watchlist_tab._refresh_events_banner)
+    assert "pool_extra" not in src, "横幅里还在算池外的债"
+
+
+def test_banner_tone_follows_content():
+    """**有事件才用警报色**。空态仍显式写文案, 但不再是橙色 ⚠.
+
+    实测这个关注池 (5 只) 在 7/14/30/60/90/180 天**每个窗口都是 0 件** —— 一条橙色
+    警告条常年说"什么都没发生", 训练出来的行为是忽略它, 而那正是真事件出现时会被
+    漏掉的原因。空态**不 grid_remove**: 消失的控件和坏掉的控件长得一模一样。
+    """
+    import inspect
+
+    from convertible_bond.gui import theme
+
+    src = inspect.getsource(watchlist_tab._refresh_events_banner)
+    assert "_set_banner_tone(label, alert=True)" in src
+    assert "_set_banner_tone(label, alert=False)" in src
+    assert "label.grid()" in src
+    assert "label.grid_remove()" not in src, "空态不许藏起控件"
+
+    class _Label:
+        def __init__(self):
+            self.color = None
+
+        def configure(self, **kw):
+            self.color = kw.get("text_color")
+
+    alert, quiet = _Label(), _Label()
+    watchlist_tab._set_banner_tone(alert, alert=True)
+    watchlist_tab._set_banner_tone(quiet, alert=False)
+    assert alert.color == theme.ORANGE
+    assert quiet.color == theme.TEXT_DIM
+    # 假 label 不该把渲染打断
+    watchlist_tab._set_banner_tone(object(), alert=True)
 
 
 # ── 扫新债: 窄同步 → 扫描 ──
@@ -300,7 +688,10 @@ class _FakeApp:
     """够跑通同步→回调这条链的最小 app: after 同步执行, 线程 join 掉."""
 
     def __init__(self):
+        # 两页各有自己的状态行 —— 关注池的动作写 v_watchlist_status,
+        # 批量页的 (含「⭐ 加入关注池」) 写 v_batch_status。见 app._build_vars。
         self.v_batch_status = _FakeStatus()
+        self.v_watchlist_status = _FakeStatus()
         self.pool_syncs = []
 
     def after(self, _delay, fn):
@@ -347,7 +738,7 @@ def test_scan_new_issues_no_longer_asks_before_syncing(monkeypatch):
 
     assert seen == [True]                    # 后续流程照常触发
     assert app.pool_syncs == []              # 没有弹窗, 也没有退回全库增量同步
-    assert any("新债上市日" in text for text in app.v_batch_status.history)
+    assert any("新债上市日" in text for text in app.v_watchlist_status.history)
 
 
 def test_scan_continues_when_the_narrow_sync_fails(monkeypatch):
@@ -356,7 +747,7 @@ def test_scan_continues_when_the_narrow_sync_fails(monkeypatch):
     seen = _run_sync_to_completion(monkeypatch, app, exc=RuntimeError("网络不通"))
 
     assert seen == [False]
-    assert "网络不通" in app.v_batch_status.value
+    assert "网络不通" in app.v_watchlist_status.value
 
 
 def test_concurrent_scan_requests_are_dropped(monkeypatch):
@@ -843,65 +1234,369 @@ def test_column_definition_is_a_single_source_of_truth():
     assert len(set(headers)) == len(headers), "表头有重复"
 
 
-def test_change_column_header_names_the_baseline_date():
-    """表头不说清是跟哪天比, 这一列就是个没法核对的数字 ——
-    周一/长假后它其实是 3 天涨跌。"""
-    assert watchlist_tab.change_column_label(None) == watchlist_tab.CHANGE_COLUMN_KEY
-    label = watchlist_tab.change_column_label({"valuation_date": date(2026, 8, 25)})
-    assert label == "涨跌 vs 08-25"
-    headers, _ = watchlist_tab.watchlist_columns(label)
-    assert label in headers and watchlist_tab.CHANGE_COLUMN_KEY not in headers
+def test_event_flags_use_one_unambiguous_date_format():
+    """「事件」列里不许出现两种 NN-NN.
+
+    别的旗标是 ``%m-%d`` (「强赎 09-09」「下修提议 09-05」), 而「不强赎至」曾用
+    ``%y-%m`` —— 「26-10」是 2026 年 10 月, 和「09-09」长得一模一样却是另一种格式,
+    同一列里无从区分。实测 27/73 有事件的行走这一档 (37%), 而两类事件本就能共存。
+    四位年份让格式自明。
+    """
+    from datetime import date as _d
+    row = {"valuation_date": _d(2026, 8, 29), "call_status": "不强赎",
+           "call_no_redemption_until": _d(2026, 10, 31)}
+    flags = batch_pricing.event_flags(row)
+    assert flags == ["不强赎至 2026-10"]
+    # 反例守住: 别的旗标仍是月-日, 两者不会被读成同一种
+    row2 = {"valuation_date": _d(2026, 8, 29), "call_status": "已公告强赎",
+            "call_redemption_date": _d(2026, 9, 9)}
+    assert batch_pricing.event_flags(row2) == ["强赎 09-09"]
+
+
+def test_direction_tags_are_relabelled_without_touching_the_frozen_string():
+    """「模型低估」的动宾读法与事实相反, 但标签字符串**不能**改.
+
+    - 判据 ``deviation < −0.08`` = 市价**低**于理论价 → 模型给的价**高**;
+      「模型高估离群」是市价**远高**于模型价 → 模型给的价**低**。两个标签用的是
+      省略式"(按)模型(判为)X", 彼此一致, 但"模型把它低估了"正好读反。
+    - 「模型高估离群」在 ``LEGACY_STRATEGY_EXCLUDE_TAGS`` (逐字冻结的默认选债排除集)
+      里, 改字符串就是默认选债行为变更; 旧缓存与旧策略快照里存的也是原名。
+    """
+    assert "模型高估离群" in batch_pricing.LEGACY_STRATEGY_EXCLUDE_TAGS
+    assert batch_pricing.risk_tag_label("模型高估离群") == "市价远高于模型价"
+    assert batch_pricing.risk_tag_label("模型低估") == "市价低于模型价"
+    # 展示名以**市价**为主语, 不能再出现会被反读的"模型高估/模型低估"动宾式
+    for shown in batch_pricing.RISK_TAG_DISPLAY_LABEL.values():
+        assert not shown.startswith("模型")
+        assert "高估" not in shown and "低估" not in shown, (
+            f"{shown} 里还留着没有主语的「高估/低估」")
+
+    # **摘要条也要走这张表** —— 它曾经另写一份字面量「⚠ 模型高估 2」, 于是标签列
+    # 已经改口而摘要条还在说旧词, 同一页两种说法。
+    class _Var:
+        def __init__(self):
+            self.value = ""
+
+        def set(self, v):
+            self.value = v
+
+    class _App:
+        v_watchlist_status = _Var()
+
+    app = _App()
+    watchlist_tab._refresh_watchlist_summary(app, [
+        {"bond_code": "X", "status": "ok", "deviation": 0.3,
+         "credit_rating": "AA", "risk_tags": ["模型高估离群"]},
+    ])
+    text = app.v_watchlist_status.value
+    assert "市价远高于模型价 1" in text, text
+    assert "模型高估" not in text
+    # 没登记的原样返回
+    assert batch_pricing.risk_tag_label("低评级") == "低评级"
+    # 表放在 batch_pricing 而不是 GUI —— 事件短标签那次私有表分叉的教训
+    assert not hasattr(batch_tab, "RISK_TAG_DISPLAY_LABEL")
+    assert not hasattr(watchlist_tab, "RISK_TAG_DISPLAY_LABEL")
+
+
+def test_tags_covered_by_the_data_column_are_dropped_on_the_watchlist():
+    """「无市价」「无偏差」已由「数据状态」列以更具体的形式承载, 标签列不再复读.
+
+    实测三只未上市新债的标签正是 ``['无偏差','无市价']``, 而同一行「数据状态」列写着
+    「无市价」—— 同一行两列逐字重复。**只挡这两个**: 「无HV」「无评级」这些在表上
+    没有专属列, 挡掉就真丢了。
+    """
+    tags = ["无偏差", "无市价", "较高HV", "无评级"]
+    assert batch_common._format_tags(tags, drop_covered=True) == "较高HV / 无评级"
+    # 批量页不传 drop_covered —— 那边没有「数据状态」列
+    assert "无市价" in batch_common._format_tags(tags)
+
+
+def test_trigger_gap_is_a_signed_ratio_and_sorts_natively():
+    """「正股/下修线」带符号, 且**原生可排序**.
+
+    它曾渲染成「线下 62%」/「线上 39%」—— 那是列名还叫「正股距下修线」时的补救,
+    因为「距离 −62%」在中文里不通。但中文前缀让 ``_parse_sortable_number`` 一律返回
+    None, 这一列于是静默退化成**字符串序**: 「线上 123%」排在「线上 3%」前面, 整个
+    「线上」组还排在「线下」组前面 —— 方向和大小全反, **不报错**。
+
+    列名去掉「距」字改成比值形式之后, `+39%` 读作"正股是触发线的 1.39 倍", 符号自洽,
+    排序也回到默认路径, 那个专用排序键 (COLUMN_SORT_KEYS) 随之下线。
+    """
+    for gap, expected in [(-0.62, "-62%"), (0.39, "+39%"), (0.0, "+0%"),
+                          (None, "—"), (float("nan"), "—")]:
+        assert batch_common.trigger_gap_text(gap) == expected
+    # 实现只许有一份 —— 两页曾各存一份 (那两个模块会成环), 靠比对输出防分叉
+    assert not hasattr(batch_tab, "_trigger_gap_text")
+    assert not hasattr(watchlist_tab, "_trigger_gap_text")
+    assert not hasattr(batch_common, "COLUMN_SORT_KEYS"), "专用排序键已无消费者"
+
+
+def test_numeric_columns_sort_numerically():
+    """**看起来是数值的列, 点表头必须按数值排** —— 这是上面那个 bug 的通用守护.
+
+    ``_attach_column_sort`` 靠 ``_parse_sortable_number`` 认数值列: 它只剥 ``+ % , ¥``
+    再试 float。任何带文字前缀的渲染 (「线上 32%」「约 5 亿」) 都会让整列返回 None,
+    于是**静默**退化成字符串序 —— 不报错, 只是点了表头之后顺序是错的。
+    """
+    numeric = {"市价", "理论价", "偏差(%)", "相对偏差(pp)", "双低", "剩余(年)",
+               "余额(亿)", "转股价值", "转股溢价(%)", "正股σ(%)", "下修优势(元)",
+               "正股/下修线"}
+    rows = [
+        {"status": "ok", "market_price": 128.37, "theoretical_price": 135.17,
+         "deviation": -0.0503, "relative_deviation": -0.259, "double_low": 142.0,
+         "T": 0.23, "outstanding_balance": 4.2, "parity": 112.55,
+         "conversion_premium": 0.141, "sigma": 0.61,
+         "down_reset_robust_edge_value": 3.5, "down_reset_trigger_gap": 0.32},
+        {"status": "ok", "market_price": 116.35, "theoretical_price": 118.28,
+         "deviation": -0.0163, "relative_deviation": -0.225, "double_low": 384.0,
+         "T": 5.94, "outstanding_balance": 18.8, "parity": 30.3,
+         "conversion_premium": 2.84, "sigma": 0.31,
+         "down_reset_robust_edge_value": -12.0, "down_reset_trigger_gap": -0.63},
+    ]
+    for name in numeric:
+        getter = batch_tab._BATCH_COL_GETTERS[name]
+        for row in rows:
+            text = getter(row)
+            assert batch_common._parse_sortable_number(text) is not None, (
+                f"「{name}」渲染成 {text!r}, _parse_sortable_number 认不出来 —— "
+                "这一列会静默按字符串排序")
+
+
+def test_double_low_does_not_go_dark_with_a_stale_anchor():
+    """``double_low = 市价 + 转股溢价率×100`` 是纯局部量, 只有它的**秩**需要横截面.
+
+    此前它搭了「相对偏差」的车, 锚一过期整列黑 —— 而「双低 <130」是不需要任何锚
+    就能读的行业经验阈值。
+    """
+    import ast
+    import inspect
+    src = inspect.getsource(watchlist_tab._render_watchlist_table)
+    tree = ast.parse(src.lstrip())
+    assigns = {t.id: ast.unparse(n.value)
+               for n in ast.walk(tree) if isinstance(n, ast.Assign)
+               for t in n.targets if isinstance(t, ast.Name)}
+    assert "anchor_stale" in assigns["rel_str"], "「相对偏差」的分母就是锚, 必须跟着变暗"
+    assert "anchor_stale" not in assigns["dbl_str"], "「双低」不该跟着锚变暗"
+
+
+def test_shared_columns_use_the_same_caliber_on_both_pages():
+    """**同名列两页必须同口径** —— 逐个边界用例跑两边的渲染表达式.
+
+    实测跑出来过五处不一致 (不是看出来的):
+
+    1. 「市价」批量页被 ``status == "ok"`` 门控, 关注池没有 —— 市价是**市场事实**,
+       定价成不成功与它无关; 门控会让"模型算挂了"和"这只债真没行情"长得一样。
+    2. 「理论价」正好**反过来**: 批量页不门控而关注池门控 —— 理论价是模型输出,
+       定价失败时不该还显示一个数。
+    3. 「市价」批量页判空用 ``is not None``, 而 ``watchlist_cache._NAN_FIELDS`` 含
+       ``market_price`` —— 那条持久化路径读回来是 **NaN**, 而 ``NaN is not None``
+       为真, 会渲染出字面的 "nan"。两页会互相喂行 (关注池 worker 写
+       ``_batch_all_results``), 所以必须同口径。
+    4. 「评级」空值批量页渲染成空串, 关注池渲染「—」。
+    5. 「剩余(年)」批量页锚**估值日** (pricer 入参 T), 关注池锚**今天** ——
+       实测 271/284 行显示值不同。锚今天会让一行之内出现两个时点。
+    """
+    nan = float("nan")
+    cases = {
+        "正常": {"status": "ok", "market_price": 128.37, "theoretical_price": 135.17,
+                 "credit_rating": "A+"},
+        "市价NaN": {"status": "ok", "market_price": nan, "theoretical_price": 135.17},
+        "市价None": {"status": "ok", "market_price": None, "theoretical_price": 135.17},
+        "定价失败": {"status": "timeout", "market_price": 128.37,
+                     "theoretical_price": 135.17},
+        "无评级": {"status": "ok", "credit_rating": None},
+    }
+    expected = {
+        "正常": {"市价": "128.37", "理论价": "135.17", "评级": "A+"},
+        "市价NaN": {"市价": "—", "理论价": "135.17"},
+        "市价None": {"市价": "—", "理论价": "135.17"},
+        # 市价照常显示 (市场事实), 理论价打「—」(模型没算出来)
+        "定价失败": {"市价": "128.37", "理论价": "—"},
+        "无评级": {"评级": "—"},
+    }
+    for case, row in cases.items():
+        for col, want in expected[case].items():
+            got = batch_tab._BATCH_COL_GETTERS[col](row)
+            assert got == want, f"{case} 的「{col}」渲染成 {got!r}, 应当是 {want!r}"
+
+    # 「剩余(年)」两页锚同一个时点 (估值日), 不是今天
+    from datetime import date
+    entry = {"maturity_date": "2026-10-15", "valuation_date": date(2026, 8, 26)}
+    anchored = watchlist_tab._years_to_maturity_text(entry, date(2026, 8, 29))
+    batch_t = batch_tab._BATCH_COL_GETTERS["剩余(年)"](
+        {"T": (date(2026, 10, 15) - date(2026, 8, 26)).days / 365.25})
+    assert anchored == batch_t, f"关注池 {anchored} vs 批量页 {batch_t}"
+    # 缺估值日才回落到今天
+    assert watchlist_tab._years_to_maturity_text(
+        {"maturity_date": "2026-10-15"}, date(2026, 8, 29)) == "0.13"
+
+
+def test_underlying_column_falls_back_to_the_stock_code():
+    """正股列渲染**名称**, 但缺名字时必须回落代码 —— 不能留一格空的.
+
+    这不是保守写法, 是当前必需: ``cb_data.json`` 的 ``underlying_name`` 实测只有
+    722/1059。它 08-24 曾是 1033/1058, 被一次全量条款同步清掉 317 只 ——
+    ``cb_data_sync._LOCALLY_AUTHORITATIVE_FIELDS`` 里只保护了 ``credit_rating``,
+    而 ``get_bond_terms`` 对正股名取不到时返回 None 就会盖掉本地好值
+    (与 AGENTS 里 ``delisting_date`` 那一档同形)。没有回落, 三成的行正股列直接变空。
+
+    两张表必须同口径 —— 它们共用「正股」这个列名。
+    """
+    named = {"underlying_name": "金隅冀东", "stock_code": "000401.SZ"}
+    unnamed = {"underlying_name": None, "stock_code": "000401.SZ"}
+    blank = {}
+
+    assert batch_tab._BATCH_COL_GETTERS["正股"](named) == "金隅冀东"
+    assert batch_tab._BATCH_COL_GETTERS["正股"](unnamed) == "000401.SZ"
+    assert batch_tab._BATCH_COL_GETTERS["正股"](blank) == "—"
+
+    # 关注池那一格是 vals 里的字面表达式, 用 AST 取出来比对同一套回落链
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(watchlist_tab))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_render_watchlist_table")
+    vals = next(n for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", "") == "vals" for t in n.targets))
+    headers, _ = watchlist_tab.watchlist_columns()
+    cell = ast.unparse(vals.value.elts[headers.index("正股")])
+    assert "underlying_name" in cell and "stock_code" in cell, (
+        f"关注池「正股」格没走 名称→代码 回落: {cell}")
+
+
+def test_row_values_line_up_with_the_column_definition():
+    """``vals`` 的元素数必须等于列数 —— 差一个就整行右移, 而**不会报错**.
+
+    表头 / 列宽 / 权重三者已有守护 (上一个用例), 但那三张表都是"列的定义",
+    渲染出来的那一行是第四张表, 此前没人比对。少一个元素 ttk 会把尾列留空,
+    多一个直接丢掉; 中间插错位置则是每一格都渲染在错的表头底下 —— 市价那一列
+    读出来是理论价, 数字全都"看上去完全正常"。
+
+    用 AST 数而不是真渲染: Treeview 在测试环境起不来 (CustomTkinter 无显示),
+    而这里要防的恰恰是**静态**的列表长度不一致。
+    """
+    import ast
+    import inspect
+
+    src = inspect.getsource(watchlist_tab)
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_render_watchlist_table")
+    vals = next(n for n in ast.walk(fn) if isinstance(n, ast.Assign)
+                and any(getattr(t, "id", "") == "vals" for t in n.targets))
+    headers, _ = watchlist_tab.watchlist_columns()
+    assert len(vals.value.elts) == len(headers), (
+        f"vals 有 {len(vals.value.elts)} 个元素, 表头有 {len(headers)} 列")
 
 
 def test_dropped_columns_are_really_gone():
-    """按用户决策: 砍「可信」留「敏感性」; 上市日/可交易日/距交易/机会分折进别处;
-    「加入时偏差」「市价变化」锚的是加入瞬间, 与选定的"vs 上一交易日"口径不是一回事。"""
+    """砍「可信」留「敏感性」; 机会分折进别处; 「加入时偏差」「市价变化」锚的是加入
+    瞬间, 与选定的"vs 上一交易日"口径不是一回事。
+
+    - **「上市日」已按用户决策加回**, 不再在本清单里 —— 关注池的 12 行里三档取值
+      (过去日期 / 未来日期 / 「待定」) 全都真实存在, 这正是新债最想看的一格。
+    - **「可交易日」「距交易」继续留在清单里, 理由比当初更强**: 实测
+      ``tradable_date ≡ listing_date`` (主池 284/284、关注池 10/10 完全相同),
+      前者与上市日同值; 后者是从同一个日期算的派生量, 还会随"你哪天开的 GUI"
+      漂移、没法跟公告核对。
+    - **「偏差Δ(pp)」新进清单**: 理论价不动时 ``偏差Δ ≡ 涨跌 × (1 + 偏差)`` 是
+      恒等式, 它和左边的「涨跌」是同一列; 独立信息 (理论价漂移) 实测中位只占 10%,
+      而安静的日子里那个量级就是 21 日 HV 窗口滚动的噪声。
+    - **「涨跌%」按用户决策删除**: 这是研究工作台不是行情软件, 而它恰是全 app 最像
+      行情软件的一格。它一走, 整条"vs 上一交易日"的展示机制就没有消费者了 ——
+      ``change_column_label`` / ``CHANGE_COLUMN_KEY`` / ``_previous_daily_snapshot``
+      / ``_baseline_is_usable`` / ``_pct_change`` 连同各自的用例一起删掉, 不留孤儿。
+      **但 ``data/watchlist_daily/`` 的窄快照仍然照写** (见
+      ``watchlist_cache.NARROW_FIELDS`` 上的说明): 那个目录只追加, 停写就等于把
+      这些天永久丢掉, 而恢复任何一列都要靠它。
+    """
     weights = set(watchlist_tab._WATCHLIST_COL_STRETCH_WEIGHTS)
-    for gone in ("可信", "上市日", "可交易日", "距交易", "机会分",
-                 "加入时偏差(%)", "市价变化(%)", "状态"):
+    for gone in ("可信", "可交易日", "距交易", "机会分", "涨跌%", "涨跌(%)",
+                 "加入时偏差(%)", "市价变化(%)", "状态", "偏差Δ(pp)", "敏感性"):
         assert gone not in weights, f"{gone} 应该已经砍掉"
-    assert "敏感性" in weights and "数据" in weights
+    # 列名从「取价」→「数据」→「数据状态」: 最后这步把七档文案的共同点
+    # (这一行的数是什么时候的) 写进了名字, 所以它不再需要 tooltip。
+    assert "数据状态" in weights and "数据" not in weights and "取价" not in weights
+    assert "取价" not in weights
+    # 加回来的列: 上市日 (新债进度) / 评级 (摘要条一直在报平均评级) /
+    # 距下修线 (下修博弈活没活) / 剩余(年) (实测半数关注池 <0.6 年到期)
+    for back in ("上市日", "评级", "正股/下修线", "剩余(年)"):
+        assert back in weights, f"{back} 应该已经加回"
+    # 双低带方向: 它是个裸数, 且与左边的「市价」不同向, 表头不写方向读者无从判断
+    # 方向注释已从名字挪进表头 tooltip (COLUMN_HELP), 名字收回「双低」
+    assert "双低" in weights and "双低(小=便宜)" not in weights
+    # 跨日变化列全没了 → 动态表头机制也该一起消失, 不留半截
+    assert not hasattr(watchlist_tab, "change_column_label")
+    assert not hasattr(watchlist_tab, "CHANGE_COLUMN_KEY")
 
 
-@pytest.mark.parametrize("state,extra,expected", [
-    ("ok", {}, "✓ 今日"),
-    ("stale", {}, "旧"),
-    ("stale", {"valuation_date": date(2026, 8, 26)}, "旧 · 08-26"),
-    ("no_market", {}, "无市价"),
-    ("failed", {"status": "provider error: timeout"}, "失败 · provider error: ti"),
-    ("unpriced", {}, "未定价"),
+@pytest.mark.parametrize("state,extra,latest,expected", [
+    # 主文案是**市价 as-of 的日期**, 不是"估值日是不是今天"。上一版正常态写
+    # 「✓ 今日 · 价 08-28」—— 14 个字符里主文案讲的是 market_today() 给的估值日,
+    # 真答案挤在后缀。
+    ("ok", {"market_price_as_of": date(2026, 8, 28)}, date(2026, 8, 28), "✓ 08-28"),
+    ("ok", {"market_price_as_of": date(2026, 8, 26)}, date(2026, 8, 28), "市价旧 08-26"),
+    ("stale", {}, None, "未重算"),
+    ("stale", {"valuation_date": date(2026, 8, 26)}, None, "未重算 08-26"),
+    ("no_market", {}, None, "无市价"),
+    ("failed", {"status": "provider error: timeout"}, None, "失败 · provider error: ti"),
+    ("unpriced", {}, None, "未定价"),
 ])
-def test_row_data_label(state, extra, expected):
+def test_row_data_label(state, extra, latest, expected):
     entry = {"bond_code": "X", "_price_state": state, **extra}
-    assert watchlist_tab._row_data_label(entry) == expected
+    assert watchlist_tab._row_data_label(entry, latest_as_of=latest) == expected
 
 
 def test_stale_label_never_asserts_a_day_it_did_not_check():
     """「昨日」是写死的文案时, 出差一周回来六行仍全写「昨日」.
 
     _derive_price_state 只判"是不是今天"、不算天数, 所以标签**不能**替它断言差几天。
-    有估值日就拼真实日期; 没有才退回一个不承诺任何天数的「旧」。
+    有估值日就拼真实日期; 没有才退回一个不承诺任何天数的「未重算」。
     """
     label = watchlist_tab._row_data_label(
         {"bond_code": "X", "_price_state": "stale", "valuation_date": "2026-08-14"})
-    assert label == "旧 · 08-14"
+    assert label == "未重算 08-14"
     assert "昨日" not in label
 
 
-def test_data_label_flags_a_price_older_than_the_valuation_date():
-    """停牌/节假日会让最近一笔收盘价落在几天前 —— 那和"今天的价"不是一回事."""
-    entry = {"bond_code": "X", "_price_state": "ok",
-             "valuation_date": date(2026, 8, 26),
-             "market_price_as_of": date(2026, 8, 21),
-             "market_price_source": "history"}
-    assert watchlist_tab._row_data_label(entry) == "✓ 今日 · 价 08-21"
+def test_stale_price_baseline_is_the_page_not_the_valuation_date():
+    """陈旧判据锚**本页 as-of 的最大值**, 不锚估值日.
+
+    估值日走 ``market_today()`` 是自然日, 而 2026-08-29 是**星期六** —— 周五收盘价
+    在周六就是最新价, 但 ``as_of < 估值日`` 对当天每一行都成立 (实测 9/9 有价的行
+    全被标陈旧)。周末两天加每个交易日收盘前的整段时间, 这个提示恒亮, 把停牌/节假日
+    那种**真**陈旧淹掉。
+    """
+    saturday = {"bond_code": "X", "_price_state": "ok",
+                "valuation_date": date(2026, 8, 29),        # 周六
+                "market_price_as_of": date(2026, 8, 28),    # 周五收盘 = 最新
+                "market_price_source": "history"}
+    rows = [saturday, {**saturday, "bond_code": "Y"}]
+    latest = watchlist_tab._latest_market_as_of(rows)
+    assert latest == date(2026, 8, 28)
+    assert watchlist_tab._row_data_label(saturday, latest_as_of=latest) == "✓ 08-28"
+
+    # 而真陈旧 (停牌: 别人都拿到 08-28, 只有它是 08-21) 照常标出来
+    halted = {**saturday, "market_price_as_of": date(2026, 8, 21)}
+    assert watchlist_tab._row_data_label(halted, latest_as_of=latest) == "市价旧 08-21"
+
+    # 整页一起旧时没有基准可比 → 不标。那一档归摘要条的「估值日 MM-DD」管。
+    assert watchlist_tab._latest_market_as_of([]) is None
+    assert watchlist_tab._row_data_label(halted, latest_as_of=None) == "✓ 08-21"
 
 
 def test_data_label_flags_the_unstamped_fallback():
-    """terms.close 兜底那一档没有 as-of, 可以任意旧 (日升转债库里的是 2021 年的值)."""
+    """terms.close 兜底那一档没有 as-of, 可以任意旧 (日升转债库里的是 2021 年的值).
+
+    原文案是「无戳」—— 从代码里搬出来的黑话, 表上没人读得懂"戳"是时间戳。
+    """
     entry = {"bond_code": "X", "_price_state": "ok",
-             "market_price_source": "terms_close"}
-    assert watchlist_tab._row_data_label(entry) == "✓ 今日 · 无戳"
+             "market_price_source": "terms_close",
+             "market_price_as_of": date(2026, 8, 28)}
+    assert watchlist_tab._row_data_label(entry) == "日期不明"
+    # as-of 干脆缺失的那一档也归这里, 不能渲染成一个假日期
+    assert watchlist_tab._row_data_label(
+        {"bond_code": "X", "_price_state": "ok"}) == "日期不明"
 
 
 def test_unpriced_label_uses_pool_exclusion_reason_not_view_reason():
@@ -930,24 +1625,6 @@ def test_unpriced_label_uses_pool_exclusion_reason_not_view_reason():
         mod.batch_pricing_exclusion_reason = original
     assert label == "未定价 · 已发行未上市"
     assert calls == ["123284.SZ"]
-
-
-@pytest.mark.parametrize("cur,base,expected", [
-    (110.0, 100.0, 10.0),
-    (90.0, 100.0, -10.0),
-    (100.0, None, None),
-    (None, 100.0, None),
-    (100.0, 0.0, None),
-    (float("nan"), 100.0, None),
-])
-def test_pct_change_returns_none_not_zero_when_there_is_no_base(cur, base, expected):
-    """没有基准就返回 None 显示「—」, **不是 0.0** —— "没有基准"和"确实没变"
-    必须分得开, 否则用户会把"我昨天没开过 GUI"读成"今天没动"。"""
-    got = watchlist_tab._pct_change(cur, base)
-    if expected is None:
-        assert got is None
-    else:
-        assert got == pytest.approx(expected)
 
 
 # ── 事件区双向化 (S9) ────────────────────────────────────────────
@@ -1030,10 +1707,13 @@ def test_events_banner_splits_past_and_future(monkeypatch):
     assert _app._batch_events_banner_full[0][0] == "A.SH"
 
 
-def test_events_banner_keeps_the_pool_wide_count(monkeypatch):
-    """全池那条线索没被丢掉, 只是从"铺满横幅"降级成"末尾一句计数"。
+def test_events_banner_ignores_bonds_outside_the_watchlist(monkeypatch):
+    """**池外的债不进横幅** (按用户决策). 这是"我的"关注池, 别人的事在别的页面找.
 
-    原来的理由 —— "横幅真正的用处是告诉你**还不知道的那些**" —— 依然成立。
+    此前末尾挂着「全池另有 N 件 (单击查看全部)」, 理由是"横幅真正的用处是告诉你
+    **还不知道的那些**"。那条理由已被推翻 —— 而它恰好是横幅上唯一常年非空的一段,
+    删掉之后这个控件会更经常地处于空态, 所以配色必须跟着内容走
+    (见 test_banner_tone_follows_content)。
     """
     today = date(2026, 8, 26)
     monkeypatch.setattr(watchlist_tab, "market_today", lambda: today)
@@ -1044,8 +1724,9 @@ def test_events_banner_keeps_the_pool_wide_count(monkeypatch):
     app = _BannerApp(["A.SH"], store, pool=["P1.SH", "P2.SH"])
     watchlist_tab._refresh_events_banner(app)
     text = app.v_batch_events_banner.get()
-    assert "全池另有 2 件" in text
-    assert "无日程事件" in text          # 关注池自己那一半仍然显式说空
+    assert "全池" not in text and "2 件" not in text
+    assert "无日程事件" in text          # 关注池自己是空的, 显式说出来
+    assert app.lbl_batch_events_banner.shown is True
 
 
 def test_events_banner_survives_a_missing_store():
@@ -1131,23 +1812,6 @@ def test_freshness_key_never_depends_on_a_field_only_one_source_has():
     # 来源序号必须真的参与排序
     assert (watchlist_tab._row_freshness(base, watchlist_tab._SOURCE_RANK_POOL)
             > watchlist_tab._row_freshness(stamped, watchlist_tab._SOURCE_RANK_CACHE))
-
-
-@pytest.mark.parametrize("row_date,base_date,usable", [
-    (date(2026, 8, 28), date(2026, 8, 26), True),    # 正常: 当前更新
-    (date(2026, 8, 26), date(2026, 8, 28), False),   # 反着比 → 符号相反的涨跌
-    (date(2026, 8, 28), date(2026, 8, 28), False),   # 同日 → 恒 0, 冒充"今天没动"
-    (None, date(2026, 8, 26), False),                # 没被定价过的行
-    (date(2026, 8, 28), None, False),                # 没有基准快照
-])
-def test_change_columns_require_the_row_to_be_newer_than_the_baseline(row_date, base_date, usable):
-    """「涨跌」「偏差Δ」的基准判据必须带日期.
-
-    只看"两边都有限"会让 08-26 的行去比 08-28 的基准, 算出 −2.89 而表头写着
-    「涨跌 vs 08-28」—— 一个倒着算出来的跌幅, 看上去完全正常。
-    """
-    entry = {"bond_code": "X", "valuation_date": row_date}
-    assert watchlist_tab._baseline_is_usable(entry, base_date) is usable
 
 
 def test_cross_section_columns_go_dark_when_the_anchor_is_old():
@@ -1481,7 +2145,7 @@ def test_a_never_priced_watchlist_row_is_not_painted_as_broken():
 
     ``no_market`` / ``unpriced`` 明确不进行色: 未上市新债没有市价是**天然状态**
     (实测关注池 6 行里有 3 只), 把它染成"别信它"就是把 ``_resolve_row_tag`` 里
-    那条刻意的"没有 status 就 return None"拿掉。这两档的区分由「数据」列的
+    那条刻意的"没有 status 就 return None"拿掉。这两档的区分由「数据状态」列的
     五档文案承载 —— 那正是 ``_price_state`` 存在的理由。
     """
     never_priced = {"bond_code": "123999.SZ", "bond_name": "未算转债",

@@ -24,7 +24,6 @@ from convertible_bond.batch_pricing import (
     sort_batch_results_for_view,
     DEFAULT_DOWN_RESET_EDGE_PERCENTILE,
     DEFAULT_UNDERVALUED_PERCENTILE,
-    DEFAULT_UNDERVALUED_SCORE_THRESHOLD,
     MIN_RELATIVE_CHEAPNESS,
     MIN_VIEW_ROWS,
     _selection_cutoff,
@@ -614,7 +613,6 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
     # 需复核只留数据质量 + 可交易性 (这一行现在不能用, 得先去拉数据/确认能不能交易)。
     assert row["review_bucket"] == "模型存疑"
     assert row["review_notes"]
-    assert math.isfinite(row["opportunity_score"])
 
 
 def test_annotate_batch_result_flags_underlying_risk_and_down_uplift():
@@ -640,7 +638,23 @@ def test_annotate_batch_result_flags_underlying_risk_and_down_uplift():
     assert row["model_signal_status"] == "不适合作为买入信号"
 
 
-def test_sort_batch_results_for_review_penalizes_noisy_deviation():
+def test_sort_batch_results_for_review_is_pure_deviation_now():
+    """研究排序不再惩罚高风险行 —— 这是删除机会分的**代价**, 记在这里.
+
+    原行为: 第一排序键是机会分降序, 而机会分对 高HV / 低评级 / 小余额 / 短久期
+    逐项扣分, 于是下面的 NOISY (σ=1.45、A 级、余额 0.2 亿、剩余 0.3 年) 即便
+    deviation 更负 (−0.30 vs −0.16) 也会被压到 CLEAN 后面。
+
+    现在纯按 deviation 升序, **NOISY 排第一**。机会分整体删除 (实测 95% 的行低估项
+    恒为 0, 它度量的是信用质量而非错定价), 它承载的这条风险惩罚一并消失。
+
+    没有顺手补一个新的沉底规则: 那等于用一个未经检验的新机制替换一个刚被证伪的旧
+    机制, 而 ``sort_batch_results_for_review`` 的顺序会喂给 `filter_batch_results_by_view`
+    —— 属于默认选债行为, 要改得单独立项。
+
+    影响面有限: ``sort_batch_results_for_view`` 对 6 个视图里的 5 个都重排, 只有
+    「需复核」(实测 5 行) 直接沿用本函数的顺序; 而那个视图里的行本来就全是高风险行。
+    """
     rows = sort_batch_results_for_review([
         {
             "bond_code": "NOISY",
@@ -670,9 +684,10 @@ def test_sort_batch_results_for_review_penalizes_noisy_deviation():
         },
     ])
 
-    assert rows[0]["bond_code"] == "CLEAN"
-    assert "转股折价" in rows[0]["risk_tags"]
-    assert rows[0]["opportunity_score"] > rows[1]["opportunity_score"]
+    assert [r["bond_code"] for r in rows] == ["NOISY", "CLEAN"]
+    assert rows[0]["deviation"] < rows[1]["deviation"]
+    # 高风险标签照常打出来 —— 消失的只是"靠它们把行压到后面"这条排序惩罚
+    assert {"高HV", "低评级", "短久期"} & set(rows[0]["risk_tags"])
 
 
 def test_filter_batch_results_by_view_splits_review_lists():
@@ -1084,15 +1099,6 @@ def test_selection_cutoff_keeps_small_batches_usable():
     assert _selection_cutoff(40, DEFAULT_UNDERVALUED_PERCENTILE) == MIN_VIEW_ROWS
     assert _selection_cutoff(200, DEFAULT_UNDERVALUED_PERCENTILE) == 30
     assert _selection_cutoff(0, DEFAULT_UNDERVALUED_PERCENTILE) == 0
-
-
-def test_legacy_absolute_score_gate_still_reachable():
-    """显式传阈值 = 旧的绝对机会分口径, 供旧快照复现与对照实验。"""
-    pool = _pool(120, level=0.13)
-    legacy = filter_batch_results_by_view(
-        pool, "低估候选",
-        undervalued_score_threshold=DEFAULT_UNDERVALUED_SCORE_THRESHOLD)
-    assert len(legacy) < len(filter_batch_results_by_view(pool, "低估候选"))
 
 
 def test_review_bucket_and_undervalued_view_stay_in_sync():

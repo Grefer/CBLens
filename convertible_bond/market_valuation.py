@@ -251,7 +251,7 @@ def valuation_banner(
     banner = (f"{icon} 市场估值 {sig.label} · 中位偏差 "
               f"{snap.median_deviation*100:+.1f}%{pct}")
     detail = (f"全市场中位偏差 {snap.median_deviation*100:+.1f}% "
-              f"(判高估 {snap.pct_overvalued*100:.0f}%, 样本 {snap.n} 只)\n{sig}")
+              f"(市价高于模型价的占 {snap.pct_overvalued*100:.0f}%, 样本 {snap.n} 只)\n{sig}")
     note = caliber_note(history, snap.caliber)
     if note:
         detail = f"{detail}\n{note}"

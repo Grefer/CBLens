@@ -23,7 +23,6 @@ def test_pde_strategy_defaults_use_robust_signal_and_reserve_cash():
     assert config.rank_signal == "down_reset_robust_edge"
     assert config.holding_mode == "top_score"
     assert config.funding_mode == "reserve_cash"
-    assert config.min_score is None
     assert config.execution_timing == "next_close"
     assert config.transaction_cost == pytest.approx(0.002)
     assert config.cash_yield_rate == pytest.approx(0.022)
@@ -335,7 +334,7 @@ def _overpriced_batch_price_factory(premium):
 
 def _exposure_test_config(**overrides):
     base = dict(rebalance_freq="M", holding_mode="pool", funding_mode="full_invest",
-                min_score=None, min_confidence=None, exclude_risk_tags=(),
+                min_confidence=None, exclude_risk_tags=(),
                 compute_benchmark=False)
     base.update(overrides)
     return ScoreStrategyConfig(**base)
@@ -791,116 +790,6 @@ def test_turnover_cost_uses_actual_holdings_not_phantom_selected(monkeypatch):
     assert p2["cost"] == pytest.approx(p2["turnover"] * 0.01)
 
 
-def test_score_strategy_can_hold_cash_when_score_filter_rejects_all(monkeypatch):
-    provider = StrategyFakeProvider()
-
-    def fake_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
-        return [
-            {
-                "bond_code": code,
-                "status": "ok",
-                "S0": 100.0,
-                "K": 100.0,
-                "sigma": 0.30,
-                "theoretical_price": 101.0,
-                "market_price": 100.0,
-                "deviation": -1.0 / 101.0,
-                "credit_rating": "AA+",
-                "outstanding_balance": 10.0,
-                "T": 3.0,
-            }
-            for code in codes
-        ]
-
-    monkeypatch.setattr(
-        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
-        fake_batch_price,
-    )
-
-    result = backtest_score_strategy(
-        provider,
-        ["113001.SH", "113002.SH"],
-        start_date=date(2025, 1, 2),
-        end_date=date(2025, 1, 31),
-        config=ScoreStrategyConfig(top_n=2, min_score=50.0),
-    )
-
-    assert result["periods"][0]["selected_codes"] == []
-    assert result["periods"][0]["period_return"] == 0.0
-    assert result["summary"]["final_equity"] == 1.0
-
-
-def test_score_strategy_default_rejects_negative_opportunity_scores(monkeypatch):
-    provider = StrategyFakeProvider()
-
-    def fake_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
-        rows = []
-        for code in codes:
-            market = _latest(provider_arg.bond_history[code], valuation_date)
-            sigma = 1.0 if code == "113002.SH" else 0.30
-            theo = market if code == "113002.SH" else market * 1.10
-            rows.append({
-                "bond_code": code,
-                "bond_name": provider_arg.terms[code].sec_name,
-                "stock_code": provider_arg.terms[code].underlying_code,
-                "status": "ok",
-                "S0": market,
-                "K": 100.0,
-                "sigma": sigma,
-                "theoretical_price": theo,
-                "market_price": market,
-                "deviation": (market - theo) / theo,
-                "credit_rating": "AA+",
-                "outstanding_balance": 10.0,
-                "T": 3.0,
-            })
-        return rows
-
-    monkeypatch.setattr(
-        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
-        fake_batch_price,
-    )
-
-    result = backtest_score_strategy(
-        provider,
-        ["113001.SH", "113002.SH"],
-        start_date=date(2025, 1, 2),
-        end_date=date(2025, 1, 31),
-        config=ScoreStrategyConfig(top_n=2, min_confidence=None, exclude_risk_tags=()),
-    )
-
-    period = result["periods"][0]
-    assert period["selected_codes"] == ["113001.SH"]
-    assert period["cash_weight"] == pytest.approx(0.5)
-    assert period["weight_denominator"] == 2
-    assert period["turnover"] == pytest.approx(0.5)
-    assert period["positions"][0]["weight"] == pytest.approx(0.5)
-    assert period["period_return"] == pytest.approx(0.05)
-    assert any(
-        row["bond_code"] == "113002.SH" and "最低分 0.0" in row["reason"]
-        for row in period["rejection_rows"]
-    )
-
-    full_invest = backtest_score_strategy(
-        provider,
-        ["113001.SH", "113002.SH"],
-        start_date=date(2025, 1, 2),
-        end_date=date(2025, 1, 31),
-        config=ScoreStrategyConfig(
-            top_n=2,
-            funding_mode="full_invest",
-            min_confidence=None,
-            exclude_risk_tags=(),
-        ),
-    )
-
-    full_period = full_invest["periods"][0]
-    assert full_period["selected_codes"] == ["113001.SH"]
-    assert full_period["cash_weight"] == pytest.approx(0.0)
-    assert full_period["weight_denominator"] == 1
-    assert full_period["turnover"] == pytest.approx(1.0)
-    assert full_period["positions"][0]["weight"] == pytest.approx(1.0)
-    assert full_period["period_return"] == pytest.approx(0.10)
 
 
 def test_score_strategy_applies_price_premium_and_sigma_filters(monkeypatch):
@@ -957,7 +846,8 @@ def test_score_strategy_applies_price_premium_and_sigma_filters(monkeypatch):
     period = result["periods"][0]
     assert period["candidate_rows"][0]["bond_code"] == "113001.SH"
     assert period["candidate_rows"][0]["selected"] is True
-    assert "机会分" in period["candidate_rows"][0]["selection_reason"]
+    # 机会分已删 —— 默认排序信号是「估值偏差」, 落选/入选解释里写的是 PDE 偏差
+    assert "偏差" in period["candidate_rows"][0]["selection_reason"]
     assert any(
         row["bond_code"] == "113002.SH" and "价格预筛" in row["reason"]
         for row in period["rejection_rows"]
@@ -2269,7 +2159,6 @@ def _rank_signal_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
 
 
 @pytest.mark.parametrize("rank_signal, expected_first", [
-    ("score", "113001.SH"),        # 机会分降序: 最低估的 113001
     ("deviation", "113001.SH"),    # 偏差升序: 同 113001 (-9.1% 最小)
     ("double_low", "113003.SH"),   # 双低升序: 价格最低的 113003 (90+0)
     ("down_reset_edge", "113002.SH"),  # 下修优势降序: 4 元的 113002
@@ -2388,30 +2277,6 @@ def test_pde_backtest_snapshot_round_trip_preserves_strategy_settings(monkeypatc
         "down_reset_robust_edge"
     )
 
-
-def test_pde_deviation_signal_does_not_use_opportunity_score_gate(monkeypatch):
-    provider = StrategyFakeProvider()
-    monkeypatch.setattr(
-        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
-        _rank_signal_batch_price,
-    )
-
-    result = backtest_score_strategy(
-        provider,
-        ["113001.SH", "113002.SH", "113003.SH"],
-        start_date=date(2025, 1, 2),
-        end_date=date(2025, 1, 31),
-        config=ScoreStrategyConfig(
-            top_n=1,
-            rank_signal="deviation",
-            min_score=999.0,
-            max_deviation=0.0,
-            min_confidence=None,
-            exclude_risk_tags=(),
-        ),
-    )
-
-    assert result["periods"][0]["selected_codes"] == ["113001.SH"]
 
 
 def test_down_reset_edge_rank_signal_enables_pde_signal_pricing(monkeypatch):

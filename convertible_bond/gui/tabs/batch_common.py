@@ -20,7 +20,7 @@ from ..theme import (
     TABLE_FONT_SIZE, TABLE_ROW_HEIGHT,
     get_color,
 )
-from ...batch_pricing import DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS
+from ...batch_pricing import DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS, risk_tag_label
 from ...market_time import market_today
 
 
@@ -87,12 +87,28 @@ def _is_finite(value) -> bool:
     return math.isfinite(f)
 
 
-def _format_tags(tags) -> str:
+#: 「数据状态」列已经把这两档说清了 (而且更具体: 「未定价 · 已发行未上市」), 标签列
+#: 再写一遍就是同一行两列逐字重复 —— 实测三只未上市新债的标签正是 ['无偏差','无市价']。
+#: **只挡这两个**, 不是整个数据质量维: 「无HV」「无评级」「无余额」「数据缺口」在表上
+#: 没有专属列承载, 挡掉就真丢了。底层 ``risk_tags`` 不动 —— 行色 / 置信度 / 策略
+#: 排除集照读原集。
+_TAGS_COVERED_BY_DATA_COLUMN = frozenset({"无市价", "无偏差"})
+
+
+def _format_tags(tags, *, drop_covered: bool = False) -> str:
+    """标签串; *drop_covered* 挡掉已被「数据状态」列承载的那两个 (关注池用)。
+
+    走 ``risk_tag_label`` 取展示名 —— 「模型高估离群」的动宾读法与事实相反, 见
+    ``batch_pricing.RISK_TAG_DISPLAY_LABEL``。
+    """
     if not tags:
         return ""
     if isinstance(tags, str):
         return tags
-    return " / ".join(str(tag) for tag in tags if tag)
+    items = [t for t in tags if t]
+    if drop_covered:
+        items = [t for t in items if t not in _TAGS_COVERED_BY_DATA_COLUMN]
+    return " / ".join(risk_tag_label(str(tag)) for tag in items)
 
 
 def _median(values) -> float | None:
@@ -200,7 +216,7 @@ def _resolve_row_tag(row) -> str | None:
     把这句话说出来, 否则它和"配色坏了"长得一模一样。
 
     没有 ``status`` 键的行 (关注池从没算过的那一档) 不染色: "从没算过"不是"这行
-    数字是坏的", 那两档的区分由「数据」列的五档文案承载。
+    数字是坏的", 那两档的区分由「数据状态」列的五档文案承载。
     """
     if _is_new_bond(row):
         return "new"
@@ -309,6 +325,60 @@ def _apply_responsive_tree_font(tree: ttk.Treeview) -> None:
     )
 
 
+#: 列对齐 —— **表头与内容必须同向**, 否则短表头居中而值靠左, 视觉上整列是错位的。
+#: 三档判据各不相同, 不是审美偏好:
+#:
+#:   右 (`e`)  数值列。**要对小数点** —— 左对齐时 160.74 / 98.5 / 1234.5 参差不齐,
+#:             比大小得逐行读数字, 而这几列的全部用途就是比大小。
+#:   中 (`center`) 1~3 字符的分类值 (高/中/低、✓、AA-)。没有小数点要对, 而列宽由
+#:             表头定, 左对齐会在右边留一大片空。
+#:   左 (`w`)  文本 (代码/名称/正股/事件/标签/日期)。默认档。
+#:
+#: 键是表头文本, 两页共用。没登记的走左对齐。
+_COLUMN_ALIGN_RIGHT = frozenset({
+    "市价", "理论价", "转股价值", "双低",
+    "偏差(%)", "相对偏差(pp)", "转股溢价(%)", "正股σ(%)",
+    "下修优势(元)", "正股/下修线", "剩余(年)", "余额(亿)",
+})
+_COLUMN_ALIGN_CENTER = frozenset({"可信度", "定价状态", "评级"})
+
+
+#: 右对齐单元格的尾随留白。**ttk 没有 per-cell padding** (Treeview.Cell 元素在
+#: aqua 主题下根本不暴露), 于是"右对齐列 + 紧跟一个左对齐列"时两段文字会**贴在
+#: 列边界上** —— 实测关注池的「双低→事件」「正股/下修线→标签」两处正是这样。
+#: 靠加宽解决不了: 右对齐把文字钉在右边缘, 加多少宽都贴着。
+#:
+#: 所以在文本上留白。统一给**右对齐**那一侧加, 而不是按"下一列是不是左对齐"分情况
+#: —— 后者是位置相关的, 列序一变就得重算; 而所有右对齐列一起右移同样多, 它们之间
+#: 的小数点对齐不受影响。
+#:
+#: 排序/缺失值判定都会 ``.strip()``, 所以这个留白不参与任何逻辑 (有守护测试)。
+CELL_GUTTER = "  "
+
+
+def pad_cells(headers, values) -> list[str]:
+    """按对齐给单元格补留白 —— 两张表插行前都要过一道."""
+    return [
+        f"{value}{CELL_GUTTER}" if column_align(header) == "e" else str(value)
+        for header, value in zip(headers, values)
+    ]
+
+
+def heading_text(header: str, arrow: str = "") -> str:
+    """表头文本; 右对齐列同样补留白, 否则表头之间也会贴在一起 (实测「双低 事件」)."""
+    text = f"{header}{arrow}"
+    return f"{text}{CELL_GUTTER}" if column_align(header) == "e" else text
+
+
+def column_align(header: str) -> str:
+    """这一列的对齐方式 (``e`` / ``center`` / ``w``); 表头与内容共用同一个值."""
+    if header in _COLUMN_ALIGN_RIGHT:
+        return "e"
+    if header in _COLUMN_ALIGN_CENTER:
+        return "center"
+    return "w"
+
+
 def _configure_responsive_columns(
     tree: ttk.Treeview,
     columns,
@@ -325,8 +395,11 @@ def _configure_responsive_columns(
     ]
 
     for column, header, width, min_width in zip(columns, headers, base_widths, min_widths):
-        tree.heading(column, text=header)
-        tree.column(column, width=width, minwidth=min_width, stretch=False, anchor="w")
+        # 表头与内容同向 —— 此前表头走 ttk 默认 (居中)、内容一律 anchor="w",
+        # 于是短表头居中而值靠左, 整列看着是错位的; 数值列还因为左对齐而对不上小数点。
+        align = column_align(header)
+        tree.heading(column, text=heading_text(header), anchor=align)
+        tree.column(column, width=width, minwidth=min_width, stretch=False, anchor=align)
 
     def _apply_widths(_event=None) -> None:
         available = tree.winfo_width()
@@ -405,6 +478,24 @@ def _parse_sortable_number(value) -> float | None:
         return None
 
 
+def trigger_gap_text(gap) -> str:
+    """正股价相对下修触发线, 带符号: ``S0/(K*ratio) - 1``。负 = 正股价在触发线**下方**。
+
+    曾渲染成「线下 62%」/「线上 39%」—— 那是列名还叫「正股距下修线」时的补救:
+    「距离 −62%」在中文里不通 (距离是非负概念)。列名去掉「距」字改成
+    「正股/下修线」之后, `+39%` 读作"正股是下修线的 1.39 倍", 符号自洽了,
+    而且**原生可排序** (`_parse_sortable_number` 会剥掉 +/%), 不再需要专门的排序键。
+
+    刻意**不写「已触发」**: 下修触发是**路径条件** (连续 N 日中至少 M 日低于触发线),
+    这里只是单点 S 的近似 (见 README「模型边界」)。价在线下是必要不充分条件。
+
+    两页共用这一份 —— 曾经 batch 与 batch_watchlist 各存一份 (那两个模块会成环)。
+    """
+    if not _is_finite(gap):
+        return "—"
+    return f"{float(gap) * 100:+.0f}%"
+
+
 def _attach_column_sort(tree: ttk.Treeview, columns, headers) -> None:
     """给 Treeview 加表头点击排序: 数字列按数值, 其他列按文本; 缺失值始终排末尾.
 
@@ -426,7 +517,10 @@ def _attach_column_sort(tree: ttk.Treeview, columns, headers) -> None:
             else:
                 present.append((raw, iid))
 
-        # 数值列识别: 至少一半 present 值能解析为 float
+        # 数值列识别: 至少一半 present 值能解析为 float。
+        # **带中文前缀的值会全部返回 None, 这一列就静默退化成字符串序** —— 曾经
+        # 「线上 123%」排在「线上 3%」前面、整个「线上」组还排在「线下」组前面, 不报错。
+        # 现在所有数值列都渲染成裸的带符号数, 由 test_numeric_columns_sort_numerically 守着。
         parsed = [(_parse_sortable_number(v), iid) for v, iid in present]
         ok_numeric = sum(1 for n, _ in parsed if n is not None)
         is_numeric = present and ok_numeric >= max(1, len(present) // 2)
@@ -448,7 +542,7 @@ def _attach_column_sort(tree: ttk.Treeview, columns, headers) -> None:
             arrow = ""
             if i == active_idx:
                 arrow = " ↑" if state["asc"] else " ↓"
-            tree.heading(col, text=f"{header}{arrow}")
+            tree.heading(col, text=heading_text(header, arrow))
 
     def on_click(idx: int) -> None:
         if state["col"] == idx:
@@ -463,20 +557,64 @@ def _attach_column_sort(tree: ttk.Treeview, columns, headers) -> None:
         tree.heading(col, command=lambda i=i: on_click(i))
 
 
+#: 表头悬浮说明。**哪几列要写是编辑决定, 不是规则** —— 判据是"不看说明会不会读错",
+#: 由人逐列过一遍定的 (当前 20 条; 剩余(年) / 定价状态 / 数据状态 三列刻意不写
+#: —— 后者的列名已经把七档文案的共同点说出来了)。
+#: 守护测试**不再钉"每列都要有"** —— 那正是为了写 tooltip 而写 tooltip: 给「评级」凑
+#: 一句"债项信用评级"读者什么也没多知道, 真正需要解释的那几条反而被淹在里面。
+#: 它现在只钉结构性的东西: 无孤儿键、够短、名字里不留方向注释。
+#:
+#: 写法: 一句话说清**怎么读**, 能一行就别两行 (当前全部单行, 平均 17 字)。带符号的量
+#: 只说"越正/越负各是什么"; 公式只在它本身就是定义时写 (转股价值 / 转股溢价 / 双低),
+#: 不写实现细节 (扣几分、哪个函数算的)。
+#:
+#: 分工: 列名说**是什么 / 度量的是谁 / 单位**, 悬浮说**怎么读 / 何时不可用**。
+#: 所以 `(小=便宜)` 这类方向注释从名字挪进来, 而 `(pp)/(%)/(元)` 这类单位留在名字里。
+#:
+#: 两页共用一份 (键 = 表头文本)。
+COLUMN_HELP: dict[str, str] = {
+    "代码": "转债代码",
+    "名称": "转债简称。上市首日会加 N 前缀。",
+    "正股": "正股名称; 缺名字时显示代码。",
+    "转股价值": "面值 / 转股价 × 当前正股价, 即转股后立刻卖出能拿到的钱。",
+    "转股溢价(%)": "市价 / 转股价值 − 1。",
+    "市价": "转债最新收盘价。",
+    "理论价": "Crank-Nicolson PDE 定价结果。",
+    "可信度": "模型理论价可信程度。",
+    "偏差(%)": "越正，市价相比模型价越贵, 反之亦然。",
+    "相对偏差(pp)": "越正，标的相比全市场中位数越贵，反之亦然。",
+    "双低": "市价 + 转股溢价率×100, 越小越便宜。经验阈值约 130。",
+    "下修优势(元)": "在最不利的模型参数下，理论价还比市价高多少。",
+    "事件": "在途日程: 强赎 / 下修 / 回售 / 暂停转股 / 不强赎承诺。",
+    "正股/下修线": "当前正股价和下修触发价关系。",
+    "标签": "风险与机会标签。悬停单元格看完整内容。",
+    "上市日": "「待定」= 已发行但上市日未公告。",
+    "余额(亿)": "未转股余额, 低于 0.3 亿触及法定摘牌线。",
+    "评级": "债项信用评级。",
+    "正股σ(%)": "正股的年化波动率 (21 日 HV)。",
+    "加入日": "加入关注池的日期。",
+}
+
+
 def _attach_cell_tooltip(
     tree: ttk.Treeview,
     columns,
     headers,
     *,
     tooltip_headers: set[str] | None = None,
+    header_help: dict[str, str] | None = None,
     delay_ms: int = 300,
 ) -> None:
-    """给 Treeview 指定列加悬浮完整文本提示.
+    """给 Treeview 加悬浮提示: 单元格看完整文本, **表头看口径说明**.
 
-    主要用于"标签"、"复核建议"这类长文本列。tooltip 内容直接取当前单元格
-    display value, 因此表头排序后也能自然跟随行移动。
+    单元格 tooltip 直接取当前 display value, 因此表头排序后也能自然跟随行移动;
+    表头 tooltip 查 *header_help* (默认 :data:`COLUMN_HELP`)。
+
+    表头这一路是后加的 —— 在此之前 ``tree.heading(col, text=...)`` 是唯一出口,
+    列名之外没有第二个解释预算, 于是方向/对象/单位全靠往名字里加字。
     """
     targets = set(tooltip_headers or headers)
+    help_map = COLUMN_HELP if header_help is None else header_help
     state = {"tip": None, "after": None, "cell": None}
 
     def _cancel_after() -> None:
@@ -524,8 +662,37 @@ def _attach_cell_tooltip(
         state["tip"] = tip
 
     def _motion(event) -> None:
-        row_id = tree.identify_row(event.y)
         col_id = tree.identify_column(event.x)
+        # 表头区: identify_row 在这里返回 "", 老实现直接 _hide 了 —— 那正是
+        # "表头没有 tooltip 机制"的由来。
+        try:
+            in_heading = tree.identify_region(event.x, event.y) == "heading"
+        except tk.TclError:
+            in_heading = False
+        if in_heading and col_id:
+            try:
+                idx = int(col_id.lstrip("#")) - 1
+            except ValueError:
+                _hide()
+                return
+            text = help_map.get(headers[idx]) if 0 <= idx < len(headers) else None
+            if not text:
+                _hide()
+                return
+            key = ("__heading__", idx, text)
+            if state.get("cell") == key:
+                tip = state.get("tip")
+                if tip is not None:
+                    tip.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 16}")
+                return
+            _hide()
+            state["cell"] = key
+            state["after"] = tree.after(
+                delay_ms,
+                lambda t=text, x=event.x_root, y=event.y_root: _show(t, x, y),
+            )
+            return
+        row_id = tree.identify_row(event.y)
         if not row_id or not col_id:
             _hide()
             return

@@ -353,7 +353,7 @@ def build(app, tab):
         tooltip="转股溢价率 = 市价 / 转股价值 − 1\n负值 = 转股折价")
     _range_grid_cell(
         range_grid, 1, 0, "偏差%", app.v_st_min_deviation, app.v_st_max_deviation,
-        tooltip="模型偏差 = (市价 − 理论价) / 理论价\n负值越大越低估")
+        tooltip="模型偏差 = (市价 − 理论价) / 理论价\n负 = 市价低于理论价 (越负越便宜)")
     _range_grid_cell(
         range_grid, 1, 1, "HV%", app.v_st_min_sigma, app.v_st_max_sigma,
         tooltip="正股历史波动率\n窗口跟随顶部 σ 设置")

@@ -159,6 +159,7 @@ class _App:
     def __init__(self, source="Wind"):
         self.v_batch_source = _Var(source)
         self.v_batch_status = _Var("")
+        self.v_watchlist_status = _Var("")
         self._watchlist_pricing_running = False
 
 
@@ -172,7 +173,7 @@ def test_quiet_round_does_not_start_when_wind_not_ready(monkeypatch):
     app = _App("Wind")
     assert watchlist_tab._start_watchlist_pricing(app, ["123284.SZ"], quiet=True) is False
     assert started == [], "不许起线程"
-    assert "⚡ 关注池重算" in app.v_batch_status.get(), "要告诉用户手动入口在哪"
+    assert "⚡ 关注池重算" in app.v_watchlist_status.get(), "要告诉用户手动入口在哪"
 
 
 def test_manual_round_is_not_gated(monkeypatch):
@@ -185,7 +186,7 @@ def test_manual_round_is_not_gated(monkeypatch):
     app = _App("Wind")
     with pytest.raises(AttributeError):
         watchlist_tab._start_watchlist_pricing(app, ["123284.SZ"], quiet=False)
-    assert "当前不可用" not in app.v_batch_status.get()
+    assert "当前不可用" not in app.v_watchlist_status.get()
 
 
 def test_quiet_round_allows_akshare(monkeypatch):

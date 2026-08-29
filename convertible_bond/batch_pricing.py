@@ -60,7 +60,6 @@ BATCH_RESULT_COLUMNS = [
     "market_median_deviation",
     "cheapness_rank",
     "cheapness_percentile",
-    "opportunity_score",
     "quality_score",
     "confidence",
     "risk_tags",
@@ -173,6 +172,30 @@ BLOCKING_RISK_TAGS = TRADABILITY_RISK_TAGS | DATA_QUALITY_RISK_TAGS
 # 转股是相反的意思却同色」是同一次分叉的两半。展示层要报计数就分开报。
 MODEL_OVERVALUED_TAGS = frozenset({"模型高估离群"})
 DEEP_UNDERVALUED_TAGS = frozenset({"深度低估待核"})
+
+#: 标签的**展示名** —— 只改表上怎么写, 底层字符串一个字节不动。
+#:
+#: 「模型低估」判据是 ``deviation < −0.08`` 即市价**低**于理论价 → 模型给的价**高**;
+#: 「模型高估离群」是市价**远高**于模型价 → 模型给的价**低**。两个标签用的是省略式
+#: "(按)模型(判为)低估/高估", 彼此一致; 但中文最自然的动宾读法 ("模型把它低估了")
+#: 正好把方向读反。展示名改成以**市价**为主语, 消掉这个歧义。
+#:
+#: **为什么是展示名而不是改标签**: 「模型高估离群」在 ``LEGACY_STRATEGY_EXCLUDE_TAGS``
+#: (逐字冻结的默认选债排除集) 里, 改字符串就是默认选债行为变更; 旧批量缓存与旧策略
+#: 快照里存的也是原名。
+#:
+#: **表放在这里而不是 GUI**: 事件短标签曾在 GUI 自带一份私有表, 漏掉 4 个类型、把
+#: 暂停转股与恢复转股渲染成同一个词 —— 展示词表只许有一份。
+RISK_TAG_DISPLAY_LABEL: dict[str, str] = {
+    "模型高估离群": "市价远高于模型价",
+    "模型低估": "市价低于模型价",
+    "深度低估待核": "市价远低于市场中位·待核",
+}
+
+
+def risk_tag_label(tag: str) -> str:
+    """标签的展示名; 没登记的原样返回."""
+    return RISK_TAG_DISPLAY_LABEL.get(tag, tag)
 
 #: 拆分前的**对称**旧名, 不带方向, 所以归不进上面任何一族 (实测当前全库 0 条,
 #: 只可能出现在旧缓存里)。要报就单独报, 不要猜一个方向塞进去。
@@ -744,7 +767,7 @@ def merge_upcoming_pricing_results(
                 "S0", "sigma", "theoretical_price", "market_price", "deviation",
                 "credit_rating", "status", "data_source", "parity",
                 "conversion_premium", "model_premium_to_parity",
-                "opportunity_score", "confidence", "risk_tags",
+                "confidence", "risk_tags",
             ):
                 if key in priced:
                     out[key] = priced[key]
@@ -902,14 +925,12 @@ def annotate_batch_result(row: dict, *,
     这些字段不改变模型定价, 只帮助排序和人工复核:
     - parity: 转股价值
     - conversion_premium: 市价相对转股价值溢价
-    - opportunity_score: 低估程度经风险惩罚后的机会分
     - confidence / risk_tags: 结果可信度与复核提示
     """
     out = dict(row)
     if out.get("status") != "ok":
         out.setdefault("risk_tags", [])
         out.setdefault("confidence", "低")
-        out.setdefault("opportunity_score", float("nan"))
         out.setdefault("quality_score", float("nan"))
         out.setdefault("double_low", float("nan"))
         out.setdefault("relative_deviation", float("nan"))
@@ -933,12 +954,9 @@ def annotate_batch_result(row: dict, *,
     rating = str(out.get("credit_rating") or "").upper().strip()
 
     risk_tags: list[str] = []
-    score = 0.0
-    # 「质量分」= 机会分里与错定价**无关**的那部分 (评级档 + 大余额加分)。
-    # 单独记账是因为实测 92% 的行低估项恒为 0, 机会分完全由这部分和风险惩罚决定 ——
-    # 一只 115.6 亿的 AAA 银行转债 (dev +0.054, 比市场中位还贵) 曾靠它排进机会榜第 4。
-    # 拆出来只做**展示与审计**, 仍然照旧计入 score, 以免改动 opportunity_score 的数值
-    # 变成 rank_signal="score" 的默认选债行为变更。
+    # 「质量分」= 评级档 + 大余额加分, 即"与错定价无关"的那部分。它原是从
+    # ``opportunity_score`` 里拆出来单独记账的一支; 那个分已整体删除 (实测 95% 的行
+    # 低估项恒为 0, 它度量的其实就是信用质量), 质量分留下来单做展示与审计。
     quality_score = 0.0
     confidence_points = 100.0
 
@@ -958,10 +976,8 @@ def annotate_batch_result(row: dict, *,
         out["double_low"] = market + conversion_premium * 100.0
         if conversion_premium < -0.03:
             risk_tags.append("转股折价")
-            score += min(30.0, abs(conversion_premium) * 140.0)
         elif conversion_premium < 0.03:
             risk_tags.append("贴近转股价值")
-            score += 4.0
 
     if theo is not None and parity and parity > 0:
         model_premium = theo / parity - 1.0
@@ -972,11 +988,8 @@ def annotate_batch_result(row: dict, *,
 
     if deviation is not None:
         out["undervaluation_rate"] = -deviation
-        score += max(0.0, -deviation) * 100.0
         if deviation < -0.08:
             risk_tags.append("模型低估")
-        if deviation > 0.08:
-            score -= min(20.0, deviation * 60.0)
         # **按方向拆成两个标签, 而不是一个对称的"异常"**。贵侧与便宜侧的后验含义相反:
         #   贵侧  市价远高于模型对同期市场的一般水平 → 模型解释不了这个价, 属模型适用性;
         #   便宜侧 市价远低于模型 → 这正是本工具存在的理由, 是**待检验的假设**而不是噪声。
@@ -1017,11 +1030,9 @@ def annotate_batch_result(row: dict, *,
         if sigma > 0.80:
             risk_tags.append("高HV")
             penalty = min(28.0, 10.0 + (sigma - 0.80) * 35.0)
-            score -= penalty
             confidence_points -= penalty
         elif sigma > 0.60:
             risk_tags.append("较高HV")
-            score -= 4.0
             confidence_points -= 6.0
     else:
         risk_tags.append("无HV")
@@ -1031,23 +1042,18 @@ def annotate_batch_result(row: dict, *,
         if balance <= 0:
             # 余额清零 = 已转股完毕/已赎回, 是退市信号而不是"数据异常"
             risk_tags.append("余额清零")
-            score -= 30.0
             confidence_points -= 35.0
         elif balance < BALANCE_DELISTING_LINE:
             # 低于 3,000 万法定线, 交易所将安排停止交易 —— 可执行的判断, 不是笼统的"小"
             risk_tags.append("触及摘牌线")
-            score -= 22.0
             confidence_points -= 25.0
         elif balance < 0.5:
             risk_tags.append("临近摘牌线")
-            score -= 16.0
             confidence_points -= 18.0
         elif balance < 1.0:
             risk_tags.append("小余额")
-            score -= 12.0
             confidence_points -= 14.0
         elif balance >= 10.0:
-            score += 2.0
             quality_score += 2.0
     else:
         risk_tags.append("无余额")
@@ -1068,11 +1074,9 @@ def annotate_batch_result(row: dict, *,
     if t_years is not None:
         if t_years < 0.5:
             risk_tags.append("短久期")
-            score -= 12.0
             confidence_points -= 14.0
         elif t_years < 1.0:
             risk_tags.append("近到期")
-            score -= 5.0
             confidence_points -= 7.0
 
     if rating:
@@ -1089,20 +1093,15 @@ def annotate_batch_result(row: dict, *,
         if rating_score is None:
             pass                                # 无法识别的评级: 不加分也不打标签
         elif rating_score >= _RATING_SCORES["AAA"]:
-            score += 3.5
             quality_score += 3.5
         elif rating_score >= _RATING_SCORES["AA+"]:
-            score += 3.0
             quality_score += 3.0
         elif rating_score >= _RATING_SCORES["AA"]:
-            score += 2.0
             quality_score += 2.0
         elif rating_score >= _RATING_SCORES["AA-"]:
-            score += 0.5
             quality_score += 0.5
         else:
             risk_tags.append("低评级")
-            score -= 8.0
             quality_score -= 8.0
             confidence_points -= 12.0
     else:
@@ -1111,20 +1110,16 @@ def annotate_batch_result(row: dict, *,
 
     if _underlying_has_st_risk(out):
         risk_tags.append("正股风险")
-        score -= 25.0
         confidence_points -= 30.0
     if _underlying_suspended(out):
         risk_tags.append("正股停牌")
-        score -= 20.0
         confidence_points -= 25.0
     if _public_trading_status_reason(out) == "停牌/暂停交易":
         risk_tags.append("转债停牌")
-        score -= 20.0
         confidence_points -= 25.0
 
     if _underlying_at_limit_down(out, out.get("stock_code")):
         risk_tags.append("正股跌停")
-        score -= 15.0
         confidence_points -= 18.0
 
     down_uplift = finite_float(out.get("down_reset_uplift"))
@@ -1153,11 +1148,9 @@ def annotate_batch_result(row: dict, *,
     if market is None or market <= 0:
         risk_tags.append("无市价")
         confidence_points -= 25.0
-        score = float("nan")
     if theo is None or theo <= 0:
         risk_tags.append("理论价异常")
         confidence_points -= 30.0
-        score = float("nan")
 
     confidence_points = max(0.0, min(100.0, confidence_points))
     if confidence_points >= 78:
@@ -1172,10 +1165,6 @@ def annotate_batch_result(row: dict, *,
     out["quality_score"] = quality_score
     out["event_flags"] = event_flags(out)
     out["down_reset_trigger_gap"] = down_reset_trigger_gap(out)
-    # opportunity_score 是"模型低估程度"的复核排序信号, 用于筛选值得人工复核的标的;
-    # 经全市场池回测其横截面排序对未来收益预测力≈0 (Rank-IC≈-0.05), 不是收益预测/买入
-    # 排名。可用 convertible_bond.signal_eval 复验。NaN 表示无市价/理论价异常 (上层已处理)。
-    out["opportunity_score"] = score
     if set(out["risk_tags"]) & HARD_REVIEW_TAGS or confidence == "低":
         out["model_signal_status"] = "不适合作为买入信号"
     elif out["risk_tags"]:
@@ -1365,16 +1354,20 @@ def annotate_batch_results(results: Sequence[dict], *,
 
 
 def sort_batch_results_for_review(results: Sequence[dict]) -> list[dict]:
-    """按实际复核价值排序: 成功行优先, 机会分降序, 偏差升序."""
+    """按实际复核价值排序: 成功行优先, 偏差升序 (最便宜的在前).
+
+    **原来的第一排序键是机会分降序, 已随 opportunity_score 一并删除**。那个键在
+    展示上早就看不见了 —— ``sort_batch_results_for_view`` 对 6 个视图里的 5 个都
+    重排过, 只有「需复核」(实测 5 行) 沿用本函数的顺序。现在它按偏差升序, 与其余
+    视图同向, 而且是表上看得见的量。
+    """
     annotated = annotate_batch_results(results)
 
     def key(row: dict):
-        score = finite_float(row.get("opportunity_score"))
         deviation = finite_float(row.get("deviation"))
         ok_rank = 0 if row.get("status") == "ok" else 1
-        score_rank = -score if score is not None else float("inf")
         deviation_rank = deviation if deviation is not None else float("inf")
-        return (ok_rank, score_rank, deviation_rank, row.get("bond_code") or "")
+        return (ok_rank, deviation_rank, row.get("bond_code") or "")
 
     return sorted(annotated, key=key)
 
@@ -1422,19 +1415,6 @@ DEFAULT_DOUBLE_LOW_PERCENTILE = 0.15
 # 主池 280 只离线复算, 14 只为正 = 5%), 那是信号在说话, 不是判据坏了。仍加长度上限,
 # 是为了反过来的那一天 —— 谷底时 5% 会变成几百只。
 DEFAULT_DOWN_RESET_EDGE_PERCENTILE = 0.15
-# 旧的绝对分数阈值。**保留但不再驱动视图** —— view_exclusion_reason 的
-# undervalued_score_threshold 入参仍然接受它, 供旧快照复现与对照实验使用。
-DEFAULT_UNDERVALUED_SCORE_THRESHOLD = 8.0
-
-
-def _legacy_score_gate(row: dict, threshold: float) -> str | None:
-    """旧的绝对机会分判据。仅在调用方显式传阈值时启用, 见 view_exclusion_reason。"""
-    score = finite_float(row.get("opportunity_score"))
-    if score is None:
-        return "缺少机会分"
-    if score < threshold:
-        return f"机会分 {score:.1f} < {threshold:.1f}"
-    return None
 
 
 def _cross_sectional_cheapness_gate(row: dict) -> str | None:
@@ -1459,12 +1439,7 @@ def _cross_sectional_cheapness_gate(row: dict) -> str | None:
     return None
 
 
-def view_exclusion_reason(
-    row: dict,
-    view: str | None,
-    *,
-    undervalued_score_threshold: float | None = None,
-) -> str | None:
+def view_exclusion_reason(row: dict, view: str | None) -> str | None:
     """这一行**不属于**该视图的原因; 属于则返回 None。
 
     视图归属的**单一事实源**: ``filter_batch_results_by_view`` 与策略页的落选解释
@@ -1479,15 +1454,9 @@ def view_exclusion_reason(
     if view_name == "低估候选":
         if not ok:
             return "定价未成功"
-        if undervalued_score_threshold is not None:
-            # legacy 口径: 显式传阈值时仍走旧的绝对机会分判据, 供旧快照复现与对照实验。
-            reason = _legacy_score_gate(row, float(undervalued_score_threshold))
-            if reason is not None:
-                return reason
-        else:
-            reason = _cross_sectional_cheapness_gate(row)
-            if reason is not None:
-                return reason
+        reason = _cross_sectional_cheapness_gate(row)
+        if reason is not None:
+            return reason
         if row.get("confidence") not in {"高", "中"}:
             return "置信度不足"
         if "转股折价" in tags:
@@ -1546,33 +1515,25 @@ def view_exclusion_reason(
     return None
 
 
-def filter_batch_results_by_view(
-    results: Sequence[dict],
-    view: str | None,
-    *,
-    undervalued_score_threshold: float | None = None,
-) -> list[dict]:
+def filter_batch_results_by_view(results: Sequence[dict], view: str | None) -> list[dict]:
     """按批量页视图过滤结果, 并保持研究排序.
 
-    *undervalued_score_threshold* 仅作用于"低估候选"视图; **None (默认) 时走当期
-    横截面口径** (相对便宜度下限 + 名单长度上限), 显式传值才回到旧的绝对机会分阈值。
+    「低估候选」一律走当期横截面口径 (相对便宜度下限 + 名单长度上限)。旧的绝对
+    机会分阈值 (``opportunity_score >= 8.0``) 已随该字段一并删除 —— 它是个**绝对**
+    阈值架在一个水平时变的量上, 实测全池 0/283 够得着。
     """
     rows = sort_batch_results_for_review(results)
-    return [
-        row for row in rows
-        if view_exclusion_reason(
-            row, view, undervalued_score_threshold=undervalued_score_threshold) is None
-    ]
+    return [row for row in rows if view_exclusion_reason(row, view) is None]
 
 
 def sort_batch_results_for_view(results: Sequence[dict], view: str | None) -> list[dict]:
     """按视图**该看的顺序**排列 —— 展示层用, 不改变 sort_batch_results_for_review。
 
-    为什么要分成两个函数: ``sort_batch_results_for_review`` 的顺序 (机会分降序) 是
-    ``strategy_backtest`` 在 ``rank_signal="score"`` 下逐行依赖的历史行为, 也是旧策略
-    快照可复现的前提, 动它就是默认选债行为变更。而批量页需要的顺序恰恰不是机会分 ——
-    实测 92% 的行机会分与错定价无关, 按它排会把 115.6 亿的 AAA 银行转债 (比市场中位
-    还贵) 送上机会榜第 4。所以展示排序单独一份, 各自服务各自的消费者。
+    为什么还要分成两个函数: ``sort_batch_results_for_review`` 是「需复核」视图与
+    ``filter_batch_results_by_view`` 的输入顺序 (偏差升序), 而各视图要看的顺序不同
+    —— 「双低」按双低升序、「下修优势」按优势秩。两者的消费者不同, 合并会让改一个
+    视图的展示顺序变成改另一个的默认行为。
+    (原来这里的第一排序键是机会分降序, 已随 ``opportunity_score`` 一并删除。)
 
     ⚠️ 本函数**只排序, 不重新标注**。输入必须是已经过 ``annotate_batch_results``
     的行 —— 典型用法是接在 ``filter_batch_results_by_view`` 之后。在过滤后的子集上
@@ -1662,7 +1623,7 @@ def write_batch_results_csv(path: str | Path, results: Sequence[dict]) -> None:
 def _csv_value(row: dict, column: str):
     if row.get("status") != "ok" and column in {
         "S0", "K", "sigma", "theoretical_price", "parity",
-        "conversion_premium", "model_premium_to_parity", "opportunity_score",
+        "conversion_premium", "model_premium_to_parity",
     }:
         return ""
     value = row.get(column, "")
@@ -1679,7 +1640,7 @@ def _csv_value(row: dict, column: str):
     if column == "undervaluation_rate":
         return f"{float(value):.6f}" if value != "" else ""
     if column in {
-        "parity", "opportunity_score", "implied_p_down", "p_down_gap",
+        "parity", "implied_p_down", "p_down_gap",
         "down_reset_sensitivity", "down_reset_edge_value",
         "down_reset_robust_edge_value", "down_reset_edge_scenario_range",
         "down_reset_edge_worst_sigma", "down_reset_edge_worst_spread",
@@ -1708,7 +1669,7 @@ def _restore_result_row(row: dict) -> dict:
     restored = dict(row)
     for key in (
         "deviation", "theoretical_price", "S0", "K", "sigma", "parity",
-        "conversion_premium", "model_premium_to_parity", "opportunity_score",
+        "conversion_premium", "model_premium_to_parity",
         "quality_score", "double_low", "relative_deviation",
         "market_median_deviation", "cheapness_percentile", "down_reset_trigger_gap",
         "undervaluation_rate", "no_down_price", "down_reset_uplift",
@@ -1816,7 +1777,10 @@ def event_flags(row: dict) -> list[str]:
     no_call_until = _terms_date(row, "call_no_redemption_until")
     if (row.get("call_status") == "不强赎" and no_call_until is not None
             and val_date is not None and no_call_until > val_date):
-        flags.append(f"不强赎至 {no_call_until.strftime('%y-%m')}")
+        # **四位年份**。这一格里别的旗标都是 `%m-%d` (「强赎 09-09」「下修提议 09-05」),
+        # 写成 `%y-%m` 的「26-10」和它们长得一模一样却是"2026 年 10 月"——同一列里两种
+        # 不可区分的 NN-NN。实测 27/73 有事件的行走这一档 (37%), 而两类事件本就能共存。
+        flags.append(f"不强赎至 {no_call_until.strftime('%Y-%m')}")
 
     return flags
 

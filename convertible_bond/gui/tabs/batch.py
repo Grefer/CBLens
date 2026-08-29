@@ -44,6 +44,9 @@ from ...market_valuation import (
 from ...paths import data_path
 from ..widgets import Tooltip
 from .batch_common import (
+    _coerce_date,
+    pad_cells,
+    trigger_gap_text,
     _create_table_section,
     _TREE_ATTRS,
     _apply_tag_colors,
@@ -70,82 +73,167 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 列预设: 简洁视图只保留投资决策最常看的字段, 完整视图沿用所有字段
-# 状态列: 成功 → ✓ (单字符即可), 失败行保留错误文本, 故宽度大幅收窄
+def _iso_or_dash(value) -> str:
+    """日期单元格: 缓存读回来可能是 ``date`` 也可能是 ISO 串, 两种都要认."""
+    parsed = _coerce_date(value)
+    return parsed.isoformat() if parsed is not None else "—"
+
+
+# ── 列序 = 读者的提问次序 ─────────────────────────────────────────────────
+#   这是哪只债 → **多少钱** → 便宜吗 → 现在有什么事 → (最后才是) 基础条款
+#
+# 关键在最后一段: 「剩余(年)」「评级」「余额」「上市日」这些**基础条款排在后面** ——
+# 盯一只债时先看价、看偏差、看有没有在途事件, 条款是回过头去核对的东西, 不是第一眼
+# 要扫的。把它们放在前面会把价格块整体推到右边。
+#
+# **价格块连成一片, 中间不插别的**: 转股价值 转股溢价 市价 理论价 可信度 偏差 相对偏差
+# —— 读者比的就是这几个数, 中间隔一列就得来回扫。两条恒等式也因此都在视线内:
+#   转股溢价 = 市价/转股价值 − 1     偏差 = 市价/理论价 − 1
+# **两个偏差必须相邻**: 它们只差一个常数 (全市场当期中位, 实测 +20.86pp), 并排才看得出
+# "本券贵不贵" 与 "相对全市场贵不贵" 是不是同向 —— 隔开之后就只剩两个孤立的百分数。
+#
+# **质量标注紧贴它标注的那个数**: 「可信度」说的是「理论价」, 挨着放之后邻接就承载了
+# 对象, 名字才收得回 `可信度` (曾叫「理论价可信度」—— 那是它隔着 4 列、还紧挨「评级」
+# 时的补救)。有守护测试钉住这处邻接: 挪走就得把主语写回名字里。
+# 「定价状态」不需要邻接 —— 对象在名字里, 所以放到最末。
 _BATCH_COLS_FULL = (
-    ("代码", 100), ("名称", 80), ("正股", 80), ("相对偏差", 80), ("双低", 65),
-    ("下修优势", 75), ("机会分", 70), ("质量分", 65), ("可信", 45),
-    ("转股价值", 70), ("转股溢价(%)", 80), ("距下修线", 75), ("σ(%)", 55),
-    ("理论价", 65), ("市价", 65), ("偏差(%)", 70), ("评级", 50), ("敏感性", 90),
-    ("事件", 150), ("标签", 180), ("复核建议", 260), ("状态", 60),
+    # ① 这是哪只债
+    ("代码", 100), ("名称", 80), ("正股", 90),
+    # ② 多少钱 —— 价格块, 不许插入其它列
+    ("转股价值", 75), ("转股溢价(%)", 100),
+    ("市价", 65), ("理论价", 65), ("可信度", 60),
+    # 两个偏差**挨着放** —— 它们只差一个常数 (全市场中位), 并排才看得出
+    # "本券贵/便宜" 与 "相对全市场贵/便宜" 是不是同向
+    ("偏差(%)", 70), ("相对偏差(pp)", 105),
+    # ③ 便宜吗
+    ("双低", 60), ("下修优势(元)", 100),
+    # ④ 现在有什么事
+    ("事件", 150), ("正股/下修线", 100), ("标签", 180),
+    # ⑤ 最后才是基础条款
+    ("上市日", 90), ("剩余(年)", 70), ("余额(亿)", 75), ("评级", 50), ("正股σ(%)", 80),
+    # ⑥ 这行算没算出来
+    ("定价状态", 70),
 )
-# 简洁视图用「相对偏差 + 双低」替掉「机会分」: 实测 92% 的行机会分的低估项恒为 0,
-# 分数由评级/余额加分与风险惩罚决定, 与错定价无关 —— 放在决策位上会误导。
-# 机会分没有删除, 切到「完整」仍可查, 旧缓存与策略层也照旧读它。
+# 「机会分」已**整体删除** (列 + 字段 + 排序信号 + min_score 门槛), 见 AGENTS。
+# 实测 269/284 (95%) 的行低估项 max(0,−deviation) 恒为 0, 分数完全由评级/余额加分与
+# 风险惩罚决定: Spearman(机会分, 质量分) = +0.517, 而 Spearman(机会分, 偏差) 只有
+# −0.640 (纯错定价排序应为 −1.0) —— 它和「质量分」在度量同一件事的重叠部分。
+# 「质量分」保留, 它本来就是从机会分里拆出来单独记账的那一支。
+# 简洁 = **决策位**, 只放"看一眼就决定要不要深入"的量。三处刻意的取舍:
+#   · 「正股距下修线」换掉「下修优势(元)」—— 后者在**开页读缓存**这条路上实测
+#     284/284 全是「—」(那份缓存的 params 里没有 compute_pde_signals), 而前者
+#     284/284 有值。下修优势保留在「完整」+ 它自己的视图。
+#   · 没有「可信度」—— 「低估候选」(40 行) 与「双低」(41 行) 的视图判据本身就含
+#     `confidence not in {高,中}`, 所以在默认视图里**结构上不可能出现「低」**。
+#   · 没有「定价状态」—— 实测 284/284 全 ok; 失败行由**行色**标出 (`nodata` 档
+#     TEXT_DIM + 斜体), 要错误原文切「完整」。
 _BATCH_COLS_SIMPLE = (
-    ("代码", 100), ("名称", 90), ("相对偏差", 80), ("双低", 65), ("下修优势", 75), ("可信", 45),
-    ("理论价", 70), ("市价", 70), ("偏差(%)", 75), ("评级", 50),
-    ("事件", 150), ("标签", 170), ("状态", 50),
+    ("代码", 100), ("名称", 90), ("正股", 90),
+    # 价格块。按用户决策把「偏差(%)」也放进简洁 —— 它是"模型说贵了还是便宜了"的直读量,
+    # 而「相对偏差(pp)」是同一个数减去全市场中位。两个都留: 前者跟模型比, 后者跟市场比。
+    ("市价", 70), ("理论价", 70), ("偏差(%)", 70), ("相对偏差(pp)", 105),
+    ("双低", 60),
+    ("事件", 150), ("正股/下修线", 100), ("标签", 170),
+    ("剩余(年)", 70), ("评级", 50),
 )
 # 列名 → 取值函数, 简洁/完整共用
 _BATCH_COL_GETTERS = {
     "代码":         lambda r: r.get("bond_code", ""),
     "名称":         lambda r: r.get("bond_name", ""),
-    "正股":         lambda r: r.get("stock_code", ""),
-    "机会分":       lambda r: f"{float(r['opportunity_score']):.1f}" if _is_finite(r.get("opportunity_score")) else "—",
+    # 正股**名称**优先, 缺失才回落代码 —— 「金隅冀东」比「000401.SZ」认得出来。
+    # 实测 cb_data 里 underlying_name 只有 722/1059 (见下方数据回归说明), 所以
+    # 必须有回落: 直接换成名字会让三成的行变空。
+    "正股":         lambda r: r.get("underlying_name") or r.get("stock_code", "") or "—",
+    # 剩余期限: 用 pricer 入参 T (实测 284/284 恒等于 (到期日−估值日)/365.25),
+    # 不自己再算一遍 —— 那样"表上显示的"和"模型算的"会在条款投影后悄悄分叉。
+    # 实测主池 <1 年 51 只 (18%)、<0.5 年 26 只, 而此前只有「近到期」「短久期」
+    # 两个标签兜住其中 25/26 只。
+    "剩余(年)":     lambda r: f"{float(r['T']):.2f}" if _is_finite(r.get("T")) else "—",
+    # 余额: 硬阈值已降级为风险标签 (DEFAULT_MIN_OUTSTANDING_BALANCE=None), 而
+    # 「小余额」实测只命中 1 只 —— 连续量既没进表也没被标签覆盖。中位 8.0 亿,
+    # <3 亿 21 只 (7%)。
+    "余额(亿)":     lambda r: f"{float(r['outstanding_balance']):.1f}" if _is_finite(r.get("outstanding_balance")) else "—",
+    # 主池里这一列答的是"这只债有多新"(21 日 HV 样本够不够 / 流动性薄不薄), 不是
+    # "什么时候上市" —— 实测主池 284/284 有值、未来上市 **0 只**、近 90 天上市 35 只。
+    # 「什么时候上市」那个问题只在关注池里有意义 (新债不进主池, 剔除原因「已发行未
+    # 上市」), 所以那边才有「待定」一档, 这边只会渲染出日期。故只进完整预设。
+    "上市日":       lambda r: _iso_or_dash(r.get("listing_date")),
     # 相对偏差 = 这只债比全市场中位便宜/贵多少 (pp)。负=相对便宜。绝对偏差的水平
     # 随市场周期在 +0.4%~+21.6% 之间整体漂移, 只有相对量在横截面上可比。
-    "相对偏差":     lambda r: f"{float(r['relative_deviation'])*100:+.1f}" if _is_finite(r.get("relative_deviation")) else "—",
+    "相对偏差(pp)": lambda r: f"{float(r['relative_deviation'])*100:+.1f}" if _is_finite(r.get("relative_deviation")) else "—",
+    # 双低 = 市价 + 转股溢价率×100, 越小越便宜。**方向注释已从名字挪进表头 tooltip**
+    # (batch_common.COLUMN_HELP): 单位留在名字里, 方向这类"要想一下才用得上"的口径
+    # 交给悬浮 —— 否则名字会一直被口径撑长。
     "双低":         lambda r: f"{float(r['double_low']):.0f}" if _is_finite(r.get("double_low")) else "—",
-    "质量分":       lambda r: f"{float(r['quality_score']):+.1f}" if _is_finite(r.get("quality_score")) else "—",
     # 稳健下修优势: sigma ±15% / 利差 ±100bp 四角点里最差的 (理论价 − 市价), 正 = 有优势
-    "下修优势":     lambda r: f"{float(r['down_reset_robust_edge_value']):+.1f}" if _is_finite(r.get("down_reset_robust_edge_value")) else "—",
-    "可信":         lambda r: r.get("confidence", "") if r.get("status") == "ok" else "—",
+    # 单位是**元** (理论价 − 市价 的最差角点), 而左右两列都带单位 —— 不写就成了裸数
+    "下修优势(元)": lambda r: f"{float(r['down_reset_robust_edge_value']):+.1f}" if _is_finite(r.get("down_reset_robust_edge_value")) else "—",
+    # 对象 = **理论价**, 由**列序**承载: 它紧跟在「理论价」右边 (见 _BATCH_COLS_FULL
+    # 的列序说明)。曾叫「理论价可信度」把对象写进名字, 那是它还隔着 4 列、且紧挨
+    # 「评级」时的补救; 挪到位之后名字就该收回来。
+    "可信度":       lambda r: r.get("confidence", "") if r.get("status") == "ok" else "—",
     "转股价值":     lambda r: f"{float(r['parity']):.2f}" if r.get("status") == "ok" and _is_finite(r.get("parity")) else "—",
     "转股溢价(%)":  lambda r: f"{float(r['conversion_premium'])*100:+.1f}" if _is_finite(r.get("conversion_premium")) else "—",
     # 这两个原先一个是裸下标、一个只查键在不在, 与相邻 getter 的 _is_finite 口径不一致:
     # status=="ok" 但字段缺失/为 NaN 时前者 KeyError、后者渲染出 "nan"。统一收口。
-    "σ(%)":         lambda r: f"{float(r['sigma'])*100:.1f}" if _is_finite(r.get("sigma")) else "—",
-    "理论价":       lambda r: f"{float(r['theoretical_price']):.2f}" if _is_finite(r.get("theoretical_price")) else "—",
-    "市价":         lambda r: f"{float(r['market_price']):.2f}" if r.get("status") == "ok" and r.get("market_price") is not None else "—",
-    "偏差(%)":      lambda r: f"{float(r['deviation'])*100:+.2f}" if _is_finite(r.get("deviation")) else "—",
-    "评级":         lambda r: r.get("credit_rating", ""),
-    "敏感性":       lambda r: r.get("sensitivity_status", ""),
+    # 对象 = **正股**的波动率 (批量路径是 vol_window_days=21 的 HV), 不是转债的
+    "正股σ(%)":     lambda r: f"{float(r['sigma'])*100:.1f}" if _is_finite(r.get("sigma")) else "—",
+    # **要被 status 门控**: 理论价是模型输出, 定价失败时它不该还显示一个数
+    # (与「市价」正好相反 —— 那个是市场事实)。两页此前的门控方向是反的。
+    "理论价":       lambda r: f"{float(r['theoretical_price']):.2f}" if r.get("status") == "ok" and _is_finite(r.get("theoretical_price")) else "—",
+    # **不被 status 门控**: 市价是市场事实, 定价成不成功与它无关 —— 定价失败时整行
+    # 打「—」会让"模型算挂了"和"这只债真没行情"长得一样。关注池一直是这个口径。
+    # **判空用 _is_finite 而不是 `is not None`**: 落盘的 None 在关注池那条持久化路径上
+    # 读回来是 **NaN** (watchlist_cache._NAN_FIELDS 含 market_price), 而
+    # `NaN is not None` 为真 —— 会把"没有市价"渲染成字面的 "nan"。两页会互相喂行
+    # (关注池 worker 写 _batch_all_results), 所以两边必须同口径。
+    "市价":         lambda r: f"{float(r['market_price']):.2f}" if _is_finite(r.get("market_price")) else "—",
+    # **1 位小数, 与紧邻的「相对偏差(pp)」一致** —— 两列只差一个常数, 挨着放却一个
+    # 2 位一个 1 位, 小数点对齐之后那一位空位很扎眼; 而 0.1pp 的分辨率对筛选足够。
+    "偏差(%)":      lambda r: f"{float(r['deviation'])*100:+.1f}" if _is_finite(r.get("deviation")) else "—",
+    # 空值渲染「—」而不是空串 —— 空单元格读起来像"这里没有这一列", 与关注池对齐
+    "评级":         lambda r: r.get("credit_rating", "") or "—",
     # 事件 = 确定性的日程/状态安排 (强赎日 / 在途下修 / 回售窗口 / 暂停转股 / 不强赎承诺)。
     # **全列出不截断**: 实测每行最多 2 条、最长 17 字符, 放得下; 而 tooltip 取的是单元格
     # display value, 一旦截断被隐藏的那条就彻底看不见了 —— 事件正是最不该被静默吞掉的一类。
     # batch_pricing.event_flags 已按可操作性排好序, 硬退出期限在最前。
     "事件":         lambda r: " / ".join(r.get("event_flags") or []) or "—",
     # 正股价距下修触发线还有多远; 负 = 已在线下, 下修博弈已经活了
-    "距下修线":     lambda r: f"{float(r['down_reset_trigger_gap'])*100:+.0f}%" if _is_finite(r.get("down_reset_trigger_gap")) else "—",
+    # **方向用词不用符号**。原来是 `+39%` / `−62%`, 而"距某条线 −62%"本身就不通;
+    # 负 = 正股价已在触发线**下方** (下修博弈已经活了), 正 = 还在线上。
+    # 对象 = **正股价**。名字去掉「距」字改成比值形式, 符号才读得通:
+    # 「距离 −62%」在中文里不通, 而「正股/下修线 −62%」= 正股是触发线的 0.38 倍。
+    "正股/下修线": lambda r: trigger_gap_text(r.get("down_reset_trigger_gap")),
     "标签":         lambda r: _format_tags(r.get("risk_tags")),
-    "复核建议":     lambda r: _format_tags(r.get("review_notes")),
-    "状态":         lambda r: "✓" if r.get("status") == "ok" else r.get("status", ""),
+    # 对象 = **这一行的定价计算**。「状态」不说是谁的状态 (债的? 数据的? 行的?),
+    # 「定价」是个名词不是状态量 —— 「定价状态」两样都说到。
+    # 与关注池的「数据状态」是**两件事**, 名字各自点了对象: 那边说"这一行的数是什么
+    # 时候的 / 为什么没有"(七档), 这边说"这一行定价成功了吗"。
+    "定价状态":     lambda r: "✓" if r.get("status") == "ok" else r.get("status", ""),
 }
 
 _BATCH_COL_STRETCH_WEIGHTS = {
     "代码": 0.5,
     "名称": 1.0,
-    "正股": 0.6,
-    "机会分": 0.35,
-    "相对偏差": 0.4,
+    "正股": 0.7,
+    "上市日": 0.5,          # 定长日期, 拉宽窗口不需要多余位置
+    "剩余(年)": 0.3,
+    "余额(亿)": 0.3,
+    "相对偏差(pp)": 0.4,
     "双低": 0.3,
-    "质量分": 0.3,
-    "下修优势": 0.4,
-    "可信": 0.2,
+    "下修优势(元)": 0.4,
+    "可信度": 0.25,
     "转股价值": 0.35,
     "转股溢价(%)": 0.4,
-    "σ(%)": 0.25,
+    "正股σ(%)": 0.3,
     "理论价": 0.35,
     "市价": 0.35,
     "偏差(%)": 0.35,
     "评级": 0.25,
-    "敏感性": 0.8,
-    "距下修线": 0.35,
+    "正股/下修线": 0.4,
     "事件": 1.6,
     "标签": 2.0,
-    "复核建议": 3.0,
-    "状态": 0.25,
+    "定价状态": 0.25,
 }
 
 
@@ -664,7 +752,7 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
 
     _apply_tag_colors(tree)
     _attach_column_sort(tree, columns, headers)
-    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签", "复核建议", "事件"})
+    _attach_cell_tooltip(tree, columns, headers, tooltip_headers={"标签", "事件"})  # 表头说明走 COLUMN_HELP
     app._batch_main_tree = tree
     _TREE_ATTRS.add("_batch_main_tree")
     _attach_main_context_menu(app, tree)
@@ -673,7 +761,8 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         vals = [_BATCH_COL_GETTERS[name](r) for name, _ in schema]
         row_tag = _resolve_row_tag(r)
         tags = [row_tag] if row_tag else []
-        tree.insert("", "end", iid=str(idx), values=vals, tags=tags)
+        # pad_cells: 右对齐列补尾随留白, 否则和右边左对齐列的文字贴在边界上
+        tree.insert("", "end", iid=str(idx), values=pad_cells(headers, vals), tags=tags)
 
     if not results:
         # 「下修优势」「转股折价」实测今天都是 0 行 —— 空视图是信号在说话, 不是

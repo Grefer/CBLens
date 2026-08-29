@@ -45,7 +45,7 @@ PORTFOLIO_SWEEP_FIELDS = frozenset({
     "min_down_reset_edge_value", "down_reset_event_exit",
     "funding_mode", "exposure_mode", "exposure_valuation_k", "exposure_floor",
     "cash_yield_rate", "transaction_cost",
-    "selection_view", "min_score", "min_confidence", "exclude_risk_tags",
+    "selection_view", "min_confidence", "exclude_risk_tags",
     "min_market_price", "max_market_price",
     "min_conversion_premium", "max_conversion_premium",
     "min_deviation", "max_deviation", "min_sigma", "max_sigma",

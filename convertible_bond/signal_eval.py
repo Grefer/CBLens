@@ -1,6 +1,6 @@
 """信号有效性评估工具 (signal_eval).
 
-为任意横截面信号 (机会分 / deviation / 动量 / 低价 ...) 提供与 ``strategy_backtest``
+为任意横截面信号 (deviation / 下修优势 / 动量 / 低价 ...) 提供与 ``strategy_backtest``
 解耦的**纯统计检验**, 用来回答"这个信号到底有没有预测力": 秩相关 (Rank-IC)、
 分位数价差、横截面去均值 (相对化) 以及聚合时序 (可作转债大类择时指标)。
 
@@ -18,8 +18,8 @@
 典型用法::
 
     from convertible_bond.signal_eval import rank_ic, quantile_returns, aggregate_series
-    print(rank_ic(obs, "score"))                       # 机会分预测力
-    print(quantile_returns(obs, "score", n_quantiles=5))
+    print(rank_ic(obs, "deviation"))                   # 估值偏差预测力
+    print(quantile_returns(obs, "deviation", n_quantiles=5))
     series = aggregate_series(obs, "deviation")        # 聚合中位偏差时序 (择时)
 
 约定:

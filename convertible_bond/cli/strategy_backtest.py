@@ -275,7 +275,6 @@ def main() -> int:
         top_n=args.top_n,
         rebalance_freq=args.freq,
         selection_view="综合机会",
-        min_score=None,
         min_confidence=None if args.allow_low_confidence else ("高", "中"),
         exclude_risk_tags=() if args.include_review_risks else PDEStrategyConfig().exclude_risk_tags,
         min_market_price=args.min_price,
