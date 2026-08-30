@@ -2110,7 +2110,7 @@ def test_every_row_colour_has_a_text_exit():
         assert text_cells != plain_cells, f"{tag} 这一档只有颜色说得出来"
 
 
-def test_refresh_theme_survives_a_tree_that_was_already_destroyed():
+def test_refresh_theme_survives_a_tree_that_was_already_destroyed(monkeypatch):
     """空结果视图留下的悬垂 Treeview 不许打断整轮重染.
 
     触发链今天就成立: 默认落地「全池」(实测 284 行, 注册树) → 切「转股折价」
@@ -2142,6 +2142,12 @@ def test_refresh_theme_survives_a_tree_that_was_already_destroyed():
 
     class _App:
         pass
+
+    # refresh_theme 头一件事是 _configure_tree_style() → ttk.Style() → 隐式建 Tk root,
+    # 无头 runner 上直接 `TclError: no display name and no $DISPLAY` —— 本机有窗口系统
+    # 所以只在 CI 红 (实测连红三次推送, 两个 Python 版本都挂在这一条)。全局样式与本条
+    # 要断言的东西 (逐树 try/except + 摘掉死树) 无关, 打掉即可; 它没有别的副作用。
+    monkeypatch.setattr(batch_common, "_configure_tree_style", lambda: None)
 
     app = _App()
     app._dead_tree = _DeadTree()

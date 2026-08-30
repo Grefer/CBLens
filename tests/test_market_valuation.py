@@ -15,7 +15,9 @@ from convertible_bond.market_valuation import (
     classify,
     compute_snapshot,
     load_history,
+    MIN_BASELINE_COVERAGE,
     percentile_rank,
+    snapshot_coverage,
     baseline_medians,
     save_history,
     valuation_banner,
@@ -140,20 +142,82 @@ def test_load_history_missing_returns_empty(tmp_path):
 
 
 def test_gui_auto_record_helper_idempotent(tmp_path):
-    """批量页自动记录: 成功落盘、同估值日幂等覆盖、空结果静默失败。"""
+    """批量页自动记录: 成功落盘、同估值日幂等覆盖、空结果静默失败。
+
+    返回值是**不记的原因**(记了返回 None), 不是 bool —— 拒记时那句话要显示给用户,
+    静默跳过和"记了"长得一模一样。
+    """
     from convertible_bond.gui.tabs.batch import _record_valuation_history
     path = tmp_path / "hist.json"
-    assert _record_valuation_history(_rows([0.10, 0.15, 0.20]), history_path=path) is True
+    assert _record_valuation_history(_rows([0.10, 0.15, 0.20]), history_path=path) is None
     loaded = load_history(path)
     assert len(loaded) == 1
     assert loaded[0].median_deviation == pytest.approx(0.15)
     # 同日重算 → 覆盖而非追加
-    assert _record_valuation_history(_rows([0.30, 0.30, 0.30]), history_path=path) is True
+    assert _record_valuation_history(_rows([0.30, 0.30, 0.30]), history_path=path) is None
     loaded = load_history(path)
     assert len(loaded) == 1
     assert loaded[0].median_deviation == pytest.approx(0.30)
-    # 空结果 → 静默失败不写盘
-    assert _record_valuation_history([], history_path=path) is False
+    # 空结果 → 静默失败不写盘, 但要说得出原因
+    assert _record_valuation_history([], history_path=path)
+    assert len(load_history(path)) == 1
+
+
+def test_partial_batch_does_not_pollute_the_versioned_baseline(tmp_path):
+    """"部分取到"不许把几十只的中位当全市场快照写进基线.
+
+    唯一的闸此前是 ``_batch_worker`` 的 ``success_count == 0``, 两个毛病:
+
+    ① **数的是另一批行**。它数 ``status == "ok"``, 而快照数有限 ``deviation`` ——
+       市价缺失时 ``deviation`` 是 NaN 而 ``status`` 仍是 "ok"。所以这个 fixture
+       (全部 ok, 只有 10% 有市价) 在旧闸下是**满员通过**的。
+    ② **全或无**。它只挡"一只都没成功", 而部分取到才是危险的那一档 ——
+       ``cb_valuation_history.json`` **进版本库**、只追加, 而且 ``baseline_medians``
+       取桶内最晚一条, 一条坏记录会当上该季度的代表。
+
+    实测系统性失败 (按上市日切) 能错 **+27.7pp / −19.3pp**, 都超过整个历史摆幅 21.2pp。
+    """
+    from convertible_bond.gui.tabs.batch import _record_valuation_history
+
+    path = tmp_path / "hist.json"
+    # 先放一条好记录, 用来验证坏记录既不覆盖也不追加
+    assert _record_valuation_history(_rows([0.10, 0.15, 0.20]), history_path=path) is None
+    before = load_history(path)
+
+    # 284 行全部 status=ok, 但只有 28 行拿到市价 → 覆盖 9.9%
+    partial = (_rows([0.50] * 28)
+               + _rows([float("nan")] * 256))
+    assert sum(1 for r in partial if r["status"] == "ok") == 284, "旧闸在这个 fixture 上满员"
+    note = _record_valuation_history(partial, history_path=path)
+    assert note and "28/284" in note and "未记入估值基线" in note, note
+    assert load_history(path) == before, "坏快照写进了版本库里的基线"
+
+    # 覆盖率够了 → 照常记 (同估值日 → 幂等覆盖那一条, 不是追加)
+    good = _rows([0.10] * 260) + _rows([float("nan")] * 24)     # 91.5%
+    assert _record_valuation_history(good, history_path=path) is None
+    after = load_history(path)
+    assert len(after) == 1 and after[0].n == 260
+    assert after[0].median_deviation == pytest.approx(0.10)
+
+
+def test_baseline_note_is_shown_after_the_render_overwrites_the_status_line(tmp_path):
+    """拒记的那句话必须排在渲染**之后** —— 否则它被视图摘要盖掉, 等于没说.
+
+    ``_render_table`` 把 ``v_batch_status`` 整个重写成「✅ 全池: 展示 N/M 只…」。
+    ``app.after`` 的回调按登记顺序跑, 所以追加状态那一句要登记在渲染之后。
+    这是**顺序**约束, 运行期看不出来 (只表现为"警告没出现"), 所以在源码上钉。
+    """
+    import inspect
+
+    from convertible_bond.gui.tabs import batch as batch_tab
+
+    src = inspect.getsource(batch_tab._batch_worker)
+    render_at = src.index("_render_batch_views(\n            app, results,\n            cache_path=cache_path")
+    note_at = src.index("baseline_note:")
+    assert note_at > render_at, "拒记提示登记在渲染之前, 会被视图摘要盖掉"
+    assert "_record_valuation_history(results)" in src
+    # 主缓存**不受这道闸管** —— 它是运行态 gitignored, 部分结果照样有用
+    assert src.index("save_batch_results_cache") < src.index("baseline_note = ")
 
 
 # ---------------- valuation_banner (GUI 横幅) ----------------
@@ -370,4 +434,33 @@ def test_baseline_keeps_one_snapshot_per_quarter_without_dropping_the_record():
         for snap in noisy:
             append_history(path, snap)
         assert len(load_history(path)) == len(noisy), "写侧去重了 —— 观测被销毁"
+
+
+def test_snapshot_coverage_counts_the_same_rows_compute_snapshot_does():
+    """覆盖率必须与快照**逐条同口径** —— 不是数 ``status == "ok"``.
+
+    这两者是**两批不同的行**: ``pricing_api`` 在市价缺失时把 ``deviation`` 写 NaN 而
+    ``status`` 仍留 "ok" (pricing_api.py:853 的 else 分支)。所以"转债行情整条挂掉、
+    正股链路正常"这一档下 ``status == "ok"`` 满员而快照样本为零 —— 批量页此前的闸
+    (``success_count == 0``) 完全看不见它, 那一档是靠 ``compute_snapshot`` 抛
+    ValueError 兜住的, 不是靠判据。
+    """
+    ok_with_dev = {"deviation": 0.1, "status": "ok"}
+    ok_no_market = {"deviation": float("nan"), "status": "ok"}   # 市价缺失 → 仍是 ok
+    failed = {"deviation": 0.1, "status": "failed"}
+
+    rows = [ok_with_dev] * 3 + [ok_no_market] * 6 + [failed] * 1
+    usable, total = snapshot_coverage(rows)
+    assert (usable, total) == (3, 10)
+    # 与 compute_snapshot 真的同口径: 它聚合的样本数就是 usable
+    assert compute_snapshot(rows).n == usable
+    # 而"数 status == ok"会给出 9 —— 那是另一批行
+    assert sum(1 for r in rows if r.get("status") == "ok") == 9
+
+    # 一条能用的都没有时 compute_snapshot 抛错 (调用方靠覆盖率闸提前挡, 不靠这个异常)
+    assert snapshot_coverage([ok_no_market] * 5) == (0, 5)
+    with pytest.raises(ValueError):
+        compute_snapshot([ok_no_market] * 5)
+
+    assert 0 < MIN_BASELINE_COVERAGE <= 1
 

@@ -141,10 +141,28 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   拿 5 做分母会让"一切正常"永远报成 2/5), 判空用 `_is_finite` 不用 `is not None`。
   在市债一只都没取到 → 与 `if not ok_rows` 同处置 (不写盘不覆盖内存, 状态栏说实话);
   部分取到 → 消息里带上 `取到市价 1/2`。
-  **⚠ 尚未处理**: 批量页 `_batch_worker` 的 `success_count == 0` 是同一个弱判据, 而
-  它后面跟着的是主缓存落盘 **和** `_record_valuation_history` (写进版本库的估值基线)。
-  全空那一档被 `compute_snapshot` 的"没有可用 deviation"挡住了, 但**部分取到**那一档
-  会拿几十只的中位当全市场快照追加进基线。要改是默认行为变更, 单独立项。
+  **批量页同一个坑已修 (2026-08-30)**: `_batch_worker` 的 `success_count == 0` 也是
+  弱判据, 而它后面跟着主缓存落盘**和** `_record_valuation_history` (写进版本库的估值
+  基线)。两个毛病: ① 它数 `status == "ok"` 而快照数**有限 `deviation`** —— 市价缺失时
+  `pricing_api` 把 deviation 写 NaN 而 status 仍留 "ok", 所以"转债行情整条挂掉、正股
+  链路正常"会让它满员通过 (那一档碰巧被 `compute_snapshot` 抛 ValueError 兜住, 靠的是
+  异常不是判据); ② 它是全或无, 而**部分取到**才危险。
+  实测危险度取决于失败是不是**系统性**的: 随机失败良性 (1000 次重采样, 随机剩 40 只时
+  95% 区间只偏离 ±4.8pp 且中位无偏), 而按上市日切的系统性失败 —— 只剩最新 40 只
+  **+48.96% (偏离 +27.7pp)**、只剩最老 40 只 **+1.93% (−19.3pp)** —— **两个方向都超过
+  整个历史摆幅 21.2pp**, 一条记录就能造出"史上最贵/最便宜"的假快照。而按上市日相关的
+  系统性失败不是假想 (新债 HV 样本、新老债行情端点、临近到期停牌都与它相关)。
+  **季度桶去重让它更危险**: `baseline_medians` 取桶内最晚一条, 坏记录会当上该季度的代表。
+  修法: `market_valuation.snapshot_coverage()` (与 `compute_snapshot` 走同一个
+  `_usable_deviations`, 不许另数一遍) + `MIN_BASELINE_COVERAGE = 0.90`。
+  **两个动作分开处置** —— 主缓存是运行态 gitignored、部分结果照样有用 (「定价状态」列
+  诚实标出失败行), 照旧写; 只有基线加闸。阈值 0.9 的依据: 按上市日掐一段的最坏偏离
+  80% → 3.11pp / **90% → 2.05pp** / 95% → 1.31pp, 而季度桶"当季代表取哪天"本身就有
+  2.84pp 抖动 —— 闸要把部分失败的误差压到已接受的噪声**以下**。代价也不对称: 漏记一次
+  几乎无成本 (每季度只需一次好记录), 记错一次进版本库还当代表。
+  拒记时**不静默** —— `_record_valuation_history` 返回**不记的原因**(记了返回 None),
+  由 `_batch_worker` 追加到状态栏; 那一句的 `app.after` 必须登记在渲染**之后**,
+  否则被 `_render_table` 重写的视图摘要盖掉 (有守护测试钉源码顺序)。
 - **GUI 启动路径上不许建立新的数据源连接**。`w.start()` 的 WindPy 默认签名是
   `start(options=None, waitTime=120)` —— **终端没开时它等满两分钟**, 而"装了 WindPy
   但终端没登录"恰恰是最常见的一档 (实测本机: 可导入、`isconnected()` 为 False)。

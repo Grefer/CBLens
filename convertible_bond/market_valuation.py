@@ -91,6 +91,63 @@ def _coerce_date(value: Any) -> str | None:
     return str(value)[:10]
 
 
+#: 记入历史基线所需的最低 deviation 覆盖率。
+#:
+#: **这不是架在市场量上的绝对阈值** (那种判据项目里已经栽过, 见 MIN_RELATIVE_CHEAPNESS
+#: 的注释): 覆盖率度量的是"这一轮取数成功了多少", 取值恒在 [0,1] 且不随市场周期漂移。
+#:
+#: 取 0.9 的两条依据 —— 实测当前主池 284 只 (中位偏差 +21.25%):
+#:
+#: · **随机失败是良性的, 系统性失败才致命**。1000 次重采样: 随机剩 40 只时 95% 区间
+#:   只偏离 ±4.8pp 且中位无偏; 而按上市日切的系统性失败, 只剩最新 40 只 → **+48.96%
+#:   (偏离 +27.7pp)**, 只剩最老 40 只 → **+1.93% (−19.3pp)** —— 两个方向都超过整个
+#:   历史摆幅 (21.2pp), 一条记录就能造出"史上最贵/最便宜"的假快照。而按上市日相关的
+#:   系统性失败不是假想: 新债的 HV 样本、新老债的行情端点、临近到期停牌都与它相关。
+#: · **要压到已经接受的噪声以下**。季度桶的"当季代表取哪天"本身有 2.84pp 抖动
+#:   (实测 2026Q3 七天内)。按上市日掐掉一段的最坏偏离: 覆盖 80% → 3.11pp (已超),
+#:   **90% → 2.05pp**, 95% → 1.31pp。
+#:
+#: 代价不对称也支持偏严: 漏记一次几乎无成本 (季度桶每季度只需要一次好记录), 而记错
+#: 一次进的是**版本库**、还会当上该季度的代表 —— 要改就得手工动 JSON。
+MIN_BASELINE_COVERAGE = 0.90
+
+
+def _usable_deviations(
+    rows: Sequence[dict[str, Any]],
+    *,
+    deviation_key: str = "deviation",
+    status_key: str = "status",
+    require_ok: bool = True,
+) -> tuple[list[float], list[str]]:
+    """能进快照的 (deviation 列表, 估值日列表)。``compute_snapshot`` 与覆盖率共用。"""
+    devs: list[float] = []
+    dates: list[str] = []
+    for row in rows:
+        if require_ok and status_key in row and row.get(status_key) != "ok":
+            continue
+        dv = _finite(row.get(deviation_key))
+        if dv is None:
+            continue
+        devs.append(dv)
+        vd = _coerce_date(row.get("valuation_date"))
+        if vd:
+            dates.append(vd)
+    return devs, dates
+
+
+def snapshot_coverage(rows: Sequence[dict[str, Any]], **kwargs: Any) -> tuple[int, int]:
+    """``(能进快照的行数, 总行数)``。
+
+    **必须与 ``compute_snapshot`` 逐条同口径**, 所以走同一个 ``_usable_deviations``。
+    批量页此前的闸是 ``success_count == 0``, 数的是 ``status == "ok"`` —— 那是**另一批
+    行**: ``pricing_api`` 在市价缺失时把 ``deviation`` 写 NaN 而 ``status`` 仍留 "ok",
+    于是"转债行情整条挂掉、正股链路正常"会让 success_count 满员而快照样本为零。
+    那一档碰巧被 ``compute_snapshot`` 抛 ValueError 兜住了, 但那是异常兜的, 不是判据。
+    """
+    devs, _ = _usable_deviations(rows, **kwargs)
+    return len(devs), len(rows)
+
+
 def compute_snapshot(
     rows: Sequence[dict[str, Any]],
     *,
@@ -104,18 +161,8 @@ def compute_snapshot(
     只统计状态为 ok (``require_ok``) 且 deviation 有限的行。``snapshot_date`` 缺省时
     取行内 ``valuation_date`` 的众数 (批量结果通常同一估值日)。
     """
-    devs: list[float] = []
-    dates: list[str] = []
-    for row in rows:
-        if require_ok and status_key in row and row.get(status_key) != "ok":
-            continue
-        dv = _finite(row.get(deviation_key))
-        if dv is None:
-            continue
-        devs.append(dv)
-        vd = _coerce_date(row.get("valuation_date"))
-        if vd:
-            dates.append(vd)
+    devs, dates = _usable_deviations(
+        rows, deviation_key=deviation_key, status_key=status_key, require_ok=require_ok)
     if not devs:
         raise ValueError("没有可用的 deviation 数据 (检查结果是否已定价)")
 

@@ -39,9 +39,11 @@ from ...batch_pricing import (
 )
 from ...pricing_api import batch_price_from_provider_threaded
 from ...market_valuation import (
+    MIN_BASELINE_COVERAGE,
     append_history,
     compute_snapshot,
     load_history,
+    snapshot_coverage,
     valuation_banner,
 )
 from ...paths import data_path
@@ -574,9 +576,10 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
             params=params,
             upcoming_results=watchlist_pricing,
         )
-        # 样本外纪律: 全市场重算成功即自动记录当期估值快照 (同估值日幂等覆盖)。
+        # 样本外纪律: 全市场重算即自动记录当期估值快照 (同估值日幂等覆盖)。
         # 仅主池重算触发; 缓存加载/关注池局部重算不记, 避免污染基线。
-        _record_valuation_history(results)
+        # 覆盖率不够时它拒记并返回原因 —— 那句话要让用户看见, 见下面的 after 顺序。
+        baseline_note = _record_valuation_history(results)
         app._batch_results = results
         app._batch_upcoming_results = watchlist_pricing
         app._last_batch_source = provider.name
@@ -584,6 +587,11 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
         app.after(0, lambda: _render_batch_views(
             app, results,
             cache_path=cache_path, excluded_count=excluded_count))
+        if baseline_note:
+            # **排在渲染之后** —— `_render_table` 会把 v_batch_status 整个重写成视图摘要,
+            # 先设就被盖掉了。app.after 的回调按登记顺序跑, 所以这里追加在摘要末尾。
+            app.after(0, lambda note=baseline_note: app.v_batch_status.set(
+                f"{app.v_batch_status.get()}  |  ⚠️ {note}"))
     except Exception as exc:
         app.after(0, lambda exc=exc: app.v_batch_status.set(f"❌ 批量定价失败: {exc}"))
         app.after(0, lambda exc=exc: messagebox.showerror("批量定价失败", str(exc)))
@@ -713,19 +721,36 @@ def _render_batch_views(
         refresh_home(app)
 
 
-def _record_valuation_history(results, history_path=None) -> bool:
-    """全市场重算成功后把当期估值快照并入历史基线 (样本外纪律的自动化形态)。
+def _record_valuation_history(results, history_path=None) -> str | None:
+    """全市场重算后把当期估值快照并入历史基线 (样本外纪律的自动化形态)。
 
-    同估值日幂等覆盖; 失败静默 (记录是副产品, 不能影响主流程)。返回是否成功记录。
+    返回 ``None`` = 已记录; 否则返回**不记的原因**, 由调用方显示。
+
+    **覆盖率不够就不记**。此前唯一的闸是 ``_batch_worker`` 里的 ``success_count == 0``,
+    那道闸有两个毛病: 它数的是 ``status == "ok"`` 而快照数的是有限 ``deviation``
+    (两批不同的行, 见 ``snapshot_coverage``); 而且它是**全或无** —— "部分取到"那一档
+    会拿几十只的中位当全市场快照追加进 ``cb_valuation_history.json``, 而那个文件**进
+    版本库**、只追加, 还会当上该季度的代表 (``baseline_medians`` 取桶内最晚一条)。
+    实测系统性失败能错 ±20~28pp, 超过整个历史摆幅。阈值依据见 MIN_BASELINE_COVERAGE。
+
+    **主缓存不受这道闸管**: 它是运行态 gitignored, 部分结果照样有用 (表上「定价状态」
+    列诚实标出失败行), 下次重算就修好了。两者的代价完全不同, 所以分开处置。
+
+    同估值日幂等覆盖; 记录失败静默降级 (它是副产品, 不能影响主流程)。
     """
+    usable, total = snapshot_coverage(results or [])
+    if total and usable < total * MIN_BASELINE_COVERAGE:
+        # **不静默跳过** —— 静默跳过和"记了"长得一模一样, 那是这个项目反复踩的形状
+        return (f"定价覆盖 {usable}/{total} ({usable / total:.0%} < "
+                f"{MIN_BASELINE_COVERAGE:.0%}), 未记入估值基线")
     try:
         snapshot = compute_snapshot(results or [])
         path = history_path or data_path("cb_valuation_history.json", seed=True)
         append_history(path, snapshot)
-        return True
+        return None
     except Exception:
         logger.debug("估值历史自动记录失败 (忽略)", exc_info=True)
-        return False
+        return "估值基线记录失败"
 
 
 def _update_valuation_banner(app, base_results) -> None:
