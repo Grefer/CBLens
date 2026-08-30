@@ -1052,6 +1052,21 @@ CustomTkinter 在测试环境跑不起来, 运行期 NameError 靠它兜底, 不
 GUI controller 大改后跑 `pytest -k composition` (组成性守护: mixin 无命名冲突 +
 UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆盖不到真实渲染路径。
 
+**测试里不许真的建 Tk root —— 那是"本机全绿、CI 全红"的唯一常见来源**。macOS 的 Tk
+不需要 X11, 所以 `ttk.Style()` / `tkinter.Tk()` 在本机悄悄成功、在 GitHub runner 上
+抛 `TclError: no display name and no $DISPLAY`。实测连红三次推送 (2026-08-28 ~ 08-30,
+两个 Python 版本都挂) 全是同一条:
+`test_refresh_theme_survives_a_tree_that_was_already_destroyed` 调 `refresh_theme`,
+而它头一件事是 `_configure_tree_style()` → `ttk.Style()` → 隐式建 root。**顺手 skip 不是
+出路** —— 那条断言的是"悬垂树不许打断整轮重染", 在 CI 上跳过等于没有守护; 真正要 root
+的东西 (量字体) 才按现有那两条的写法 `try: ... except Exception: pytest.skip(...)`。
+在本机复现无头环境 (比等一轮 CI 快, `tests/headless.py` 把 `_tkinter.create` 换成
+照样抛 `TclError` 的函数, 本机就能把 CI 的失败逐条复现出来):
+
+```bash
+pytest -p tests.headless -q
+```
+
 ### 按改动选测试
 
 | 改动模块 | 先跑 |
