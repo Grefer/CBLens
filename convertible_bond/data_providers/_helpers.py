@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
 import time
 from datetime import date, datetime
 from typing import Any, Callable
@@ -19,8 +21,84 @@ from .base import to_date
 logger = logging.getLogger(__name__)
 
 
-def _retry(call: Callable, attempts: int = 3, delay: float = 0.8, label: str = "akshare"):
-    """对瞬态网络错误 (RemoteDisconnected / ConnectionError / timeout) 重试 attempts 次."""
+#: **拒绝**信号 —— 不是瞬态抖动, 重试只会加重。东财的实时行情集群
+#: (``push2`` / ``push2his``) 按**出口 IP** 限流封禁: 被封时 TCP 连得上、
+#: TLS 握手完整成功, HTTP 请求发完之后服务端才直接断开, requests 侧就报成
+#: ``ConnectionError('Connection aborted.', RemoteDisconnected(...))``。
+#:
+#: 判成"瞬态"曾让每只债白撞 3 次: 实测 30s 一次的低频探测连续 8 次全失败
+#: (不是短冷却), 而**同一个 URL 经海外代理照常返回数据** —— 拒绝是按 IP 生效的,
+#: 接口本身活着。批量定价是 8 线程 × 280+ 只债, 每只再乘 3 就是以三倍力度
+#: 继续敲同一个限流器, 等于自己给自己续封。
+_REJECTION_MARKERS = ("remotedisconnected", "connection aborted")
+
+#: 真正值得重试的瞬态抖动: 连接中途被重置 / 读超时 / urllib3 自己已经重试到头。
+#: 判定顺序上 ``_REJECTION_MARKERS`` 必须**先**匹配 —— ``MaxRetryError`` 的消息里
+#: 常把底层 cause 一起带上, 两边都能命中。
+_TRANSIENT_MARKERS = ("connection reset", "timeout", "timed out", "max retries")
+
+#: 某个端点被源站拒绝后的熔断冷却时长 (秒)。用
+#: ``CBLENS_AKSHARE_ENDPOINT_COOLDOWN_SEC`` 覆盖; 设 0 关闭熔断 (每次都真的去打)。
+#: 与 ``WIND_CONNECT_COOLDOWN_SEC`` 是同一个形状的负缓存。
+AKSHARE_ENDPOINT_COOLDOWN_SEC = float(
+    os.environ.get("CBLENS_AKSHARE_ENDPOINT_COOLDOWN_SEC", "300") or 0)
+
+_ENDPOINT_LOCK = threading.Lock()
+_endpoint_tripped_at: dict[str, float] = {}
+
+
+class EndpointCooldownError(RuntimeError):
+    """端点处于熔断冷却期, 本次**没有真的发起请求**就跳过了.
+
+    与"请求发出去失败了"分开是有用的: 调用方据此知道这一档的代价是 0 秒,
+    不必再为它保留 fallback 之外的额外提示。
+    """
+
+
+def endpoint_is_tripped(endpoint: str) -> bool:
+    """该端点是否仍在拒绝冷却期内."""
+    if AKSHARE_ENDPOINT_COOLDOWN_SEC <= 0:
+        return False
+    with _ENDPOINT_LOCK:
+        at = _endpoint_tripped_at.get(endpoint)
+    return at is not None and (time.monotonic() - at) < AKSHARE_ENDPOINT_COOLDOWN_SEC
+
+
+def trip_endpoint(endpoint: str) -> None:
+    """把端点标记为被源站拒绝, 起算冷却."""
+    with _ENDPOINT_LOCK:
+        _endpoint_tripped_at[endpoint] = time.monotonic()
+
+
+def reset_endpoint_breaker(endpoint: str | None = None) -> None:
+    """清掉熔断状态 (``None`` 表示全清). 给测试和"用户显式重试"用."""
+    with _ENDPOINT_LOCK:
+        if endpoint is None:
+            _endpoint_tripped_at.clear()
+        else:
+            _endpoint_tripped_at.pop(endpoint, None)
+
+
+def _retry(
+    call: Callable,
+    attempts: int = 3,
+    delay: float = 0.8,
+    label: str = "akshare",
+    endpoint: str | None = None,
+):
+    """瞬态网络错误重试 attempts 次; **限流拒绝立即抛出, 不重试**.
+
+    两类错误的区分见 ``_REJECTION_MARKERS`` / ``_TRANSIENT_MARKERS``。
+
+    传了 ``endpoint`` 时额外启用熔断: 该端点一旦被判为拒绝就进负缓存,
+    冷却期内后续调用直接抛 ``EndpointCooldownError`` 而**不发起请求** ——
+    否则被封的那几个小时里, 每只债都要为一个注定失败的调用等满连接超时
+    (实测 ``stock_zh_a_spot_em`` 单次失败就要 5.4s)。
+    """
+    if endpoint is not None and endpoint_is_tripped(endpoint):
+        raise EndpointCooldownError(
+            f"{endpoint} 处于源站限流冷却期 ({AKSHARE_ENDPOINT_COOLDOWN_SEC:.0f}s), 跳过本次调用")
+
     last_exc: BaseException | None = None
     for i in range(attempts):
         try:
@@ -28,14 +106,15 @@ def _retry(call: Callable, attempts: int = 3, delay: float = 0.8, label: str = "
         except Exception as e:
             last_exc = e
             msg = str(e).lower()
-            transient = (
-                "remotedisconnected" in msg
-                or "connection aborted" in msg
-                or "connection reset" in msg
-                or "timeout" in msg
-                or "max retries" in msg
-            )
-            if not transient or i == attempts - 1:
+            if any(m in msg for m in _REJECTION_MARKERS):
+                if endpoint is not None:
+                    trip_endpoint(endpoint)
+                logger.warning(
+                    "%s 被源站拒绝 (%s) — 判为按 IP 限流, 不重试%s",
+                    label, type(e).__name__,
+                    f", 该端点冷却 {AKSHARE_ENDPOINT_COOLDOWN_SEC:.0f}s" if endpoint else "")
+                raise
+            if not any(m in msg for m in _TRANSIENT_MARKERS) or i == attempts - 1:
                 raise
             logger.warning(
                 "%s 调用失败 (第 %d/%d 次, %s), %.1fs 后重试",

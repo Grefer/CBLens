@@ -872,6 +872,41 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 - `DataProvider` 新增方法时，先在 `data_providers/base.py` 的 ABC 里给兼容默认实现，避免打断
   provider 装饰器链。
 - akshare 网络调用一律走 `_retry()`，不要裸调。
+- **东财的实时行情集群按*出口 IP* 限流封禁; 这类拒绝不许重试, 而且要熔断**。
+  被封的形状很容易误判成"网络不好": TCP 连得上、TLS 握手完整成功 (拿得到真实的
+  DigiCert `*.eastmoney.com` 证书), HTTP 请求**发完之后**服务端才断开, requests 侧
+  报成 `ConnectionError('Connection aborted.', RemoteDisconnected(...))`。三条实测判据
+  说明它不是抖动 (2026-08-30): 同主机根路径 `/` 照常返回 404 (服务活着) 而 `/api/*`
+  一律掐断; 30s 一次的低频探测**连续 8 次全失败** (不是短冷却); **同一个 URL 经海外
+  代理照常返回数据**而本机同一时刻 000 —— 拒绝按 IP 生效, 接口本身活着。社区同类报告
+  也一致 (akshare issue #6092/#6100/#7051), 解法是换 IP 或等几小时。
+  `_retry` 因此把 `_REJECTION_MARKERS` (remotedisconnected / connection aborted) 与
+  `_TRANSIENT_MARKERS` (connection reset / timeout / max retries) 分开: 前者立即抛,
+  后者才重试。**判定顺序不能反** —— `MaxRetryError` 的消息常把底层 cause 一起带上,
+  两边都能命中。此前一律判"瞬态"重试 3 次, 而批量定价是 8 线程 × 280+ 只债, 等于以
+  三倍力度继续敲同一个限流器, 自己给自己续封。
+  熔断走 `AKSHARE_ENDPOINT_COOLDOWN_SEC` (默认 300s, `CBLENS_AKSHARE_ENDPOINT_COOLDOWN_SEC`
+  可覆盖, 设 0 关闭), 与 `WIND_CONNECT_COOLDOWN_SEC` 同形: 传了 `endpoint=` 的调用在
+  冷却期内抛 `EndpointCooldownError` 而**不发请求**。省的是时间 —— 实测被封时
+  `stock_zh_a_spot_em` 单次失败要 5.4s, 全池每只债都走一次就是十几分钟纯等待, 而它
+  注定返回 None。跳过日志降到 debug, 否则 280+ 只债各刷一条 warning。
+  **哪些接口在这个集群里要分清**: 挂的是 `stock_zh_a_hist` (push2his) 与
+  `stock_zh_a_spot_em` (push2); 东财的**另一个**集群 datacenter-web (`bond_zh_cov` /
+  `bond_zh_cov_value_analysis`) 与新浪那四个 (`bond_zh_hs_cov_daily` / `_spot` /
+  `stock_zh_a_daily` / `bond_cb_profile_sina`) 同期全部正常。"东财挂了" ≠ "akshare 挂了"。
+- **正股日线以新浪为主、东财为兜底 —— 顺序与直觉相反, 是实测定的**。
+  `get_stock_history` 的 calls 顺序是 `stock_zh_a_daily` (新浪) → `stock_zh_a_hist` (东财)。
+  东财被封期间新浪稳定 0.3s 出数, 而东财排前面时每只债都要先为一个注定失败的调用付一次
+  代价 (实测 `get_stock_history` 1.9s → **0.22s**, `get_stock_close` → 0.16s)。
+  **换的是优先级不是兜底** —— 新浪挂了仍要回落东财, 有守护测试钉住两个方向。
+  连带影响: `bond_zh_hs_cov_daily` 与 `stock_zh_a_daily` 都走 MiniRacer 解密, 新浪优先
+  会显著提高 V8 上下文的创建频率 —— `_warm_up_js_runtime()` 那道闸因此更不能拿掉。
+- **`q` 恒为 0 现在有两个叠加原因, 别读成"这只股不分红"**。`stock_a_indicator_lg`
+  (乐咕估值指标) 已被 **akshare 上游删除** (实测 1.18.58 起 `AttributeError`), 代码里
+  那道 `hasattr` 现在恒为 False; 而兜底的 `stock_zh_a_spot_em` 恰好属于东财被封的那个
+  集群。两条路同时不通, `pricing_api` 就把 q 回落 0。要区分"真没有股息"与"取不到",
+  看有没有 `正股实时股息率取 … 失败` 的告警。**上游删接口这一类只能靠跑起来发现** ——
+  `hasattr` 保护让它不崩, 也让它不吭声, 静态检查与全套测试都是绿的。
 - **akshare 的 JS 解密端点会把整个进程带走, 必须先在单线程里预热 V8**。
   `bond_zh_hs_cov_daily` (转债日线) 与 `stock_zh_a_daily` (正股日线兜底) 每次调用都
   **新建**一个 `py_mini_racer.MiniRacer()` 去跑新浪的解密 JS; 而 V8 的 partition_alloc

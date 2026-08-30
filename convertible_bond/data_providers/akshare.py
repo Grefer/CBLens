@@ -3,13 +3,20 @@
 数据组合:
   - bond_zh_cov            列表层: 转股价 / 正股代码 / 现价 / 信用评级 / 发行规模
   - bond_cb_profile_sina   详情层: 到期日 / 起息日 / 利率说明 (中文) / 计息方式
-  - stock_zh_a_hist        正股日线历史 (主)
-  - stock_zh_a_daily       正股日线历史 (兜底)
-  - stock_zh_a_spot_em     正股实时快照 (现价兜底)
+  - stock_zh_a_daily       正股日线历史 (主, 新浪)
+  - stock_zh_a_hist        正股日线历史 (兜底, 东财)
+  - stock_zh_a_spot_em     正股实时快照 (现价兜底, 东财)
   - bond_zh_hs_cov_daily   转债日线历史
   - macro_china_shibor_all Shibor 期限结构
 
-瞬态网络错误 (RemoteDisconnected / 超时) 自动重试 3 次。
+**正股日线以新浪为主、东财为兜底**, 与直觉相反是实测决定的: 东财的实时行情集群
+(``push2`` / ``push2his``) 按出口 IP 限流封禁, 被封期间 ``stock_zh_a_hist`` 与
+``stock_zh_a_spot_em`` 整段不可用 (单次失败还要等满 5.4s), 而同期新浪
+``stock_zh_a_daily`` 稳定 0.3s 出数。东财排在前面时, 每只债都要先为一个注定失败的
+调用付一次代价, 而它能给的东西新浪已经给了。详见 ``_helpers._REJECTION_MARKERS``。
+
+瞬态网络错误 (连接重置 / 超时) 自动重试 3 次; **源站限流拒绝不重试**, 并让该端点
+进熔断冷却 (见 ``_helpers.AKSHARE_ENDPOINT_COOLDOWN_SEC``)。
 强赎/回售触发比例、回售观察期月数 akshare 不直接给, 留 None
 (落到 UniversalCBPricer 的默认 1.3 / 0.7 / put_active_years=2)。
 """
@@ -31,6 +38,7 @@ from .base import (
     to_date,
 )
 from ._helpers import (
+    EndpointCooldownError,
     _float_or_none,
     _retry,
     _row_value,
@@ -342,7 +350,8 @@ class AkshareDataProvider(DataProvider):
 
         plain = _wind_to_ak_stock(stock_code).zfill(6)
         try:
-            spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em")
+            spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em",
+                          endpoint="stock_zh_a_spot_em")
             if spot is not None and len(spot) > 0:
                 mask = spot["代码"].astype(str).str.zfill(6) == plain
                 if mask.any():
@@ -350,6 +359,8 @@ class AkshareDataProvider(DataProvider):
                     value = _row_value(row, "最新价", "最新", "现价")
                     if value is not None:
                         return float(value)
+        except EndpointCooldownError as e:
+            logger.debug("akshare 正股实时快照跳过 %s: %s", stock_code, e)
         except Exception as e:
             logger.warning("akshare 正股实时快照取 %s 失败: %s", stock_code, e)
         raise RuntimeError(f"akshare 取正股 {stock_code} 现价为空")
@@ -361,25 +372,32 @@ class AkshareDataProvider(DataProvider):
         end_str = end.strftime("%Y%m%d")
 
         errors = []
+        # 顺序是实测决定的: 新浪在前, 东财兜底 —— 见模块 docstring。
+        # 东财这一路挂上 endpoint 熔断: 被 IP 封禁期间只有第一只债付一次代价,
+        # 之后直接跳过, 不再每只都等满连接超时, 也不再继续喂那个限流器。
         calls = [
+            (
+                f"stock_zh_a_daily({prefixed})",
+                lambda: self._ak.stock_zh_a_daily(
+                    symbol=prefixed, start_date=start_str, end_date=end_str, adjust=""),
+                None,
+            ),
             (
                 f"stock_zh_a_hist({plain})",
                 lambda: self._ak.stock_zh_a_hist(
                     symbol=plain, period="daily",
                     start_date=start_str, end_date=end_str, adjust=""),
-            ),
-            (
-                f"stock_zh_a_daily({prefixed})",
-                lambda: self._ak.stock_zh_a_daily(
-                    symbol=prefixed, start_date=start_str, end_date=end_str, adjust=""),
+                "stock_zh_a_hist",
             ),
         ]
-        for label, call in calls:
+        for label, call, endpoint in calls:
             try:
-                df = _retry(call, label=label)
+                df = _retry(call, label=label, endpoint=endpoint)
                 history = _stock_history_from_df(df)
                 if history:
                     return [(d, v) for d, v in history if d is not None and start <= d <= end]
+            except EndpointCooldownError as e:
+                errors.append(f"{label}: {e}")
             except Exception as e:
                 errors.append(f"{label}: {e}")
                 logger.warning("akshare %s 失败: %s", label, e)
@@ -419,7 +437,15 @@ class AkshareDataProvider(DataProvider):
             return None
 
     def get_stock_dividend_yield(self, stock_code, on_date):
-        """取正股股息率 (%), 优先使用乐咕估值指标, 失败时尝试实时快照字段."""
+        """取正股股息率 (%), 优先使用乐咕估值指标, 失败时尝试实时快照字段.
+
+        ⚠️ 两条路当前都可能不通, 于是 ``q`` 静默落到 0 (见 ``pricing_api`` 的回退):
+        ``stock_a_indicator_lg`` 已被 **akshare 上游删除** (实测 1.18.58 起
+        ``AttributeError``, 所以下面那道 ``hasattr`` 现在恒为 False), 而兜底的
+        ``stock_zh_a_spot_em`` 属于东财被限流封禁的那个集群。这不是本项目的 bug,
+        但**别把"q=0"读成"这只股不分红"** —— 要区分, 看有没有
+        "正股实时股息率取 … 失败" 的告警。
+        """
         plain = _wind_to_ak_stock(stock_code).zfill(6)
 
         if hasattr(self._ak, "stock_a_indicator_lg"):
@@ -450,7 +476,8 @@ class AkshareDataProvider(DataProvider):
                 logger.warning("akshare 股息率取 %s 失败: %s", stock_code, e)
 
         try:
-            spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em")
+            spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em",
+                          endpoint="stock_zh_a_spot_em")
             if spot is not None and len(spot) > 0:
                 mask = spot["代码"].astype(str).str.zfill(6) == plain
                 if mask.any():
@@ -459,6 +486,8 @@ class AkshareDataProvider(DataProvider):
                         pct = self._dividend_yield_value(row.get(col))
                         if pct is not None:
                             return pct
+        except EndpointCooldownError as e:
+            logger.debug("akshare 正股实时股息率跳过 %s: %s", stock_code, e)
         except Exception as e:
             logger.warning("akshare 正股实时股息率取 %s 失败: %s", stock_code, e)
         return None

@@ -9,9 +9,16 @@ import time
 from datetime import date
 
 import pandas as pd
+import pytest
 
 import convertible_bond.data_providers.akshare as ak_mod
 from convertible_bond.data_providers import is_issued_pending_listing
+from convertible_bond.data_providers._helpers import (
+    EndpointCooldownError,
+    _retry,
+    endpoint_is_tripped,
+    reset_endpoint_breaker,
+)
 from convertible_bond.data_providers.akshare import AkshareDataProvider
 
 
@@ -200,3 +207,145 @@ def test_warm_up_js_runtime_never_raises(monkeypatch):
     ak_mod._warm_up_js_runtime()          # 不抛就是通过
 
     assert ak_mod._js_runtime_warmed is True, "失败也要置位, 否则每次构造 provider 都重试"
+
+
+# --------------------------------------------------------------------------
+# 源站限流拒绝: 不重试 + 端点熔断 + 正股日线以新浪为主
+#
+# 背景 (2026-08-30 实测): 东财的实时行情集群 (push2 / push2his) 按出口 IP 限流
+# 封禁 —— TCP/TLS 全程正常, HTTP 请求发完之后服务端才断开, 30s 一次的低频探测
+# 连续 8 次全失败, 而同一个 URL 经海外代理照常返回数据。此前这类错误被判成
+# "瞬态"要重试 3 次, 于是批量定价在被封期间以三倍力度继续敲同一个限流器。
+# --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _clean_breaker():
+    """熔断状态是模块级全局, 每个用例前后都清干净, 免得互相污染."""
+    reset_endpoint_breaker()
+    yield
+    reset_endpoint_breaker()
+
+
+def _rejection_error():
+    """复刻被封时 requests 抛出的那个异常形状."""
+    from http.client import RemoteDisconnected
+    return ConnectionError(
+        "('Connection aborted.', RemoteDisconnected('Remote end closed connection "
+        "without response'))",
+        RemoteDisconnected("Remote end closed connection without response"),
+    )
+
+
+def test_rejection_is_not_retried():
+    """限流拒绝只打一次 —— 重试是在给自己续封, 不是在等抖动过去."""
+    calls = []
+
+    def call():
+        calls.append(1)
+        raise _rejection_error()
+
+    with pytest.raises(ConnectionError):
+        _retry(call, attempts=3, delay=0, label="stock_zh_a_hist")
+
+    assert len(calls) == 1, "被源站拒绝时不该重试"
+
+
+def test_genuine_transient_error_is_still_retried():
+    """真瞬态抖动 (连接重置) 仍然重试满 attempts 次 —— 别把这道保护一起删掉."""
+    calls = []
+
+    def call():
+        calls.append(1)
+        raise ConnectionError("Connection reset by peer")
+
+    with pytest.raises(ConnectionError):
+        _retry(call, attempts=3, delay=0, label="whatever")
+
+    assert len(calls) == 3, "连接重置是真抖动, 该重试"
+
+
+def test_rejected_endpoint_trips_breaker_and_skips_without_calling():
+    """拒绝一次后该端点进冷却: 后续调用直接抛 EndpointCooldownError, 不发请求.
+
+    这一档的价值是**时间**: 实测被封时 stock_zh_a_spot_em 单次失败要等 5.4s,
+    而全池 280+ 只债每只都要走一次, 那是十几分钟的纯等待, 且注定返回 None。
+    """
+    calls = []
+
+    def call():
+        calls.append(1)
+        raise _rejection_error()
+
+    with pytest.raises(ConnectionError):
+        _retry(call, attempts=3, delay=0, label="spot", endpoint="stock_zh_a_spot_em")
+    assert endpoint_is_tripped("stock_zh_a_spot_em")
+
+    with pytest.raises(EndpointCooldownError):
+        _retry(call, attempts=3, delay=0, label="spot", endpoint="stock_zh_a_spot_em")
+
+    assert len(calls) == 1, "冷却期内不该真的发起请求"
+
+
+def test_breaker_is_per_endpoint():
+    """熔断按端点隔离: 东财挂了不该连累新浪那一路."""
+    def boom():
+        raise _rejection_error()
+
+    with pytest.raises(ConnectionError):
+        _retry(boom, attempts=1, delay=0, endpoint="stock_zh_a_spot_em")
+
+    assert endpoint_is_tripped("stock_zh_a_spot_em")
+    assert not endpoint_is_tripped("stock_zh_a_daily")
+
+
+class FakeBothSourcesAkshare(FakeAkshare):
+    """两条正股日线都可用时, 记录到底调了哪一条."""
+
+    def __init__(self):
+        super().__init__()
+        self.daily_calls = 0
+        self.hist_calls = 0
+
+    def stock_zh_a_daily(self, **kwargs):
+        self.daily_calls += 1
+        return pd.DataFrame({
+            "date": ["2026-06-01", "2026-06-02"],
+            "close": [20.0, 21.0],
+        })
+
+    def stock_zh_a_hist(self, **kwargs):
+        self.hist_calls += 1
+        return super().stock_zh_a_hist(**kwargs)
+
+
+def test_stock_history_prefers_sina_and_never_touches_eastmoney(monkeypatch):
+    """正股日线以新浪 stock_zh_a_daily 为主, 顺利时**完全不碰**东财.
+
+    顺序反过来时, 东财被封的那几个小时里每只债都要先付一次失败代价, 而它能给的
+    收盘价新浪已经给了 (实测 get_stock_history 1.9s → 0.22s)。
+    """
+    fake = FakeBothSourcesAkshare()
+    provider = _make_provider(monkeypatch, fake)
+
+    history = provider.get_stock_history("000001.SZ", date(2026, 6, 1), date(2026, 6, 2))
+
+    assert history == [(date(2026, 6, 1), 20.0), (date(2026, 6, 2), 21.0)]
+    assert fake.daily_calls == 1
+    assert fake.hist_calls == 0, "新浪出数时不该再打东财"
+
+
+def test_stock_history_falls_back_to_eastmoney_when_sina_fails(monkeypatch):
+    """新浪挂了仍要回落东财 —— 换的是优先级, 不是把兜底删掉."""
+    fake = FakeBothSourcesAkshare()
+
+    def broken_daily(**kwargs):
+        fake.daily_calls += 1
+        raise RuntimeError("sina down")
+
+    fake.stock_zh_a_daily = broken_daily
+    provider = _make_provider(monkeypatch, fake)
+
+    history = provider.get_stock_history("000001.SZ", date(2026, 6, 1), date(2026, 6, 3))
+
+    assert fake.daily_calls == 1
+    assert fake.hist_calls == 1, "新浪失败时东财必须顶上"
+    assert history[0] == (date(2026, 6, 1), 10.0)
