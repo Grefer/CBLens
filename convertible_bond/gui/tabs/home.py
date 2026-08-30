@@ -32,7 +32,7 @@ from ..theme import (
     BTN_CTRL, BTN_HOVER,
     FONT_FAMILY,
     ORANGE,
-    TEXT,
+    TEXT, TEXT_DIM,
 )
 from ..widgets import Tooltip
 from .batch_common import _create_table_section
@@ -84,18 +84,25 @@ def _build_control_card(app, tab) -> None:
     ctrl.grid(row=0, column=0, sticky="ew", pady=(6, 8), padx=16)
     ctrl.grid_columnconfigure(0, weight=1)
 
-    # ── 上排: 标题 + 副标题 + 右侧摘要 ──
-    # 卡片里**只放标题和按钮**。副标题删掉了 (那句"开页即有上次落盘的价 · 要最新点
-    # 「⚡ 关注池重算」"): 按钮自己已经说清要点什么, 而"开页即有价"是这一页的**行为**,
-    # 用一次就知道, 不必每次都读一遍。完整说明留在标题的 Tooltip 里, 要看才看。
-    # 摘要 (持仓/偏差中位/平均评级/估值日) 在状态行右侧 —— 那是逐日变化的**数据**,
-    # 不是这一页"是干什么的"。
+    # ── 上排: 标题 + 副标题 ──
+    # 副标题与批量/回测/敏感性三页同形 (12pt TEXT_DIM, 紧跟标题右侧), 说的是
+    # **这一页是干什么的**。
+    #
+    # 它删过一次, 那次的理由只对**旧文案**成立: 旧的写"开页即有上次落盘的价 · 要最新
+    # 点「⚡ 关注池重算」", 后半句是在复述按钮, 前半句是这一页的行为、用一次就知道。
+    # 所以这一句只答"表里装的是什么" (2026-08-30 用户定的文案), **不要**再往里加
+    # "点哪个按钮" —— 那正是它上次被删掉的原因。作用域/取价链路那些留在 Tooltip 里。
+    #
+    # 逐列口径与符号约定留在标题的 Tooltip 里, 要看才看; 摘要 (关注数/偏差中位/
+    # 平均评级/估值日) 在状态行 —— 那是逐日变化的**数据**, 不是这一页"是干什么的"。
     ch = ctk.CTkFrame(ctrl, fg_color="transparent")
     ch.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 4))
 
     title = ctk.CTkLabel(ch, text="⭐ 我的关注池",
                          font=(FONT_FAMILY, 16, "bold"), text_color=TEXT)
     title.pack(side="left")
+    ctk.CTkLabel(ch, text="自选关注 + 新债",
+                 font=(FONT_FAMILY, 12), text_color=TEXT_DIM).pack(side="left", padx=(12, 0))
     # 与 COLUMN_HELP 同一条写法约定: 一句话说清怎么用, 不写实现细节 (三级兜底取价、
     # 缓存文件名那些属于代码注释)。逐列口径悬停表头看, 这里只留一条最容易读反的 ——
     # `+54.84` 有两种正好相反的读法, 而它同时出现在两列上。
@@ -165,7 +172,10 @@ def _build_table(app, tab) -> None:
     holder.grid_columnconfigure(0, weight=1)
     holder.grid_rowconfigure(0, weight=1)
     app.batch_watchlist_table_frame = _create_table_section(
-        holder, row=0, title="持仓/候选 (右键删除 · 双击载入定价页)")
+        # 「关注清单」而不是「持仓/候选」: 这是**纯研究关注清单, 不记持仓** (口径1) ——
+        # 没有成本价/份额/浮盈, 也不打算有。默认落地页最显眼的那行标题写着"持仓",
+        # 等于向读者承诺了一套这里根本不存在的语义。
+        holder, row=0, title="关注清单 (右键删除 · 双击载入定价页)")
 
 
 def refresh_theme(app: "CBPricerApp") -> None:

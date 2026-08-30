@@ -53,10 +53,6 @@ _RATING_SPREAD_FLOORS = {
     "C": 0.800,
 }
 
-DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND = 0.15
-DEFAULT_PDE_SIGNAL_SPREAD_BAND = 0.01
-
-
 def _latest_price_with_date(history, on_date: date) -> tuple[float | None, date | None]:
     """不晚于 *on_date* 的最近一笔收盘价, **连同它自己的日期**.
 
@@ -281,198 +277,9 @@ def cb_data_provider_for_market(market_provider: DataProvider) -> DataProvider:
     )
 
 
-# down_reset_uplift 诊断 (含/不含下修两价之差) 专用的粗网格。
-# no_down 价是"普通无下修转债"价, 在该网格上已收敛 (与 M=300/N=1000 细网格相差 <0.03 元),
-# 远小于 8% "下修贡献高" 阈值的尺度; 用它替代第二次细网格求解, 批量约省 1/3 算力。
-_UPLIFT_GRID: tuple[int, int] = (150, 400)
-
-
-def _uplift_grid(M: int, N: int) -> tuple[int, int]:
-    """下修诊断信号 (隐含 p_down 反解 + 4 个扰动角点) 专用的粗网格。
-
-    ⚠️ 已知不足, 保留现状是**实测后的选择**而非疏忽:
-    S_max = min(max(4, exp(3σ√T)), 50)·K 在 σ 稍大时就顶到 50K, 格点绝大部分落在 S0 以上的
-    无关区域 —— M=150 时落在 S0 **以下**的格点, σ=0.44 的债只有 12 个、σ=1.08 的只有 4 个。
-    隐含下修强度是**反解**, 价格误差被显著放大: 相对细网格的相对差中位 1.2%、P90 37%,
-    且约 9% 的债**可解性直接翻转** (implied 为 NaN 即被 strategy_backtest 剔出候选池)。
-
-    试过两条路, 实测都不划算, 别再重复:
-      - 只把 N 随 T 加密 (dt ≤ 2/3 日): 翻转 8→7、相对误差中位 1.19%→1.05%, 而诊断求解
-        慢 4~8 倍。误差主要来自 M/S_max 而不是 N。
-      - 自适应 M (保证 S0 以下 N 个格点): 对 σ>1 的券**更差** —— 强赎宽限期 cap 是障碍式
-        约束, 加密会改变它落在哪个格点上, 产生振幅达 3.5 元的周期性锯齿; 现行 M=500 恰好
-        落在锯齿零点附近 (dS=0.1K 让 K/1.2K/1.3K 都落到格点上)。
-    正解应是先收窄 S_max (需先修上边界 V[-1]=parity 与内点 cap 的不一致) 或把关键触发价
-    对齐到格点, 两者都动定价核心, 需要单独立项验证。
-    """
-    mu, nu = _UPLIFT_GRID
-    return min(M, mu), min(N, nu)
-
-
 def _one_year_probability(intensity: float) -> float:
     """年化事件强度转一年内至少发生一次的概率."""
     return float(-np.expm1(-max(0.0, float(intensity))))
-
-
-def _down_reset_pde_signals(
-    pricer: UniversalCBPricer,
-    *,
-    market_price: float | None,
-    theoretical_price: float,
-    effective_p_down: float,
-    scheduled_reset_prob: float,
-    redemption_mode: bool,
-    sigma: float,
-    r: float,
-    base_spread: float,
-    distress_k: float,
-    q: float,
-    M: int,
-    N: int,
-    implied_p_down_hi: float,
-    sensitivity_bump: float,
-    sigma_rel_band: float,
-    spread_band: float,
-) -> dict[str, Any]:
-    """按需计算市场隐含下修强度与事件模型优势, 普通批量定价不调用."""
-    empty = {
-        "implied_p_down": float("nan"),
-        "effective_p_down_1y_prob": _one_year_probability(effective_p_down),
-        "implied_p_down_1y_prob": float("nan"),
-        "p_down_gap": float("nan"),
-        "down_reset_probability_gap": float("nan"),
-        "down_reset_sensitivity": float("nan"),
-        "down_reset_edge_value": float("nan"),
-        "down_reset_edge_pct": float("nan"),
-        "down_reset_robust_edge_value": float("nan"),
-        "down_reset_edge_scenario_range": float("nan"),
-        "down_reset_edge_worst_sigma": float("nan"),
-        "down_reset_edge_worst_spread": float("nan"),
-        "down_reset_edge_scenario_count": 0,
-        "pde_down_reset_robust_status": "unavailable",
-        "pde_down_reset_signal_status": "unavailable",
-    }
-    if redemption_mode:
-        empty["pde_down_reset_signal_status"] = "redemption_mode"
-        return empty
-    market = finite_float(market_price)
-    if market is None or market <= 0:
-        empty["pde_down_reset_signal_status"] = "missing_market_price"
-        return empty
-    if (
-        implied_p_down_hi <= 0
-        or sensitivity_bump <= 0
-        or not 0 <= sigma_rel_band < 1
-        or spread_band < 0
-    ):
-        empty["pde_down_reset_signal_status"] = "invalid_signal_bounds"
-        empty["pde_down_reset_robust_status"] = "invalid_scenario_bounds"
-        return empty
-
-    mu, nu = _uplift_grid(M, N)
-    implied = pricer.solve_implied_p_down(
-        target_price=market,
-        sigma=sigma,
-        r=r,
-        base_spread=base_spread,
-        distress_k=distress_k,
-        M=mu,
-        N=nu,
-        p_down_lo=0.0,
-        p_down_hi=implied_p_down_hi,
-        q=q,
-    )
-    if not np.isfinite(implied):
-        empty["pde_down_reset_signal_status"] = "no_implied_solution"
-        return empty
-
-    try:
-        sensitivity = pricer.down_reset_sensitivity(
-            sigma=sigma,
-            r=r,
-            base_spread=base_spread,
-            p_down=effective_p_down,
-            distress_k=distress_k,
-            M=mu,
-            N=nu,
-            bump=sensitivity_bump,
-            q=q,
-        )
-        empty["down_reset_sensitivity"] = float(sensitivity)
-    except Exception:
-        pass
-    implied = float(implied)
-    effective_prob = _one_year_probability(effective_p_down)
-    implied_prob = _one_year_probability(implied)
-    edge_value = float(theoretical_price) - market
-    empty.update({
-        "implied_p_down": implied,
-        "implied_p_down_1y_prob": implied_prob,
-        "p_down_gap": float(effective_p_down) - implied,
-        "down_reset_probability_gap": effective_prob - implied_prob,
-        "down_reset_edge_value": edge_value,
-        "down_reset_edge_pct": edge_value / market,
-        "pde_down_reset_signal_status": (
-            "conditional_on_scheduled_reset" if scheduled_reset_prob > 0 else "ok"
-        ),
-    })
-
-    # 对最容易把“下修 alpha”误判出来的两个输入做角点扰动。这里不重新校准
-    # p_down: 问题正是“事件模型给定的 p_down 在一组合理 nuisance 参数下是否仍有优势”。
-    # 基准点复用 headline 理论价, 其余四个角点使用诊断粗网格。
-    scenarios = [{
-        "sigma": float(sigma),
-        "spread": float(base_spread),
-        "edge": edge_value,
-    }]
-    sigma_values = {
-        max(0.001, float(sigma) * (1.0 - sigma_rel_band)),
-        max(0.001, float(sigma) * (1.0 + sigma_rel_band)),
-    }
-    spread_values = {
-        max(0.0, float(base_spread) - spread_band),
-        max(0.0, float(base_spread) + spread_band),
-    }
-    seen = {(round(float(sigma), 12), round(float(base_spread), 12))}
-    for scenario_sigma in sorted(sigma_values):
-        for scenario_spread in sorted(spread_values):
-            key = (round(scenario_sigma, 12), round(scenario_spread, 12))
-            if key in seen:
-                continue
-            seen.add(key)
-            try:
-                scenario_price = float(pricer.price(
-                    sigma=scenario_sigma,
-                    r=r,
-                    base_spread=scenario_spread,
-                    p_down=effective_p_down,
-                    distress_k=distress_k,
-                    M=mu,
-                    N=nu,
-                    q=q,
-                ))
-            except Exception:
-                continue
-            if np.isfinite(scenario_price):
-                scenarios.append({
-                    "sigma": scenario_sigma,
-                    "spread": scenario_spread,
-                    "edge": scenario_price - market,
-                })
-    if scenarios:
-        worst = min(scenarios, key=lambda item: item["edge"])
-        edges = [float(item["edge"]) for item in scenarios]
-        empty.update({
-            "down_reset_robust_edge_value": float(worst["edge"]),
-            "down_reset_edge_scenario_range": max(edges) - min(edges),
-            "down_reset_edge_worst_sigma": float(worst["sigma"]),
-            "down_reset_edge_worst_spread": float(worst["spread"]),
-            "down_reset_edge_scenario_count": len(scenarios),
-            "pde_down_reset_robust_status": (
-                "ok" if len(scenarios) == len(seen) else "partial"
-            ),
-        })
-    return empty
 
 
 def price_from_provider(provider: DataProvider, bond_code,
@@ -485,11 +292,6 @@ def price_from_provider(provider: DataProvider, bond_code,
                         apply_term_events: bool = True,
                         use_rating_spread: bool = True,
                         estimate_down_reset_floor: bool = True,
-                        compute_pde_signals: bool = False,
-                        implied_p_down_hi: float = 3.0,
-                        p_down_sensitivity_bump: float = 0.01,
-                        pde_signal_sigma_rel_band: float = DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND,
-                        pde_signal_spread_band: float = DEFAULT_PDE_SIGNAL_SPREAD_BAND,
                         **pricer_overrides):
     """
     输入转债代码 (例如 '128009.SZ') + 一个 DataProvider 实例, 自动拉参数并定价.
@@ -710,44 +512,6 @@ def price_from_provider(provider: DataProvider, bond_code,
     else:
         no_down_price = theo
     down_reset_uplift = float(theo) - float(no_down_price)
-    if compute_pde_signals:
-        pde_signals = _down_reset_pde_signals(
-            pricer,
-            market_price=market_price,
-            theoretical_price=float(theo),
-            effective_p_down=effective_p_down,
-            scheduled_reset_prob=down_intensity.scheduled_reset_prob,
-            redemption_mode=redemption_mode,
-            sigma=sigma,
-            r=r,
-            base_spread=effective_base_spread,
-            distress_k=distress_k,
-            q=effective_q,
-            M=M,
-            N=N,
-            implied_p_down_hi=implied_p_down_hi,
-            sensitivity_bump=p_down_sensitivity_bump,
-            sigma_rel_band=pde_signal_sigma_rel_band,
-            spread_band=pde_signal_spread_band,
-        )
-    else:
-        pde_signals = {
-            "implied_p_down": float("nan"),
-            "effective_p_down_1y_prob": _one_year_probability(effective_p_down),
-            "implied_p_down_1y_prob": float("nan"),
-            "p_down_gap": float("nan"),
-            "down_reset_probability_gap": float("nan"),
-            "down_reset_sensitivity": float("nan"),
-            "down_reset_edge_value": float("nan"),
-            "down_reset_edge_pct": float("nan"),
-            "down_reset_robust_edge_value": float("nan"),
-            "down_reset_edge_scenario_range": float("nan"),
-            "down_reset_edge_worst_sigma": float("nan"),
-            "down_reset_edge_worst_spread": float("nan"),
-            "down_reset_edge_scenario_count": 0,
-            "pde_down_reset_robust_status": "not_computed",
-            "pde_down_reset_signal_status": "not_computed",
-        }
     model_signal_status = _model_signal_status(terms, sigma, risk_warnings)
     return {
         "bond_code": bond_code,
@@ -788,7 +552,9 @@ def price_from_provider(provider: DataProvider, bond_code,
         "no_down_price": no_down_price,
         "down_reset_uplift": down_reset_uplift,
         "down_reset_uplift_pct": (down_reset_uplift / theo) if theo else float("nan"),
-        **pde_signals,
+        # 模型自己那支下修强度的一年期概率读数。此前它混在 _down_reset_pde_signals
+        # 的返回里, 但它只是 effective_p_down 的纯变换, 与已删除的隐含 λ 反解无关。
+        "effective_p_down_1y_prob": _one_year_probability(effective_p_down),
         "redemption_mode": redemption_mode,
         "call_status": terms.call_status,
         "call_redemption_date": terms.call_redemption_date,

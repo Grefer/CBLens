@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import date, timedelta
 
@@ -44,6 +45,52 @@ from ..market_time import market_today
 logger = logging.getLogger(__name__)
 _STALE_STOCK_CLOSE_DAYS = 7
 
+_JS_RUNTIME_LOCK = threading.Lock()
+_js_runtime_warmed = False
+
+
+def _warm_up_js_runtime() -> None:
+    """把 V8 (py_mini_racer) 的进程级一次性初始化压在单线程里跑完。
+
+    akshare 的 ``bond_zh_hs_cov_daily`` (转债日线) 与 ``stock_zh_a_daily`` (正股日线
+    兜底) 每次调用都**新建**一个 MiniRacer 上下文去跑新浪的 JS 解密。而 V8 的
+    partition_alloc 地址空间是**进程级一次性**初始化、且这一步不是线程安全的:
+    批量定价的多个线程头一回同时进到那一行, 落后的那个会在
+    ``PartitionAddressSpace::Init`` 里 PA_CHECK 失败 → **SIGTRAP**。
+
+    那是 C 层 abort **不是 Python 异常** —— worker 的 try/except 一个字都接不住,
+    整个进程当场消失, 用户看到的就是"行情源切成 akshare, 点关注池重算, GUI 直接闪退"。
+    实测本机 py_mini_racer 0.14.1: 8 线程同时首建 3/3 崩 (rc=133=128+SIGTRAP),
+    先在单线程建一个再放开则 5/5 干净; 崩溃报告里两个线程一个停在
+    ``PartitionAddressSpace::Init`` 一个停在 ``Isolate::Init``, 正是这个竞态的形状。
+
+    **只热身, 不留全局引用**: ``MiniRacer.__del__`` → ``close()`` 会 join 它自己的
+    事件循环线程, 而解释器退出时守护线程已被冻结 —— 留一份活引用会把"启动闪退"换成
+    "退出挂死" (实测 12s 超时栈就停在那个 join 上)。
+    """
+    global _js_runtime_warmed
+    if _js_runtime_warmed:
+        return
+    with _JS_RUNTIME_LOCK:
+        # 双检: 落后的线程在这里排队, 等先到的那个把进程级初始化做完再放行
+        if _js_runtime_warmed:
+            return
+        try:
+            import py_mini_racer  # type: ignore[import-not-found]
+
+            ctx = py_mini_racer.MiniRacer()
+            try:
+                ctx.eval("1")
+            finally:
+                close = getattr(ctx, "close", None)
+                if close is not None:
+                    close()
+        except Exception:
+            # 预热是防御性的: 装不上/初始化不了都不该挡住定价本身 (JS 解密只影响
+            # 日线那两个端点, 其余取数照常)
+            logger.debug("py_mini_racer 预热跳过", exc_info=True)
+        _js_runtime_warmed = True
+
 
 class AkshareDataProvider(DataProvider):
     name = "akshare"
@@ -62,6 +109,9 @@ class AkshareDataProvider(DataProvider):
                 "未安装 akshare. 请运行: pip install akshare"
             ) from e
         self._ak = ak
+        # 必须在批量定价 fan-out **之前**做掉 (provider 总是先在单线程里构造好再分发),
+        # 否则多个 worker 同时首建 V8 上下文会 SIGTRAP 掉整个进程, 见 _warm_up_js_runtime
+        _warm_up_js_runtime()
         self._cb_list_cache = None
         self._cb_list_fetched_at: float | None = None
         self._profile_cache: dict = {}    # bond_code -> profile DataFrame

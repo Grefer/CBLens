@@ -21,6 +21,8 @@ from ...batch_pricing import (
     DEFAULT_MIN_OUTSTANDING_BALANCE,
     annotate_batch_results,
     batch_pricing_exclusion_reason,
+    batch_view_from_label,
+    batch_view_label,
     build_batch_provider,
     cross_section_anchor_as_of,
     cross_section_anchor_from,
@@ -32,6 +34,7 @@ from ...batch_pricing import (
     split_batch_codes_from_cache,
     summarize_exclusions,
     summarize_batch_results,
+    view_exclusion_reason,
     write_batch_results_csv,
 )
 from ...pricing_api import batch_price_from_provider_threaded
@@ -73,6 +76,39 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _empty_view_note(app, view: str | None) -> str:
+    """空视图的说明。
+
+    空视图是**信号在说话**, 不是判据坏了 —— 但一个空表和一个坏掉的表长得一模一样,
+    所以永远要显式写一句, 不能靠留白。而"写一句"不等于"写句废话": 通用文案
+    (「换个视图或点刷新重算」) 既没说为什么空, 又在建议一个未必奏效的动作 ——
+    实测「转股折价」的判据是 转股溢价 < −3%, 而全池最低 **−0.3%**、中位 +58.4%,
+    重算一百次也还是 0 行。
+
+    **理由要问 ``view_exclusion_reason``, 不许在这里按视图名分支**。上一版给
+    「下修优势」写过一段特判, 那个视图整体删除之后特判跟着成了死代码 —— "每加一个
+    视图就加一个 if" 必然烂掉, 而视图归属的单一事实源本来就在 ``batch_pricing``。
+
+    只在**全池同一个理由**时逐字引用它。理由串里带着**行内**数字 (「相对市场中位
+    +17.9pp, 未便宜过 5pp」「双低 205 排第 44/283」), 取众数展示等于把某一只债的
+    数字冒充成全池的口径 —— 实测「低估候选」若真空掉, 284 行会给出 200+ 种不同写法。
+    混合理由退回通用文案: 一句诚实的下限, 好过一个精确的假数。
+    """
+    view_name = view or "综合机会"       # 查判据用**冻结名**
+    name = batch_view_label(view_name)   # 写文案用**展示名**
+    rows = getattr(app, "_batch_all_results", None) or []
+    reasons = {view_exclusion_reason(row, view_name) for row in rows}
+    # ``None`` = 这一行**属于**该视图, 与"视图是空的"直接矛盾 (「综合机会」从不排除
+    # 任何行, 全池的理由集恰是 {None})。留着它会渲染出字面的 "None"; 而这种自相矛盾
+    # 的状态本来就不该由这句文案去解释, 退回通用文案。
+    if rows and len(reasons) == 1 and None not in reasons:
+        # 全池同一个理由 → 这句话说的是**池子**的性质, 可以逐字引用
+        return (f"「{name}」当前没有标的 — 全池 {len(rows)} 只的落选理由"
+                f"都是「{reasons.pop()}」。")
+    return f"「{name}」当前没有标的 — 换个视图或点「🔄 刷新重算」。"
+
+
 def _iso_or_dash(value) -> str:
     """日期单元格: 缓存读回来可能是 ``date`` 也可能是 ISO 串, 两种都要认."""
     parsed = _coerce_date(value)
@@ -106,7 +142,7 @@ _BATCH_COLS_FULL = (
     # "本券贵/便宜" 与 "相对全市场贵/便宜" 是不是同向
     ("偏差(%)", 70), ("相对偏差(pp)", 105),
     # ③ 便宜吗
-    ("双低", 60), ("下修优势(元)", 100),
+    ("双低", 60),
     # ④ 现在有什么事
     ("事件", 150), ("正股/下修线", 100), ("标签", 180),
     # ⑤ 最后才是基础条款
@@ -120,11 +156,13 @@ _BATCH_COLS_FULL = (
 # −0.640 (纯错定价排序应为 −1.0) —— 它和「质量分」在度量同一件事的重叠部分。
 # 「质量分」保留, 它本来就是从机会分里拆出来单独记账的那一支。
 # 简洁 = **决策位**, 只放"看一眼就决定要不要深入"的量。三处刻意的取舍:
-#   · 「正股距下修线」换掉「下修优势(元)」—— 后者在**开页读缓存**这条路上实测
-#     284/284 全是「—」(那份缓存的 params 里没有 compute_pde_signals), 而前者
-#     284/284 有值。下修优势保留在「完整」+ 它自己的视图。
-#   · 没有「可信度」—— 「低估候选」(40 行) 与「双低」(41 行) 的视图判据本身就含
-#     `confidence not in {高,中}`, 所以在默认视图里**结构上不可能出现「低」**。
+#   · 「正股/下修线」是唯一的下修相关列 (284/284 有值)。「稳健优势(元)」曾在这个
+#     位置竞争, 已随隐含下修强度反解整体删除 —— 它在两个 regime 都结构性无解:
+#     谷底 市价 < price(λ=0)、高位 市价 > price(λ=3)。
+#   · 没有「可信度」—— 它近乎常量: 实测全池 高 219 / 中 64 / **低 1** (77% 是「高」)。
+#     (次要理由: 「低估候选」「双低」的判据本身就含 `confidence in {高,中}`, 在那两页
+#     结构上不可能出现「低」。默认视图改成「全池」之后这条不再覆盖落地页, 但主论证
+#     "近乎常量"是在全池上量的, 不受影响。)
 #   · 没有「定价状态」—— 实测 284/284 全 ok; 失败行由**行色**标出 (`nodata` 档
 #     TEXT_DIM + 斜体), 要错误原文切「完整」。
 _BATCH_COLS_SIMPLE = (
@@ -165,9 +203,6 @@ _BATCH_COL_GETTERS = {
     # (batch_common.COLUMN_HELP): 单位留在名字里, 方向这类"要想一下才用得上"的口径
     # 交给悬浮 —— 否则名字会一直被口径撑长。
     "双低":         lambda r: f"{float(r['double_low']):.0f}" if _is_finite(r.get("double_low")) else "—",
-    # 稳健下修优势: sigma ±15% / 利差 ±100bp 四角点里最差的 (理论价 − 市价), 正 = 有优势
-    # 单位是**元** (理论价 − 市价 的最差角点), 而左右两列都带单位 —— 不写就成了裸数
-    "下修优势(元)": lambda r: f"{float(r['down_reset_robust_edge_value']):+.1f}" if _is_finite(r.get("down_reset_robust_edge_value")) else "—",
     # 对象 = **理论价**, 由**列序**承载: 它紧跟在「理论价」右边 (见 _BATCH_COLS_FULL
     # 的列序说明)。曾叫「理论价可信度」把对象写进名字, 那是它还隔着 4 列、且紧挨
     # 「评级」时的补救; 挪到位之后名字就该收回来。
@@ -212,6 +247,47 @@ _BATCH_COL_GETTERS = {
     "定价状态":     lambda r: "✓" if r.get("status") == "ok" else r.get("status", ""),
 }
 
+#: 各视图**赖以成立的那几列** (判据量或排序量) 在「简洁」里缺的部分 —— 切到该视图
+#: 时补进去。名字不叫 CRITERION 是因为「全池」没有判据, 它需要的是**排序量**
+#: 「上市日」; 按判据命名会让那一条看上去像登记错了。
+#:
+#: 「简洁」是**全池视角**下的决策位, 它排掉「可信度」「定价状态」的理由是实测在默认
+#: 视图里这两列近乎常量 (低估候选/双低的判据本身就含 `confidence in {高,中}`)。但那个
+#: 理由**是随视图变的**, 而列预设此前不随视图变: 切到「需复核」时, 判据恰恰就是
+#: status / 拦截标签 / 置信度 这三条, 其中两条没有列。实测今天那 1 只
+#: (123270.SZ 盛德转债) **完全是因为 `confidence == "低"`** 进来的 (全池: 定价失败 0 ·
+#: 置信度低 1 · 带拦截标签 0) —— 表上看到一行, 没有任何一列说得出它为什么在那儿。
+#: 「转股折价」同理: 判据是 `转股溢价 < −3%`, 而那一列只在「完整」里。
+#:
+#: **不动 `_BATCH_COLS_SIMPLE` 本身** —— 全局加进去就是让 283 只不需要它的行陪着一起
+#: 占宽; 这里补的是"这一屏正好需要"的那几列。
+_VIEW_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
+    # 全池按**上市日倒序** (最新在前) —— 排序量不可见等于让用户看一张按不可见的数排好
+    # 的表: 第一屏是三只刚上市的新债, 而页面上没有任何一列说得出它们为什么排在最前。
+    "综合机会": ("上市日",),
+    "转股折价": ("转股溢价(%)",),
+    "需复核": ("可信度", "定价状态"),
+}
+
+
+def _batch_schema_for(cols_preset: str, view: str | None):
+    """列预设 + 视图 → 实际用的 (表头, 列宽) 序列。
+
+    **列序一律从 `_BATCH_COLS_FULL` 取**, 不是把补进来的列追加到末尾: 列序是"读者的
+    提问次序"且价格块必须连成一片 (「转股溢价(%)」就落在价格块里), 追加会把它甩到
+    「评级」后面, 与它要对照的「市价」隔开十列。列宽以「简洁」自己的为准 (两个预设
+    对同名列的宽度不完全一样), 补进来的列取「完整」的宽度。
+    """
+    if cols_preset != "简洁":
+        return _BATCH_COLS_FULL
+    extra = _VIEW_KEY_COLUMNS.get(view or "", ())
+    if not extra:
+        return _BATCH_COLS_SIMPLE
+    widths = dict(_BATCH_COLS_FULL) | dict(_BATCH_COLS_SIMPLE)
+    keep = {name for name, _ in _BATCH_COLS_SIMPLE} | set(extra)
+    return tuple((name, widths[name]) for name, _ in _BATCH_COLS_FULL if name in keep)
+
+
 _BATCH_COL_STRETCH_WEIGHTS = {
     "代码": 0.5,
     "名称": 1.0,
@@ -221,7 +297,6 @@ _BATCH_COL_STRETCH_WEIGHTS = {
     "余额(亿)": 0.3,
     "相对偏差(pp)": 0.4,
     "双低": 0.3,
-    "下修优势(元)": 0.4,
     "可信度": 0.25,
     "转股价值": 0.35,
     "转股溢价(%)": 0.4,
@@ -283,18 +358,20 @@ def build(app, tab):
     # 行情源在顶栏 (app.v_data_source, v_batch_source 就是它本身), 页内不再摆第二个。
     # v_batch_status 同理已提到 app._build_vars —— 主页比批量页先 build, 谁也不能
     # 再假设自己是创建方。
-    # 默认进入「低估候选」视图: 比全市场中位便宜 ≥5pp **且**排进当期最便宜的 15%,
-    # 并排除拦截标签 (数据质量 / 可交易性) 与低置信。
-    # **偏差类标签不被排除** —— 「模型高估离群」「深度低估待核」都属模型适用性/机会信号,
-    # 不在 BLOCKING_RISK_TAGS 里; 实测这 40 行里有 16 行带「深度低估待核」。
-    # 原注释写着"偏差异常自动排除", 与 view_exclusion_reason 的实际判据对不上。
-    # canonical 名 (v_batch_view) 永远是 BATCH_REVIEW_VIEWS 之一; 菜单显示带 "(N)" 计数
-    # 后缀的 display var 与之分离, 避免回写 canonical 引发字符串不一致.
-    app.v_batch_view = ctk.StringVar(value="低估候选")
-    app._batch_view_display_var = ctk.StringVar(value="低估候选")
+    # 默认进入「全池」(底层名「综合机会」): 不过滤, 按上市日倒序 —— 打开先看到的是
+    # 全市场的近况和最新挂牌的债, 要找便宜货再切「低估候选」。
+    # 此前默认落「低估候选」, 那是把一个**判断**放在了落地页上: 它只有 43/284 只,
+    # 而"今天有没有便宜货"本身随周期摆动 (中位偏差 +0.4%~+21.6%), 谷底时它诚实归零,
+    # 于是默认打开就是一张空表 —— 那正是绝对机会分阈值时代踩过的坑, 换成横截面口径只是
+    # 把它变得罕见, 没有消除。分母做落地页则永远不空。
+    # canonical 名 (v_batch_view) 永远是 BATCH_REVIEW_VIEWS 之一; 菜单显示的是**展示名**
+    # 且带 "(N)" 计数后缀, display var 与之分离, 避免回写 canonical 引发字符串不一致.
+    app.v_batch_view = ctk.StringVar(value="综合机会")
+    app._batch_view_display_var = ctk.StringVar(value=batch_view_label("综合机会"))
     ctk.CTkLabel(cc, text="视图", text_color=TEXT_DIM, font=(FONT_FAMILY, 13)).pack(side="left", padx=(0, 4))
     app._batch_view_menu = ctk.CTkOptionMenu(
-        cc, variable=app._batch_view_display_var, values=list(BATCH_REVIEW_VIEWS),
+        cc, variable=app._batch_view_display_var,
+        values=[batch_view_label(v) for v in BATCH_REVIEW_VIEWS],
         command=lambda label: _on_view_menu_select(app, label),
         width=130, font=(FONT_FAMILY, 12), fg_color=BG_INPUT, button_color=BTN_HOVER,
         text_color=TEXT, dropdown_fg_color=BG_INPUT, dropdown_text_color=TEXT,
@@ -417,11 +494,6 @@ def _run_batch_now(app, *, reload_terms: bool = False):
             M=max(300, int(float(app.v_M.get()))),
             N=max(1000, int(float(app.v_N.get()))),
             vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
-            # 反解隐含下修强度 + 四角点扰动, 产出稳健下修优势 (策略页的默认排序信号)。
-            # 此前批量页跑完整 PDE 网格却把这族信号整批丢掉 (实测缓存里 0/280 有值)。
-            # 实测边际成本: 诊断走粗网格 (150,400) = 细网格的 0.16x, 每债 +166ms,
-            # 全池 280 只按 10 线程折算 3.1s → 7.7s —— 相对分钟级的取数可忽略。
-            compute_pde_signals=True,
         )
     except ValueError as e:
         messagebox.showerror("参数错误", str(e))
@@ -593,11 +665,16 @@ def _batch_admission_config(app):
 
 
 def _canonical_view_name(label: str) -> str:
-    """剥离视图标签里的 ' (24)' 计数后缀, 还原为 BATCH_REVIEW_VIEWS 里的标准名."""
+    """剥离视图标签里的 ' (24)' 计数后缀, 还原为 BATCH_REVIEW_VIEWS 里的标准名.
+
+    菜单里显示的是**展示名** (「综合机会」显示成「全池」), 所以回读要过
+    ``batch_view_from_label`` —— 它与 ``batch_view_label`` 共用同一张表。
+    这里不许再写一份反向映射: 展示名与底层名分叉正是这条路上的老毛病。
+    """
     if not label:
         return "综合机会"
     name = label.split(" (")[0]
-    return name if name in BATCH_REVIEW_VIEWS else "综合机会"
+    return batch_view_from_label(name) or "综合机会"
 
 
 def _render_batch_views(
@@ -680,7 +757,8 @@ def _refresh_view_menu_labels(app, base_results):
         for view in BATCH_REVIEW_VIEWS
     }
     canonical = list(BATCH_REVIEW_VIEWS)
-    decorated = [f"{name} ({counts.get(name, 0)})" for name in canonical]
+    decorated = [f"{batch_view_label(name)} ({counts.get(name, 0)})"
+                 for name in canonical]
 
     current_name = _canonical_view_name(app.v_batch_view.get())
     target_label = decorated[canonical.index(current_name)]
@@ -712,12 +790,13 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     # 空结果**照样建表** —— 不再早返回。早返回留下的是一个已 destroy 却还挂在
     # ``app._batch_main_tree`` / ``_TREE_ATTRS`` 上的悬垂 Treeview, 下一次
     # ``refresh_theme`` 在它上面抛 TclError (真机 Tk 8.6.15 实测)。触发链是现成的:
-    # 默认落地「低估候选」(40 行) → 切「下修优势」或「转股折价」(实测都是 0 行) →
+    # 默认落地「全池」(284 行) → 切「转股折价」(实测 0 行) →
     # 切主题。``refresh_theme`` 那边也补了兜底, 但两道都要有: 空视图整块消失还会
     # 让页面高度跳变, 而关注池的空态一直是"留着表 + 一句占位文案"。
     cols_preset = (app.v_batch_cols.get()
                    if hasattr(app, "v_batch_cols") else "简洁")
-    schema = _BATCH_COLS_SIMPLE if cols_preset == "简洁" else _BATCH_COLS_FULL
+    # 判据量/排序量看不见的表, 等于让用户按一个不可见的数筛选 (见 _VIEW_KEY_COLUMNS)
+    schema = _batch_schema_for(cols_preset, view)
     headers = [name for name, _ in schema]
     col_widths = [w for _, w in schema]
     columns = [f"c{i}" for i in range(len(headers))]
@@ -765,19 +844,19 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
         tree.insert("", "end", iid=str(idx), values=pad_cells(headers, vals), tags=tags)
 
     if not results:
-        # 「下修优势」「转股折价」实测今天都是 0 行 —— 空视图是信号在说话, 不是
-        # 判据坏了 (见 README 的模型边界一节)。所以要显式写出来: 一个消失的控件
-        # 和一个坏掉的控件长得一模一样。
+        # 「转股折价」实测今天是 0 行 —— 空视图是信号在说话, 不是判据坏了
+        # (见 README 的模型边界一节)。所以要显式写出来: 一个消失的控件和一个坏掉的
+        # 控件长得一模一样。文案怎么组织见 _empty_view_note。
         ctk.CTkLabel(
             app.batch_table_frame,
-            text=f"「{view or '综合机会'}」当前没有标的 — 这一档的判据今天没有命中任何债, "
-                 f"换个视图或点「🔄 刷新重算」",
+            text=_empty_view_note(app, view),
             font=(FONT_FAMILY, 12), text_color=TEXT_DIM,
+            anchor="w", justify="left", wraplength=1000,
         ).grid(row=2, column=0, sticky="w", padx=12, pady=(2, 8))
 
     summary = summarize_batch_results(results)
     total = total_results if total_results is not None else summary["total"]
-    view_name = view or "综合机会"
+    view_name = batch_view_label(view or "综合机会")
     parts = [
         f"✅ {view_name}: 展示 {summary['total']}/{total} 只",
         f"成功 {summary['success']}  失败 {summary['failed']}",
@@ -964,6 +1043,10 @@ def _load_selection_in_pricing_tab(app):
         return
     if hasattr(app, "v_bond_code"):
         app.v_bond_code.set(code)
+        # 650ms 防抖是给"用户逐字敲代码"用的; 从表里双击是一次确定的选择, 没有后续
+        # 按键要合并, 等它只会让新债的条款晚半秒才落位。
+        if hasattr(app, "_flush_pending_bond_autoload"):
+            app._flush_pending_bond_autoload()
     if hasattr(app, "tab_seg") and hasattr(app, "_switch_tab"):
         app.tab_seg.set(E("⚡ 定价"))
         app._switch_tab(E("⚡ 定价"))

@@ -21,7 +21,6 @@ from ..constants import (
 )
 
 from .strategy_common import (
-    PDE_DOWN_RESET_SOLVE_MULTIPLIER,
     STRATEGY_TEMPLATES,
     WIND_HIGH_FIDELITY_CODE_WARN_LIMIT,
     WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT,
@@ -165,7 +164,7 @@ class StrategySetupMixin:
                 return default
 
         rank_signal = normalize_pde_rank_signal_label(
-            _get("v_st_rank_signal", "稳健下修优势")
+            _get("v_st_rank_signal", "估值偏差")
         )
         use_valuation_exposure = "估值" in str(
             _get("v_st_exposure", "恒定满仓")
@@ -178,16 +177,8 @@ class StrategySetupMixin:
             yield_text = f"{float(_get('v_st_cash_yield', '0')):g}%/年"
         except (TypeError, ValueError):
             yield_text = "不计息"
-        if rank_signal == "估值偏差":
-            signal_text = "估值偏差 < 0"
-            event_exit = False
-        else:
-            try:
-                min_edge = float(_get("v_st_min_reset_edge", "0"))
-                signal_text = f"{rank_signal} ≥ {min_edge:g}元"
-            except (TypeError, ValueError):
-                signal_text = rank_signal
-            event_exit = bool(_get("v_st_event_exit", True))
+        signal_text = "估值偏差 < 0"
+        event_exit = bool(_get("v_st_event_exit", False))
         parts = [signal_text, f"Top {n_text} 等权", f"缺口留现金（{yield_text}）"]
         if event_exit:
             parts.append("公告后退出")
@@ -267,15 +258,6 @@ class StrategySetupMixin:
             estimated_pricing * WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER
             if mode == "Wind高保真" else 0
         )
-        rank_raw = normalize_pde_rank_signal_label(
-            self.v_st_rank_signal.get()
-            if hasattr(self, "v_st_rank_signal") else "稳健下修优势"
-        )
-        uses_pde_down_reset_signal = "下修" in str(rank_raw)
-        estimated_pde_solves = (
-            estimated_pricing * PDE_DOWN_RESET_SOLVE_MULTIPLIER
-            if uses_pde_down_reset_signal else estimated_pricing
-        )
         history = self._strategy_history_precheck(schedule[:-1])
         patch = self._strategy_patch_precheck()
         events = self._strategy_events_precheck()
@@ -288,11 +270,6 @@ class StrategySetupMixin:
         ):
             warnings.append(
                 "Wind高保真会逐债拉取历史条款/状态/行情, 大池回测可能耗时数小时"
-            )
-        if uses_pde_down_reset_signal:
-            warnings.append(
-                "下修优势需逐债反解隐含强度并做参数角点重算, "
-                f"本地求解量约为普通回测的{PDE_DOWN_RESET_SOLVE_MULTIPLIER}倍"
             )
         if top_n > len(codes):
             warnings.append("TopN 大于代码池数量")
@@ -310,15 +287,16 @@ class StrategySetupMixin:
             "pool_mode": self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场",
             "history_mode": mode,
             "strategy_template": normalize_pde_strategy_template(self.v_st_template.get()),
-            "rank_signal_label": rank_raw,
+            "rank_signal_label": normalize_pde_rank_signal_label(
+                self.v_st_rank_signal.get()
+                if hasattr(self, "v_st_rank_signal") else "估值偏差"
+            ),
             "code_count": len(codes),
             "period_count": period_count,
             "top_n": top_n,
             "grid_M": _STRATEGY_PDE_GRID_M,
             "grid_N": _STRATEGY_PDE_GRID_N,
             "estimated_pricing": estimated_pricing,
-            "estimated_pde_solves": estimated_pde_solves,
-            "uses_pde_down_reset_signal": uses_pde_down_reset_signal,
             "estimated_wind_requests": estimated_wind_requests,
             "history": history,
             "patch": patch,
@@ -385,8 +363,6 @@ class StrategySetupMixin:
             f"{info['period_count']}期",
             f"预计定价 {int(info['estimated_pricing']):,}次",
         ]
-        if info.get("uses_pde_down_reset_signal"):
-            parts.append(f"模型求解 {int(info['estimated_pde_solves']):,}次")
         if info.get("estimated_wind_requests"):
             parts.append(f"Wind请求 {int(info['estimated_wind_requests']):,}次")
         parts.append(str(info.get("history_mode") or "标准"))

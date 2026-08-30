@@ -1,7 +1,7 @@
 """基于批量 PDE 信号的可转债策略回测.
 
 策略保持可解释且分层:
-  - 每个调仓日对候选池做批量定价, 按 PDE 估值偏差 / 下修错定价信号排序
+  - 每个调仓日对候选池做批量定价, 按 PDE 估值偏差排序
   - 选出前 N 只转债, 按等权持有到下一调仓边界
   - 下修策略遇到提议/通过/拒绝公告时提前退出, 其余持有到调仓边界
   - 收益用信号日或下一可得收盘价计算
@@ -45,7 +45,6 @@ from .data_providers import DataProvider, finite_float
 from .pricing_api import batch_price_from_provider_threaded
 
 
-_DOWN_RESET_RANK_SIGNALS = frozenset({"down_reset_edge", "down_reset_robust_edge"})
 _DOWN_RESET_EXIT_EVENT_TYPES = frozenset({
     "down_reset_proposed",
     "down_reset_approved",
@@ -127,20 +126,16 @@ class ScoreStrategyConfig:
     # ── B 持仓层排序信号: top_score 取前 N 的排序依据 (pool 的余额截断与此解耦) ──
     #   "double_low": 双低值 = 转债价格 + 转股溢价率×100, 升序 (经典双低轮动)。
     #   "deviation" : 模型偏差 (市价-理论价)/理论价 升序 (最低估优先, 纯 PDE 信号)。
-    #   "down_reset_edge": 事件模型 p_down 对应理论价 - 市价, 降序; 仅接受市场价
-    #                       可反解出隐含 p_down 的标的, 计算成本显著高于普通排序。
-    #   "down_reset_robust_edge": 在 sigma ±15% / 信用利差 ±100bp 四角点中取最差
-    #                              下修优势, 降序; GUI 下修策略默认使用此稳健信号。
     # **默认从 "score" 改成 "deviation"**: 机会分及其字段已整体删除 (实测 95% 的行
-    # 低估项恒为 0, 它度量的是信用质量而非错定价)。选 "deviation" 而不是 GUI/CLI 各自的
-    # 默认 "down_reset_robust_edge", 是因为 GUI 的
-    # ``STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES`` **早就**把「机会分」/「score」映射成
-    # 「估值偏差」—— 让这里跟上是消除分叉, 不是新立一个决定。
+    # 低估项恒为 0, 它度量的是信用质量而非错定价)。让这里跟上 GUI 的
+    # ``STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES`` 是消除分叉, 不是新立一个决定。
+    # 下修优势 (``down_reset_edge`` / ``down_reset_robust_edge``) 已随隐含下修强度反解
+    # 一并删除, 旧值由 ``_normalize_rank_signal`` 落到这里。
     rank_signal: str = "deviation"
-    min_down_reset_edge_value: float | None = 0.0
-    # 下修策略的 thesis 在提议/通过/拒绝公告后已经发生或证伪; 默认在公告后的
-    # 可成交收盘退出, 余下时间持有现金, 而不是机械等到下一调仓边界。
-    down_reset_event_exit: bool = True
+    # 下修提议/通过/拒绝公告落地后, 在下一可成交收盘退出, 余下时间持有现金, 而不是
+    # 机械等到下一调仓边界。**默认从 True 改成 False**: 它此前只在排序信号是下修优势时
+    # 才被激活, 而那个信号已整体删除; 留着 True 会让事件退出突然对所有回测生效。
+    down_reset_event_exit: bool = False
     # ── C 资金层: 未建仓/缺成交价的槽位怎么办 ──
     #   "reserve_cash": 留现金 (分母=目标槽位数; top_score 下=top_n, pool 下=候选数)。
     #   "full_invest" : 满仓等权, 缺口/缺价权重摊回已持仓 (分母=实际持仓数)。
@@ -164,13 +159,13 @@ class ScoreStrategyConfig:
 class PDEStrategyConfig(ScoreStrategyConfig):
     """PDE 策略的推荐默认口径。
 
-    主策略为稳健下修错定价：反解市场隐含下修强度，在 HV 与信用利差角点取
-    最差优势，公告后下一可得收盘退出。未满 Top N 的仓位保留现金。
+    主策略为估值错定价：按模型偏差升序取前 N，公告后下一可得收盘退出。
+    未满 Top N 的仓位保留现金。
     """
 
     execution_timing: str = "next_close"
     transaction_cost: float = 0.002
-    rank_signal: str = "down_reset_robust_edge"
+    rank_signal: str = "deviation"
     cash_yield_rate: float = 0.022
 
 
@@ -420,8 +415,6 @@ def validate_strategy_config(cfg: ScoreStrategyConfig) -> None:
 def strategy_type_for_rank_signal(value: str | None) -> str:
     """排序信号对应的产品策略类型；legacy 仅用于旧快照兼容。"""
     signal = _normalize_rank_signal(value)
-    if signal in _DOWN_RESET_RANK_SIGNALS:
-        return "pde_down_reset"
     if signal == "deviation":
         return "pde_valuation"
     return "legacy"
@@ -437,7 +430,6 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
         "top_n": cfg.top_n,
         "holding_mode": holding_mode,
         "rank_signal": rank_signal,
-        "min_down_reset_edge_value": cfg.min_down_reset_edge_value,
         "down_reset_event_exit": bool(cfg.down_reset_event_exit),
         "max_holdings": cfg.max_holdings,
         "funding_mode": funding_mode,
@@ -536,8 +528,6 @@ def _run_rebalance_period(
         ctx.performance_stats["price_prefilter_excluded"] += len(prefilter_excluded)
     _emit_stage_progress(stage_cb, "定价", 0, len(pricing_codes), idx, total_periods)
     pricing_overrides = dict(ctx.pricer_overrides)
-    if rank_signal in _DOWN_RESET_RANK_SIGNALS:
-        pricing_overrides["compute_pde_signals"] = True
     priced_rows = _batch_price_with_snapshot_cache(
         provider,
         pricing_codes,
@@ -597,10 +587,12 @@ def _run_rebalance_period(
         candidate_codes={str(row.get("bond_code")) for row in candidates},
     )
     _emit_stage_progress(stage_cb, "持仓估值", 0, len(selected), idx, total_periods)
+    # 此前这道门是 "排序信号是下修优势 **且** 开了 down_reset_event_exit"。下修优势信号
+    # 已整体删除, 于是唯一的自动触发路径没了。默认值同时从 True 改成 False, 是为了**保住
+    # 既有行为**: 按 deviation 排序的回测在删除前就走不到这条路 (第一个条件恒假), 若只删
+    # 前半个条件、留着 True, 事件退出会突然对所有回测生效 —— 那是默认选债行为变更。
     event_exit_store = (
-        _event_store_from_provider(provider)
-        if rank_signal in _DOWN_RESET_RANK_SIGNALS and cfg.down_reset_event_exit
-        else None
+        _event_store_from_provider(provider) if cfg.down_reset_event_exit else None
     )
     positions, skipped_positions = _position_returns(
         provider,
@@ -1069,10 +1061,7 @@ def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow([
         "period_start", "period_end", "rank", "bond_code", "bond_name",
         "rank_signal", "rank_value", "signal_market_price", "theoretical_price",
-        "deviation", "effective_p_down_1y_prob", "implied_p_down_1y_prob",
-        "down_reset_probability_gap", "down_reset_edge_value",
-        "down_reset_robust_edge_value", "pde_down_reset_signal_status",
-        "pde_down_reset_robust_status",
+        "deviation", "effective_p_down_1y_prob",
         "entry_date", "exit_date", "start_price", "end_price",
         "price_return", "post_exit_cash_return", "period_return",
         "exit_reason", "exit_signal_date", "exit_event_type", "exit_event_title",
@@ -1091,12 +1080,6 @@ def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
             _csv_value(pos.get("theoretical_price")),
             _csv_value(pos.get("deviation")),
             _csv_value(pos.get("effective_p_down_1y_prob")),
-            _csv_value(pos.get("implied_p_down_1y_prob")),
-            _csv_value(pos.get("down_reset_probability_gap")),
-            _csv_value(pos.get("down_reset_edge_value")),
-            _csv_value(pos.get("down_reset_robust_edge_value")),
-            pos.get("pde_down_reset_signal_status", ""),
-            pos.get("pde_down_reset_robust_status", ""),
             _csv_value(pos.get("entry_date")),
             _csv_value(pos.get("exit_date")),
             _csv_value(pos.get("start_price")),
@@ -1151,10 +1134,6 @@ def _write_csv_candidate_rows(writer, periods: list[dict[str, Any]]) -> None:
         "period_start", "period_end", "rank", "selected", "bond_code", "bond_name",
         "selection_reason", "rank_signal", "rank_value", "market_price",
         "theoretical_price", "deviation", "effective_p_down_1y_prob",
-        "implied_p_down_1y_prob", "down_reset_probability_gap",
-        "down_reset_edge_value", "down_reset_robust_edge_value",
-        "down_reset_edge_scenario_range", "pde_down_reset_signal_status",
-        "pde_down_reset_robust_status",
         "conversion_premium", "sigma", "confidence", "risk_tags",
     ])
     for period, row in candidate_rows:
@@ -1172,13 +1151,6 @@ def _write_csv_candidate_rows(writer, periods: list[dict[str, Any]]) -> None:
             _csv_value(row.get("theoretical_price")),
             _csv_value(row.get("deviation")),
             _csv_value(row.get("effective_p_down_1y_prob")),
-            _csv_value(row.get("implied_p_down_1y_prob")),
-            _csv_value(row.get("down_reset_probability_gap")),
-            _csv_value(row.get("down_reset_edge_value")),
-            _csv_value(row.get("down_reset_robust_edge_value")),
-            _csv_value(row.get("down_reset_edge_scenario_range")),
-            row.get("pde_down_reset_signal_status", ""),
-            row.get("pde_down_reset_robust_status", ""),
             _csv_value(row.get("conversion_premium")),
             _csv_value(row.get("sigma")),
             row.get("confidence", ""),
@@ -1195,9 +1167,7 @@ def _write_csv_rejection_rows(writer, periods: list[dict[str, Any]]) -> None:
     writer.writerow([
         "period_start", "period_end", "source", "bond_code", "bond_name",
         "reason", "rank_signal", "rank_value", "market_price", "deviation",
-        "effective_p_down_1y_prob", "implied_p_down_1y_prob",
-        "down_reset_edge_value", "down_reset_robust_edge_value",
-        "pde_down_reset_signal_status", "pde_down_reset_robust_status",
+        "effective_p_down_1y_prob",
         "conversion_premium", "confidence", "risk_tags",
     ])
     for period, row in rejection_rows:
@@ -1213,11 +1183,6 @@ def _write_csv_rejection_rows(writer, periods: list[dict[str, Any]]) -> None:
             _csv_value(row.get("market_price")),
             _csv_value(row.get("deviation")),
             _csv_value(row.get("effective_p_down_1y_prob")),
-            _csv_value(row.get("implied_p_down_1y_prob")),
-            _csv_value(row.get("down_reset_edge_value")),
-            _csv_value(row.get("down_reset_robust_edge_value")),
-            row.get("pde_down_reset_signal_status", ""),
-            row.get("pde_down_reset_robust_status", ""),
             _csv_value(row.get("conversion_premium")),
             row.get("confidence", ""),
             "|".join(str(tag) for tag in row.get("risk_tags") or []),
@@ -1679,21 +1644,7 @@ def _select_candidate_rows(rows: list[dict[str, Any]], cfg: ScoreStrategyConfig)
     for row in ranked:
         if row.get("status") != "ok":
             continue
-        if rank_signal in _DOWN_RESET_RANK_SIGNALS:
-            edge = _rank_signal_value(row, rank_signal)
-            if edge is None:
-                continue
-            if (
-                rank_signal == "down_reset_robust_edge"
-                and row.get("pde_down_reset_robust_status") != "ok"
-            ):
-                continue
-            if (
-                cfg.min_down_reset_edge_value is not None
-                and edge < cfg.min_down_reset_edge_value
-            ):
-                continue
-        elif rank_signal == "deviation":
+        if rank_signal == "deviation":
             if finite_float(row.get("deviation")) is None:
                 continue
         if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
@@ -1747,23 +1698,9 @@ def _candidate_explanation_rows(
             "confidence": row.get("confidence"),
             "risk_tags": list(row.get("risk_tags") or []),
             "model_signal_status": row.get("model_signal_status"),
-            "implied_p_down": finite_float(row.get("implied_p_down")),
             "effective_p_down_1y_prob": finite_float(
                 row.get("effective_p_down_1y_prob")
             ),
-            "implied_p_down_1y_prob": finite_float(row.get("implied_p_down_1y_prob")),
-            "down_reset_probability_gap": finite_float(
-                row.get("down_reset_probability_gap")
-            ),
-            "down_reset_edge_value": finite_float(row.get("down_reset_edge_value")),
-            "down_reset_robust_edge_value": finite_float(
-                row.get("down_reset_robust_edge_value")
-            ),
-            "down_reset_edge_scenario_range": finite_float(
-                row.get("down_reset_edge_scenario_range")
-            ),
-            "pde_down_reset_signal_status": row.get("pde_down_reset_signal_status"),
-            "pde_down_reset_robust_status": row.get("pde_down_reset_robust_status"),
         })
     return rows
 
@@ -1779,25 +1716,7 @@ def _candidate_selection_reason(
     premium = finite_float(row.get("conversion_premium"))
     tags = [str(tag) for tag in row.get("risk_tags") or []]
     parts = []
-    if rank_signal in _DOWN_RESET_RANK_SIGNALS:
-        edge = _rank_signal_value(row, rank_signal)
-        point_edge = finite_float(row.get("down_reset_edge_value"))
-        effective_prob = finite_float(row.get("effective_p_down_1y_prob"))
-        implied_prob = finite_float(row.get("implied_p_down_1y_prob"))
-        if edge is not None:
-            label = "稳健下修优势" if rank_signal == "down_reset_robust_edge" else "下修优势"
-            parts.append(f"{label} {edge:+.2f}元")
-        if (
-            rank_signal == "down_reset_robust_edge"
-            and point_edge is not None
-            and edge is not None
-        ):
-            parts.append(f"基准参数 {point_edge:+.2f}元")
-        if effective_prob is not None and implied_prob is not None:
-            parts.append(
-                f"一年概率 模型{effective_prob * 100:.1f}%/隐含{implied_prob * 100:.1f}%"
-            )
-    elif rank_signal == "deviation":
+    if rank_signal == "deviation":
         if deviation is not None:
             parts.append(f"PDE偏差 {deviation * 100:+.1f}%")
     if deviation is not None and rank_signal != "deviation":
@@ -1818,31 +1737,25 @@ def _rejection_explanation_rows(
     candidate_codes: set[str],
     limit: int = 120,
 ) -> list[dict[str, Any]]:
+    """落选解释, 按信息量倒序填预算。
+
+    两段共用一个 ``limit``: 「筛选」段 (过了准入、定过价、却没进候选) 是**唯一**能回答
+    "信号为什么是空的"的一段; 「准入/预筛」段几乎全是已退市/已到期这类结构性死券, 每期
+    几乎不变、看一次就够。曾经先填准入段并在填满时直接 return, 于是死券把预算整个吃光 ——
+    实测全库 615 只里死券就有约 100 只, 每期稳稳撞满 120, 导出的 CSV 里**一条「筛选」都没有**。
+    而"没有落选解释"和"根本没有落选"长得一模一样: 排查"策略为什么 100% 现金"时,
+    唯一能用的那段证据恰好是被截掉的那段。所以先填「筛选」, 准入段拿剩下的。
+    """
     rank_signal = _normalize_rank_signal(cfg.rank_signal)
+    excluded_codes = {str(code) for code, _ in excluded}
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for code, reason in excluded:
-        code = str(code)
-        rows.append({
-            "bond_code": code,
-            "bond_name": "",
-            "source": "准入/预筛",
-            "reason": str(reason),
-            "rank_signal": rank_signal,
-            "rank_value": None,
-            "market_price": None,
-            "deviation": None,
-            "conversion_premium": None,
-            "confidence": "",
-            "risk_tags": [],
-        })
-        seen.add(code)
-        if len(rows) >= limit:
-            return rows
 
     for row in filter_batch_results_by_view(priced_rows, "综合机会"):
         code = str(row.get("bond_code") or "")
         if not code or code in seen or code in candidate_codes:
+            continue
+        if code in excluded_codes:
             continue
         reason = _candidate_filter_reason(row, cfg)
         if reason is None:
@@ -1862,17 +1775,31 @@ def _rejection_explanation_rows(
             "effective_p_down_1y_prob": finite_float(
                 row.get("effective_p_down_1y_prob")
             ),
-            "implied_p_down_1y_prob": finite_float(row.get("implied_p_down_1y_prob")),
-            "down_reset_edge_value": finite_float(row.get("down_reset_edge_value")),
-            "down_reset_robust_edge_value": finite_float(
-                row.get("down_reset_robust_edge_value")
-            ),
-            "pde_down_reset_signal_status": row.get("pde_down_reset_signal_status"),
-            "pde_down_reset_robust_status": row.get("pde_down_reset_robust_status"),
         })
         seen.add(code)
         if len(rows) >= limit:
             break
+
+    for code, reason in excluded:
+        if len(rows) >= limit:
+            break
+        code = str(code)
+        if code in seen:
+            continue
+        rows.append({
+            "bond_code": code,
+            "bond_name": "",
+            "source": "准入/预筛",
+            "reason": str(reason),
+            "rank_signal": rank_signal,
+            "rank_value": None,
+            "market_price": None,
+            "deviation": None,
+            "conversion_premium": None,
+            "confidence": "",
+            "risk_tags": [],
+        })
+        seen.add(code)
     return rows
 
 
@@ -1889,26 +1816,7 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
     if view_reason is not None:
         return f"{view}视图: {view_reason}"
 
-    if rank_signal in _DOWN_RESET_RANK_SIGNALS:
-        edge = _rank_signal_value(row, rank_signal)
-        if edge is None:
-            status = str(row.get("pde_down_reset_signal_status") or "未计算")
-            return f"缺少可解释的下修优势 ({status})"
-        if (
-            rank_signal == "down_reset_robust_edge"
-            and row.get("pde_down_reset_robust_status") != "ok"
-        ):
-            status = str(row.get("pde_down_reset_robust_status") or "未计算")
-            return f"下修优势情景不完整 ({status})"
-        if (
-            cfg.min_down_reset_edge_value is not None
-            and edge < cfg.min_down_reset_edge_value
-        ):
-            return (
-                f"下修优势 {edge:+.2f}元 < 下限 "
-                f"{cfg.min_down_reset_edge_value:+.2f}元"
-            )
-    elif rank_signal == "deviation":
+    if rank_signal == "deviation":
         if finite_float(row.get("deviation")) is None:
             return "缺少PDE估值偏差"
     if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
@@ -2132,20 +2040,9 @@ def _position_returns(
             "signal_market_price": finite_float(row.get("market_price")),
             "theoretical_price": finite_float(row.get("theoretical_price")),
             "deviation": finite_float(row.get("deviation")),
-            "implied_p_down": finite_float(row.get("implied_p_down")),
             "effective_p_down_1y_prob": finite_float(
                 row.get("effective_p_down_1y_prob")
             ),
-            "implied_p_down_1y_prob": finite_float(row.get("implied_p_down_1y_prob")),
-            "down_reset_probability_gap": finite_float(
-                row.get("down_reset_probability_gap")
-            ),
-            "down_reset_edge_value": finite_float(row.get("down_reset_edge_value")),
-            "down_reset_robust_edge_value": finite_float(
-                row.get("down_reset_robust_edge_value")
-            ),
-            "pde_down_reset_signal_status": row.get("pde_down_reset_signal_status"),
-            "pde_down_reset_robust_status": row.get("pde_down_reset_robust_status"),
             "confidence": row.get("confidence"),
             "risk_tags": list(row.get("risk_tags") or []),
             "entry_date": entry_point.date,
@@ -3031,13 +2928,16 @@ def _normalize_rank_signal(value: str | None) -> str:
         "double_low": "double_low", "doublelow": "double_low", "双低": "double_low",
         "deviation": "deviation", "偏差": "deviation", "模型偏差": "deviation",
         "pde估值偏差": "deviation",
-        "down_reset_edge": "down_reset_edge", "reset_edge": "down_reset_edge",
-        "下修优势": "down_reset_edge", "pde下修优势": "down_reset_edge",
-        "下修错定价": "down_reset_edge",
-        "down_reset_robust_edge": "down_reset_robust_edge",
-        "robust_reset_edge": "down_reset_robust_edge",
-        "稳健下修优势": "down_reset_robust_edge",
-        "pde稳健下修优势": "down_reset_robust_edge",
+        # 下修优势系列已随隐含下修强度反解整体删除 (信号在两个 regime 都结构性
+        # 无解: 谷底 市价 < price(λ=0)、高位 市价 > price(λ=3))。旧配置/旧快照
+        # 仍可能带这些值, 一律落到「估值偏差」—— 与机会分那次的处置一致。
+        "down_reset_edge": "deviation", "reset_edge": "deviation",
+        "下修优势": "deviation", "pde下修优势": "deviation",
+        "下修错定价": "deviation",
+        "down_reset_robust_edge": "deviation",
+        "robust_reset_edge": "deviation",
+        "稳健下修优势": "deviation",
+        "pde稳健下修优势": "deviation",
     }
     if raw not in aliases:
         raise ValueError(f"未知排序信号 rank_signal: {value}")
@@ -3054,10 +2954,6 @@ def _rank_signal_value(row: dict[str, Any], signal: str) -> float | None:
         return price + premium * 100.0
     if signal == "deviation":
         return finite_float(row.get("deviation"))
-    if signal == "down_reset_edge":
-        return finite_float(row.get("down_reset_edge_value"))
-    if signal == "down_reset_robust_edge":
-        return finite_float(row.get("down_reset_robust_edge_value"))
     return finite_float(row.get("deviation"))
 
 
@@ -3073,7 +2969,7 @@ def _sort_candidates_by_rank_signal(
     """
     def key(row: dict[str, Any]):
         value = _rank_signal_value(row, signal)
-        sort_value = -value if value is not None and signal in _DOWN_RESET_RANK_SIGNALS else value
+        sort_value = value
         return (
             0 if value is not None else 1,
             sort_value if sort_value is not None else float("inf"),

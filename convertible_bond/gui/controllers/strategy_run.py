@@ -19,10 +19,6 @@ from ...historical_terms import (
     project_terms_patches_path,
 )
 from ...paths import data_dir
-from ...pricing_api import (
-    DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND,
-    DEFAULT_PDE_SIGNAL_SPREAD_BAND,
-)
 from ...strategy_backtest import (
     PDEStrategyConfig,
     _funding_legacy_alias,
@@ -37,7 +33,6 @@ from .strategy_common import (
     STRATEGY_BACKTEST_PRO_PREVIEW,
     STRATEGY_VIEW_POLICY,
     StrategyBacktestCancelled,
-    PDE_DOWN_RESET_SOLVE_WARN_LIMIT,
     WIND_HIGH_FIDELITY_CODE_WARN_LIMIT,
     WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT,
     _DEFAULT_VIEW_POLICY,
@@ -95,25 +90,18 @@ class StrategyRunMixin:
             rank_label = normalize_pde_rank_signal_label(
                 getattr(self, "v_st_rank_signal", None).get()
                 if getattr(self, "v_st_rank_signal", None) is not None
-                else "稳健下修优势"
+                else "估值偏差"
             )
-            rank_signal = {
-                "稳健下修优势": "down_reset_robust_edge",
-                "下修优势": "down_reset_edge",
-                "估值偏差": "deviation",
-            }[rank_label]
-            is_down_reset = rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
-            min_reset_edge = (
-                self._optional_float(self.v_st_min_reset_edge)
-                if is_down_reset and hasattr(self, "v_st_min_reset_edge") else None
+            rank_signal = {"估值偏差": "deviation"}[rank_label]
+            event_exit = (
+                bool(self.v_st_event_exit.get())
+                if hasattr(self, "v_st_event_exit") else False
             )
-            event_exit = bool(self.v_st_event_exit.get()) if hasattr(self, "v_st_event_exit") else True
             config = PDEStrategyConfig(
                 top_n=max(1, int(float(self.v_st_top_n.get()))),
                 holding_mode="top_score",
                 rank_signal=rank_signal,
-                min_down_reset_edge_value=min_reset_edge,
-                down_reset_event_exit=bool(event_exit and is_down_reset),
+                down_reset_event_exit=event_exit,
                 funding_mode="reserve_cash",
                 cash_yield_rate=max(0.0, (cash_yield_pct or 0.0) / 100.0),
                 exposure_mode=exposure_mode,
@@ -168,14 +156,6 @@ class StrategyRunMixin:
                     self.v_st_status.set("已取消 Wind高保真大池回测")
                     return
                 expensive_confirmed = True
-        if (
-            precheck is not None
-            and not expensive_confirmed
-            and self._strategy_pde_signal_is_expensive(precheck)
-        ):
-            if not self._confirm_expensive_pde_strategy_backtest(precheck):
-                self.v_st_status.set("已取消下修机会大池回测")
-                return
         history_mode = (
             precheck.get("history_mode") if precheck is not None
             else normalize_strategy_history_mode(
@@ -238,30 +218,8 @@ class StrategyRunMixin:
         )
 
     @staticmethod
-    def _strategy_pde_signal_is_expensive(precheck: dict) -> bool:
-        return bool(
-            precheck.get("uses_pde_down_reset_signal")
-            and int(precheck.get("estimated_pde_solves") or 0)
-            > PDE_DOWN_RESET_SOLVE_WARN_LIMIT
-        )
-
-    @staticmethod
-    def _confirm_expensive_pde_strategy_backtest(precheck: dict) -> bool:
-        return messagebox.askokcancel(
-            "下修机会计算量较大",
-            "当前配置需要逐债反解市场隐含下修强度并运行参数情景:\n\n"
-            f"代码池: {precheck.get('code_count')} 只\n"
-            f"调仓期: {precheck.get('period_count')} 期\n"
-            f"模型求解估算: ≈{precheck.get('estimated_pde_solves')} 次\n\n"
-            "建议先缩短区间或切换到当前筛选结果/自选代码的小池验证。",
-        )
-
-    @staticmethod
     def _confirm_expensive_wind_strategy_backtest(precheck: dict) -> bool:
-        pde_line = (
-            f"模型求解估算: ≈{precheck.get('estimated_pde_solves')} 次\n"
-            if precheck.get("uses_pde_down_reset_signal") else ""
-        )
+        pde_line = ""
         return messagebox.askokcancel(
             "Wind高保真回测耗时很长",
             "当前配置会对 Wind 做大量同步请求:\n\n"
@@ -458,18 +416,6 @@ class StrategyRunMixin:
 
     def _strategy_pricing_params(self):
         """仅从策略页取 PDE 参数，不读取单债定价页状态。"""
-        sigma_band = (
-            float(self.v_st_sigma_band.get()) / 100.0
-            if hasattr(self, "v_st_sigma_band")
-            else DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND
-        )
-        spread_band = (
-            float(self.v_st_spread_band_bps.get()) / 10000.0
-            if hasattr(self, "v_st_spread_band_bps")
-            else DEFAULT_PDE_SIGNAL_SPREAD_BAND
-        )
-        if sigma_band < 0 or spread_band < 0:
-            raise ValueError("稳健情景扰动幅度不能为负")
         p_down = float(self.v_st_p_down.get()) / 100.0
         if p_down < 0.0:
             raise ValueError("年化下修强度不能为负")
@@ -481,8 +427,6 @@ class StrategyRunMixin:
             "M": _STRATEGY_PDE_GRID_M,
             "N": _STRATEGY_PDE_GRID_N,
             "vol_window_days": VOL_WINDOW_MAP.get(self.v_st_vol_window.get(), 21),
-            "pde_signal_sigma_rel_band": sigma_band,
-            "pde_signal_spread_band": spread_band,
         }
 
     @staticmethod
@@ -522,7 +466,6 @@ class StrategyRunMixin:
                 "top_n": config.top_n,
                 "holding_mode": config.holding_mode,
                 "rank_signal": config.rank_signal,
-                "min_down_reset_edge_value": config.min_down_reset_edge_value,
                 "down_reset_event_exit": config.down_reset_event_exit,
                 "max_holdings": config.max_holdings,
                 "funding_mode": config.funding_mode,

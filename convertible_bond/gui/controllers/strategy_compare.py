@@ -26,6 +26,7 @@ from ..theme import (
     FONT_FAMILY,
     get_color,
 )
+from ...batch_pricing import batch_view_label
 from ..widgets import Tooltip
 
 from .strategy_common import STRATEGY_MEDIUM_TABLE_HEIGHT, STRATEGY_SECONDARY_CHART_HEIGHT
@@ -47,7 +48,11 @@ class StrategyCompareMixin:
         strategy_name = {
             "pde_down_reset": "下修机会",
             "pde_valuation": "估值偏差",
-        }.get(strategy_type, f"旧策略·{config.get('selection_view') or '—'}")
+        }.get(strategy_type,
+              # 旧快照里存的是**冻结名** ("综合机会"), 展示要过 batch_view_label ——
+              # 否则比较表上出现的是一个批量页已经不再显示的词。
+              f"旧策略·{batch_view_label(config.get('selection_view') or '—')}")
+        # 下修两档只出现在**旧快照**里 (信号已删); 保留映射, 否则它们会掉进「旧机会分」。
         rank_label = {
             "deviation": "估值偏差",
             "down_reset_edge": "下修优势",

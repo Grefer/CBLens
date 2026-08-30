@@ -194,23 +194,83 @@ _LABEL_ICON = {
 }
 
 
-def _history_medians(history: Sequence[Any]) -> list[float]:
-    """把历史序列归一成中位偏差列表 (接受 ValuationSnapshot 或裸 float)。"""
-    out: list[float] = []
-    for item in history:
-        value = item.median_deviation if isinstance(item, ValuationSnapshot) else item
-        if value is not None:
-            out.append(float(value))
-    return out
+def _quarter_of(day: str | None) -> str | None:
+    """``'2026-08-29'`` → ``'2026Q3'``; 无日期返回 None。"""
+    if not day:
+        return None
+    try:
+        d = date.fromisoformat(str(day)[:10])
+    except ValueError:
+        return None
+    return f"{d.year}Q{(d.month - 1) // 3 + 1}"
 
+
+def baseline_medians(
+    history: Sequence[Any],
+    *,
+    exclude_date: str | None = None,
+) -> list[float]:
+    """算分位用的历史中位偏差序列 —— **每季度只取一条**。
+
+    基线混了两种采样频率: 前 18 期是季度末 (相邻间隔中位 91 天, 2022-06~2026-06),
+    而全量重算每成功一次就追加一条, 于是又冒出日频点 (实测 2026-08-22 / 08-23 / 08-29,
+    间隔 1 天和 6 天) —— 即"哪天点了刷新重算"。
+
+    **不去重会让分位变味**。分位的全部价值在于跨完整牛熊周期比较 (中位偏差摆幅
+    +0.4%~+21.6%), 而日频点按**天数**给最近这段行情加权: 按每天开一次 GUI 算, 一年后
+    基线是 18 个季度点 + 约 244 个日点, **93% 的比较对象来自最近 12 个月**。
+
+    **去重放在读侧, 不放在 append_history**: 写侧去重会销毁真实观测且不可逆, 而这里
+    的判据 (季度桶 / 代表怎么选) 还会调 —— 与 ``data/watchlist_daily/`` 只追加不删的
+    既定态度一致。
+
+    两条规则:
+
+    · **桶内取最晚一条**。历史 18 期明显锚季末, 取最晚就是"能拿到的最接近季末的观测",
+      用户不必记得在季末那天点刷新。代价要认: 季内任意日 ≠ 季末, 实测 2026Q3 七天内
+      摆了 2.84pp。
+    · **先分桶, 再整桶剔掉当期所在的那个季度**。反过来 (先剔当期再分桶) 会让当季剩下
+      的点顶上来当代表 —— 那是拿今天跟六天前的自己比, 而"当季"根本还不是历史。
+      剔当期本身是必需的: 全量重算先 ``append_history`` 再渲染横幅, 不剔就是在含自己
+      的集合里排位, ``arr <= value`` 自己必然命中。
+
+    裸 float 序列没有日期, 既分不了桶也剔不了, 原样返回 (兼容旧调用)。
+    """
+    latest: dict[str, ValuationSnapshot] = {}
+    plain: list[float] = []
+    loose: list[float] = []          # 有快照但没日期 —— 分不了桶, 各自成一条
+    for item in history:
+        if not isinstance(item, ValuationSnapshot):
+            if item is not None:
+                plain.append(float(item))
+            continue
+        quarter = _quarter_of(item.date)
+        if quarter is None:
+            loose.append(float(item.median_deviation))
+            continue
+        prev = latest.get(quarter)
+        if prev is None or (item.date or "") > (prev.date or ""):
+            latest[quarter] = item
+    if plain:
+        return plain
+    drop = _quarter_of(exclude_date)
+    return sorted(
+        [s.median_deviation for q, s in latest.items() if q != drop] + loose)
 
 def caliber_note(
     history: Sequence[Any],
     current: str = CURRENT_CALIBER,
+    *,
+    verbose: bool = True,
 ) -> str:
-    """历史序列跨口径时返回一句断点说明; 全同口径返回空串。
+    """历史序列跨口径时返回断点说明; 全同口径返回空串。
 
     只接受 :class:`ValuationSnapshot` 序列 (裸 float 无口径信息, 返回空串)。
+
+    ``verbose=False`` 压成**一行**给 GUI 悬浮用。完整版会把 bug 修了什么、补回多少只、
+    中位偏差移了多少全写出来 —— 那是 ``cb-valuation`` 这种报告该有的样子, 但在悬浮里
+    它占了 331 字里的 136 字 (41%), 而读者拿这些做不了任何决定。悬浮只需要回答
+    "这个分位能不能当真": 不能完全当真, 因为基线跨了两种池口径。
     """
     counts: dict[str, int] = {}
     for snap in history:
@@ -221,6 +281,12 @@ def caliber_note(
     if set(counts) | {current} == {current}:
         return ""
     change = CALIBER_CHANGES.get(current)
+    if not verbose:
+        # 口径种数 = counts 里出现过的 ∪ 当期。**不是 len(counts)+1** ——
+        # 当期口径的快照本来就在 history 里 (实测 counts = {v1: 18, v2: 3}), 加一会多报一种。
+        n_cal = len(set(counts) | {current})
+        since = f", {change['since']} 起换口径" if change else ""
+        return f"⚠️ 分位基线跨 {n_cal} 种主池口径{since}, 断点前后不严格可比。"
     detail = ", ".join(f"{cal} {n} 期" for cal, n in sorted(counts.items()))
     head = f"[口径] 历史序列跨口径合并计算分位 (历史 {detail}; 当期 {current})。"
     if not change:
@@ -245,17 +311,59 @@ def valuation_banner(
         snap = compute_snapshot(rows, **snapshot_kwargs)
     except ValueError:
         return "", ""
-    sig = classify(snap.median_deviation, _history_medians(history))
+    sig = classify(snap.median_deviation,
+                   baseline_medians(history, exclude_date=snap.date))
     icon = _LABEL_ICON.get(sig.label, "⚪")
     pct = "" if not np.isfinite(sig.percentile) else f" · 历史分位 {sig.percentile:.0f}%"
     banner = (f"{icon} 市场估值 {sig.label} · 中位偏差 "
               f"{snap.median_deviation*100:+.1f}%{pct}")
-    detail = (f"全市场中位偏差 {snap.median_deviation*100:+.1f}% "
-              f"(市价高于模型价的占 {snap.pct_overvalued*100:.0f}%, 样本 {snap.n} 只)\n{sig}")
-    note = caliber_note(history, snap.caliber)
+    return banner, _tooltip_detail(snap, sig, history)
+
+
+def _tooltip_detail(
+    snap: ValuationSnapshot,
+    sig: ValuationSignal,
+    history: Sequence[Any],
+) -> str:
+    """GUI 悬浮的详情 —— **不复用** ``str(sig)``。
+
+    ``str(sig)`` 与 ``sig.note`` 是给 ``cb-valuation`` 那份终端报告写的, 直接拿来当
+    悬浮有四个毛病 (实测原文 331 字 / 6 行):
+
+    ① **同一个数说三遍**: 横幅已经写了「中位偏差 +21.2% · 历史分位 95%」, 详情第一行
+       和第二行又各重复一遍。悬浮是用来补充横幅的, 不是复述它。
+    ② **「样本」一词两种含义且相邻两行**: 「样本 284 只」是**个券数**,
+       「样本 21」是**历史期数** —— 挨着放, 读者只会以为其中一个写错了。
+    ③ **给操作建议**: 「强烈利于减仓」。这是研究工作台, README 通篇写着"不是投资建议";
+       而且那句话没有主语 —— 谁减仓、减什么、减多少, 一个都没说。
+    ④ **口径断点写成 changelog**: 修了什么 bug、补回多少只、中位偏差移了多少,
+       占 136/331 字 (41%)。读者拿它做不了决定, 他只需要知道"这个分位能不能当真"。
+
+    所以这里按 AGENTS 对悬浮的要求重写: **说清怎么读**, 不复述数值, 不写实现细节。
+    数值本身一个都没重算 —— 全部取自 ``snap`` / ``sig``, 单一事实源不变。
+    """
+    lines = [
+        "中位偏差 = 全市场「市价 ÷ 理论价 − 1」的中位数; 越正 = 转债整体越贵。",
+        f"当期主池 {snap.n} 只, 其中 {snap.pct_overvalued*100:.0f}% 市价高于模型价。",
+    ]
+    if np.isfinite(sig.percentile):
+        lines.append(
+            f"「历史分位」是拿它跟过去 {sig.n_history} 个季度比 —— "
+            f"不是「多少只贵」, 而是「比历史上多少时候贵」。")
+        lines.append(
+            "经验上它与中证转债指数下一季收益负相关 ≈−0.52 "
+            "(便宜组 +2.8% vs 贵组 0%)。")
+    else:
+        # 历史不足那一档: 原文写"请先用 --record 积累基线", 那是 CLI 的开关,
+        # 用户在这个页面上找不到它 (与 WATCH_REFRESH_LABEL 那条同源)。
+        lines.append(
+            f"历史基线只有 {sig.n_history} 个季度 (需 ≥8), 分位信号不可靠 —— "
+            "每次全量重算会自动累积, 同季度只留最新一条。")
+    lines.append("只说转债大类贵不贵: 不是个券信号, 也不是操作建议。")
+    note = caliber_note(history, snap.caliber, verbose=False)
     if note:
-        detail = f"{detail}\n{note}"
-    return banner, detail
+        lines.append(note)
+    return "\n".join(lines)
 
 
 def load_history(path: Path) -> list[ValuationSnapshot]:

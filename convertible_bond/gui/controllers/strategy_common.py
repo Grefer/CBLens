@@ -13,10 +13,6 @@ from ...batch_pricing import (
     DEFAULT_MIN_CREDIT_RATING,
     DEFAULT_MIN_OUTSTANDING_BALANCE,
 )
-from ...pricing_api import (
-    DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND,
-    DEFAULT_PDE_SIGNAL_SPREAD_BAND,
-)
 from ..constants import DEFAULT_P_DOWN_PCT
 
 
@@ -32,10 +28,6 @@ STRATEGY_SECONDARY_CHART_HEIGHT = 300
 WIND_HIGH_FIDELITY_CODE_WARN_LIMIT = 120
 WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT = 1000
 WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER = 10
-# 每个样本除常规定价外, 还需端点定价、Brent 迭代和一次 p_down bump。
-# 仅用于 GUI 工作量预估, 不参与模型计算。
-PDE_DOWN_RESET_SOLVE_MULTIPLIER = 14
-PDE_DOWN_RESET_SOLVE_WARN_LIMIT = 5000
 
 
 def _strategy_snapshot_jsonable(obj):
@@ -104,21 +96,17 @@ _STRATEGY_TEMPLATE_BASE = {
     "v_st_min_turnover": "", "v_st_delist_window": "0", "v_st_cost": "20",
     # 模板 = 完整可复现配置: 选券权重/现金收益/仓位择时也随模板归位, 不残留上次手动值
     "v_st_weighting": "Top N 排序", "v_st_cash_yield": "2.2",
-    "v_st_rank_signal": "稳健下修优势", "v_st_min_reset_edge": "0",
+    "v_st_rank_signal": "估值偏差",
     "v_st_r": "2.2", "v_st_spread": "3.0", "v_st_distress_k": "5.0",
     "v_st_p_down": f"{DEFAULT_P_DOWN_PCT:g}", "v_st_vol_window": "1M",
-    "v_st_sigma_band": f"{DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND * 100:g}",
-    "v_st_spread_band_bps": f"{DEFAULT_PDE_SIGNAL_SPREAD_BAND * 10000:g}",
-    "v_st_event_exit": True,
+    # 事件退出默认 False —— 与 ScoreStrategyConfig.down_reset_event_exit 对齐:
+    # 它此前只在下修优势排序信号下才被激活, 而那个信号已删。
+    "v_st_event_exit": False,
     "v_st_exposure": "恒定满仓",
 }
+# 「下修错定价」模板已删: 它与「估值偏差」的唯一区别就是 rank_signal, 而下修优势
+# 信号已整体删除 —— 留着会变成两个字面上不同、行为完全一样的模板。
 STRATEGY_TEMPLATES = {
-    "下修错定价": {
-        "v_st_view": "综合机会", "v_st_freq": "月", "v_st_top_n": "10",
-        "v_st_weighting": "Top N 排序", "v_st_rank_signal": "稳健下修优势",
-        "v_st_min_reset_edge": "0", "v_st_event_exit": True,
-        "v_st_history_mode": "Wind高保真",
-    },
     "估值偏差": {
         "v_st_view": "综合机会", "v_st_freq": "月", "v_st_top_n": "10",
         "v_st_weighting": "Top N 排序", "v_st_rank_signal": "估值偏差",

@@ -28,11 +28,10 @@ EVENT_SYNC_STALE_HOURS = 24
 
 # 新策略页只暴露模型错定价策略；旧批量视图常量保留给历史预设兼容。
 STRATEGY_SELECTION_VIEWS = ("综合机会",)
-STRATEGY_TEMPLATE_NAMES = ("下修错定价", "估值偏差")
+STRATEGY_TEMPLATE_NAMES = ("估值偏差",)
 STRATEGY_POOL_MODES = ("本地全市场", "当前筛选结果", "自选代码")
 STRATEGY_HISTORY_MODES = ("标准", "Wind高保真")
 STRATEGY_TEMPLATE_DESCRIPTIONS = {
-    "下修错定价": "选择下修价值被低估且情景扰动后仍有优势的转债",
     "估值偏差": "选择市价低于模型理论价的转债",
 }
 STRATEGY_VIEW_DESCRIPTIONS = {
@@ -50,32 +49,39 @@ STRATEGY_HISTORY_DESCRIPTIONS = {
     "Wind高保真": "推荐 · Wind 按估值日查询历史条款\n用于正式策略回测, 速度较慢",
 }
 
+#: 旧模板名一律落到「估值偏差」——「下修错定价」已随下修优势信号删除, 它与本模板的
+#: 唯一区别就是那个 rank_signal。
 STRATEGY_TEMPLATE_LEGACY_ALIASES = {
-    "PDE下修错定价": "下修错定价",
+    "下修错定价": "估值偏差",
+    "PDE下修错定价": "估值偏差",
     "PDE估值偏差": "估值偏差",
-    "自定义": "下修错定价",
-    "自定义PDE": "下修错定价",
+    "自定义": "估值偏差",
+    "自定义PDE": "估值偏差",
     "低估轮动": "估值偏差",
     "折价套利": "估值偏差",
     "稳健打底": "估值偏差",
 }
 
 STRATEGY_PDE_RANK_SIGNAL_LABELS = (
-    "稳健下修优势",
-    "下修优势",
     "估值偏差",
 )
+#: 旧标签一律落到「估值偏差」。两族已删除的信号都留在这里 —— 机会分 (2026-08-29,
+#: 低估项在 95% 的行上恒为 0) 与下修优势 (2026-08-29, 隐含下修强度反解在两个 regime
+#: 都结构性无解: 谷底 市价 < price(λ=0)、高位 市价 > price(λ=3))。别名不删是因为
+#: 旧配置与旧快照仍可能带这些值, 删了就是硬崩而不是降级。
 STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES = {
-    "": "稳健下修优势",
-    "PDE稳健下修优势": "稳健下修优势",
-    "PDE下修优势": "下修优势",
+    "": "估值偏差",
     "PDE估值偏差": "估值偏差",
-    "机会分": "估值偏差",       # 机会分已删, 旧快照落到估值偏差
+    "机会分": "估值偏差",
     "双低": "估值偏差",
     "score": "估值偏差",
     "double_low": "估值偏差",
-    "down_reset_robust_edge": "稳健下修优势",
-    "down_reset_edge": "下修优势",
+    "稳健下修优势": "估值偏差",
+    "下修优势": "估值偏差",
+    "PDE稳健下修优势": "估值偏差",
+    "PDE下修优势": "估值偏差",
+    "down_reset_robust_edge": "估值偏差",
+    "down_reset_edge": "估值偏差",
     "deviation": "估值偏差",
 }
 
@@ -83,7 +89,7 @@ STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES = {
 def normalize_pde_strategy_template(value: str | None) -> str:
     name = str(value or "").strip()
     name = STRATEGY_TEMPLATE_LEGACY_ALIASES.get(name, name)
-    return name if name in STRATEGY_TEMPLATE_NAMES else "下修错定价"
+    return name if name in STRATEGY_TEMPLATE_NAMES else "估值偏差"
 
 
 def normalize_pde_rank_signal_label(value: str | None) -> str:
@@ -92,7 +98,7 @@ def normalize_pde_rank_signal_label(value: str | None) -> str:
     return (
         label
         if label in STRATEGY_PDE_RANK_SIGNAL_LABELS
-        else "稳健下修优势"
+        else "估值偏差"
     )
 
 

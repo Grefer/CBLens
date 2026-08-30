@@ -4,6 +4,8 @@ akshare 是免 Wind 用户的主力动态行情路径, 此前无专门测试。
 当前覆盖: 转债列表缓存 TTL 行为 + 正股历史解析链路 (stock_zh_a_hist → 列名兼容)。
 """
 import sys
+import threading
+import time
 from datetime import date
 
 import pandas as pd
@@ -104,3 +106,97 @@ def test_pending_new_bond_gets_no_fabricated_listing_date(monkeypatch):
     assert is_issued_pending_listing("123284.SZ", terms, date(2026, 8, 25))
     assert terms.trading_status == "pending"
     assert terms.is_tradable is False
+
+
+# ── V8 (py_mini_racer) 预热: 防"切到 akshare 点重算, GUI 直接闪退" ──────────────
+class FakeMiniRacerModule:
+    """假 py_mini_racer: 记录上下文建了几个 / 分别在哪个线程 / 关没关."""
+
+    def __init__(self, ctor_delay: float = 0.0):
+        self.ctor_threads: list[str] = []
+        self.closed = 0
+        self._ctor_delay = ctor_delay
+        outer = self
+
+        class MiniRacer:
+            def __init__(self):
+                outer.ctor_threads.append(threading.current_thread().name)
+                if outer._ctor_delay:
+                    time.sleep(outer._ctor_delay)
+
+            def eval(self, _src):
+                return 1
+
+            def close(self):
+                outer.closed += 1
+
+        self.MiniRacer = MiniRacer
+
+
+def test_provider_init_warms_js_runtime(monkeypatch):
+    """provider 构造时必须把 V8 预热掉 —— 那是 fan-out 之前唯一的单线程时机.
+
+    akshare 的 ``bond_zh_hs_cov_daily`` / ``stock_zh_a_daily`` 每次调用都新建一个
+    MiniRacer 上下文, 而 V8 的 partition_alloc 地址空间是进程级一次性初始化且非线程
+    安全: 批量定价的 8 个 worker 头一回同时进到那一行, 落后的那个 PA_CHECK 失败 →
+    SIGTRAP。那是 C 层 abort 不是 Python 异常, worker 的 try/except 接不住,
+    整个进程当场消失 (实测 8 线程同时首建 3/3 崩, 预热后 5/5 干净)。
+    """
+    calls = []
+    monkeypatch.setattr(ak_mod, "_warm_up_js_runtime", lambda: calls.append(1))
+
+    _make_provider(monkeypatch, FakeAkshare())
+
+    assert calls, "AkshareDataProvider.__init__ 必须调用 _warm_up_js_runtime"
+
+
+def test_warm_up_js_runtime_builds_exactly_one_context_under_concurrency(monkeypatch):
+    """并发调用只许建一个上下文 —— 竞态正是崩溃的成因, 预热自己不能再制造一次."""
+    fake = FakeMiniRacerModule(ctor_delay=0.02)   # 拉宽窗口, 让后到的线程真的撞上
+    monkeypatch.setitem(sys.modules, "py_mini_racer", fake)
+    monkeypatch.setattr(ak_mod, "_js_runtime_warmed", False)
+
+    barrier = threading.Barrier(8)
+
+    def go():
+        barrier.wait()
+        ak_mod._warm_up_js_runtime()
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+
+    assert len(fake.ctor_threads) == 1, f"预热重复建了 {len(fake.ctor_threads)} 个上下文"
+    assert ak_mod._js_runtime_warmed is True
+
+    ak_mod._warm_up_js_runtime()
+    assert len(fake.ctor_threads) == 1, "已预热后不该再建"
+
+
+def test_warm_up_js_runtime_keeps_no_live_context(monkeypatch):
+    """预热完必须把上下文关掉, 不留全局引用.
+
+    ``MiniRacer.__del__`` → ``close()`` 会 join 它自己的事件循环线程, 而解释器退出时
+    守护线程已被冻结 —— 留一份活引用只是把"启动闪退"换成"退出挂死"。
+    """
+    fake = FakeMiniRacerModule()
+    monkeypatch.setitem(sys.modules, "py_mini_racer", fake)
+    monkeypatch.setattr(ak_mod, "_js_runtime_warmed", False)
+
+    ak_mod._warm_up_js_runtime()
+
+    assert fake.closed == 1, "预热用的上下文必须显式 close"
+    assert not [v for v in vars(ak_mod).values()
+                if isinstance(v, fake.MiniRacer)], "模块里不许留活着的 MiniRacer"
+
+
+def test_warm_up_js_runtime_never_raises(monkeypatch):
+    """预热是防御性的: py_mini_racer 缺失/初始化失败都不该挡住取数本身."""
+    monkeypatch.setitem(sys.modules, "py_mini_racer", None)   # import 时抛 ImportError
+    monkeypatch.setattr(ak_mod, "_js_runtime_warmed", False)
+
+    ak_mod._warm_up_js_runtime()          # 不抛就是通过
+
+    assert ak_mod._js_runtime_warmed is True, "失败也要置位, 否则每次构造 provider 都重试"

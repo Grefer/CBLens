@@ -70,7 +70,7 @@ CACHE_FIELDS: tuple[str, ...] = (
     # 研究信号
     "double_low", "quality_score",
     "confidence", "sensitivity_status", "risk_tags", "event_flags",
-    "down_reset_trigger_gap", "down_reset_robust_edge_value",
+    "down_reset_trigger_gap",
     # 条款/状态 (只收真实日期与评级, 不收 is_tradable / trading_status ——
     # 那两个是派生字段, 缓存值只可能是 infer_cb_trading_metadata 自己上一次的
     # 输出, 当独立证据用就是自我确认)
@@ -107,7 +107,7 @@ NARROW_FIELDS: tuple[str, ...] = (
 _NAN_FIELDS = frozenset({
     "theoretical_price", "market_price", "deviation", "K", "parity",
     "conversion_premium", "double_low", "quality_score",
-    "down_reset_trigger_gap", "down_reset_robust_edge_value",
+    "down_reset_trigger_gap",
     "relative_deviation", "cheapness_percentile", "market_median_deviation",
 })
 

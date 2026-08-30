@@ -459,11 +459,6 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None,
             M=max(300, int(float(app.v_M.get()))),
             N=max(1000, int(float(app.v_N.get()))),
             vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
-            # 反解隐含下修强度 + 四角点扰动, 产出稳健下修优势 (策略页的默认排序信号)。
-            # 此前批量页跑完整 PDE 网格却把这族信号整批丢掉 (实测缓存里 0/280 有值)。
-            # 实测边际成本: 诊断走粗网格 (150,400) = 细网格的 0.16x, 每债 +166ms,
-            # 全池 280 只按 10 线程折算 3.1s → 7.7s —— 相对分钟级的取数可忽略。
-            compute_pde_signals=True,
         )
     except ValueError as exc:
         messagebox.showerror("参数错误", str(exc))
@@ -496,6 +491,30 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None,
             app._stop_progress()
         raise
     return True
+
+
+def market_price_coverage(ok_rows):
+    """把 ``ok_rows`` 拆成 (应当有市价的行, 其中真取到市价的行)。
+
+    ``status == "ok"`` **只说明模型算完了**, 与"数据源今天给没给行情"是两回事:
+    S0/σ 走**正股**链路 (akshare 里是东财 ``stock_zh_a_hist`` → 新浪
+    ``stock_zh_a_daily``), 市价走**转债**链路 (新浪 ``bond_zh_hs_cov_daily``) ——
+    后者整条挂掉时前者照样出理论价。``_batch_result_from_provider`` 对
+    ``market_price`` 只是 ``if mkt is not None`` 分个岔, 缺了就把 deviation 写 nan,
+    ``status`` 照样是 ``"ok"``。于是"一个市价都没取到"会一路走到
+    「⚡ 已刷新关注池 N/N 只」, 而表里价格那一片全是「—」(实测 akshare 东财侧连不上时
+    正是这个形状)。
+
+    **未上市新债不进分母**: 它们没有市价是天然状态而不是取数失败 —— 实测这份关注池
+    5 只里有 3 只在途新债, 拿 5 做分母会让"一切正常"永远报成 2/5。
+
+    判空用 :func:`_is_finite` 而不是 ``is not None``: 市价在
+    ``watchlist_cache._NAN_FIELDS`` 里, 落盘走一圈读回来是 **NaN**, 而
+    ``NaN is not None`` 为真。
+    """
+    expect = [r for r in ok_rows if not _is_new_bond(r)]
+    got = [r for r in expect if _is_finite(r.get("market_price"))]
+    return expect, got
 
 
 def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bool = False):
@@ -537,6 +556,18 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
                 f"⚠ 今日取价失败 ({provider.name}) — 表内仍是{stale_date}的价"))
             return
 
+        expect_price, with_price = market_price_coverage(ok_rows)
+        if expect_price and not with_price:
+            # 在市的债一只都没拿到行情 = 取价失败, 与上面那道守卫是同一件事, 只是
+            # 失败发生在链路更深处。同样不写盘: 热缓存是**整行 upsert**
+            # (`save_watchlist_pricing` 里 `merged.update(fresh)`), 写进去就把昨天
+            # 那个真实市价换成 NaN, 实测 163.19 → nan。
+            stale_date = _cached_valuation_label(app)
+            app.after(0, lambda: app.v_watchlist_status.set(
+                f"⚠ {provider.name} 未取到市价 ({len(expect_price)} 只在市债全空) "
+                f"— 表内仍是{stale_date}的价"))
+            return
+
         val_date = market_today()
         pool_rows = app._batch_all_results or []
         anchor = cross_section_anchor_from(pool_rows)
@@ -572,11 +603,17 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
         # 只刷一边的表现是"算完了但表还是旧值", 正是 AGENTS 记的那个陷阱。
         app.after(0, lambda: _render_batch_views(app, refresh_home_table=False))
         app.after(0, lambda: refresh_home(app))
-        n_main = sum(1 for c in codes if c in {r.get("bond_code") for r in (app._batch_all_results or [])})
         n_failed = len(results) - len(ok_rows)
+        # 报数要把"算完了"与"取到市价了"分开说 —— 只报前者时, 行情整条挂掉的那一轮
+        # 与一切正常的那一轮在状态栏上一模一样。
         msg = f"⚡ 已刷新关注池 {len(ok_rows)}/{len(codes)} 只"
         if n_failed:
-            msg += f" (失败 {n_failed})"
+            msg += f" (定价失败 {n_failed})"
+        if expect_price:
+            msg += f" · 取到市价 {len(with_price)}/{len(expect_price)}"
+        n_pending = len(ok_rows) - len(expect_price)
+        if n_pending:
+            msg += f" · {n_pending} 只未上市无市价"
         app.after(0, lambda: app.v_watchlist_status.set(msg))
     except Exception as exc:
         app.after(0, lambda exc=exc: app.v_watchlist_status.set(f"❌ 关注池定价失败: {exc}"))
@@ -720,7 +757,7 @@ _PRICED_MERGE_FIELDS = (
     # 研究信号
     "quality_score", "double_low", "confidence",
     "sensitivity_status", "risk_tags", "review_bucket", "review_notes",
-    "event_flags", "down_reset_trigger_gap", "down_reset_robust_edge_value",
+    "event_flags", "down_reset_trigger_gap",
     # 横截面 (小批量标注时为 None, 展示层打「—」而不是打一个假名次)
     "relative_deviation", "cheapness_rank", "cheapness_percentile",
     "cheapness_rank_total",
@@ -1365,6 +1402,9 @@ def _load_watchlist_selection_in_pricing_tab(app):
         return
     if hasattr(app, "v_bond_code"):
         app.v_bond_code.set(code)
+        # 同批量页: 双击是确定的选择, 不必再等打字防抖
+        if hasattr(app, "_flush_pending_bond_autoload"):
+            app._flush_pending_bond_autoload()
     if hasattr(app, "tab_seg") and hasattr(app, "_switch_tab"):
         app.tab_seg.set(E("⚡ 定价"))
         app._switch_tab(E("⚡ 定价"))
@@ -1373,7 +1413,7 @@ def _load_watchlist_selection_in_pricing_tab(app):
 
 # ── 摘要条 / 事件横幅 ─────────────────────────────────────────
 def _refresh_watchlist_summary(app, rows, *, anchor_stale_rows: int = 0):
-    """汇总关注池: 持仓数 / 等权偏差中位 / 平均评级 / 异常计数.
+    """汇总关注池: 关注数 / 等权偏差中位 / 平均评级 / 异常计数.
 
     末尾还带两条**口径出处**, 它们是表上唯一说清"这些数是哪天的"的地方:
     「估值日 MM-DD」(取展示行里出现最多的那个估值日) 与锚过期时的一句提示。
@@ -1413,7 +1453,8 @@ def _refresh_watchlist_summary(app, rows, *, anchor_stale_rows: int = 0):
     n_legacy_outlier = _count(LEGACY_DEVIATION_OUTLIER_TAGS)
 
     # 分组与批量页同构: 「✅ 名称: 规模」|「口径」|「异常」|「出处」
-    head = f"持仓 {n}" + (f" · 已定价 {len(priced)}" if priced else "")
+    # 「关注 N」不是「持仓 N」—— 口径1: 纯研究关注清单, 不记持仓。
+    head = f"关注 {n}" + (f" · 已定价 {len(priced)}" if priced else "")
     parts = [f"✅ 关注池: {head}"]
     caliber = []
     if median_dev is not None:

@@ -53,42 +53,29 @@ def build(app, tab):
         font=(FONT_FAMILY, 13), width=52, anchor="w",
     ).grid(row=0, column=0, sticky="w")
 
-    app.v_st_template_display = ctk.StringVar(value="下修机会")
+    # 策略只剩「估值偏差」一个 —— 「下修机会」随下修优势排序信号一并删除, 它与本策略的
+    # 唯一区别就是那个 rank_signal。两选一的分段按钮因此换成静态标签: 一个只有一个选项
+    # 的开关会让人一直找另一个选项。
+    app.v_st_template_display = ctk.StringVar(value="估值偏差")
     app.v_st_params_state = ctk.StringVar(value="")
-    strategy_description = ctk.StringVar(value="")
+    strategy_description = ctk.StringVar(value="优先选择市价低于模型理论价的转债")
 
     def _strategy_display_name():
-        return "估值偏差" if app.v_st_template.get() == "估值偏差" else "下修机会"
+        return "估值偏差"
 
     def _sync_strategy_display(*_):
-        display = _strategy_display_name()
-        if app.v_st_template_display.get() != display:
-            app.v_st_template_display.set(display)
-        description = (
-            "优先选择市价低于模型理论价的转债"
-            if display == "估值偏差"
-            else "优先选择下修价值被低估且情景扰动后仍有优势的转债"
-        )
-        strategy_description.set(description)
+        app.v_st_template_display.set("估值偏差")
+        strategy_description.set("优先选择市价低于模型理论价的转债")
 
-    def _select_strategy(display):
-        app._apply_strategy_template(
-            "估值偏差" if display == "估值偏差" else "下修错定价"
-        )
+    def _select_strategy(_display=None):
+        app._apply_strategy_template("估值偏差")
         app.v_st_params_state.set("")
         _sync_strategy_display()
 
-    strategy_switch = ctk.CTkSegmentedButton(
-        strategy_bar, variable=app.v_st_template_display,
-        values=["下修机会", "估值偏差"], command=_select_strategy,
-        width=210, height=28, corner_radius=7,
-        font=(FONT_FAMILY, 12, "bold"),
-        fg_color=BG_INPUT, selected_color=ACCENT,
-        selected_hover_color=ACCENT_HOVER,
-        unselected_color=BG_INPUT, unselected_hover_color=BTN_HOVER,
-        text_color=TEXT,
-    )
-    strategy_switch.grid(row=0, column=1, sticky="w", padx=(8, 14))
+    ctk.CTkLabel(
+        strategy_bar, textvariable=app.v_st_template_display,
+        font=(FONT_FAMILY, 12, "bold"), text_color=TEXT, anchor="w",
+    ).grid(row=0, column=1, sticky="w", padx=(8, 14))
     ctk.CTkLabel(
         strategy_bar, textvariable=strategy_description,
         text_color=TEXT_DIM, font=(FONT_FAMILY, 12), anchor="w",
@@ -226,10 +213,9 @@ def build(app, tab):
 
     editable_strategy_vars = (
         app.v_st_freq, app.v_st_top_n, app.v_st_cost,
-        app.v_st_cash_yield, app.v_st_exposure, app.v_st_min_reset_edge,
+        app.v_st_cash_yield, app.v_st_exposure,
         app.v_st_r, app.v_st_spread, app.v_st_distress_k, app.v_st_p_down,
-        app.v_st_vol_window, app.v_st_sigma_band, app.v_st_spread_band_bps,
-        app.v_st_event_exit, app.v_st_min_price, app.v_st_max_price,
+        app.v_st_vol_window, app.v_st_event_exit, app.v_st_min_price, app.v_st_max_price,
         app.v_st_min_premium, app.v_st_max_premium,
         app.v_st_min_deviation, app.v_st_max_deviation,
         app.v_st_min_sigma, app.v_st_max_sigma,
@@ -360,7 +346,7 @@ def build(app, tab):
 
     tune_card, c2 = _adv_card(
         adv_panel, 1, "模型与交易",
-        "仅下修策略使用的参数会随策略自动显示",
+        "定价模型入参与交易成本",
         col=0, columnspan=2)
     tune_card.grid_configure(pady=(8, 0))
     tune_grid = ctk.CTkFrame(c2, fg_color="transparent")
@@ -400,44 +386,20 @@ def build(app, tab):
         "单边调仓交易成本; 基准同口径计成本",
         control_width=92, label_width=76)
 
-    p_down_entry = _grid_cell(
+    # 「HV扰动%」「利差扰动bp」「最低优势元」三格已删 —— 它们只配置稳健下修优势的
+    # 四角点与门槛, 而那个信号已随隐含下修强度反解一并删除。`年化下修%` 留下: 它是
+    # 定价模型自己那支下修强度 (regime ①), 与反解无关。
+    #
+    # 随之删掉的还有 `_sync_reset_edge_input` —— 排序信号只剩一个, 按信号显隐这些格子
+    # 已无意义; 「事件退出」因此常驻显示 (它此前只在下修策略下才露出来)。
+    _grid_cell(
         tune_grid, "年化下修%", app.v_st_p_down, 2, 0, "entry", None,
-        "事件模型给定的年化下修强度 p_down\n下修策略会与市场隐含强度比较",
+        "事件模型给定的年化下修强度 p_down",
         control_width=92, label_width=76)
-    sigma_band_entry = _grid_cell(
-        tune_grid, "HV扰动%", app.v_st_sigma_band, 2, 1, "entry", None,
-        "稳健下修优势在 HV ±该比例的情景中取最差值",
-        control_width=92, label_width=76)
-    spread_band_entry = _grid_cell(
-        tune_grid, "利差扰动bp", app.v_st_spread_band_bps, 2, 2, "entry", None,
-        "稳健下修优势在基准信用利差 ±该 bp 的情景中取最差值",
-        control_width=92, label_width=82)
-    min_reset_edge_entry = _grid_cell(
-        tune_grid, "最低优势元", app.v_st_min_reset_edge, 2, 3, "entry", None,
-        "下修优势最低金额\n0 = 只要求模型优势为正",
-        control_width=92, label_width=82)
-    event_exit_check = _grid_cell(
-        tune_grid, "事件退出", app.v_st_event_exit, 3, 0, "checkbox", None,
+    _grid_cell(
+        tune_grid, "事件退出", app.v_st_event_exit, 2, 1, "checkbox", None,
         "下修提议/通过/拒绝公告后，在下一可得收盘价退出并持有现金",
         label_width=76, checkbox_text="公告后退出")
-
-    def _sync_reset_edge_input(*_):
-        enabled = "下修优势" in app.v_st_rank_signal.get()
-        down_reset_cells = (
-            p_down_entry.master,
-            sigma_band_entry.master,
-            spread_band_entry.master,
-            min_reset_edge_entry.master,
-            event_exit_check.master,
-        )
-        for cell in down_reset_cells:
-            if enabled:
-                cell.grid()
-            else:
-                cell.grid_remove()
-
-    app.v_st_rank_signal.trace_add("write", _sync_reset_edge_input)
-    _sync_reset_edge_input()
 
     # ── 执行状态栏 ────────────────────────────────────────
     console = ctk.CTkFrame(ctrl, fg_color=BG_INPUT, corner_radius=10)

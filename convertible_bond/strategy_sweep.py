@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # 允许在变体间变化的组合层字段: 均不影响 (估值日, 定价参数, 送定价代码集) 三元组。
 PORTFOLIO_SWEEP_FIELDS = frozenset({
     "top_n", "holding_mode", "rank_signal", "max_holdings",
-    "min_down_reset_edge_value", "down_reset_event_exit",
+    "down_reset_event_exit",
     "funding_mode", "exposure_mode", "exposure_valuation_k", "exposure_floor",
     "cash_yield_rate", "transaction_cost",
     "selection_view", "min_confidence", "exclude_risk_tags",
@@ -52,7 +52,7 @@ PORTFOLIO_SWEEP_FIELDS = frozenset({
 })
 
 PDE_PORTFOLIO_SWEEP_FIELDS = frozenset({
-    "top_n", "rank_signal", "min_down_reset_edge_value", "down_reset_event_exit",
+    "top_n", "rank_signal", "down_reset_event_exit",
     "exposure_mode", "exposure_valuation_k", "exposure_floor",
     "cash_yield_rate", "transaction_cost",
     "min_confidence", "exclude_risk_tags",
@@ -225,9 +225,7 @@ def sweep_pde_strategy(
         if unknown:
             raise ValueError(f"PDE扫描不支持字段: {sorted(unknown)}")
         signal = raw.get("rank_signal")
-        if signal is not None and signal not in {
-            "deviation", "down_reset_edge", "down_reset_robust_edge",
-        }:
+        if signal is not None and signal != "deviation":
             raise ValueError(f"PDE扫描不支持排序信号: {signal}")
     return sweep_score_strategy(
         provider,

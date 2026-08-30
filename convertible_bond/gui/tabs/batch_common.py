@@ -21,6 +21,7 @@ from ..theme import (
     get_color,
 )
 from ...batch_pricing import DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS, risk_tag_label
+from ..widgets import Tooltip
 from ...market_time import market_today
 
 
@@ -30,9 +31,12 @@ from ...market_time import market_today
 # 它不表达贵/便宜, 两条独立的理由:
 #
 # ① 便宜度已经被**行位置**编码完了。``sort_batch_results_for_view`` 对
-#    「综合机会/低估候选/转股折价」一律按 ``relative_deviation`` 升序, 而
-#    「低估候选」的准入判据本身就是 ``rel < −5pp`` —— 任何架在便宜度上的行色
-#    在默认落地页上都是整表同色 (实测 40/40)。换阈值救不了, 换的是同一个病。
+#    「低估候选/转股折价」按 ``relative_deviation`` 升序, 而「低估候选」的准入判据
+#    本身就是 ``rel < −5pp`` —— 任何架在便宜度上的行色在那两页上都是整表同色
+#    (实测 40/40)。换阈值救不了, 换的是同一个病。
+#    ⚠️ **这条对「全池」不成立**: 它按上市日倒序, 行位置根本不编码便宜度, 上色在
+#    那一页确实会**增加**信息。默认落地页改成全池之后 ① 不再覆盖落地页 —— 撑住这个
+#    决定的是 ②, 而 ② 本来就是在全池上量的。
 # ② 旧的绝对阈值绿线 ``dev < −3%`` 换算到相对轴是 ``rel < −(3% + 中位)``,
 #    而橙线 ``|rel| ≥ 20pp`` 优先级更高 —— ``绿 ⊂ 橙 ⟺ 当期中位 ≥ 17%``。
 #    实测中位 +20.86% 时 ``underpriced`` 渲染 **0/284** (独立判据其实命中
@@ -57,10 +61,15 @@ _TAG_COLORS: dict[str, tuple[str, str]] = {
 }
 
 #: 行色图例文案 —— 键集必须与 ``_TAG_COLORS`` 相等 (有守护测试比对集合)。
+#:
+#: ``blocked`` 刻意**不叫**「不可交易」: 它收的是 临近摘牌 / 余额清零 / 正股停牌 /
+#: 正股跌停 / 正股风险 / 转债停牌 —— 「临近摘牌」今天照样买得到, 「正股跌停」压根
+#: 不拦转债本身。这一档的真实语义是 AGENTS 里那句"买不到 / 快买不到了", 「买卖受限」
+#: 覆盖得住而「不可交易」是把最重的那一档当成了全部。
 _TAG_LEGEND: dict[str, str] = {
     "new":     "未上市",
-    "blocked": "不可交易",
-    "nodata":  "数据缺失/失败",
+    "blocked": "买卖受限",
+    "nodata":  "数据缺失或定价失败",
 }
 
 #: 非颜色的第二通道。颜色是最不可靠的那条: 实测灰阶下浅色 ``new`` 与旧的
@@ -211,9 +220,11 @@ def _resolve_row_tag(row) -> str | None:
     风险两个维度**刻意都不在内** —— 它们是永久属性, 查完还是那样 (实测模型适用性
     在 72% 的债上都亮), 收进来行色就变回 79% 的垃圾桶。
 
-    "无色"是**有含义的一档**: 没有否决理由。默认落地视图「低估候选」里三档全为 0
-    (该视图本身就排除了拦截标签与低置信), 所以一页全无色是设计意图 —— 必须配图例
-    把这句话说出来, 否则它和"配色坏了"长得一模一样。
+    "无色"是**有含义的一档**: 没有否决理由, 而且是常态 —— **实测默认落地视图
+    「全池」284 行三档全为 0**。(换默认视图没让它变罕见, 只是换了依据: 此前的
+    「低估候选」是**判据上**不可能出现 blocked, 全池是**实际上**一只都没有。)
+    图例怎么写见 ``row_colour_legend`` —— 那里按 2026-08-29 的决策**不再**为这一档
+    单列一行, 不要照着旧说法在这里再钉一遍。
 
     没有 ``status`` 键的行 (关注池从没算过的那一档) 不染色: "从没算过"不是"这行
     数字是坏的", 那两档的区分由「数据状态」列的五档文案承载。
@@ -249,14 +260,62 @@ def _apply_tag_colors(tree: ttk.Treeview) -> None:
             tree.tag_configure(tag, foreground=get_color(color))
 
 
-def row_colour_legend() -> str:
-    """行色图例 —— 两页共用一份文案.
+_LEGEND_TITLE = "整行颜色的含义:"
 
-    与 ``WATCH_REFRESH_LABEL`` 那条同构: 用户看得见的名字必须有单一事实源, 否则
-    改了 tag 之后图例里会留着一个**过期**的档位名, 用户对着表找一个不存在的颜色。
+
+def row_colour_legend_segments() -> list[tuple[str, tuple | None, tuple | None]]:
+    """行色图例的分段 ``(文本, 颜色, 字体)`` —— 直接喂给 ``Tooltip(segments=)``.
+
+    **这是单一事实源**, 纯文本版 (:func:`row_colour_legend`) 由它拼出来。与
+    ``WATCH_REFRESH_LABEL`` 那条同构: 用户看得见的名字只许有一处, 否则改了 tag
+    之后图例里会留着一个**过期**的档位名, 用户对着表找一个不存在的颜色。
+
+    每档用**它自己的颜色与字重**渲染 —— 提示要*演示*颜色, 不是用文字描述颜色:
+    在一行本来就是红色加粗的字前面写「红色加粗 =」, 说的是读者眼前就能看见的东西。
+    (上一版没有颜色可用, 只能靠 ``_TAG_APPEARANCE`` 把色名写成文字; 那张表随之删掉,
+    留着就是第二份会过期的展示词表。)
+
+    字重/字形跟着 ``_BOLD_TAGS`` / ``_ITALIC_TAGS`` 走, 不另抄一份 —— 但**斜体那一档
+    在 macOS 上对中文渲染不出来, 别再声称"三档不靠色相也分得开"**:
+
+    - ``FONT_FAMILY`` = PingFang SC **没有斜体字面**, Tk/Cocoa 也不合成倾斜 ——
+      实测 ``tkfont.Font(font=("PingFang SC", 12, "italic")).actual()["slant"]``
+      返回 ``roman`` (同一组 ``bold`` 正常返回 ``bold``)。
+    - 换 ``FONT_MONO`` = Menlo **也修不好**: ``actual()`` 确实报 ``italic``, 但 Menlo
+      没有 CJK 字形, 中文走回落而回落字体不倾斜 —— 实测正体/斜体量宽**完全相等**
+      (中文 106 = 106)。改字族只会让 ``actual()`` 变好看、让守护测试变绿, 而用户
+      看到的还是直立的中文: 用一个绿测试担保一句假话, 比现状更糟。
+
+    所以这个 tooltip 里第二通道**只有 bold 那一档真的生效**, ``nodata`` 与 ``new``
+    之间实际只剩色相差 (灰阶下 MAUVE≈106 vs TEXT_DIM≈112, 基本分不开)。斜体仍然留着
+    是因为它在 Windows 上会被合成、对拉丁/数字也真斜 —— 但**不要**据此在文档里写
+    "三档分得开"。表里那一档同理: 数字列真斜、中文列不斜 (那是既有状态, 与本函数无关)。
+
+    颜色传主题元组 ``(light, dark)`` 而不是 ``get_color`` 取死值: tooltip 每次悬停
+    新建, CTk 构造时按当前 appearance mode 解析, 切主题天然跟随。
     """
-    parts = " · ".join(f"{label}" for label in _TAG_LEGEND.values())
-    return f"行色: {parts} · 无色 = 无否决理由"
+    segments: list[tuple[str, tuple | None, tuple | None]] = [(_LEGEND_TITLE, None, None)]
+    for tag, label in _TAG_LEGEND.items():
+        segments.append((f"  {label}", _TAG_COLORS[tag], _legend_font(tag)))
+    return segments
+
+
+def _legend_font(tag: str) -> tuple:
+    """图例某一档的字体 —— 第二通道跟着表里的定义走, 不另抄一份.
+
+    ⚠️ ``italic`` 在 macOS 上对中文**渲染不出来** (见 ``row_colour_legend_segments``
+    的说明); 留着它是为了 Windows 与拉丁字符, 不要把它当成"这一档分得开"的依据。
+    """
+    if tag in _BOLD_TAGS:
+        return (FONT_FAMILY, 12, "bold")
+    if tag in _ITALIC_TAGS:
+        return (FONT_FAMILY, 12, "italic")
+    return (FONT_FAMILY, 12)
+
+
+def row_colour_legend() -> str:
+    """图例的纯文本版 (给测试与任何非 GUI 消费者); 由分段拼出来, 不另写一份."""
+    return "\n".join(text for text, _color, _font in row_colour_legend_segments())
 
 
 def _configure_tree_style() -> None:
@@ -338,7 +397,7 @@ def _apply_responsive_tree_font(tree: ttk.Treeview) -> None:
 _COLUMN_ALIGN_RIGHT = frozenset({
     "市价", "理论价", "转股价值", "双低",
     "偏差(%)", "相对偏差(pp)", "转股溢价(%)", "正股σ(%)",
-    "下修优势(元)", "正股/下修线", "剩余(年)", "余额(亿)",
+    "正股/下修线", "剩余(年)", "余额(亿)",
 })
 _COLUMN_ALIGN_CENTER = frozenset({"可信度", "定价状态", "评级"})
 
@@ -433,7 +492,7 @@ def refresh_theme(app) -> None:
     ``getattr(app, attr, None) is not None`` 拦不住已 ``destroy`` 的控件 —— 它还是
     个对象, 而 Tk 8.6.15 实测在 ``tag_configure`` 上抛
     ``TclError: invalid command name ".!frame.!treeview"``。触发链今天就成立:
-    默认落地「低估候选」(40 行) → 切「下修优势」或「转股折价」(**实测都是 0 行**)
+    默认落地「全池」(284 行) → 切「转股折价」(**实测 0 行**)
     → 切主题 (app.py) 或跨响应式档位。
 
     真正难查的是后果而不是异常本身: 它从 ``for attr in _TREE_ATTRS`` 抛出会**中断
@@ -584,7 +643,6 @@ COLUMN_HELP: dict[str, str] = {
     "偏差(%)": "越正，市价相比模型价越贵, 反之亦然。",
     "相对偏差(pp)": "越正，标的相比全市场中位数越贵，反之亦然。",
     "双低": "市价 + 转股溢价率×100, 越小越便宜。经验阈值约 130。",
-    "下修优势(元)": "在最不利的模型参数下，理论价还比市价高多少。",
     "事件": "在途日程: 强赎 / 下修 / 回售 / 暂停转股 / 不强赎承诺。",
     "正股/下修线": "当前正股价和下修触发价关系。",
     "标签": "风险与机会标签。悬停单元格看完整内容。",
@@ -739,10 +797,15 @@ def _create_table_section(parent, *, row, title, with_summary=False):
     header = ctk.CTkFrame(section, fg_color="transparent")
     header.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 2))
     header.grid_columnconfigure(1, weight=1)
-    ctk.CTkLabel(
+    title_label = ctk.CTkLabel(
         header, text=title,
         font=(FONT_FAMILY, 13, "bold"), text_color=TEXT,
-    ).grid(row=0, column=0, sticky="w")
+    )
+    title_label.grid(row=0, column=0, sticky="w")
+    # 行色图例挂在**标题的 tooltip** 里, 不再常驻一行: 它解释的是一个多数行都用不上
+    # 的维度 (默认落地视图里往往一行都不染), 常驻等于拿最显眼的位置放最少用的信息。
+    # 两页共用同一份文案, 不各写一份。
+    Tooltip(title_label, segments=row_colour_legend_segments())
 
     summary_var = None
     if with_summary:
@@ -751,15 +814,6 @@ def _create_table_section(parent, *, row, title, with_summary=False):
             header, textvariable=summary_var,
             font=(FONT_FAMILY, 11), text_color=TEXT_DIM, anchor="e",
         ).grid(row=0, column=1, sticky="e", padx=(12, 0))
-
-    # 行色图例 —— 两页共用一份文案, 挂在共用的表区里而不是各页各写一份。
-    # 这一维不进 CSV、不能排序, 且默认落地视图里往往一行都不染 (「低估候选」的
-    # 判据本身就排除了拦截标签) —— 没有这句话, "一页全无色"和"配色坏了"长得
-    # 一模一样。与事件横幅空态那条同源: 要的是显式空态文案。
-    ctk.CTkLabel(
-        header, text=row_colour_legend(),
-        font=(FONT_FAMILY, 10), text_color=TEXT_DIM, anchor="w",
-    ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     body_row = 1
     section.grid_rowconfigure(body_row, weight=1)

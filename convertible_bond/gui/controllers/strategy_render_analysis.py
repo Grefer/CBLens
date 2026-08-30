@@ -401,7 +401,7 @@ class StrategyAnalysisRenderMixin:
         )
         suggestions = self._strategy_dynamic_suggestions(
             summary=summary, win_rate=win_rate, worst=worst,
-            concentration=concentration, ret_std=ret_std, rank_signal=rank_signal,
+            concentration=concentration, ret_std=ret_std,
         )
         ctk.CTkLabel(right, text="改进建议", text_color=TEXT,
                      font=(FONT_FAMILY, 13, "bold")).pack(anchor="w")
@@ -625,34 +625,27 @@ class StrategyAnalysisRenderMixin:
 
     @staticmethod
     def _strategy_dynamic_suggestions(
-        *, summary, win_rate, worst, concentration, ret_std, rank_signal="",
+        *, summary, win_rate, worst, concentration, ret_std,
     ):
+        # 建议必须是**现在做得到**的动作。下修优势那一支已随信号删除, 连同它的门槛与
+        # 扰动带 —— 留着会对着一个旧快照建议用户去调一个已经不存在的参数。
         suggestions = []
-        is_down_reset = rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
         avg_turnover = summary.get("avg_turnover")
         if avg_turnover is not None and float(avg_turnover) >= 0.6:
-            action = "提高下修优势门槛" if is_down_reset else "收紧低估偏差上限"
-            suggestions.append(f"换手偏高 → {action}，并用30~50bp成本做压力测试")
+            suggestions.append("换手偏高 → 收紧低估偏差上限，并用30~50bp成本做压力测试")
         elif avg_turnover is not None and float(avg_turnover) < 0.3:
             suggestions.append("换手很低 → 对比月频/周频，检查错定价的修复速度")
         if win_rate is not None and win_rate < 0.45:
-            action = (
-                "上调最低稳健优势"
-                if is_down_reset else "要求更负的估值偏差"
-            )
-            suggestions.append(f"胜率偏低 → {action}，减少边界错定价")
+            suggestions.append("胜率偏低 → 要求更负的估值偏差，减少边界错定价")
         if concentration is not None and concentration >= 0.65:
             suggestions.append("收益集中 → 增加持仓数并核对主要贡献券的下修/退市事件价格")
         if worst is not None and worst <= -0.1:
-            suggestions.append("极端亏损 → 对照该期模型/隐含下修概率和公告退出时点")
+            suggestions.append("极端亏损 → 对照该期的公告事件与退出时点")
         if ret_std is not None and ret_std > 0.05:
-            if is_down_reset:
-                suggestions.append("波动偏大 → 扩大HV/信用利差扰动带，检查稳健优势是否消失")
-            else:
-                suggestions.append("波动偏大 → 扰动p_down、HV和信用利差，检查低估排名是否稳定")
+            suggestions.append("波动偏大 → 扰动p_down、HV和信用利差，检查低估排名是否稳定")
         sharpe = summary.get("sharpe")
         if sharpe is not None and float(sharpe) < 0.5:
-            suggestions.append("Sharpe 偏低 → 对比下修机会与估值偏差，判断优势来源")
+            suggestions.append("Sharpe 偏低 → 对照等权/指数基准，判断优势是否真实存在")
         if not suggestions:
             suggestions.append("各项指标尚可 → 对p_down、HV和信用利差做邻域扰动，验证结论是否稳定")
         suggestions.append("最终结论使用Wind高保真口径复跑，并保留完整模型参数快照")
@@ -795,6 +788,7 @@ class StrategyAnalysisRenderMixin:
         strategy_text = f"{strategy_name} · {freq_text}"
         # 缺 rank_signal 的旧快照按「估值偏差」读 —— 与 _normalize_rank_signal 同口径
         rank_signal = str(config.get("rank_signal") or "deviation")
+        # 下修两档只出现在**旧快照**里 (信号已删); 保留映射, 否则它们会掉进「旧机会分」。
         rank_label = {
             "deviation": "估值偏差",
             "down_reset_edge": "下修优势",
@@ -805,27 +799,9 @@ class StrategyAnalysisRenderMixin:
             strategy_text += " · 等权全池" + (f"(≤{int(cap)})" if cap else "")
         elif top_n is not None:   # top_score 或旧快照
             strategy_text += f" · {rank_label} Top{top_n}"
-            if rank_signal in {"down_reset_edge", "down_reset_robust_edge"}:
-                min_edge = config.get("min_down_reset_edge_value")
-                try:
-                    strategy_text += f"(≥{float(min_edge):g}元)"
-                except (TypeError, ValueError):
-                    pass
         shortfall_text = "满仓等权" if funding_mode == "full_invest" else "缺口留现金"
-        if (
-            rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
-            and config.get("down_reset_event_exit", True)
-        ):
+        if config.get("down_reset_event_exit"):
             shortfall_text += " · 下修公告后退出"
-        if rank_signal == "down_reset_robust_edge":
-            sigma_band = run_pricing.get("pde_signal_sigma_rel_band", 0.15)
-            spread_band = run_pricing.get("pde_signal_spread_band", 0.01)
-            try:
-                shortfall_text += (
-                    f" · HV±{float(sigma_band)*100:g}%/利差±{float(spread_band)*10000:g}bp"
-                )
-            except (TypeError, ValueError):
-                pass
         cost = config.get("transaction_cost")
         try:
             cost_text = f"{float(cost) * 10000:.0f} bps"

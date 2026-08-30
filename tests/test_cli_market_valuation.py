@@ -50,10 +50,13 @@ def test_json_valid_with_history(tmp_path, capsys):
     cache = tmp_path / "c.json"
     _write_cache(cache, [_row(0.1), _row(0.15), _row(0.2)], [])
     hist = tmp_path / "hist.json"
+    # **按季度末**造 10 期。分位基线是季度桶去重的 (baseline_medians), 10 个**月度**点
+    # 只折叠成 4 个季度 → 不足 8 → 分位是 NaN。"够不够"按季度数算, 不按记录条数算。
     hist.write_text(json.dumps({"records": [
-        {"date": f"2024-{m:02d}-01", "n": 100, "median_deviation": 0.05 * i,
-         "mean_deviation": 0.05 * i, "pct_overvalued": 0.5, "p25": 0.0, "p75": 0.1}
-        for i, m in enumerate(range(1, 11))
+        {"date": f"{2022 + i // 4}-{(i % 4 + 1) * 3:02d}-28", "n": 100,
+         "median_deviation": 0.05 * i, "mean_deviation": 0.05 * i,
+         "pct_overvalued": 0.5, "p25": 0.0, "p75": 0.1}
+        for i in range(10)
     ]}), encoding="utf-8")
     rc = main(["--cache", str(cache), "--history", str(hist), "--json"])
     assert rc == 0

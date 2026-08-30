@@ -158,6 +158,79 @@ class PricingMixin:
         ]
         return not terminal_after_notice
 
+    # ── 切债清场 ──────────────────────────────────────────
+
+    #: 一次定价的产物, 全部只属于"算它的那只债"。换债时**它们不会自己更新** ——
+    #: 只有再点一次「开始计算」才会。所以必须显式清掉: 新债的 K / S₀ 配着上一只债的
+    #: 理论价和希腊值, 比整块空白危险得多 (读数看上去完全正常, 只是说的是别的债)。
+    _STALE_RESULT_VARS = (
+        "v_result", "v_deviation", "v_bond_floor", "v_parity", "v_option_prem",
+        "v_delta", "v_gamma", "v_vega", "v_theta", "v_iv",
+    )
+
+    #: 条款族: 逐债从 cb_data / Wind 回填。**不能指望回填覆盖** ——
+    #: ``_fill_from_cache`` 在条款库里没有这只债时直接 return, 不清就一直挂着上一只
+    #: 债的 K / 票息 / 到期日。清成空值 + "待加载" 来源标, 回填到了自然会盖掉。
+    _STALE_TERM_FIELDS = (
+        ("v_S0", "v_src_S0"), ("v_K", "v_src_K"), ("v_face", "v_src_face"),
+        ("v_redemp", "v_src_redemp"), ("v_mat_date", "v_src_mat_date"),
+        ("v_iss_date", "v_src_iss_date"), ("v_conv_date", "v_src_conv_date"),
+        ("v_coupons", "v_src_coupons"), ("v_sigma", "v_src_sigma"),
+    )
+
+    def _reset_pricing_view(self, code: str = "") -> None:
+        """换标的时清掉上一只债留在定价页上的一切。
+
+        从批量页/关注池双击过来时, 代码框先被 set(), 自动加载要等 650ms 防抖 + 一次
+        Wind 往返才回填; 在那之前整页 (名称 / 条款 / 事件 / 评级 / 市价) 显示的都还是
+        上一只债。而结果族更彻底: 回填**完成之后**它依然是上一只债的, 因为它只由
+        「开始计算」写。这里两族一起清, 空白 + "正在加载" 至少是诚实的。
+
+        本方法在 UI 建起来之前也可能被调用 (代码框的 trace 挂在 ``_build_vars`` 里,
+        早于 ``_build_ui``), 所以每处 widget 访问都要 hasattr 守卫。
+        """
+        for name in self._STALE_RESULT_VARS:
+            var = getattr(self, name, None)
+            if var is not None:
+                var.set("—")
+        if hasattr(self, "lbl_result"):
+            self.lbl_result.configure(text_color=TEXT_DIM)
+        if hasattr(self, "lbl_deviation"):
+            self.lbl_deviation.configure(text_color=TEXT_DIM)
+        self._reset_what_if_labels()
+        self._set_what_if_enabled(False)
+        self._last_pricing_impact = None
+
+        for value_name, source_name in self._STALE_TERM_FIELDS:
+            self._set_field(
+                getattr(self, value_name), "", getattr(self, source_name), "待加载")
+        # 市价清空会经 trace 把英雄卡的读数带成 "—"; 回填由 _fill_wind_data 的 close 做
+        self._set_field(self.v_market_price, "")
+
+        loading = f"正在加载 {code}…" if code else ""
+        self.v_bond_title.set(code or "未加载转债")
+        self.v_ref_info.set(loading or "尚未拉取数据")
+        self.v_ref_detail.set("")
+        self.v_status.set(loading or "就绪")
+
+        self._current_projected_terms = None
+        self._current_terms_projection = None
+
+        # 事件与下修都是本地读 (event_store / patch store), 没有网络往返 ——
+        # 直接按新代码重画, 比留空好: 空的事件区读起来像"这只债没有事件"。
+        if hasattr(self, "_refresh_events_panel") and hasattr(self, "_events_list_frame"):
+            self._refresh_events_panel(code)
+        for name, blank in (
+            ("v_dr_announce_date", ""), ("v_dr_cooldown", ""),
+            ("v_dr_note", ""), ("v_dr_block_until", "—"),
+            ("v_dr_status", loading or "无事件"),
+        ):
+            var = getattr(self, name, None)
+            if var is not None:
+                var.set(blank)
+        if hasattr(self, "_refresh_terms_snapshot_card"):
+            self._refresh_terms_snapshot_card()
+
     # ── 定价计算 ──────────────────────────────────────────
     def _run_pricing(self):
         code = self._normalize_bond_code(self.v_bond_code.get())

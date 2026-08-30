@@ -72,3 +72,38 @@ def test_popup_width_is_capped():
 def test_popup_width_stays_on_screen():
     ac = _entry([("X", "长" * 200)])
     assert ac._popup_width(entry_width=400, x=1800) == 1920 - 1800 - 8
+
+
+# ── Tooltip: 分段渲染不许破坏原有的 (widget, text) 用法 ──────────
+def test_tooltip_keeps_the_positional_text_signature():
+    """全仓库 30+ 个调用点都是 ``Tooltip(widget, "……")``.
+
+    分段渲染是**加**出来的第二条路 (行色图例要演示颜色, 不是描述颜色), 不能把
+    ``text`` 挤成关键字参数 —— 那会一次性打断所有既有调用点, 而 GUI 在测试环境
+    起不来, F821 也拦不住"参数传错位置"这种运行期错误。
+    """
+    import inspect
+
+    from convertible_bond.gui.widgets import Tooltip
+
+    params = list(inspect.signature(Tooltip.__init__).parameters.values())
+    assert [p.name for p in params[:4]] == ["self", "widget", "text", "delay_ms"]
+    assert params[2].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert params[2].default is None
+    segments = inspect.signature(Tooltip.__init__).parameters["segments"]
+    assert segments.kind is inspect.Parameter.KEYWORD_ONLY
+    assert segments.default is None
+
+
+def test_tooltip_resolves_constants_callables_and_vars():
+    """三种取值方式在本仓库都有现成用法; 分段与纯文本共用同一条解析路径."""
+    from convertible_bond.gui.widgets import Tooltip
+
+    class _Var:
+        def get(self):
+            return "from-var"
+
+    assert Tooltip._resolve("abc") == "abc"
+    assert Tooltip._resolve(lambda: "xyz") == "xyz"
+    assert Tooltip._resolve(_Var()) == "from-var"
+    assert Tooltip._resolve(None) is None

@@ -22,6 +22,7 @@ from ..market_valuation import (
     append_history,
     classify,
     compute_snapshot,
+    baseline_medians,
     caliber_note,
     load_history,
 )
@@ -74,7 +75,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     history = load_history(history_path)
-    hist_medians = [s.median_deviation for s in history if s.date != snapshot.date]
+    # 与 GUI 横幅**同一个函数**: 季度桶去重 + 剔掉当期所在季度。这里曾自己写一份
+    # "剔同日期"的过滤, 而 valuation_banner 连剔都没剔 —— 同一个中位偏差在两处给出
+    # 不同分位, 两边都不报错。
+    hist_medians = baseline_medians(history, exclude_date=snapshot.date)
     signal = classify(snapshot.median_deviation, hist_medians)
 
     if args.record:

@@ -127,7 +127,7 @@ def test_batch_column_getters_tolerate_missing_and_nan_values():
     import math
     for row in ({}, {"status": "error"},
                 {"status": "ok", "relative_deviation": math.nan,
-                 "double_low": None, "down_reset_robust_edge_value": math.nan}):
+                 "double_low": None}):
         for name, getter in batch_tab._BATCH_COL_GETTERS.items():
             assert isinstance(getter(row), str), f"{name} 在缺值行上没返回字符串"
 
@@ -156,11 +156,14 @@ def test_simple_preset_is_the_decision_view_not_a_diagnostic_one():
     # 两个偏差都在简洁里 (按用户决策): 「偏差(%)」跟模型比, 「相对偏差(pp)」跟市场比
     assert "相对偏差(pp)" in simple and "偏差(%)" in simple
 
-    # 「距下修线」(284/284 有值) 顶掉「下修优势」—— 后者在开页读缓存这条路上整列空
-    assert "正股/下修线" in simple and "下修优势(元)" not in simple
-    assert "下修优势(元)" in full
+    # 「正股/下修线」是唯一的下修相关列 (284/284 有值)。「稳健优势(元)」曾在这个位置
+    # 竞争, 已随隐含下修强度反解整体删除 —— 反解在两个 regime 都无解 (谷底
+    # 市价 < price(λ=0)、高位 市价 > price(λ=3))。
+    assert "正股/下修线" in simple
+    assert "稳健优势(元)" not in simple and "稳健优势(元)" not in full
 
-    # 诊断项只进完整: 理论价可信度在默认视图里结构上只有高/中; 定价状态实测恒 ✓
+    # 诊断项只进完整: 理论价可信度近乎常量 (实测全池 高 219 / 中 64 / 低 1);
+    # 定价状态实测恒 ✓
     for diagnostic in ("可信度", "定价状态", "转股价值", "正股σ(%)"):
         assert diagnostic not in simple, f"{diagnostic} 不该占决策位"
         assert diagnostic in full
@@ -205,7 +208,7 @@ def test_header_help_stays_short_and_has_no_orphans():
     for name in headers:
         assert "便宜" not in name and "=" not in name, f"{name} 的方向注释该进 tooltip"
     # 但单位必须留在名字里
-    for unit_col in ("相对偏差(pp)", "偏差(%)", "剩余(年)", "余额(亿)", "下修优势(元)"):
+    for unit_col in ("相对偏差(pp)", "偏差(%)", "剩余(年)", "余额(亿)"):
         assert unit_col in headers
 
     # 表头这一路真的接上了 —— 老实现在表头区 identify_row 返回 "" 就直接 _hide 了
@@ -227,7 +230,6 @@ def test_column_names_name_their_object():
     - `距下修线` → **`正股距下修线`**: 触发线是拿**正股价**比的, 而值写「线上 32%」
       时"谁在线上"正是要点。两页同步改。
     - `σ(%)` → **`正股σ(%)`**: 是正股的波动率, 不是转债的。
-    - `下修优势` → **`下修优势(元)`**: 左右两列都带单位, 不写就是个裸数。
 
     (`敏感性` 没有改名而是**删掉了** —— 见
     ``test_derivable_columns_are_off_the_batch_table``。)
@@ -239,7 +241,7 @@ def test_column_names_name_their_object():
         assert vague not in full and vague not in simple, f"{vague} 没有点明对象"
         assert vague not in batch_tab._BATCH_COL_GETTERS
         assert vague not in batch_tab._BATCH_COL_STRETCH_WEIGHTS
-    for named in ("定价状态", "正股/下修线", "正股σ(%)", "下修优势(元)"):
+    for named in ("定价状态", "正股/下修线", "正股σ(%)"):
         assert named in full
     assert "正股/下修线" in simple
 
@@ -291,7 +293,7 @@ def test_column_alignment_matches_between_header_and_content():
     **对不上小数点**, 而这几列的全部用途就是比大小。
     """
     numeric = {"市价", "理论价", "转股价值", "双低", "偏差(%)", "相对偏差(pp)",
-               "转股溢价(%)", "正股σ(%)", "下修优势(元)", "正股/下修线",
+               "转股溢价(%)", "正股σ(%)", "正股/下修线",
                "剩余(年)", "余额(亿)"}
     text = {"代码", "名称", "正股", "事件", "标签", "上市日", "加入日", "数据状态"}
     for name in numeric:
@@ -342,8 +344,8 @@ def test_column_widths_fit_the_largest_responsive_font():
     """列宽要按**响应式字号上限**定, 不是基准字号.
 
     ``_apply_responsive_tree_font`` 会随窗口变宽把字号调到 TABLE_FONT_SIZE+3, 而列宽
-    是写死的 —— 实测 2000px 宽的窗口下「正股/下修线」「相对偏差(pp)」「下修优势(元)」
-    「转股溢价(%)」四个表头全被截断 (截图里读到的是「正股/」)。
+    是写死的 —— 实测 2000px 宽的窗口下「正股/下修线」「相对偏差(pp)」「转股溢价(%)」
+    三个表头全被截断 (截图里读到的是「正股/」)。
     """
     import tkinter.font as tkfont
     from convertible_bond.gui.theme import FONT_FAMILY, TABLE_FONT_SIZE
@@ -460,9 +462,8 @@ def test_opportunity_score_is_gone_everywhere():
     - 269/284 (95%) 的行低估项 ``max(0, −deviation)`` 恒为 0, 分数完全由评级/余额加分
       与风险惩罚决定; Spearman(机会分, 质量分) = +0.517, 而 Spearman(机会分, 偏差)
       只有 −0.640 (纯错定价排序应为 −1.0)。
-    - 它的非展示消费者当时也已全部不可达: GUI 的排序信号只有三个选项, CLI 默认
-      ``down_reset_robust_edge``, ``_legacy_score_gate`` 生产代码零调用而全池
-      **0/283** 够得着它的 8.0 阈值。
+    - 它的非展示消费者当时也已全部不可达: GUI 的排序信号里没有它,
+      ``_legacy_score_gate`` 生产代码零调用而全池 **0/283** 够得着它的 8.0 阈值。
 
     **保留的是 ``quality_score``** —— 它本来就是从机会分里拆出来单独记账的那一支
     (评级档 + 大余额加分), 与错定价无关但对审计有用。
@@ -508,17 +509,6 @@ def test_opportunity_score_is_gone_everywhere():
     assert "机会分" not in app.v_watchlist_status.value
     assert "平均评级" in app.v_watchlist_status.value
 
-
-
-def test_both_pricing_entries_request_pde_down_reset_signals():
-    """主池与关注池两条定价路径都要开 PDE 下修信号, 否则「下修优势」列一半是空的。
-
-    这个 kwarg 走 ``**pricer_overrides``, 漏传不报错只静默不算 —— 正是它此前在批量页
-    缺席、让稳健下修优势在缓存里 0/280 有值的原因。
-    """
-    for module in (batch_tab, watchlist_tab):
-        src = inspect.getsource(module)
-        assert "compute_pde_signals=True" in src, f"{module.__name__} 未开 PDE 下修信号"
 
 
 # ── 事件横幅 ──
@@ -927,6 +917,82 @@ def test_worker_has_zero_success_guard_and_persists():
     assert "cross_section_anchor_from(" in src
 
 
+# ── 「取到市价了吗」与「算完了吗」是两回事 ──────────────────────────
+
+def _listed(code, market_price=163.19):
+    return {"bond_code": code, "status": "ok", "theoretical_price": 110.0,
+            "market_price": market_price, "listing_date": "2026-08-24",
+            "is_tradable": True, "trading_status": "tradable"}
+
+
+def _pending(code):
+    """未上市新债: 没有市价是天然状态, 不是取数失败."""
+    return {"bond_code": code, "status": "ok", "theoretical_price": 128.9,
+            "market_price": None, "listing_date": None,
+            "is_tradable": False, "trading_status": "pending"}
+
+
+def test_market_price_coverage_excludes_pending_new_bonds():
+    """在途新债不进分母 —— 否则一切正常的那一轮永远报成 2/5."""
+    rows = [_listed("A"), _listed("B"), _pending("N1"), _pending("N2"), _pending("N3")]
+
+    expect, got = watchlist_tab.market_price_coverage(rows)
+
+    assert [r["bond_code"] for r in expect] == ["A", "B"]
+    assert [r["bond_code"] for r in got] == ["A", "B"]
+
+
+def test_market_price_coverage_flags_listed_bond_without_price():
+    """已上市却没市价 = 转债行情链路挂了, 必须能与"新债本来就没有"分开."""
+    rows = [_listed("A"), _listed("B", market_price=None), _pending("N1")]
+
+    expect, got = watchlist_tab.market_price_coverage(rows)
+
+    assert [r["bond_code"] for r in expect] == ["A", "B"]
+    assert [r["bond_code"] for r in got] == ["A"]
+
+
+def test_market_price_coverage_treats_nan_as_missing():
+    """市价在 watchlist_cache._NAN_FIELDS 里, 落盘走一圈读回来是 NaN.
+
+    ``NaN is not None`` 为真 —— 用 ``is not None`` 判空会把"没市价"数成"有市价",
+    页面上渲染出来的是字面的 "nan"。
+    """
+    expect, got = watchlist_tab.market_price_coverage([_listed("A", market_price=float("nan"))])
+
+    assert len(expect) == 1 and got == []
+
+
+def test_worker_reports_market_price_coverage_not_just_status():
+    """状态栏必须把"取到市价"单独报出来.
+
+    ``status == "ok"`` 只说明模型算完了: S0/σ 走正股链路, 市价走转债链路, 后者整条
+    挂掉时前者照样出理论价 (`_batch_result_from_provider` 缺市价只把 deviation 写 nan,
+    status 照样 "ok")。实测 akshare 东财侧连不上时正是这个形状 —— 表里价格那一片
+    全是「—」, 而状态栏报「⚡ 已刷新关注池 5/5 只」。
+    """
+    src = inspect.getsource(watchlist_tab._watchlist_pricing_worker)
+
+    assert "market_price_coverage(ok_rows)" in src
+    assert "取到市价" in src, "完成消息必须报市价覆盖率"
+
+
+def test_worker_bails_out_before_persisting_when_no_market_price_at_all():
+    """在市债一只都没取到行情时, 不许落盘.
+
+    热缓存是**整行 upsert** (`save_watchlist_pricing` 里 `merged.update(fresh)`),
+    写进去就把昨天那个真实市价换成 NaN (实测 163.19 → nan), 而状态栏说的是成功。
+    这与 `if not ok_rows` 那道守卫是同一件事, 只是失败发生在链路更深处。
+    """
+    src = inspect.getsource(watchlist_tab._watchlist_pricing_worker)
+
+    guard_at = src.index("if expect_price and not with_price:")
+    persist_at = src.index("save_watchlist_pricing(")
+    assert guard_at < persist_at, "空市价守卫必须排在落盘之前"
+    # 守卫体内必须 return, 否则只是多打一行字
+    assert "return" in src[guard_at:persist_at]
+
+
 def test_lock_is_set_immediately_before_thread_start():
     """置位必须紧挨 Thread.start(), 中间不许有会抛的裸控件访问.
 
@@ -1270,6 +1336,17 @@ def test_direction_tags_are_relabelled_without_touching_the_frozen_string():
         assert not shown.startswith("模型")
         assert "高估" not in shown and "低估" not in shown, (
             f"{shown} 里还留着没有主语的「高估/低估」")
+        # **展示名不许暗示动作** —— 页面上有一个叫「需复核」的视图, 而标签里的
+        # 「待核/复核」说的是完全不同的一件事: 那个视图是"数据/可交易性坏了, 去修",
+        # 这些标签是"数是对的, 去研究"。实测带「深度低估待核」的 23 只 **23/23 都在
+        # 「低估候选」里** (status=ok、置信度高/中、无拦截标签), 而「需复核」当前那
+        # 1 只恰恰是"这行的数不能信" —— 两者方向相反, 名字不该把人往那边引。
+        # 该做什么由 review_notes 说, 不由标签名说。
+        assert "核" not in shown, f"{shown} 在暗示动作, 而页面上有「需复核」视图"
+    assert batch_pricing.risk_tag_label("深度低估待核") == "市价远低于市场中位"
+    # 底层字符串一个字节没动 —— 它是 DEEP_UNDERVALUED_TAGS 的成员, 旧缓存里存的也是它
+    assert "深度低估待核" in batch_pricing.DEEP_UNDERVALUED_TAGS
+    assert batch_pricing.RISK_TAG_DIMENSION["深度低估待核"] == "机会信号"
 
     # **摘要条也要走这张表** —— 它曾经另写一份字面量「⚠ 模型高估 2」, 于是标签列
     # 已经改口而摘要条还在说旧词, 同一页两种说法。
@@ -1339,19 +1416,19 @@ def test_numeric_columns_sort_numerically():
     于是**静默**退化成字符串序 —— 不报错, 只是点了表头之后顺序是错的。
     """
     numeric = {"市价", "理论价", "偏差(%)", "相对偏差(pp)", "双低", "剩余(年)",
-               "余额(亿)", "转股价值", "转股溢价(%)", "正股σ(%)", "下修优势(元)",
+               "余额(亿)", "转股价值", "转股溢价(%)", "正股σ(%)",
                "正股/下修线"}
     rows = [
         {"status": "ok", "market_price": 128.37, "theoretical_price": 135.17,
          "deviation": -0.0503, "relative_deviation": -0.259, "double_low": 142.0,
          "T": 0.23, "outstanding_balance": 4.2, "parity": 112.55,
          "conversion_premium": 0.141, "sigma": 0.61,
-         "down_reset_robust_edge_value": 3.5, "down_reset_trigger_gap": 0.32},
+         "down_reset_trigger_gap": 0.32},
         {"status": "ok", "market_price": 116.35, "theoretical_price": 118.28,
          "deviation": -0.0163, "relative_deviation": -0.225, "double_low": 384.0,
          "T": 5.94, "outstanding_balance": 18.8, "parity": 30.3,
          "conversion_premium": 2.84, "sigma": 0.31,
-         "down_reset_robust_edge_value": -12.0, "down_reset_trigger_gap": -0.63},
+         "down_reset_trigger_gap": -0.63},
     ]
     for name in numeric:
         getter = batch_tab._BATCH_COL_GETTERS[name]
@@ -1958,9 +2035,11 @@ def test_row_colour_never_depends_on_how_cheap_the_bond_looks():
        宝莱 −3.24%), 全被橙色吃掉; 20 期估值基线里 5 期都在这一档。
 
     ② **颜色是渲染排序键的单调函数**。``sort_batch_results_for_view`` 对
-       「综合机会/低估候选/转股折价」一律按 ``relative_deviation`` **升序**,
-       而「低估候选」的准入判据本身就是 ``rel < −5pp`` —— 任何架在便宜度上的
-       行色在那一页上都是整表同色 (实测 40/40)。便宜度已经被行位置编码完了。
+       「低估候选/转股折价」按 ``relative_deviation`` **升序**, 而「低估候选」的
+       准入判据本身就是 ``rel < −5pp`` —— 任何架在便宜度上的行色在那一页上都是
+       整表同色 (实测 40/40)。便宜度已经被行位置编码完了。
+       (「全池」已改按**上市日倒序**, 那一页的排序键根本不是便宜度, 上色会与
+       行位置各说各话。)
 
     所以这条不是"换个阈值", 是**便宜度整体退出行色通道**。
     """
@@ -2034,9 +2113,8 @@ def test_every_row_colour_has_a_text_exit():
 def test_refresh_theme_survives_a_tree_that_was_already_destroyed():
     """空结果视图留下的悬垂 Treeview 不许打断整轮重染.
 
-    触发链今天就成立: 默认落地「低估候选」(40 行, 注册树) → 切「下修优势」
-    (**实测 0 行**) 或「转股折价」(**实测 0 行**) → 切主题 (app.py:996) 或跨响应式
-    档位 (app.py:748)。真机 Tk **8.6.15** 实测 ``tag_configure`` 抛
+    触发链今天就成立: 默认落地「全池」(实测 284 行, 注册树) → 切「转股折价」
+    (**实测 0 行**) → 切主题 (app.py:996) 或跨响应式档位 (app.py:748)。真机 Tk **8.6.15** 实测 ``tag_configure`` 抛
     ``TclError: invalid command name ".!frame.!treeview"`` —— 而
     ``getattr(app, attr, None) is not None`` 拦不住已 destroy 的控件 (它还是个对象)。
 
@@ -2171,18 +2249,389 @@ def test_row_colour_treats_nan_as_missing():
 
 
 def test_legend_names_exactly_the_colours_the_table_can_show():
-    """图例与 ``_TAG_COLORS`` 键集必须同步, 且要显式解释"无色".
+    """图例与 ``_TAG_COLORS`` 键集必须同步.
 
     与 ``WATCH_REFRESH_LABEL`` 那次同构: 改了 tag 但图例里留着一个**过期**的
     档位名, 用户对着表找一个不存在的颜色。所以比对的是**集合相等**而不是扫字面量
     —— 扫字面量抓不到"留着旧名字"这种真实形态。
 
-    "无色"那一句是硬要求: 默认落地视图「低估候选」里 ``blocked`` 恒为 0
-    (该视图本身就排除了拦截标签与低置信), 一页全无色是**设计意图**; 没有这句话,
-    它和"配色坏了"长得一模一样 —— 与事件横幅空态那条同源。
+    「无色 = …」那一句**已按用户决策去掉** (2026-08-29)。此前它是硬要求, 理由是
+    实测默认落地视图 284 行 ``blocked`` 为 0、一页全无色是设计意图, 没有那句话
+    它和"配色坏了"长得一模一样。现在区分这两者靠的是"悬停表区标题看得到这三档
+    确实存在"; 换来的是不再为绝大多数行的**常态**常驻一行说明。
     """
     assert set(_TAG_LEGEND) == set(_TAG_COLORS)
     legend = row_colour_legend()
     for label in _TAG_LEGEND.values():
         assert label in legend
-    assert "无色" in legend
+
+
+def test_legend_segments_wear_the_colours_they_describe():
+    """图例**演示**颜色, 不用文字描述颜色.
+
+    上一版的 tooltip 是纯文本, 只能写「红色加粗 = 买卖受限」; 现在逐行按各自的
+    颜色与字重渲染, 那张色名表 (``_TAG_APPEARANCE``) 随之删掉 —— 留着就是第二份
+    会过期的展示词表, 而在一行本来就是红色加粗的字前面写「红色加粗 =」, 说的是
+    读者眼前就能看见的东西。
+    """
+    from convertible_bond.gui.tabs.batch_common import (
+        _BOLD_TAGS, _ITALIC_TAGS, _TAG_COLORS as COLORS, row_colour_legend_segments,
+    )
+    import convertible_bond.gui.tabs.batch_common as mod
+
+    assert not hasattr(mod, "_TAG_APPEARANCE"), "色名表该随 tooltip 上色一起删掉"
+
+    segments = row_colour_legend_segments()
+    coloured = {seg[1]: seg for seg in segments if seg[1] is not None}
+    # 每一档都得真的带上自己的颜色 —— 少一档就是"表里有这个色, 图例里没有"
+    assert set(coloured) == set(COLORS.values())
+
+    by_label = {seg[0].strip(): seg for seg in segments}
+    for tag, label in _TAG_LEGEND.items():
+        _text, color, font = by_label[label]
+        assert color == COLORS[tag]
+        # 第二通道跟着表走: 颜色在灰阶/单色打印/红绿色觉缺陷下信息量为 0
+        if tag in _BOLD_TAGS:
+            assert font[-1] == "bold"
+        elif tag in _ITALIC_TAGS:
+            assert font[-1] == "italic"
+        else:
+            assert len(font) == 2
+    # 三档请求的字体互不相同 —— 但**请求不等于渲染**, 见下一条用例
+
+
+def test_legend_italic_does_not_actually_render_on_macos_cjk():
+    """守住一个**已知失效**, 免得文档里再写"三档不靠色相也分得开".
+
+    实测 (Tk 8.6.15 / macOS): PingFang SC 没有斜体字面且 Tk 不合成 →
+    ``actual()["slant"] == "roman"``; 换 Menlo 虽然 ``actual()`` 报 italic, 但它没有
+    CJK 字形, 中文走回落而回落不倾斜 —— 正体/斜体量宽完全相等。所以改字族只会让这条
+    用例变绿而用户看到的没变, 那是用绿测试担保一句假话。
+
+    这条用例的作用是**把测量结果钉住**: 断言的是渲染态 (``actual()``) 而不是请求的
+    元组 —— 上一版就是因为只比元组, 一个显式请求了却从不生效的属性一路全绿。
+    """
+    import tkinter
+    import tkinter.font as tkfont
+
+    from convertible_bond.gui.theme import FONT_FAMILY, FONT_MONO
+
+    try:
+        root = tkinter.Tk()
+        root.withdraw()
+    except Exception:  # pragma: no cover - CI 无显示环境
+        pytest.skip("需要 Tk 显示环境才能量字体")
+    try:
+        if FONT_FAMILY != "PingFang SC":      # 非 macOS: 结论不适用, 不做断言
+            pytest.skip(f"本条只描述 macOS 的 PingFang SC, 当前是 {FONT_FAMILY}")
+        assert tkfont.Font(font=(FONT_FAMILY, 12, "bold")).actual()["weight"] == "bold"
+        assert tkfont.Font(font=(FONT_FAMILY, 12, "italic")).actual()["slant"] == "roman"
+        # 换 FONT_MONO 不是出路: actual() 好看了, 中文照样不斜 (量宽相等)
+        upright = tkfont.Font(font=(FONT_MONO, 12)).measure("数据缺失或定价失败")
+        slanted = tkfont.Font(font=(FONT_MONO, 12, "italic")).measure("数据缺失或定价失败")
+        assert upright == slanted
+    finally:
+        root.destroy()
+
+
+def test_legend_plain_text_is_derived_from_the_segments():
+    """纯文本版必须由分段拼出来, 不许另写一份字面量 (改档位名后会留下过期的那份)."""
+    from convertible_bond.gui.tabs.batch_common import row_colour_legend_segments
+
+    text = row_colour_legend()
+    for seg_text, _color, _font in row_colour_legend_segments():
+        assert seg_text in text
+
+
+def test_legend_does_not_call_a_still_tradable_bond_untradable():
+    """``blocked`` 收的是 临近摘牌 / 正股跌停 这类"买不到 / 快买不到了",
+    「临近摘牌」今天照样买得到 —— 叫它「不可交易」是把最重的那一档当成了全部。"""
+    assert _TAG_LEGEND["blocked"] == "买卖受限"
+
+
+def test_empty_view_note_explains_why_without_faking_a_pool_wide_number():
+    """空视图的文案要说**为什么**空, 而且不许把某一行的数字冒充成全池口径.
+
+    三件事分开:
+
+    ① **通用文案是句废话, 而且会指向无效动作**。「换个视图或点刷新重算」既没说为什么
+       空, 又在建议一个未必奏效的操作 —— 实测「转股折价」的判据是 转股溢价 < −3%,
+       而全池最低 **−0.3%**、中位 **+58.4%**, 重算多少次都还是 0 行。所以全池理由
+       一致时要逐字引用那个理由。
+
+    ② **理由串带行内数字, 取众数展示就是造假**。「相对市场中位 +17.9pp, 未便宜过
+       5pp」「双低 205 排第 44/283」里的数都是**那一行**的; 挑一条当"全池的原因"
+       会渲染出一个看上去完全正常的假口径。所以只在**全集只有一个理由**时才引用,
+       混合理由退回通用文案。
+
+    ③ **``None`` 是"这行属于该视图", 与"视图是空的"自相矛盾**。「综合机会」从不排除
+       任何行, 它的理由集恰是 ``{None}`` —— 少一道闸就会渲染出字面的 "None"。
+
+    另有一条**结构性**约束: 理由必须问 ``view_exclusion_reason``, 不许在文案函数里按
+    视图名分支。上一版给「下修优势」写过特判, 那个视图整体删除之后特判成了死代码 ——
+    "每加一个视图加一个 if" 的写法必然烂掉, 而判据的单一事实源本来就在 batch_pricing。
+    """
+    import inspect
+
+    from convertible_bond.batch_pricing import BATCH_REVIEW_VIEWS
+
+    class _App:
+        pass
+
+    def note(rows, view):
+        app = _App()
+        app._batch_all_results = rows
+        return batch_tab._empty_view_note(app, view)
+
+    # ① 全池同一个理由 → 逐字引用
+    discount = [{"status": "ok", "risk_tags": []} for _ in range(284)]
+    text = note(discount, "转股折价")
+    assert "未出现转股折价标签" in text and "284" in text
+    assert "刷新重算" not in text, "理由已经说清楚了, 不该再指一个不奏效的动作"
+
+    # ② 混合理由 → 通用文案, 且**一个行内数字都不许漏出来**
+    mixed = [
+        {"status": "ok", "risk_tags": [], "relative_deviation": 0.179,
+         "cheapness_rank": 200.0, "cheapness_rank_total": 284.0, "confidence": "高"},
+        {"status": "failed", "risk_tags": []},
+    ]
+    text = note(mixed, "低估候选")
+    assert "刷新重算" in text
+    for leaked in ("17.9", "+17.9pp", "200", "定价未成功"):
+        assert leaked not in text, f"混合理由不该漏出单行口径 {leaked!r}"
+
+    # ③ None 不许渲染出来 (「综合机会」的理由集恰是 {None})
+    text = note(discount, "综合机会")
+    assert "None" not in text and "刷新重算" in text
+
+    # ④ 没有结果 / 连属性都还没建 —— 建表早于第一次批量, 不许抛
+    assert note([], "双低")
+    assert batch_tab._empty_view_note(_App(), "双低")
+
+    # ⑤ 结构性: 不许按视图名分支。判据**不能**只扫 BATCH_REVIEW_VIEWS 的成员 ——
+    #    烂掉的那个特判分支到的正是一个**已经删除**的视图名 ("下修优势"), 它早已不在
+    #    这个元组里, 按成员扫等于永远抓不到真实故障形态。所以扫的是"拿 name 和任意
+    #    字符串字面量比较"这个**形状**。
+    import re
+
+    src = inspect.getsource(batch_tab._empty_view_note)
+    body = src.split('"""')[-1]          # 掐掉 docstring, 那里当然会点名视图
+    branch = re.search(r'name\s*(?:==|!=|\bin\b)\s*[({\[]?["\u0027]', body)
+    assert branch is None, (
+        f"按视图名分支会随视图增删烂掉 (命中 {branch.group(0)!r} ), "
+        "理由要问 view_exclusion_reason")
+    assert "view_exclusion_reason" in body, "理由的单一事实源是 view_exclusion_reason"
+    assert BATCH_REVIEW_VIEWS            # 视图表还在, 只是不该在这里被逐个点名
+
+
+def test_view_display_label_is_split_from_the_frozen_view_name():
+    """「综合机会」只改**展示名**, 底层字面量逐字冻结.
+
+    为什么必须改: 这个视图的 ``view_exclusion_reason`` 直接 ``return None`` —— 它就是
+    **不过滤的全池**, 既不"综合"也不排"机会"。而名字里的「机会」指的是
+    ``opportunity_score``, 那个字段已于 2026-08-29 整体删除, 视图名成了唯一的残留引用。
+    实测它也不是一个独立的机会排序: 按相对偏差升序的**前 43 行与「低估候选」重合
+    43/43**, 独立信息全在第 44 行往后。
+
+    为什么**不能**直接改串: ``"综合机会"`` 是 ``ScoreStrategyConfig.selection_view``
+    的默认值, 随策略配置落进快照并被 ``_canonical_view_name`` 回读 —— 改它是兼容性
+    破坏。与「模型高估离群」→「市价远高于模型价」同一条解法。
+
+    三件事:
+
+    ① **冻结锚**: 底层名还在, 且仍是策略层默认值。
+    ② **往返闭合**, 且展示名不许撞上另一个视图的底层名 —— 撞了之后
+       ``batch_view_from_label`` 会静默解析成**另一个视图**, 页面照常渲染, 只是筛子
+       换了一把。
+    ③ **每个面向用户的出口都要过 ``batch_view_label``**。少接一处的表现不是报错, 是
+       "菜单叫「全池」而状态栏叫「综合机会」" —— 同一个东西两个名字, 用户无从判断
+       是不是两回事。
+    """
+    import inspect
+
+    from convertible_bond.batch_pricing import (
+        BATCH_REVIEW_VIEWS,
+        BATCH_VIEW_DISPLAY_LABEL,
+        batch_view_from_label,
+        batch_view_label,
+    )
+    from convertible_bond.strategy_backtest import ScoreStrategyConfig
+
+    # ① 冻结锚: 底层名没动, 策略默认值仍指向它
+    assert "综合机会" in BATCH_REVIEW_VIEWS
+    assert ScoreStrategyConfig().selection_view == "综合机会"
+    assert BATCH_VIEW_DISPLAY_LABEL["综合机会"] == "全池"
+
+    # ② 往返闭合 + 展示名不许撞上另一个视图的底层名
+    for view in BATCH_REVIEW_VIEWS:
+        label = batch_view_label(view)
+        assert batch_view_from_label(label) == view
+        if label != view:
+            assert label not in BATCH_REVIEW_VIEWS, (
+                f"展示名 {label!r} 撞上了另一个视图的底层名, 回读会静默换一把筛子")
+    assert batch_view_from_label("不存在的视图") is None
+    # 旧快照/旧配置里存的是底层名, 也必须认
+    assert batch_view_from_label("综合机会") == "综合机会"
+
+    # 菜单标签带 " (N)" 计数后缀, 回读要能剥掉
+    assert batch_tab._canonical_view_name("全池 (284)") == "综合机会"
+    assert batch_tab._canonical_view_name("综合机会") == "综合机会"
+    assert batch_tab._canonical_view_name("") == "综合机会"
+
+    # ③ 面向用户的出口都接上了 (菜单 / 状态行 / 空态文案)
+    for fn in (batch_tab._refresh_view_menu_labels,
+               batch_tab._render_table,
+               batch_tab._empty_view_note):
+        assert "batch_view_label" in inspect.getsource(fn), (
+            f"{fn.__name__} 没走展示名, 会和菜单显示两个名字")
+
+    # 空态文案用展示名, 但**查判据仍用底层名** —— 两者混用会让 view_exclusion_reason
+    # 收到一个它不认识的串, 静默退回「综合机会」的口径 (那个视图从不排除任何行)。
+    class _App:
+        pass
+
+    app = _App()
+    app._batch_all_results = [{"status": "ok", "risk_tags": []} for _ in range(7)]
+    note = batch_tab._empty_view_note(app, "综合机会")
+    assert "全池" in note and "综合机会" not in note
+    # 判据没走岔: 「综合机会」全池理由集恰是 {None}, 该退回通用文案而不是引用 "None"
+    assert "None" not in note
+
+
+def test_each_view_shows_the_column_its_criterion_is_built_on():
+    """切到一个视图, 它的**判据量**必须在表上 —— 否则是按不可见的数筛选.
+
+    「简洁」是**全池视角**下的决策位, 它排掉「可信度」「定价状态」的理由是实测在默认
+    视图里这两列近乎常量。但那个理由**随视图变**, 而列预设此前不随视图变:
+
+    · 「需复核」的判据恰是 status / 拦截标签 / 置信度 三条, 其中两条没有列。实测今天
+      那 1 只 (123270.SZ 盛德转债) **完全是因为 `confidence == "低"`** 进来的
+      (全池: 定价失败 0 · 置信度低 1 · 带拦截标签 0) —— 表上一行, 没有任何一列说得出
+      它为什么在那儿。
+    · 「转股折价」的判据是 `转股溢价 < −3%`, 而那一列只在「完整」里。
+
+    三件事:
+
+    ① **补列只在该视图生效**, ``_BATCH_COLS_SIMPLE`` 本身一个字节不动 —— 全局加进去
+       就是让不需要它的行陪着占宽 (那正是
+       ``test_simple_preset_is_the_decision_view_not_a_diagnostic_one`` 钉住的东西)。
+    ② **列序从 ``_BATCH_COLS_FULL`` 取, 不追加到末尾**。列序是"读者的提问次序"且价格块
+       必须连成一片 —— 「转股溢价(%)」就落在价格块里, 追加会把它甩到「评级」后面, 与它
+       要对照的「市价」隔开十列; 「可信度」的对象 (理论价) 也是**由列序承载**的。
+    ③ **这套组装依赖两条不变量**: 简洁 ⊆ 完整, 且简洁的列序等于它在完整里的相对序。
+       任一条破了, ``_batch_schema_for`` 会**静默**丢列或重排 —— 不报错, 只是表变了样。
+    """
+    from convertible_bond.batch_pricing import BATCH_REVIEW_VIEWS
+
+    simple = [name for name, _ in batch_tab._BATCH_COLS_SIMPLE]
+    full = [name for name, _ in batch_tab._BATCH_COLS_FULL]
+
+    # ③ 先钉不变量 —— 下面两条都架在它上面
+    assert set(simple) <= set(full), "简洁有完整没有的列, 组装会 KeyError 或丢列"
+    assert [n for n in full if n in set(simple)] == simple, (
+        "简洁的列序与完整的相对序不一致, 补列会静默重排整张表")
+
+    # ① 补列只在该视图生效, 且不改简洁本身
+    assert [n for n, _ in batch_tab._batch_schema_for("简洁", "低估候选")] == simple
+    assert [n for n, _ in batch_tab._batch_schema_for("简洁", None)] == simple
+    assert batch_tab._batch_schema_for("完整", "需复核") == batch_tab._BATCH_COLS_FULL
+
+    # ② 判据列到位, 且落在完整预设给它的位置上 (不是末尾)
+    review = [n for n, _ in batch_tab._batch_schema_for("简洁", "需复核")]
+    assert "可信度" in review and "定价状态" in review
+    assert review[review.index("理论价") + 1] == "可信度", "可信度的对象由列序承载"
+    # 「全池」的那一列是**排序量**不是判据量: 它按上市日倒序排, 第一屏是刚上市的
+    # 新债 —— 不显示上市日的话, 页面上没有任何一列说得出它们为什么排在最前。
+    pool = [n for n, _ in batch_tab._batch_schema_for("简洁", "综合机会")]
+    assert "上市日" in pool
+    assert pool[pool.index("上市日") + 1] == "剩余(年)", "它属于基础条款块"
+
+    discount = [n for n, _ in batch_tab._batch_schema_for("简洁", "转股折价")]
+    assert "转股溢价(%)" in discount
+    assert discount[discount.index("转股溢价(%)") + 1] == "市价", "它属于价格块"
+    for view in (None, "需复核", "转股折价"):
+        cols = [n for n, _ in batch_tab._batch_schema_for("简洁", view)]
+        assert cols == [n for n in full if n in set(cols)], f"{view} 的列序被打乱了"
+
+    # 补进来的列必须在三张表里都登记过 —— 缺权重会静默走默认 1.0 (与「名称」同级),
+    # 缺 getter 直接 KeyError, 缺对齐则表头与内容不同向。
+    for view, extra in batch_tab._VIEW_KEY_COLUMNS.items():
+        assert view in BATCH_REVIEW_VIEWS, f"{view} 不是视图名, 这条补列永远不会生效"
+        for name in extra:
+            assert name in full, f"{name} 不在完整预设里, 取不到列宽"
+            assert name not in simple, f"{name} 已经在简洁里, 这条登记是死条目"
+            assert name in batch_tab._BATCH_COL_GETTERS
+            assert name in batch_tab._BATCH_COL_STRETCH_WEIGHTS
+
+
+
+def test_watchlist_pages_never_call_it_a_position():
+    """关注池是**纯研究关注清单, 不记持仓** (2026-08-25 拍板的口径1).
+
+    没有成本价 / 份额 / 浮盈, 也不打算有。而"持仓"这个词向读者承诺的正是那一套
+    语义 —— 它出现在默认落地页最显眼的表标题和常驻摘要条上, 是全 app 最容易被
+    读成"这里记着我买了多少"的两处。
+
+    **只扫用户看得见的字符串**, 不扫注释与 docstring: 解释"为什么这里不叫持仓"的
+    注释本身就得写出这个词, 扫源码文本会把它们一并判红 —— 那是"为了规则改文档",
+    与 AGENTS 里 tooltip 那条来回摆过两次的教训同源。
+
+    也只扫关注池那两个文件: 策略页与回测页确实建模持仓 (调仓/权重/归因),
+    那里用这个词是对的。
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "convertible_bond" / "gui" / "tabs"
+    for name in ("home.py", "batch_watchlist.py"):
+        tree = ast.parse((root / name).read_text(encoding="utf-8"))
+        docstrings = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.body and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in docstrings):
+                assert "持仓" not in node.value, (
+                    f"{name}:{node.lineno} 的用户可见文案里有「持仓」"
+                    " —— 关注池不记持仓 (口径1)")
+
+
+def test_batch_page_lands_on_the_full_pool():
+    """批量页默认落「全池」, 而且 canonical 与 display var 不许各说各话.
+
+    为什么不再落「低估候选」: 那是把一个**判断**放在落地页上。它只有 43/284 只, 而
+    "今天有没有便宜货"本身随周期摆动 (中位偏差实测 +0.4% ~ +21.6%) —— 谷底时判据
+    诚实归零, 默认打开就是一张空表。那正是绝对机会分阈值时代踩过的坑 (2026-08 主池
+    280 只只剩 1 只候选), 换成横截面口径只是让它变罕见, 没有消除。分母做落地页永远不空。
+
+    **两个 var 必须同源**。``v_batch_view`` 存冻结名、``_batch_view_display_var`` 存
+    展示名, 各写一个字面量就会分叉 —— 表现不是报错, 是"菜单显示 A 而表里是 B 的行",
+    用户无从判断哪个说了算。所以 display var 要由 ``batch_view_label`` 算出来。
+    """
+    import inspect
+
+    from convertible_bond.batch_pricing import BATCH_REVIEW_VIEWS, batch_view_label
+
+    src = inspect.getsource(batch_tab.build)
+    assert 'app.v_batch_view = ctk.StringVar(value="综合机会")' in src, (
+        "默认视图不是「全池」的冻结名「综合机会」")
+    assert ('app._batch_view_display_var = ctk.StringVar('
+            'value=batch_view_label("综合机会"))') in src, (
+        "display var 写死了字面量, 会与 canonical 分叉")
+
+    # 落地页的冻结名必须是真视图, 且它的展示名回得来
+    assert "综合机会" in BATCH_REVIEW_VIEWS
+    assert batch_tab._canonical_view_name(batch_view_label("综合机会")) == "综合机会"
+
+    # 落地页不许是一个会空掉的视图: 全池的判据是"没有判据"
+    from convertible_bond.batch_pricing import view_exclusion_reason
+    for row in ({}, {"status": "failed"}, {"status": "ok", "risk_tags": ["无市价"]}):
+        assert view_exclusion_reason(row, "综合机会") is None, (
+            "全池开始排除行了 —— 落地页就可能空")
+

@@ -32,10 +32,6 @@ from ..cb_events import CBEventStore, project_events_path
 from ..market_time import market_today
 from ..batch_pricing import DEFAULT_MIN_CREDIT_RATING, DEFAULT_MIN_OUTSTANDING_BALANCE
 from ..paths import asset_path, seed_data_files
-from ..pricing_api import (
-    DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND,
-    DEFAULT_PDE_SIGNAL_SPREAD_BAND,
-)
 from .constants import (
     BOND_CODE_RE,
     default_market_source,
@@ -281,26 +277,19 @@ class CBPricerApp(
         self.v_st_end = ctk.StringVar(value=today.isoformat())
         self.v_st_freq = ctk.StringVar(value="月")
         self.v_st_top_n = ctk.StringVar(value="10")
-        self.v_st_template = ctk.StringVar(value="下修错定价")
+        self.v_st_template = ctk.StringVar(value="估值偏差")
         self.v_st_view = ctk.StringVar(value="综合机会")
         # 新策略页固定为按 PDE 信号取 Top N，候选不足时留现金。
         # 字段保留为内部兼容镜像，不再向正常 GUI 流程暴露“等权全池”。
         self.v_st_weighting = ctk.StringVar(value="Top N 排序")
-        self.v_st_rank_signal = ctk.StringVar(value="稳健下修优势")
-        self.v_st_min_reset_edge = ctk.StringVar(value="0")
+        self.v_st_rank_signal = ctk.StringVar(value="估值偏差")
         # 策略模型参数独立于单债定价页，避免拉取单债后暗中改变回测口径。
         self.v_st_r = ctk.StringVar(value="2.2")
         self.v_st_spread = ctk.StringVar(value="3.0")
         self.v_st_distress_k = ctk.StringVar(value="5.0")
         self.v_st_p_down = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
         self.v_st_vol_window = ctk.StringVar(value=VOL_WINDOW_DEFAULT)
-        self.v_st_sigma_band = ctk.StringVar(
-            value=f"{DEFAULT_PDE_SIGNAL_SIGMA_REL_BAND * 100:g}"
-        )
-        self.v_st_spread_band_bps = ctk.StringVar(
-            value=f"{DEFAULT_PDE_SIGNAL_SPREAD_BAND * 10000:g}"
-        )
-        self.v_st_event_exit = ctk.BooleanVar(value=True)
+        self.v_st_event_exit = ctk.BooleanVar(value=False)
         # 闲置现金年化收益 (%/年, 默认≈无风险利率)。0 计息会让 Sharpe 的 rf 门槛
         # 系统性低估持现金配置 (留现金/择时缩放); 设 0 可复现旧口径。
         self.v_st_cash_yield = ctk.StringVar(value="2.2")
@@ -925,6 +914,12 @@ class CBPricerApp(
             return
         code = self._normalize_bond_code(self.v_bond_code.get())
         self._refresh_watchlist_button()   # ⭐ 按钮要跟着代码切换显示已关注/未关注
+        # 代码一变, 页上显示的一切就不再属于这只债了 —— 立刻清场, 不等 650ms 防抖。
+        # 判据锚"页面上现在显示的是谁"(_displayed_bond_code) 而不是"上次自动加载过谁":
+        # 后者在加载失败时不会更新, 于是失败留下的残页会被当成"已经是这只债了"。
+        if code != getattr(self, "_displayed_bond_code", None):
+            self._displayed_bond_code = code
+            self._reset_pricing_view(code)
         if not BOND_CODE_RE.match(code):
             self._last_auto_loaded_code = None
             if self._auto_fetch_after is not None:
@@ -1063,10 +1058,9 @@ class CBPricerApp(
         "v_data_source",
         # 策略页配置 (模板/选债逻辑/范围过滤/成本); 文件路径与日期不纳入, 保持预设可移植
         "v_st_freq", "v_st_top_n", "v_st_template", "v_st_view",
-        "v_st_weighting", "v_st_rank_signal", "v_st_min_reset_edge",
+        "v_st_weighting", "v_st_rank_signal",
         "v_st_r", "v_st_spread", "v_st_distress_k", "v_st_p_down",
-        "v_st_vol_window", "v_st_sigma_band", "v_st_spread_band_bps",
-        "v_st_event_exit", "v_st_cash_yield", "v_st_exposure",
+        "v_st_vol_window", "v_st_event_exit", "v_st_cash_yield", "v_st_exposure",
         "v_st_pool_mode", "v_st_history_mode", "v_st_codes",
         "v_st_min_price", "v_st_max_price",
         "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",
@@ -1119,23 +1113,18 @@ class CBPricerApp(
                         getattr(self, name).set(value)
                 # 旧版把任意手动调参都记为“自定义”。新版不再把它作为第三种
                 # 策略，按实际排名信号还原到两个真实策略之一。
-                if str(data.get("v_st_template") or "").strip() in {"自定义", "自定义PDE"}:
-                    inferred_template = (
-                        "估值偏差"
-                        if normalize_pde_rank_signal_label(self.v_st_rank_signal.get()) == "估值偏差"
-                        else "下修错定价"
-                    )
-                    self.v_st_template.set(inferred_template)
+                # 旧预设里的模板名 (自定义/下修错定价/...) 一律经
+                # normalize_pde_strategy_template 落到「估值偏差」—— 下修优势信号已删,
+                # 模板只剩一个。
+                self.v_st_template.set(
+                    normalize_pde_strategy_template(data.get("v_st_template"))
+                )
                 # 旧预设中的市场通用选债/全池持仓不再进入新 GUI 主流程。
                 self.v_st_view.set("综合机会")
                 self.v_st_weighting.set("Top N 排序")
-                if "v_st_rank_signal" not in data:
-                    if self.v_st_template.get() == "估值偏差":
-                        self.v_st_rank_signal.set("估值偏差")
-                        self.v_st_event_exit.set(False)
-                    else:
-                        self.v_st_rank_signal.set("稳健下修优势")
-                        self.v_st_event_exit.set(True)
+                self.v_st_rank_signal.set(
+                    normalize_pde_rank_signal_label(self.v_st_rank_signal.get())
+                )
             finally:
                 self._suppress_bond_autoload = False
                 self._programmatic_update = False

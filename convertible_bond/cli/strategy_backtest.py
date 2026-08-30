@@ -76,7 +76,7 @@ def main() -> int:
         else -1.0
     )
     parser = argparse.ArgumentParser(
-        description="按 CBLens 下修错定价或估值偏差做定期调仓回测",
+        description="按 CBLens 估值偏差信号做定期调仓回测",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -116,21 +116,25 @@ def main() -> int:
                         help="定价速度/精度: fast=快速预览, standard=标准, precise=精确 (默认 standard)")
     parser.add_argument("--top-n", type=int, default=10,
                         help="每次调仓按策略信号选债数量; 不足时留现金 (默认 10)")
-    parser.add_argument("--rank-signal", default="down_reset_robust_edge",
+    # 下修优势两档已删 —— 隐含下修强度反解在两个 regime 都结构性无解 (谷底
+    # 市价 < price(λ=0)、高位 市价 > price(λ=3))。旧脚本传的值由
+    # _normalize_rank_signal 落到 deviation, 所以 choices 里仍然接受它们。
+    parser.add_argument("--rank-signal", default="deviation",
                         choices=[
                             "deviation", "down_reset_edge", "down_reset_robust_edge",
                         ],
-                        help="排序信号: deviation=市价/理论价偏差升序; "
-                             "down_reset_edge=下修优势金额降序; "
-                             "down_reset_robust_edge=HV/信用利差扰动后的最差优势降序 "
-                             "(默认)")
-    parser.add_argument("--min-down-reset-edge", type=float, default=0.0,
-                        help="下修错定价排序时的最低优势金额(元, 默认 0)")
+                        help="排序信号: deviation=市价/理论价偏差升序 (默认)。"
+                             "down_reset_edge / down_reset_robust_edge 已删除, "
+                             "传入会退化为 deviation")
+    # 曾是 --no-down-reset-event-exit (store_false, 默认开启), 因为那时它还被
+    # `and is_down_reset` 二次把关 —— 按 deviation 排序时恒为 False。下修优势信号删掉
+    # 之后那道把关没了, 留着 store_false 会让事件退出**突然对所有回测生效**, 而那是
+    # 默认选债行为变更。改成显式开启, 与 ScoreStrategyConfig 的默认值对齐。
     parser.add_argument(
-        "--no-down-reset-event-exit",
-        action="store_false",
+        "--down-reset-event-exit",
+        action="store_true",
         dest="down_reset_event_exit",
-        help="关闭下修提议/通过/拒绝公告后的提前退出 (默认开启)",
+        help="下修提议/通过/拒绝公告后在下一可得收盘退出并持有现金 (默认关闭)",
     )
     parser.add_argument("--exposure-mode", default="full",
                         choices=["full", "valuation"],
@@ -194,12 +198,22 @@ def main() -> int:
                         help="困境信用利差斜率 (默认 0.05)")
     parser.add_argument("--p-down", type=float, default=0.25,
                         help="年化下修事件强度 (默认 0.25)")
+    # 正股股息率 q。**回测里这是最贵的一次取数, 而且口径可疑**: akshare 走
+    # stock_a_indicator_lg 逐只股票拉, 失败再回落 stock_zh_a_spot_em (整张全市场
+    # 现货快照), 每只 3 次重试 —— 实测 2024-09 那个窗口 623 只债全部失败, 光这一步
+    # 就耗掉 55 分钟, 而失败后本来就回落 q=0, 结果与显式传 0 完全一样。
+    # 更根本的是它取的是**实时**快照, 却拿去给历史估值日用。
+    #
+    # 显式给一个值就整段跳过取数 (price_from_provider: q is None 才去 provider 取)。
+    # **信号对照场景下这是正确做法** —— 两次回测用同一个 q, 比较才公平; 而 q=0 本来
+    # 就是 README 记录的模型边界 ("数据源缺失时默认 0")。
+    # ``backtest_disk_cache`` 不缓存 q (bond_history/stock_history/terms 三样都缓存了,
+    # 只有它是直接透传), 补那个缓存是另一件事。
+    parser.add_argument("--q", type=float, default=None,
+                        help="正股股息率 (%%, 例 1.5)。给了就跳过逐只联网取数; "
+                             "不给则按数据源取, 取不到回落 0")
     parser.add_argument("--vol-window", type=int, default=21,
                         help="历史波动率窗口交易日数 (默认 21)")
-    parser.add_argument("--pde-sigma-band", type=float, default=0.15,
-                        help="稳健下修优势的 HV 相对扰动带 (默认 0.15)")
-    parser.add_argument("--pde-spread-band", type=float, default=0.01,
-                        help="稳健下修优势的信用利差扰动带 (默认 0.01=100bp)")
     parser.add_argument("--M", type=int, default=None,
                         help="覆盖定价价格网格 M")
     parser.add_argument("--N", type=int, default=None,
@@ -268,9 +282,8 @@ def main() -> int:
         min_turnover_amount=None if args.min_turnover < 0 else args.min_turnover,
     )
     max_deviation = args.max_deviation
-    if args.rank_signal == "deviation" and max_deviation is None:
+    if max_deviation is None:
         max_deviation = 0.0
-    is_down_reset = args.rank_signal in {"down_reset_edge", "down_reset_robust_edge"}
     strategy_config = PDEStrategyConfig(
         top_n=args.top_n,
         rebalance_freq=args.freq,
@@ -296,8 +309,7 @@ def main() -> int:
         pool_mode=args.pool_mode,
         holding_mode="top_score",
         rank_signal=args.rank_signal,
-        min_down_reset_edge_value=(args.min_down_reset_edge if is_down_reset else None),
-        down_reset_event_exit=bool(args.down_reset_event_exit and is_down_reset),
+        down_reset_event_exit=bool(args.down_reset_event_exit),
         max_holdings=None,
         funding_mode="reserve_cash",
         exposure_mode=args.exposure_mode,
@@ -330,8 +342,7 @@ def main() -> int:
             distress_k=args.distress_k,
             p_down=args.p_down,
             vol_window_days=args.vol_window,
-            pde_signal_sigma_rel_band=args.pde_sigma_band,
-            pde_signal_spread_band=args.pde_spread_band,
+            q=(args.q / 100.0) if args.q is not None else None,
             M=grid_M,
             N=grid_N,
             max_workers=effective_max_workers,
@@ -349,10 +360,7 @@ def main() -> int:
         "data_source": args.source,
         "history_mode": result_config["history_mode"],
         "strategy": {
-            "template": (
-                "估值偏差"
-                if args.rank_signal == "deviation" else "下修错定价"
-            ),
+            "template": "估值偏差",
             **result_config,
         },
         "pricing": {
@@ -361,10 +369,9 @@ def main() -> int:
             "distress_k": args.distress_k,
             "p_down": args.p_down,
             "vol_window_days": args.vol_window,
+            "q": args.q,
             "M": grid_M,
             "N": grid_N,
-            "pde_signal_sigma_rel_band": args.pde_sigma_band,
-            "pde_signal_spread_band": args.pde_spread_band,
             "max_workers": effective_max_workers,
         },
     }

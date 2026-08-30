@@ -22,7 +22,6 @@ from convertible_bond.batch_pricing import (
     filter_batch_results_by_view,
     sort_batch_results_for_review,
     sort_batch_results_for_view,
-    DEFAULT_DOWN_RESET_EDGE_PERCENTILE,
     DEFAULT_UNDERVALUED_PERCENTILE,
     MIN_RELATIVE_CHEAPNESS,
     MIN_VIEW_ROWS,
@@ -1187,60 +1186,10 @@ def test_rating_outlook_suffix_does_not_flip_low_rating(rating, expect_low):
     assert (batch_pricing._rating_score(rating) < batch_pricing._RATING_SCORES["AA-"]) is expect_low
 
 
-# ── 下修优势 ──
-#
-# 稳健下修优势是策略页的默认排序信号, 而批量页此前跑完整 PDE 网格却整批丢掉这族
-# 信号 (实测缓存 down_reset_robust_edge_value 有值 0/280) —— 全项目最贴近模型能力
-# 边界的信号, 在"找机会"的页面上是空列。
-
-def _edge_row(edge, **kw):
-    row = dict(status="ok", bond_code=kw.pop("bond_code", "113000.SH"),
-               S0=12.0, K=13.5, theoretical_price=110.0, market_price=118.0,
-               deviation=0.07, sigma=0.30, T=3.0, credit_rating="AA",
-               outstanding_balance=4.25, valuation_date="2026-08-22",
-               down_reset_robust_edge_value=edge)
-    row.update(kw)
-    return row
-
-
-def test_down_reset_edge_view_keeps_only_positive_edge():
-    """零点在这里是**有意义**的: 最差角点下模型价仍高于市价才算有优势。"""
-    rows = [_edge_row(3.0, bond_code="POS.SH"), _edge_row(-3.0, bond_code="NEG.SH"),
-            _edge_row(0.0, bond_code="ZERO.SH")]
-    kept = [r["bond_code"] for r in filter_batch_results_by_view(rows, "下修优势")]
-    assert kept == ["POS.SH"]
-    assert "不为正" in view_exclusion_reason(
-        annotate_batch_results(rows)[1], "下修优势")
-
-
-def test_down_reset_edge_view_ranks_strongest_first():
-    rows = [_edge_row(e, bond_code=f"{100000 + i}.SZ")
-            for i, e in enumerate([1.0, 9.0, 5.0, -2.0])]
-    ordered = sort_batch_results_for_view(
-        filter_batch_results_by_view(rows, "下修优势"), "下修优势")
-    assert [r["down_reset_robust_edge_value"] for r in ordered] == [9.0, 5.0, 1.0]
-
-
-def test_down_reset_edge_view_explains_missing_signal():
-    """没开 compute_pde_signals 与"这只债反解不出隐含强度"是两回事, 落选解释要分得开。"""
-    off = annotate_batch_results([_edge_row(math.nan)])[0]
-    assert view_exclusion_reason(off, "下修优势") == "未计算 PDE 下修信号"
-    unsolvable = annotate_batch_results(
-        [_edge_row(math.nan, pde_down_reset_signal_status="no_implied_solution")])[0]
-    assert "反解不出" in view_exclusion_reason(unsolvable, "下修优势")
-
-
-def test_down_reset_edge_view_caps_length_in_a_cheap_market():
-    """贵市场里这个视图合法地变空; 但谷底时 5% 会变成几百只, 长度上限得在。"""
-    rows = [_edge_row(float(i) + 1.0, bond_code=f"{100000 + i}.SZ") for i in range(200)]
-    kept = filter_batch_results_by_view(rows, "下修优势")
-    assert len(kept) == _selection_cutoff(200, DEFAULT_DOWN_RESET_EDGE_PERCENTILE) == 30
-
-
 def test_batch_result_columns_carry_the_new_signals():
     """新字段必须进 CSV/缓存列, 否则导出与跨运行缓存会静默丢掉它们。"""
     for key in ("relative_deviation", "cheapness_rank", "double_low",
-                "quality_score", "down_reset_edge_rank"):
+                "quality_score", "double_low_rank"):
         assert key in BATCH_RESULT_COLUMNS
 
 
@@ -1305,7 +1254,7 @@ def test_high_frequency_states_are_deliberately_not_flags():
     """在近半数债上都亮的旗标描述的是市场不是这只债 (与标签维度同源的教训)。
 
     「已触发下修线」实测 127/280 = 45%, 「下修冻结中」186/280 = 66% —— 前者改由
-    「距下修线」数值列承载, 后者是模型入参, 经「下修优势」体现。
+    「正股/下修线」数值列承载, 后者是模型入参, 不单独展示。
     """
     row = _flag_row(S0=8.0, K=13.5, down_reset_trigger_ratio=0.85,
                     down_reset_block_until="2027-01-09")
@@ -1341,13 +1290,11 @@ def test_event_flags_are_not_risk_tags():
 
 # ── 横截面锚回传 + 小样本秩字段清空 (S3) ─────────────────────────────
 
-def _anchor_row(code, deviation, double_low=None, edge=None, median=None):
+def _anchor_row(code, deviation, double_low=None, median=None):
     row = {"bond_code": code, "status": "ok", "deviation": deviation,
            "theoretical_price": 110.0, "market_price": 108.0}
     if double_low is not None:
         row["double_low"] = double_low
-    if edge is not None:
-        row["down_reset_robust_edge_value"] = edge
     if median is not None:
         row["market_median_deviation"] = median
     return row
@@ -1411,8 +1358,8 @@ def test_off_pool_subset_relative_deviation_matches_full_pool():
 
 def test_rank_scope_false_blanks_every_rank_field():
     """传锚修不了秩 —— 名次是在这一批内部排的, 必须显式清空."""
-    rows = [_anchor_row("A", 0.1, double_low=120, edge=2.0),
-            _anchor_row("B", 0.3, double_low=140, edge=1.0)]
+    rows = [_anchor_row("A", 0.1, double_low=120),
+            _anchor_row("B", 0.3, double_low=140)]
     out = batch_pricing.annotate_batch_results(rows, market_median_deviation=0.2,
                                                rank_scope=False)
     for row in out:
@@ -1475,3 +1422,38 @@ def test_gui_never_calls_annotate_batch_results_without_an_anchor():
     assert not offenders, (
         "GUI 侧这些 annotate_batch_results 调用没带锚, 请改用 _annotate_off_pool:\n  "
         + "\n  ".join(offenders))
+
+
+def test_full_pool_view_sorts_by_listing_date_newest_first():
+    """「全池」按上市日倒序排**全部**标的; 只有没有上市日的沉底。
+
+    为什么换掉便宜度排序: 全池是分母不是筛子, 便宜度那一路已由「低估候选」承担 ——
+    实测两者都按 ``relative_deviation`` 排时**前 43 行重合 43/43**, 等于把同一屏看两次。
+
+    两处不显然的地方:
+
+    · **不按定价成没成功分组** —— 定价失败的也是标的, 有上市日就照常参与排序。其余
+      视图的 ``by()`` 把失败行沉底是因为那些视图排的是模型输出 (相对偏差/双低),
+      失败行根本没有值; 上市日与定价成不成功无关。
+    · **取值走 ``safe_date`` 不是 ``to_date``** —— 缓存里是 ISO 串、内存里是 ``date``,
+      而 ``pandas.NaT`` 是 ``datetime`` 子类且为真值, ``to_date`` 会原样放行它
+      (``safe_date`` 的 docstring 点名的正是 ``listing_date``)。排序键里抛出来就是整表
+      渲染失败, 所以 ``None`` / ``NaN`` 都要能落到底而不是炸掉。
+    """
+    rows = [
+        {"bond_code": "OLD.SZ", "status": "ok", "listing_date": date(2020, 9, 23)},
+        {"bond_code": "NEW.SZ", "status": "ok", "listing_date": "2026-08-26"},
+        {"bond_code": "NODATE.SZ", "status": "ok", "listing_date": None},
+        {"bond_code": "NAN.SZ", "status": "ok", "listing_date": float("nan")},
+        # 定价失败但上市日最新 → 照样排第一
+        {"bond_code": "FAIL.SZ", "status": "failed", "listing_date": "2026-08-27"},
+    ]
+    order = [r["bond_code"] for r in sort_batch_results_for_view(rows, "综合机会")]
+    assert order[:3] == ["FAIL.SZ", "NEW.SZ", "OLD.SZ"], order
+    assert set(order[3:]) == {"NODATE.SZ", "NAN.SZ"}, order
+
+    # 其余视图的排序键没被顺带改掉
+    cheap = [{"bond_code": "A", "status": "ok", "relative_deviation": 0.10},
+             {"bond_code": "B", "status": "ok", "relative_deviation": -0.20}]
+    assert [r["bond_code"]
+            for r in sort_batch_results_for_view(cheap, "低估候选")] == ["B", "A"]

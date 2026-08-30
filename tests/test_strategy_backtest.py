@@ -18,9 +18,11 @@ from convertible_bond.strategy_backtest import (
 from convertible_bond.market_time import market_today
 
 
-def test_pde_strategy_defaults_use_robust_signal_and_reserve_cash():
+def test_pde_strategy_defaults_use_deviation_signal_and_reserve_cash():
+    """下修优势信号已删 (两个 regime 都结构性无解), 默认落到「估值偏差」。"""
     config = PDEStrategyConfig()
-    assert config.rank_signal == "down_reset_robust_edge"
+    assert config.rank_signal == "deviation"
+    assert config.down_reset_event_exit is False
     assert config.holding_mode == "top_score"
     assert config.funding_mode == "reserve_cash"
     assert config.execution_timing == "next_close"
@@ -36,7 +38,9 @@ def test_strategy_cli_help_exposes_only_pde_rank_signals():
         text=True,
     )
     help_text = completed.stdout
+    # 下修两档仍留在 choices 里 (旧脚本传入会退化为 deviation), 但已标注为已删除
     assert "down_reset_robust_edge" in help_text
+    assert "已删除" in help_text
     assert "deviation" in help_text
     assert "--holding-mode" not in help_text
     assert "--selection-view" not in help_text
@@ -61,7 +65,7 @@ def test_backtest_pde_strategy_uses_pde_config_by_default(monkeypatch):
         end_date=date(2025, 2, 28),
     )
     assert isinstance(captured["config"], PDEStrategyConfig)
-    assert result["config"].rank_signal == "down_reset_robust_edge"
+    assert result["config"].rank_signal == "deviation"
 
 
 class StrategyFakeProvider(DataProvider):
@@ -610,14 +614,12 @@ def test_strategy_template_resets_new_knobs_to_full_config():
             self.v_st_weighting = Var("等权全池")
             self.v_st_cash_yield = Var("0")
             self.v_st_rank_signal = Var("下修优势")
-            self.v_st_min_reset_edge = Var("8")
 
     app = DummyApp()
     app._apply_strategy_template("稳健打底")
     assert app.v_st_weighting.get() == "Top N 排序"   # 随模板归位, 不残留
     assert app.v_st_cash_yield.get() == "2.2"
     assert app.v_st_rank_signal.get() == "估值偏差"
-    assert app.v_st_min_reset_edge.get() == "0"
     assert app.v_st_view.get() == "综合机会"
     assert app.v_st_top_n.get() == "10"
     assert app.v_st_max_deviation.get() == "0"
@@ -632,13 +634,27 @@ def test_strategy_gui_exposes_simplified_workflow_and_no_legacy_rank_controls():
     from convertible_bond.gui.controllers import strategy_run
     from convertible_bond.gui.tabs import strategy as strategy_tab
 
-    assert constants.STRATEGY_TEMPLATE_NAMES == ("下修错定价", "估值偏差")
+    assert constants.STRATEGY_TEMPLATE_NAMES == ("估值偏差",)
     source = inspect.getsource(strategy_tab.build)
+
+    # **扫字面量而不是扫源码文本**: 原来直接 `in source` 会连注释一起匹配, 于是
+    # "解释为什么删掉了 X" 的那句注释本身就让守护测试变红 —— 抓不到真实故障形态,
+    # 只抓到写注释的人。(同一个坑在 batch_watchlist 的几个守护测试里踩过。)
+    import ast as _ast
+    import textwrap as _textwrap
+    literals = {
+        node.value
+        for node in _ast.walk(_ast.parse(_textwrap.dedent(source)))
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str)
+    }
     for legacy_text in (
-        "机会分", "双低", "等权全池", "选债规则", "持仓方式", "✓ 预检",
+        "机会分", "双低", "等权全池", "选债规则", "持仓方式", "✓ 预检", "下修机会",
     ):
-        assert legacy_text not in source
-    assert 'values=["下修机会", "估值偏差"]' in source
+        assert not any(legacy_text in text for text in literals), (
+            f"策略页仍有旧控件文案: {legacy_text}")
+    # 策略只剩一个 —— 策略切换器从两选一的分段按钮换成静态标签, 免得让人一直找
+    # 另一个选项 (「下修机会」已在上面的字面量扫描里挡掉)。
+    assert "variable=app.v_st_template_display" in source
     assert 'for name in ("概览", "持仓", "诊断", "对比")' in source
     assert 'app.v_st_benchmark.set(True)' in source
     run_source = inspect.getsource(strategy_run.StrategyRunMixin._run_strategy_backtest)
@@ -646,41 +662,6 @@ def test_strategy_gui_exposes_simplified_workflow_and_no_legacy_rank_controls():
     assert 'benchmark_index_code="000832.CSI"' in run_source
     assert 'text=E("▶ 运行回测")' in source
     assert "运行策略" not in source
-
-
-def test_down_reset_template_selects_pde_signal_and_wind_history():
-    from convertible_bond.gui.controllers.strategy_backtest import (
-        StrategyBacktestMixin, _STRATEGY_TEMPLATE_BASE)
-
-    class Var:
-        def __init__(self, value=""):
-            self.value = value
-
-        def set(self, value):
-            self.value = value
-
-        def get(self):
-            return self.value
-
-    app = StrategyBacktestMixin()
-    for name in _STRATEGY_TEMPLATE_BASE:
-        setattr(app, name, Var(""))
-    app.v_st_view = Var("")
-    app.v_st_summary = Var("")
-    app.v_st_template = Var("下修错定价")
-    app.v_st_history_mode = Var("标准")
-
-    app._apply_strategy_template("下修错定价")
-
-    assert app.v_st_rank_signal.get() == "稳健下修优势"
-    assert app.v_st_min_reset_edge.get() == "0"
-    assert app.v_st_history_mode.get() == "Wind高保真"
-    assert app.v_st_top_n.get() == "10"
-
-    app._apply_strategy_template("PDE估值偏差")  # 旧预设名称仍可迁移
-    assert app.v_st_rank_signal.get() == "估值偏差"
-    assert app.v_st_max_deviation.get() == "0"
-    assert app.v_st_history_mode.get() == "Wind高保真"
 
 
 def test_strategy_pricing_params_are_independent_from_single_bond_page():
@@ -699,8 +680,6 @@ def test_strategy_pricing_params_are_independent_from_single_bond_page():
     app.v_st_p_down = Var("25")
     app.v_st_distress_k = Var("5")
     app.v_st_vol_window = Var("1M")
-    app.v_st_sigma_band = Var("15")
-    app.v_st_spread_band_bps = Var("100")
     # 单债页故意放入完全不同的值，策略参数不应读取它们。
     app.v_r = Var("99")
     app.v_spread = Var("88")
@@ -714,8 +693,9 @@ def test_strategy_pricing_params_are_independent_from_single_bond_page():
     assert params["p_down"] == pytest.approx(0.25)
     assert params["distress_k"] == pytest.approx(0.05)
     assert params["vol_window_days"] == 21
-    assert params["pde_signal_sigma_rel_band"] == pytest.approx(0.15)
-    assert params["pde_signal_spread_band"] == pytest.approx(0.01)
+    # 「HV扰动%」「利差扰动bp」已删 —— 它们只配置稳健下修优势的四角点
+    assert "pde_signal_sigma_rel_band" not in params
+    assert "pde_signal_spread_band" not in params
 
 
 def test_strategy_run_settings_record_effective_and_requested_data_sources():
@@ -728,7 +708,7 @@ def test_strategy_run_settings_record_effective_and_requested_data_sources():
         end=date(2025, 2, 28),
         source="Wind",
         requested_source="Akshare",
-        template_name="下修错定价",
+        template_name="估值偏差",
         history_mode="Wind高保真",
         gui_pool_mode="自选代码",
         engine_pool_mode="static",
@@ -740,8 +720,8 @@ def test_strategy_run_settings_record_effective_and_requested_data_sources():
 
     assert settings["data_source"] == "Wind"
     assert settings["requested_data_source"] == "Akshare"
-    assert settings["strategy"]["template"] == "下修错定价"
-    assert settings["strategy"]["strategy_type"] == "pde_down_reset"
+    assert settings["strategy"]["template"] == "估值偏差"
+    assert settings["strategy"]["strategy_type"] == "pde_valuation"
     assert settings["pricing"]["p_down"] == pytest.approx(0.25)
 
 
@@ -1381,6 +1361,8 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                     "rebalance_freq": "M",
                     "top_n": 10,
                     "holding_mode": "pool",
+                    # 手写的**旧配置字典** (不是新跑出来的) —— 快照保存这条路
+                    # 必须原样透传未知键, 否则历史快照会在保存时被悄悄改写。
                     "rank_signal": "down_reset_robust_edge",
                     "min_down_reset_edge_value": 1.5,
                     "down_reset_event_exit": True,
@@ -1424,8 +1406,6 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
                         "M": 120,
                         "N": 400,
                         "vol_window_days": 21,
-                        "pde_signal_sigma_rel_band": 0.15,
-                        "pde_signal_spread_band": 0.01,
                     },
                 },
                 "periods": [{"start_date": date(2025, 5, 30)}],
@@ -1467,9 +1447,7 @@ def test_strategy_snapshot_save_writes_metadata_and_strips_runtime_fields(tmp_pa
         "113001.SH", "113002.SH",
     ]
     assert archive_payload["meta"]["run_settings"]["pricing"]["M"] == 120
-    assert archive_payload["meta"]["run_settings"]["pricing"]["pde_signal_sigma_rel_band"] == pytest.approx(0.15)
-    assert archive_payload["meta"]["run_settings"]["pricing"]["pde_signal_spread_band"] == pytest.approx(0.01)
-    assert archive_payload["meta"]["config"]["strategy_type"] == "pde_down_reset"
+    assert archive_payload["meta"]["config"]["strategy_type"] == "pde_valuation"
     assert archive_payload["meta"]["model_settings"]["p_down"] == pytest.approx(0.25)
     assert archive_payload["meta"]["admission_filter"]["min_credit_rating"] == "A+"
     assert archive_payload["result"]["run_settings"]["admission_filter"]["min_credit_rating"] == "A+"
@@ -1509,6 +1487,8 @@ def test_comparison_label_uses_snapshot_config_not_current_gui_state():
 
     app._record_strategy_comparison_result(result)
 
+    # 这是**旧快照**的兼容渲染 (信号已删, 但快照里存着) —— 标签映射必须留着,
+    # 否则历史对比条目会退化成「旧策略」。
     label = app._strategy_compare_results[0]["label"]
     assert "下修机会" in label and "PDE下修错定价" not in label
     assert "Wind 历史" in label
@@ -1519,12 +1499,14 @@ def test_comparison_label_uses_snapshot_config_not_current_gui_state():
 def test_old_snapshot_pde_config_is_upgraded_in_memory():
     from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
+    # 旧快照里的 down_reset_robust_edge 由 _normalize_rank_signal 落到 deviation ——
+    # 该信号已删, 所以升级后的 strategy_type 是 pde_valuation 而不是硬崩。
     result = {
         "config": {"rank_signal": "down_reset_robust_edge"},
         "run_settings": {"history_mode": "Wind高保真"},
     }
     StrategyBacktestMixin._patch_snapshot_strategy_config(result)
-    assert result["config"]["strategy_type"] == "pde_down_reset"
+    assert result["config"]["strategy_type"] == "pde_valuation"
     assert result["config"]["history_mode"] == "Wind高保真"
 
 
@@ -2084,7 +2066,6 @@ def test_strategy_logic_summary_text_reflects_pde_signal_and_cash_policy():
     app.v_st_top_n = Var("10")
     app.v_st_cash_yield = Var("2.2")
     app.v_st_rank_signal = Var("估值偏差")
-    app.v_st_min_reset_edge = Var("0")
 
     text = app._strategy_logic_summary_text()
     assert "估值偏差 < 0" in text
@@ -2096,24 +2077,21 @@ def test_strategy_logic_summary_text_reflects_pde_signal_and_cash_policy():
     app.v_st_top_n = Var("")
     assert "Top N 等权" in app._strategy_logic_summary_text()
 
+    # 旧标签一律落到「估值偏差」—— 下修优势信号已删, 摘要不该再说得出那几个词
     app.v_st_top_n = Var("10")
-    app.v_st_rank_signal = Var("下修优势")
-    app.v_st_min_reset_edge = Var("1.5")
-    pde_text = app._strategy_logic_summary_text()
-    assert "下修优势" in pde_text
-    assert "下修优势 ≥ 1.5元" in pde_text
-
-    app.v_st_rank_signal = Var("稳健下修优势")
-    assert "稳健下修优势" in app._strategy_logic_summary_text()
-
-    app.v_st_rank_signal = Var("估值偏差")
-    assert "估值偏差" in app._strategy_logic_summary_text()
+    for legacy in ("下修优势", "稳健下修优势", ""):
+        app.v_st_rank_signal = Var(legacy)
+        summary = app._strategy_logic_summary_text()
+        assert "估值偏差 < 0" in summary
+        assert "下修优势" not in summary
 
 
 def test_strategy_signal_text_distinguishes_pde_and_legacy_snapshots():
     from convertible_bond.gui.controllers.strategy_backtest import StrategyBacktestMixin
 
     app = StrategyBacktestMixin()
+    # 下修两档已删, 但**渲染分支保留** —— 旧快照的 rank_value 还在里面, 去掉会让
+    # 它们掉进末尾的「旧分」分支, 把元读成分。
     assert app._strategy_signal_text({
         "rank_signal": "down_reset_robust_edge", "rank_value": 1.25,
     }) == "稳健 +1.25元"
@@ -2132,8 +2110,6 @@ def _rank_signal_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
     三只券溢价均为 0, 双低值 = 市价; 113001 偏差 -9.1%, 其余 -2%。
     """
     theo_bonus = {"113001.SH": 0.10, "113002.SH": 0.02, "113003.SH": 0.02}
-    reset_edge = {"113001.SH": 1.0, "113002.SH": 4.0, "113003.SH": 2.0}
-    robust_reset_edge = {"113001.SH": 0.5, "113002.SH": 1.0, "113003.SH": 3.0}
     rows = []
     for code in codes:
         market = _latest(provider_arg.bond_history[code], valuation_date)
@@ -2147,12 +2123,7 @@ def _rank_signal_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
             "theoretical_price": theo, "market_price": market,
             "deviation": (market - theo) / theo,
             "conversion_premium": 0.0,
-            "down_reset_edge_value": reset_edge[code],
-            "down_reset_robust_edge_value": robust_reset_edge[code],
-            "pde_down_reset_robust_status": "ok",
             "effective_p_down_1y_prob": 0.20,
-            "implied_p_down_1y_prob": 0.10,
-            "pde_down_reset_signal_status": "ok",
             "credit_rating": "AA+", "outstanding_balance": 10.0, "T": 3.0,
         })
     return rows
@@ -2161,8 +2132,6 @@ def _rank_signal_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
 @pytest.mark.parametrize("rank_signal, expected_first", [
     ("deviation", "113001.SH"),    # 偏差升序: 同 113001 (-9.1% 最小)
     ("double_low", "113003.SH"),   # 双低升序: 价格最低的 113003 (90+0)
-    ("down_reset_edge", "113002.SH"),  # 下修优势降序: 4 元的 113002
-    ("down_reset_robust_edge", "113003.SH"),  # 扰动后最差优势降序: 3 元的 113003
 ])
 def test_rank_signal_reorders_candidates(monkeypatch, rank_signal, expected_first):
     provider = StrategyFakeProvider()
@@ -2188,17 +2157,6 @@ def test_rank_signal_reorders_candidates(monkeypatch, rank_signal, expected_firs
     assert first_candidate["rank_signal"] == rank_signal
     if rank_signal == "double_low":
         assert first_candidate["rank_value"] == pytest.approx(90.0)
-    if rank_signal == "down_reset_edge":
-        assert first_candidate["rank_value"] == pytest.approx(4.0)
-    if rank_signal == "down_reset_robust_edge":
-        assert first_candidate["rank_value"] == pytest.approx(3.0)
-    if rank_signal in {"down_reset_edge", "down_reset_robust_edge"}:
-        assert result["config"]["strategy_type"] == "pde_down_reset"
-        position = period["positions"][0]
-        assert position["rank_signal"] == rank_signal
-        assert position["rank_value"] == pytest.approx(first_candidate["rank_value"])
-        assert position["effective_p_down_1y_prob"] == pytest.approx(0.20)
-        assert position["implied_p_down_1y_prob"] == pytest.approx(0.10)
 
 
 def test_pde_backtest_snapshot_round_trip_preserves_strategy_settings(monkeypatch, tmp_path):
@@ -2230,7 +2188,7 @@ def test_pde_backtest_snapshot_round_trip_preserves_strategy_settings(monkeypatc
         "requested_data_source": "akshare",
         "history_mode": "Wind高保真",
         "strategy": {
-            "template": "下修错定价",
+            "template": "估值偏差",
             **result["config"],
         },
         "pricing": {
@@ -2238,8 +2196,6 @@ def test_pde_backtest_snapshot_round_trip_preserves_strategy_settings(monkeypatc
             "base_spread": 0.03,
             "distress_k": 0.05,
             "p_down": 0.25,
-            "pde_signal_sigma_rel_band": 0.15,
-            "pde_signal_spread_band": 0.01,
         },
         "admission_filter": {
             "min_outstanding_balance": 0.5,
@@ -2262,56 +2218,20 @@ def test_pde_backtest_snapshot_round_trip_preserves_strategy_settings(monkeypatc
     saved = writer._save_strategy_backtest_snapshot()
     payload = json.loads(saved["path"].read_text(encoding="utf-8"))
     assert payload["schema_version"] == 3
-    assert payload["meta"]["config"]["strategy_type"] == "pde_down_reset"
-    assert payload["meta"]["config"]["rank_signal"] == "down_reset_robust_edge"
+    assert payload["meta"]["config"]["strategy_type"] == "pde_valuation"
+    assert payload["meta"]["config"]["rank_signal"] == "deviation"
     assert payload["meta"]["run_settings"]["pricing"]["p_down"] == pytest.approx(0.25)
 
     reader = SnapshotApp()
     reader._load_strategy_backtest_snapshot(silent=True, render=False)
     loaded = reader._last_strategy_bt_result
-    assert loaded["config"]["strategy_type"] == "pde_down_reset"
+    assert loaded["config"]["strategy_type"] == "pde_valuation"
     assert loaded["config"]["history_mode"] == "Wind高保真"
-    assert loaded["run_settings"]["strategy"]["template"] == "下修错定价"
-    assert loaded["periods"][0]["selected_codes"] == ["113003.SH", "113002.SH"]
-    assert loaded["periods"][0]["candidate_rows"][0]["rank_signal"] == (
-        "down_reset_robust_edge"
-    )
+    assert loaded["run_settings"]["strategy"]["template"] == "估值偏差"
+    # 按 deviation 升序: 113001 (−9.1%) 最低估, 113002/113003 并列 −2% 由代码序断开
+    assert loaded["periods"][0]["selected_codes"] == ["113001.SH", "113002.SH"]
+    assert loaded["periods"][0]["candidate_rows"][0]["rank_signal"] == "deviation"
 
-
-
-def test_down_reset_edge_rank_signal_enables_pde_signal_pricing(monkeypatch):
-    provider = StrategyFakeProvider()
-    seen_compute_flags = []
-
-    def capturing_batch_price(provider_arg, codes, *, valuation_date, **kwargs):
-        seen_compute_flags.append(kwargs.get("compute_pde_signals"))
-        return _rank_signal_batch_price(
-            provider_arg,
-            codes,
-            valuation_date=valuation_date,
-            **kwargs,
-        )
-
-    monkeypatch.setattr(
-        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
-        capturing_batch_price,
-    )
-
-    result = backtest_score_strategy(
-        provider,
-        ["113001.SH", "113002.SH", "113003.SH"],
-        start_date=date(2025, 1, 2),
-        end_date=date(2025, 1, 31),
-        config=ScoreStrategyConfig(
-            top_n=1,
-            rank_signal="down_reset_edge",
-            min_down_reset_edge_value=1.5,
-        ),
-    )
-
-    assert seen_compute_flags == [True]
-    assert result["periods"][0]["selected_codes"] == ["113002.SH"]
-    assert result["config"]["min_down_reset_edge_value"] == pytest.approx(1.5)
 
 
 def test_down_reset_strategy_exits_after_resolution_event(monkeypatch, tmp_path):
@@ -2344,7 +2264,10 @@ def test_down_reset_strategy_exits_after_resolution_event(monkeypatch, tmp_path)
         end_date=date(2025, 1, 31),
         config=ScoreStrategyConfig(
             top_n=1,
-            rank_signal="down_reset_robust_edge",
+            # 事件退出此前由"排序信号是下修优势"隐式激活; 那个信号删掉之后,
+            # 它变成**显式开关** (默认关闭), 所以这里必须自己打开。
+            rank_signal="deviation",
+            down_reset_event_exit=True,
             cash_yield_rate=0.365,
             min_confidence=None,
             exclude_risk_tags=(),
@@ -2381,7 +2304,7 @@ def test_down_reset_strategy_exits_after_resolution_event(monkeypatch, tmp_path)
         end_date=date(2025, 1, 31),
         config=ScoreStrategyConfig(
             top_n=1,
-            rank_signal="down_reset_robust_edge",
+            rank_signal="deviation",
             down_reset_event_exit=False,
             min_confidence=None,
             exclude_risk_tags=(),

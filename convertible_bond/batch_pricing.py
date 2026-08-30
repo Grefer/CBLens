@@ -30,6 +30,7 @@ from .data_providers import (
     is_issued_pending_listing,
     is_standard_public_cb_code,
     looks_private_cb_name,
+    safe_date,
     to_date,
 )
 from .cb_events import CBEventStore, project_events_path
@@ -70,22 +71,7 @@ BATCH_RESULT_COLUMNS = [
     "model_signal_status",
     "no_down_price",
     "down_reset_uplift",
-    "implied_p_down",
     "effective_p_down_1y_prob",
-    "implied_p_down_1y_prob",
-    "p_down_gap",
-    "down_reset_probability_gap",
-    "down_reset_sensitivity",
-    "down_reset_edge_value",
-    "down_reset_edge_pct",
-    "down_reset_robust_edge_value",
-    "down_reset_edge_rank",
-    "down_reset_edge_scenario_range",
-    "down_reset_edge_worst_sigma",
-    "down_reset_edge_worst_spread",
-    "down_reset_edge_scenario_count",
-    "pde_down_reset_robust_status",
-    "pde_down_reset_signal_status",
     "sensitivity_status",
     "review_bucket",
     "review_notes",
@@ -95,7 +81,45 @@ _CODE_SPLIT_RE = re.compile(r"[\s,;，；]+")
 _HEADER_TOKENS = {"code", "bond_code", "证券代码", "转债代码", "代码"}
 BATCH_RESULT_META_KEY = "_meta"
 LOW_RATING_PREFIXES = ("A", "BBB", "BB", "B", "CCC", "CC", "C")
-BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "下修优势", "双低", "转股折价", "需复核")
+
+BATCH_REVIEW_VIEWS = ("综合机会", "低估候选", "双低", "转股折价", "需复核")
+
+#: 视图的**展示名**; 底层字面量逐字冻结。
+#:
+#: ``"综合机会"`` 是 ``ScoreStrategyConfig.selection_view`` 的默认值, 会随策略配置
+#: 落进快照 (``strategy_run`` 的 ``config``) 并被 ``_canonical_view_name`` 回读 ——
+#: 改这个串是兼容性破坏, 不是改个标签。解法与「模型高估离群」→「市价远高于模型价」
+#: 同一条: 只改展示名, 底层一个字节不动 (见 ``RISK_TAG_DISPLAY_LABEL``)。
+#:
+#: 为什么这一条非改不可: 这个视图的 ``view_exclusion_reason`` 直接 ``return None``,
+#: 它**就是不过滤的全池**, 既不"综合"也不排"机会" —— 而它名字里的那个「机会」指的是
+#: ``opportunity_score``, 那个字段已于 2026-08-29 整体删除, 名字成了唯一的残留引用。
+#: 实测它也确实不是一个独立的机会排序: 按相对偏差升序的**前 43 行与「低估候选」
+#: 重合 43/43**, 独立信息全在第 44 行往后。``STRATEGY_VIEW_DESCRIPTIONS`` 早就把它
+#: 描述成"全部可交易主池, 不额外筛" —— 只有名字一直没跟上。
+BATCH_VIEW_DISPLAY_LABEL: dict[str, str] = {
+    "综合机会": "全池",
+}
+
+
+def batch_view_label(view: str) -> str:
+    """视图的展示名; 没登记的原样返回。**所有**面向用户的出口都要走这里。"""
+    return BATCH_VIEW_DISPLAY_LABEL.get(view, view)
+
+
+def batch_view_from_label(label: str) -> str | None:
+    """展示名 → 冻结的视图名; 认不出来返回 None。
+
+    与 ``batch_view_label`` 共用**同一张表**, 不许在消费者里各自反转一份 —— 那正是
+    展示名与底层名分叉的老路子。canonical 名本身也认 (菜单未刷新时显示的就是它)。
+    """
+    if label in BATCH_REVIEW_VIEWS:
+        return label
+    for canonical, shown in BATCH_VIEW_DISPLAY_LABEL.items():
+        if shown == label:
+            return canonical
+    return None
+
 # ── 标签维度 ──────────────────────────────────────────────────────────────
 # 标签混了四类**性质不同**的关切, 却挤在一个扁平集合里驱动四个消费者 (展示 / 置信度 /
 # 批量页视图 / 策略 exclude_risk_tags), 于是调一个阈值会同时穿透四层。先给每个标签
@@ -189,7 +213,14 @@ DEEP_UNDERVALUED_TAGS = frozenset({"深度低估待核"})
 RISK_TAG_DISPLAY_LABEL: dict[str, str] = {
     "模型高估离群": "市价远高于模型价",
     "模型低估": "市价低于模型价",
-    "深度低估待核": "市价远低于市场中位·待核",
+    # 尾巴上的「·待核」已去掉 (2026-08-30): 页面上恰好有一个叫「需复核」的视图,
+    # 而这两个「核」不是一回事 —— 「需复核」= 数据/可交易性坏了, 去**修**;
+    # 这里的「待核」= 数是对的、便宜是真的, 去**研究**。名字把人往那个视图上引,
+    # 而它们方向相反: 实测 23 只带这个标签的债 **23/23 都在「低估候选」里**
+    # (status=ok、置信度高/中、无拦截标签, 相对偏差中位 −21.9pp), 而「需复核」当前
+    # 那 1 只恰恰是"这行的数不能信"。展示名只陈述事实, 不暗示动作 —— 该做什么由
+    # ``review_notes`` 说 ("这是待检验的假设不是结论; 核实行情同日性…")。
+    "深度低估待核": "市价远低于市场中位",
 }
 
 
@@ -1198,8 +1229,6 @@ def _assign_cross_sectional_ranks(rows: list[dict]) -> list[dict]:
          "relative_deviation", False),
         ("double_low_rank", "double_low_percentile", "double_low_rank_total",
          "double_low", False),
-        ("down_reset_edge_rank", "down_reset_edge_percentile",
-         "down_reset_edge_rank_total", "down_reset_robust_edge_value", True),
     ):
         ranked: list[tuple[float, str, int]] = []
         for idx, row in enumerate(rows):
@@ -1235,7 +1264,6 @@ def _assign_cross_sectional_ranks(rows: list[dict]) -> list[dict]:
 _CROSS_SECTIONAL_RANK_FIELDS = (
     "cheapness_rank", "cheapness_percentile", "cheapness_rank_total",
     "double_low_rank", "double_low_percentile", "double_low_rank_total",
-    "down_reset_edge_rank", "down_reset_edge_percentile", "down_reset_edge_rank_total",
 )
 
 
@@ -1406,15 +1434,6 @@ MIN_VIEW_ROWS = 10
 # 有 double_low 排序信号, 批量页此前既无列也无视图。同样用分位而非绝对值: 价格中枢
 # 与溢价中枢都随周期漂移 (今日主池市价中位 132.9, p95 297.7)。
 DEFAULT_DOUBLE_LOW_PERCENTILE = 0.15
-# 「下修优势」视图: 稳健下修优势 = sigma ±15% / 信用利差 ±100bp 四角点中最差的
-# (理论价 − 市价)。口径与 strategy_backtest 的 down_reset_robust_edge 排序信号、
-# 以及 PDEStrategyConfig.min_down_reset_edge_value=0.0 的门槛完全一致。
-#
-# 这里的零点**是有意义的**, 不同于机会分的 8.0: 它表示"即便按最不利的 nuisance 参数,
-# 模型给的价仍高于你要付的价"。所以这个视图在贵市场里合法地变空 (实测 2026-08-22
-# 主池 280 只离线复算, 14 只为正 = 5%), 那是信号在说话, 不是判据坏了。仍加长度上限,
-# 是为了反过来的那一天 —— 谷底时 5% 会变成几百只。
-DEFAULT_DOWN_RESET_EDGE_PERCENTILE = 0.15
 
 
 def _cross_sectional_cheapness_gate(row: dict) -> str | None:
@@ -1465,27 +1484,6 @@ def view_exclusion_reason(row: dict, view: str | None) -> str | None:
         if blocking:
             return "拦截标签 " + "/".join(sorted(blocking))
         return None
-    if view_name == "下修优势":
-        if not ok:
-            return "定价未成功"
-        edge = finite_float(row.get("down_reset_robust_edge_value"))
-        if edge is None:
-            # 批量跑时没开 compute_pde_signals, 或该债市价反解不出隐含下修强度
-            status = str(row.get("pde_down_reset_signal_status") or "")
-            return ("市价反解不出隐含下修强度" if status == "no_implied_solution"
-                    else "未计算 PDE 下修信号")
-        if edge <= 0:
-            return f"最差角点优势 {edge:+.1f} 元, 不为正"
-        rank = finite_float(row.get("down_reset_edge_rank"))
-        total = finite_float(row.get("down_reset_edge_rank_total"))
-        if rank is not None and total is not None:
-            cutoff = _selection_cutoff(int(total), DEFAULT_DOWN_RESET_EDGE_PERCENTILE)
-            if rank >= cutoff:
-                return f"优势排第 {int(rank) + 1}/{int(total)}, 不在最强的 {cutoff} 名内"
-        blocking = tags & BLOCKING_RISK_TAGS
-        if blocking:
-            return "拦截标签 " + "/".join(sorted(blocking))
-        return None
     if view_name == "双低":
         if not ok:
             return "定价未成功"
@@ -1526,12 +1524,24 @@ def filter_batch_results_by_view(results: Sequence[dict], view: str | None) -> l
     return [row for row in rows if view_exclusion_reason(row, view) is None]
 
 
+def _by_listing_date_desc(row: dict):
+    """上市日倒序; 没有上市日的沉底。
+
+    日期取负而不是 ``reverse=True`` —— 后者会把"缺值沉底"那一项一起翻上来。
+    取值走 ``safe_date``: 缓存里是 ISO 串、内存里是 ``date``, 而 ``pandas.NaT`` 是
+    ``datetime`` 子类且为真值, ``to_date`` 会原样放行它 (见 ``safe_date`` 的 docstring,
+    它点名的正是 ``listing_date``)。
+    """
+    listed = safe_date(row.get("listing_date"))
+    return (listed is None, -listed.toordinal() if listed is not None else 0)
+
+
 def sort_batch_results_for_view(results: Sequence[dict], view: str | None) -> list[dict]:
     """按视图**该看的顺序**排列 —— 展示层用, 不改变 sort_batch_results_for_review。
 
     为什么还要分成两个函数: ``sort_batch_results_for_review`` 是「需复核」视图与
     ``filter_batch_results_by_view`` 的输入顺序 (偏差升序), 而各视图要看的顺序不同
-    —— 「双低」按双低升序、「下修优势」按优势秩。两者的消费者不同, 合并会让改一个
+    —— 「双低」按双低升序。两者的消费者不同, 合并会让改一个
     视图的展示顺序变成改另一个的默认行为。
     (原来这里的第一排序键是机会分降序, 已随 ``opportunity_score`` 一并删除。)
 
@@ -1555,9 +1565,12 @@ def sort_batch_results_for_view(results: Sequence[dict], view: str | None) -> li
 
     if view_name == "双低":
         return sorted(rows, key=by("double_low"))
-    if view_name == "下修优势":
-        return sorted(rows, key=by("down_reset_edge_rank"))
-    if view_name in {"综合机会", "低估候选", "转股折价"}:
+    if view_name == "综合机会":
+        # 全池按**上市日倒序** (最新在前) —— 全部标的一起排, 不按定价成没成功分组。
+        # 它是分母不是筛子, 便宜度那一路已由「低估候选」承担 (实测两者按相对偏差排时
+        # 前 43 行重合 43/43, 全池再排一遍等于把同一屏看两次)。
+        return sorted(rows, key=_by_listing_date_desc)
+    if view_name in {"低估候选", "转股折价"}:
         # 相对偏差升序 = 相对全市场最便宜的在前
         return sorted(rows, key=by("relative_deviation"))
     return rows                                   # 需复核: 保持研究排序
@@ -1633,18 +1646,12 @@ def _csv_value(row: dict, column: str):
         return ""
     if column in {
         "deviation", "conversion_premium", "model_premium_to_parity",
-        "effective_p_down_1y_prob", "implied_p_down_1y_prob",
-        "down_reset_probability_gap", "down_reset_edge_pct",
+        "effective_p_down_1y_prob",
     }:
         return f"{float(value):.6f}" if value != "" else ""
     if column == "undervaluation_rate":
         return f"{float(value):.6f}" if value != "" else ""
-    if column in {
-        "parity", "implied_p_down", "p_down_gap",
-        "down_reset_sensitivity", "down_reset_edge_value",
-        "down_reset_robust_edge_value", "down_reset_edge_scenario_range",
-        "down_reset_edge_worst_sigma", "down_reset_edge_worst_spread",
-    }:
+    if column == "parity":
         return f"{float(value):.4f}" if value != "" else ""
     if column in {"risk_tags", "event_flags", "review_notes"} and isinstance(value, list):
         return "|".join(str(item) for item in value)
@@ -1673,11 +1680,7 @@ def _restore_result_row(row: dict) -> dict:
         "quality_score", "double_low", "relative_deviation",
         "market_median_deviation", "cheapness_percentile", "down_reset_trigger_gap",
         "undervaluation_rate", "no_down_price", "down_reset_uplift",
-        "implied_p_down", "effective_p_down_1y_prob", "implied_p_down_1y_prob",
-        "p_down_gap", "down_reset_probability_gap", "down_reset_sensitivity",
-        "down_reset_edge_value", "down_reset_edge_pct", "down_reset_robust_edge_value",
-        "down_reset_edge_scenario_range", "down_reset_edge_worst_sigma",
-        "down_reset_edge_worst_spread",
+        "effective_p_down_1y_prob",
     ):
         if key in restored and restored[key] is None:
             restored[key] = float("nan")
@@ -1727,7 +1730,7 @@ def _sensitivity_status(tags: Sequence[str], confidence: str) -> str:
 #
 # 刻意**不收**两类高频状态: 「已触发下修线」(实测 127/280 = 45%) 与「下修冻结中」
 # (186/280 = 66%)。在近半数债上都亮的旗标描述的是市场不是这只债 —— 与标签维度那条
-# 教训同源。前者改由「距下修线」数值列承载, 后者是模型入参, 经「下修优势」体现。
+# 教训同源。前者改由「正股/下修线」数值列承载, 后者是模型入参, 不单独展示。
 _DOWN_RESET_KIND_LABEL = {"proposed": "下修提议", "approved": "下修已通过"}
 # 回售窗口提前多少天开始提示
 PUTBACK_NOTICE_DAYS = 60

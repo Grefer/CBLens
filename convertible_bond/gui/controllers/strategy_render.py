@@ -358,9 +358,8 @@ class StrategyRenderMixin:
         quality = "高" if fallback_ratio <= 0 else ("中" if fallback_ratio <= 0.2 else "低")
 
         hints = {
-            "结论": "下修机会策略比较‘模型给定’与‘市场隐含’的下修强度;\n"
-                    "估值偏差策略比较市价与理论价。两者都必须对照等权/指数基准解读;\n"
-                    "稳健优势只代表对当前参数扰动不敏感，不等于统计显著的收益预测。",
+            "结论": "估值偏差策略比较市价与理论价, 必须对照等权/指数基准解读;\n"
+                    "模型偏差只是错定价的候选线索, 不等于统计显著的收益预测。",
             "最大回撤": "净值从峰值到谷底的最大跌幅 = 历史上最深要忍受的亏损。\n"
                        "对照基准回撤判断风险是否换来了收益; 与持仓集中度、现金缓冲相关。",
             "主要贡献": "收益贡献最大的单券。若总收益高度依赖个别券 (尤其强赎/退市收敛券),\n"
@@ -628,7 +627,6 @@ class StrategyRenderMixin:
                     row.get("bond_name", ""),
                     self._strategy_signal_text(row),
                     self._fmt_strategy_pct(row.get("effective_p_down_1y_prob")),
-                    self._fmt_strategy_pct(row.get("implied_p_down_1y_prob")),
                     self._fmt_strategy_price(row.get("market_price")),
                     self._fmt_strategy_pct(row.get("deviation"), sign=True),
                     row.get("confidence", ""),
@@ -648,7 +646,6 @@ class StrategyRenderMixin:
                     row.get("bond_name", ""),
                     self._strategy_signal_text(row),
                     self._fmt_strategy_pct(row.get("effective_p_down_1y_prob")),
-                    self._fmt_strategy_pct(row.get("implied_p_down_1y_prob")),
                     self._fmt_strategy_price(row.get("market_price")),
                     self._fmt_strategy_pct(row.get("deviation"), sign=True),
                     row.get("confidence", ""),
@@ -665,10 +662,10 @@ class StrategyRenderMixin:
         self._render_strategy_small_tree(
             frame, 2, 0,
             ["period", "status", "rank", "code", "name", "signal", "model_prob",
-             "implied_prob", "price", "dev", "confidence", "reason"],
+             "price", "dev", "confidence", "reason"],
             ["区间", "状态", "排名", "代码", "名称", "策略信号", "模型1Y",
-             "隐含1Y", "价格", "偏差", "置信", "解释/原因"],
-            [150, 58, 44, 88, 88, 100, 72, 72, 64, 68, 52, 340],
+             "价格", "偏差", "置信", "解释/原因"],
+            [150, 58, 44, 88, 88, 100, 72, 64, 68, 52, 340],
             all_rows,
             xscroll=True,
             max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
@@ -771,7 +768,6 @@ class StrategyRenderMixin:
                     self._fmt_strategy_pct(pos.get("period_return"), sign=True),
                     self._strategy_signal_text(pos),
                     self._fmt_strategy_pct(pos.get("effective_p_down_1y_prob")),
-                    self._fmt_strategy_pct(pos.get("implied_p_down_1y_prob")),
                     pos.get("confidence", ""),
                     f"{pos.get('entry_date', '—')} @ {self._fmt_strategy_price(pos.get('start_price'))}",
                     f"{pos.get('exit_date', '—')} @ {self._fmt_strategy_price(pos.get('end_price'))} · {exit_reason}",
@@ -799,10 +795,10 @@ class StrategyRenderMixin:
         tree = self._render_strategy_small_tree(
             self.strategy_bt_table_frame, 3, 0,
             ["period", "status", "rank", "code", "name", "contrib", "ret",
-             "signal", "model_prob", "implied_prob", "confidence", "entry", "exit", "note"],
+             "signal", "model_prob", "confidence", "entry", "exit", "note"],
             ["区间", "状态", "排名", "代码", "名称", "贡献(%)", "收益(%)",
-             "策略信号", "模型1Y", "隐含1Y", "置信", "买入", "卖出/原因", "标签/事件"],
-            [170, 56, 52, 88, 96, 76, 76, 100, 72, 72, 58, 122, 190, 260],
+             "策略信号", "模型1Y", "置信", "买入", "卖出/原因", "标签/事件"],
+            [170, 56, 52, 88, 96, 76, 76, 100, 72, 58, 122, 190, 260],
             detail_rows,
             xscroll=True,
             max_height=STRATEGY_DETAIL_TABLE_HEIGHT,
@@ -926,11 +922,7 @@ class StrategyRenderMixin:
         signal = str(row.get("rank_signal") or "")
         value = row.get("rank_value")
         if value is None:
-            if signal == "down_reset_robust_edge":
-                value = row.get("down_reset_robust_edge_value")
-            elif signal == "down_reset_edge":
-                value = row.get("down_reset_edge_value")
-            elif signal == "deviation":
+            if signal == "deviation":
                 value = row.get("deviation")
             else:
                 # 旧快照 (机会分时代) 存过 score; 新快照不再有这个键 → None → 「—」
@@ -941,6 +933,8 @@ class StrategyRenderMixin:
             return "—"
         if not np.isfinite(number):
             return "—"
+        # 下修优势两档已删, 但**渲染分支保留** —— 旧快照的 rank_value 还在里面,
+        # 去掉会让它们掉进末尾的「旧分」分支, 把元读成分。与 score 那条同源。
         if signal == "down_reset_robust_edge":
             return f"稳健 {number:+.2f}元"
         if signal == "down_reset_edge":

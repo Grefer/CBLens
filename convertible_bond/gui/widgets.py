@@ -190,10 +190,23 @@ class CollapsibleSection(ctk.CTkFrame):
 
 
 class Tooltip:
-    """轻量悬浮提示: 鼠标悬停 delay_ms 后弹出, 离开/点击立即收起."""
-    def __init__(self, widget, text, delay_ms=450):
+    """轻量悬浮提示: 鼠标悬停 delay_ms 后弹出, 离开/点击立即收起.
+
+    *segments* 给出时按**逐行分段**渲染, 每行可带自己的颜色与字体, 形如
+    ``[(文本, 颜色, 字体), ...]`` (颜色/字体为 ``None`` 走默认)。给行色图例用:
+    那种提示要**演示**颜色而不是用文字描述颜色 —— 「红色加粗 = 买卖受限」是在说
+    读者眼前就能看见的东西。
+
+    颜色一律传主题元组 ``(light, dark)``, 不要 ``get_color`` 取死值: tooltip 每次
+    悬停都新建, CTk 会在构造时按当前 appearance mode 解析, 于是切主题天然跟随。
+
+    *text* 与 *segments* 是二选一; 两个都不给等于永不弹出。保留 *text* 位置参数
+    的原签名 —— 全仓库 30+ 个调用点都是 ``Tooltip(widget, "……")``。
+    """
+    def __init__(self, widget, text=None, delay_ms=450, *, segments=None):
         self.widget = widget
         self.text = text
+        self.segments = segments
         self.delay = delay_ms
         self._after_id = None
         self._tip = None
@@ -216,15 +229,26 @@ class Tooltip:
             self.widget.after_cancel(self._after_id)
             self._after_id = None
 
+    @staticmethod
+    def _resolve(value):
+        """支持传入常量 / 可调用 / StringVar —— 三种在本仓库都有现成用法."""
+        value = value() if callable(value) else value
+        return value.get() if hasattr(value, "get") else value
+
     def _show(self):
         if self._tip is not None:
             return
-        text = self.text() if callable(self.text) else self.text
-        if hasattr(text, "get"):
-            text = text.get()
-        text = str(text or "").strip()
-        if not text:
-            return
+        segments = None
+        text = ""
+        if self.segments is not None:
+            segments = [seg for seg in (self._resolve(self.segments) or ())
+                        if str(seg[0] or "").strip()]
+            if not segments:
+                return
+        else:
+            text = str(self._resolve(self.text) or "").strip()
+            if not text:
+                return
         x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
         tip = ctk.CTkToplevel(self.widget)
@@ -239,12 +263,24 @@ class Tooltip:
             tip, fg_color=BG_CARD, corner_radius=8,
             border_width=1, border_color=BORDER)
         frame.pack()
-        lbl = ctk.CTkLabel(
-            frame, text=text, font=(FONT_FAMILY, 12),
-            text_color=TEXT, fg_color=BG_CARD,
-            justify="left", anchor="w", wraplength=320,
-            padx=12, pady=8)
-        lbl.pack()
+        if segments is None:
+            ctk.CTkLabel(
+                frame, text=text, font=(FONT_FAMILY, 12),
+                text_color=TEXT, fg_color=BG_CARD,
+                justify="left", anchor="w", wraplength=320,
+                padx=12, pady=8).pack()
+        else:
+            # 内层 frame 吃掉内边距: 逐行 Label 各自带 padx/pady 会在行与行之间
+            # 攒出多余的竖直间距, 看着像段落而不是一张清单。
+            body = ctk.CTkFrame(frame, fg_color=BG_CARD, corner_radius=0)
+            body.pack(padx=12, pady=8)
+            for seg_text, seg_color, seg_font in segments:
+                ctk.CTkLabel(
+                    body, text=seg_text,
+                    font=seg_font or (FONT_FAMILY, 12),
+                    text_color=seg_color or TEXT, fg_color=BG_CARD,
+                    justify="left", anchor="w", wraplength=320,
+                ).pack(fill="x", anchor="w")
         tip.update_idletasks()
         # 居中对齐到目标控件下方
         tip.geometry(f"+{x - tip.winfo_width() // 2}+{y}")
