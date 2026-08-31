@@ -108,9 +108,39 @@ def _is_finite(value) -> bool:
 #: 排除集照读原集。
 _TAGS_COVERED_BY_DATA_COLUMN = frozenset({"无市价", "无偏差"})
 
+#: 标签 → **承载同一事实的数值列**。那一列在同一张表上时, 标签就是同一行两列逐字重复,
+#: 而且列还更精确 ——「低评级」把 A+ / A / A- / BBB+ / BBB / CC 六档、信用利差下限差 14 倍
+#: 的范围压成一个词, 而「评级」列原样显示、可排序、进得了 CSV。
+#:
+#: 这是 ``_TAGS_COVERED_BY_DATA_COLUMN`` 那条规则的一般化 (那里的理由写的是"「数据状态」列
+#: 已经把这两档说清了, 标签列再写一遍就是同一行两列逐字重复")。两张表分开是因为判据不同:
+#: 那一张的承载列是**状态文案**且标签是拦截档, 这一张的承载列是**数值**且标签一律非拦截。
+#:
+#: **按预设判, 不是一刀切**: 「较高HV」在简洁预设里必须留着 —— 「正股σ(%)」只在完整预设,
+#: 简洁页上它是唯一的波动率线索 (实测 35 行)。一刀切删掉正是评审指出的删过头。
+#:
+#: 两条排除规则由守护测试钉住 (``test_suppressed_tags_are_never_blocking_or_opportunity``):
+#:   · **拦截标签不进这张表** —— 行已经被染色, 标签是唯一的解释, 抑制它等于一行红色没有理由;
+#:   · **机会信号不进这张表** —— "为什么值得看这只债"正是标签列存在的意义。
+#: 底层 ``risk_tags`` 一个字节不动: 行色 / 置信度 / 复核分桶 / 复核建议 / CSV 照读原集,
+#: 所以这是纯展示改动, 四个通道逐行不变。
+_TAG_CARRIER_COLUMN: dict[str, str] = {
+    "低评级": "评级",
+    "短久期": "剩余(年)",
+    "近到期": "剩余(年)",
+    "高HV": "正股σ(%)",
+    "较高HV": "正股σ(%)",
+    "小余额": "余额(亿)",
+    "触及摘牌线": "余额(亿)",
+}
 
-def _format_tags(tags, *, drop_covered: bool = False) -> str:
-    """标签串; *drop_covered* 挡掉已被「数据状态」列承载的那两个 (关注池用)。
+
+def _format_tags(tags, *, drop_covered: bool = False, columns=None) -> str:
+    """标签串; 挡掉已经被同一张表上的列承载的那些。
+
+    *drop_covered* 挡掉「数据状态」列承载的那两个 (关注池用)。
+    *columns* 给出本表实际渲染的列名集合, 据此挡掉 ``_TAG_CARRIER_COLUMN`` 里承载列在场的
+    标签 —— 传 None (默认) 表示不知道列集, 一个都不挡, 这是保守的那一侧。
 
     走 ``risk_tag_label`` 取展示名 —— 「模型高估离群」的动宾读法与事实相反, 见
     ``batch_pricing.RISK_TAG_DISPLAY_LABEL``。
@@ -122,6 +152,9 @@ def _format_tags(tags, *, drop_covered: bool = False) -> str:
     items = [t for t in tags if t]
     if drop_covered:
         items = [t for t in items if t not in _TAGS_COVERED_BY_DATA_COLUMN]
+    if columns:
+        present = set(columns)
+        items = [t for t in items if _TAG_CARRIER_COLUMN.get(t) not in present]
     return " / ".join(risk_tag_label(str(tag)) for tag in items)
 
 

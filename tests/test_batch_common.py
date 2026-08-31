@@ -2642,3 +2642,105 @@ def test_batch_page_lands_on_the_full_pool():
         assert view_exclusion_reason(row, "综合机会") is None, (
             "全池开始排除行了 —— 落地页就可能空")
 
+
+
+def test_suppressed_tags_are_never_blocking_or_opportunity():
+    """被列承载而抑制渲染的标签, **不许**是拦截档或机会信号。
+
+    两条规则各有各的理由:
+      · **拦截标签**: 行已经被染成红色/灰色, 标签是它唯一的解释 —— 抑制它等于让用户
+        看见一行红色却找不到原因 (与「一个消失的控件和一个坏掉的控件长得一模一样」同源)。
+      · **机会信号**: "为什么值得看这只债"正是标签列存在的意义, 挡掉它标签列就只剩坏消息。
+
+    没有这条守护, 以后往 ``_TAG_CARRIER_COLUMN`` 里加一个红行标签, 红行就没解释了 ——
+    而那是静默的: 表照常渲染, 只是少了一个词。
+    """
+    from convertible_bond import batch_pricing
+
+    for tag, column in batch_common._TAG_CARRIER_COLUMN.items():
+        assert tag in batch_pricing.RISK_TAG_DIMENSION, f"{tag} 不是已登记的标签"
+        assert tag not in batch_pricing.BLOCKING_RISK_TAGS, (
+            f"{tag} 是拦截标签, 抑制它会让染色的行失去唯一的解释")
+        assert batch_pricing.RISK_TAG_DIMENSION[tag] != batch_pricing.DIM_OPPORTUNITY, (
+            f"{tag} 是机会信号, 那正是标签列存在的意义")
+        assert isinstance(column, str) and column, f"{tag} 的承载列名为空"
+
+
+def test_tag_suppression_is_per_preset_not_global():
+    """按预设判, 不是一刀切 —— 「较高HV」在简洁里必须留着。
+
+    「正股σ(%)」只在完整预设; 简洁页上「较高HV」是唯一的波动率线索 (实测 35 行)。
+    一刀切删掉正是评审指出的"删过头": 那 35 行会一个字都不剩。
+    """
+    from convertible_bond.gui.tabs import batch as batch_tab
+
+    simple = {name for name, _ in batch_tab._BATCH_COLS_SIMPLE}
+    full = {name for name, _ in batch_tab._BATCH_COLS_FULL}
+    watchlist, _ = watchlist_tab.watchlist_columns()
+
+    row_tags = ["低评级", "较高HV", "短久期"]
+
+    # 「评级」「剩余(年)」三个预设都有 → 那两个标签处处抑制
+    for cols in (simple, full, set(watchlist)):
+        rendered = batch_common._format_tags(row_tags, columns=cols)
+        assert "低评级" not in rendered
+        assert "短久期" not in rendered
+
+    # 而「较高HV」只在完整里抑制 —— 简洁/关注池没有 σ 列
+    assert "较高HV" in batch_common._format_tags(row_tags, columns=simple)
+    assert "较高HV" in batch_common._format_tags(row_tags, columns=set(watchlist))
+    assert "较高HV" not in batch_common._format_tags(row_tags, columns=full)
+
+    # 不传列集 = 不知道渲染了什么 → 一个都不挡 (保守的那一侧)
+    assert batch_common._format_tags(row_tags).count("/") == 2
+
+
+def test_suppression_does_not_touch_the_underlying_tag_set():
+    """抑制是**纯展示**: 行色 / 置信度 / 分桶 / 策略排除集照读原集。
+
+    这是这次改动与"删标签"的全部区别 —— 删标签会连带改四个通道 (实测
+    review_notes 123/284 行、model_signal_status 74/284 行), 抑制一个都不碰。
+    """
+    from convertible_bond import batch_pricing
+    from convertible_bond.gui.tabs import batch as batch_tab
+
+    row = {"bond_code": "x", "status": "ok", "risk_tags": ["低评级", "短久期", "余额清零"]}
+    full = {name for name, _ in batch_tab._BATCH_COLS_FULL}
+
+    # 表上只剩「余额清零」(拦截档, 不抑制)
+    assert batch_common._format_tags(row["risk_tags"], columns=full) == "余额清零"
+    # 但行色仍由完整的 risk_tags 决定
+    assert batch_common._resolve_row_tag(row) == "blocked"
+    # 底层集合一个字节没动
+    assert row["risk_tags"] == ["低评级", "短久期", "余额清零"]
+    assert set(row["risk_tags"]) & batch_pricing.BLOCKING_RISK_TAGS == {"余额清零"}
+
+
+def test_both_tables_actually_pass_their_column_set_to_the_tag_cell():
+    """两张表都必须把**本次渲染的列集**传给标签格 —— 不传就退回"一个都不挡"。
+
+    这条只能在源码上钉: GUI 在无头环境起不来, 而漏传的表现是"抑制没生效", 表照常渲染、
+    测试照常绿 (实测这个变异体第一轮活了下来)。用 AST 查关键字实参, 不扫源码文本 ——
+    文本扫描会把解释性注释判红, 那是为了让规则变绿去改文档 (库内踩过一次)。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from convertible_bond.gui.tabs import batch as batch_tab
+    from convertible_bond.gui.tabs import batch_watchlist as wl_tab
+
+    for module, func_name in ((batch_tab, "_render_table"),
+                              (wl_tab, "_render_watchlist_table")):
+        src = textwrap.dedent(inspect.getsource(getattr(module, func_name)))
+        calls = [
+            node for node in ast.walk(ast.parse(src))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "_format_tags"
+        ]
+        assert calls, f"{module.__name__}.{func_name} 里找不到 _format_tags 调用"
+        for call in calls:
+            kwargs = {kw.arg for kw in call.keywords if kw.arg}
+            assert "columns" in kwargs, (
+                f"{module.__name__}.{func_name} 的 _format_tags 没传 columns= —— "
+                f"标签抑制会静默失效, 表照常渲染")

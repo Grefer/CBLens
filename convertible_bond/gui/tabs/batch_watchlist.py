@@ -1323,7 +1323,9 @@ def _render_watchlist_table(app):
             # (「正股/下修线」) 而不是「距下修线」—— 否则负号读作"距离是负的"
             trigger_gap_text(entry.get("down_reset_trigger_gap")),
             # drop_covered: 「无市价」「无偏差」已由「数据状态」列以更具体的形式承载
-            _format_tags(entry.get("risk_tags"), drop_covered=True),
+            # drop_covered: 「数据状态」列承载的那两个; columns: 本表已有的数值列承载的那些
+            _format_tags(entry.get("risk_tags"), drop_covered=True,
+                         columns=headers),
             # 实测关注池双峰: 6 只 <0.6 年 (南航 0.13 ≈ 47 天), 6 只 ~5.95 年。此前
             # 只有「短久期」「近到期」两个标签暗示, 而南航 (47 天) 与上银 (5 个月)
             # 标的是**同一个**「短久期」。T 不在 CACHE_FIELDS, 从到期日算。

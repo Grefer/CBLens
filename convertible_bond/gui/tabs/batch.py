@@ -859,8 +859,15 @@ def _render_table(app, results, *, total_results=None, view=None, cache_path=Non
     _TREE_ATTRS.add("_batch_main_tree")
     _attach_main_context_menu(app, tree)
 
+    # 「标签」那一格要知道**本次渲染了哪些列** —— 承载列在场时标签就是逐字重复
+    # (见 batch_common._TAG_CARRIER_COLUMN)。其余列的 getter 与行无关, 照旧走查表。
+    present_columns = {name for name, _ in schema}
     for idx, r in enumerate(results):
-        vals = [_BATCH_COL_GETTERS[name](r) for name, _ in schema]
+        vals = [
+            _format_tags(r.get("risk_tags"), columns=present_columns) if name == "标签"
+            else _BATCH_COL_GETTERS[name](r)
+            for name, _ in schema
+        ]
         row_tag = _resolve_row_tag(r)
         tags = [row_tag] if row_tag else []
         # pad_cells: 右对齐列补尾随留白, 否则和右边左对齐列的文字贴在边界上
