@@ -331,7 +331,21 @@ def resolve_down_reset(
             for e in down_events if e is not latest_approved
         )
         if is_latest:
-            eff = latest_approved.effective_end or latest_approved.effective_start
+            # ``effective_start`` 只有**真解析到**才算数 —— 与 delisting /
+            # call_redemption 的 last_trading_date 是同一条闸: 它在标题/正文都没有日期时
+            # 会回落成公告日本身 (parse_event_from_announcement 的通用回落), 而
+            # ``parse_event_from_announcement`` 对 down_reset_approved **只解析 event_price,
+            # 不解析生效日** —— 于是 effective_start 恒等于 event_date、effective_end 恒为
+            # None (实测全库 113/113)。
+            #
+            # 而 ``events_for_down_reset(through_date=valuation_date)`` 已经保证
+            # ``event_date <= valuation_date``, 所以下面的 ``eff > cmp_date`` **恒为假**,
+            # ``APPROVED_EFFECTIVE_LAG_DAYS`` 那条兜底一行都执行不到 —— regime ②
+            # (已通过待生效) 从来没有建过节点。
+            eff = latest_approved.effective_end
+            if eff is None and (latest_approved.effective_start
+                                and latest_approved.effective_start > latest_approved.event_date):
+                eff = latest_approved.effective_start
             if eff is None:
                 eff = latest_approved.event_date + timedelta(days=APPROVED_EFFECTIVE_LAG_DAYS)
             cmp_date = valuation_date or market_today()

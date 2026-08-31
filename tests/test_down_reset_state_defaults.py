@@ -79,3 +79,49 @@ def test_calibrated_down_reset_constants_are_pinned_to_their_values():
     # 概率是概率, 滞后是正整数天 —— 顺手钉住量纲, 免得单位被改成"月"还全绿
     assert 0.0 < dro.PROPOSED_PASS_PROB <= dro.APPROVED_PASS_PROB <= 1.0
     assert dro.PROPOSED_EFFECTIVE_LAG_DAYS > dro.APPROVED_EFFECTIVE_LAG_DAYS > 0
+
+
+def test_approved_down_reset_builds_a_node_at_the_lag_fallback(tmp_path):
+    """regime ②「已通过待生效」必须建得出节点 —— 此前恒不可达。
+
+    ``parse_event_from_announcement`` 对 ``down_reset_approved`` **只解析 event_price,
+    不解析生效日**, 于是 ``effective_start`` 恒等于公告日 (通用回落)、``effective_end``
+    恒为 None (实测全库 113/113)。而 ``events_for_down_reset(through_date=valuation_date)``
+    已保证 ``event_date <= valuation_date``, 所以 ``eff > cmp_date`` 恒为假 ——
+    ``APPROVED_EFFECTIVE_LAG_DAYS`` 那条兜底一行都执行不到, 节点从来没建过。
+
+    修法与 delisting / call_redemption 的 ``last_trading_date`` 同形: ``effective_start``
+    只有**真解析到**(严格晚于公告日) 才算数, 否则走滞后兜底。
+    """
+    from datetime import date, timedelta
+
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.down_reset_overrides import resolve_down_reset
+
+    store = CBEventStore(tmp_path / "events.json")
+    announced = date(2026, 8, 25)
+    store.add_many([CBEvent(
+        bond_code="123124.SZ", event_date=announced,
+        event_type="down_reset_approved", parsed_status="已下修",
+        raw_title="关于向下修正转股价格的公告",
+        effective_start=announced,          # ← 通用回落, 不是真解析到的生效日
+    )])
+    terms = BondTerms(sec_name="晶瑞转2", conversion_price=12.0,
+                      listing_date=date(2022, 1, 1), maturity_date=date(2030, 1, 1))
+
+    resolved = resolve_down_reset("123124.SZ", terms, event_store=store,
+                                  valuation_date=announced + timedelta(days=1))
+    assert resolved.approved_effective_date == announced + timedelta(
+        days=dro.APPROVED_EFFECTIVE_LAG_DAYS)
+
+    # 真解析到生效日时照常用它
+    store2 = CBEventStore(tmp_path / "events2.json")
+    store2.add_many([CBEvent(
+        bond_code="123124.SZ", event_date=announced,
+        event_type="down_reset_approved", parsed_status="已下修",
+        raw_title="关于向下修正转股价格的公告",
+        effective_end=date(2026, 9, 10),
+    )])
+    resolved2 = resolve_down_reset("123124.SZ", terms, event_store=store2,
+                                   valuation_date=announced + timedelta(days=1))
+    assert resolved2.approved_effective_date == date(2026, 9, 10)

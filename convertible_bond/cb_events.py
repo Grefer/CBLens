@@ -494,13 +494,18 @@ def parse_conversion_suspension_terms(text: str) -> dict[str, date | None]:
         ),
         negative_after=r"恢复|开始恢复",
     )
+    # 明确锚点先试, 不设闸
     end = _extract_labeled_date(
-        t,
-        (
-            r"(?:恢复转股日|恢复转股起始日|恢复转股开始日)(?:为|是|:|：)?",
-            r"(?:至|截至)",
-        ),
-    )
+        t, (r"(?:恢复转股日|恢复转股起始日|恢复转股开始日)(?:为|是|:|：)?",))
+    if end is None:
+        # **裸的「至/截至」必须加语义闸**。停止转股公告绝大多数是权益分派的配套件, 正文里
+        # 必然出现"本次利润分配以…截至2023年12月31日公司总股本…"这类**基准日**表述 ——
+        # 与「赎回门槛条款被当成当期余额」「评级符号附录被当成状态」是同一类陷阱。
+        # 实测存量 358 条起止俱全的记录里 30 条 end < start, 假 end 集中在期末日
+        # (12-31 ×18 / 03-31 ×6 / 04-20 ×3), 正是股本基准日的形状。
+        end = _extract_labeled_date(
+            t, (r"(?:至|截至)",),
+            negative_after=r"公司总股本|总股本|股本基数|股本总额|基准日|的?股份总数")
     resume_after = re.search(date_re + r"(?:起|开始)?(?:恢复|开始恢复)转股", t)
     if resume_after:
         end = _safe_date(*resume_after.groups()[-3:]) or end
@@ -518,6 +523,17 @@ def parse_conversion_suspension_terms(text: str) -> dict[str, date | None]:
             start = start or _safe_date(*m.groups()[:3])
             end = end or _safe_date(*m.groups()[3:])
             break
+    # **不变量: 暂停窗口的结束不可能早于开始**。语义闸只挡得住"股本基准日"那一种误锚,
+    # 实测 1399 份缓存正文重放后仍有 41 条 end < start —— 假 end 还能从 range_re 与
+    # resume_after 等别的模式来。两者之中 ``end`` 是更不可靠的那半 (``start`` 有
+    # 「暂停转股起始日」这类明确锚点), 所以丢 end 不丢 start。
+    #
+    # 代价是把"解析出了一个错值"降级成"没解析出来", 而下游对 None 有现成处置:
+    # apply_events_to_terms 只在 ``effective_end >= val_date`` 或 end 为 None 时才写
+    # 「暂停转股」状态 —— 一个过去的假 end 会让真正在停转的那几天**不写状态**,
+    # 「暂停转股」旗标与定价页的告警同时消失。
+    if start is not None and end is not None and end < start:
+        end = None
     return {"start": start, "end": end}
 
 
@@ -803,7 +819,7 @@ def apply_events_to_terms(
     updates: dict[str, Any] = {}
     latest_call = _latest_event(active, "call_redemption")
     if latest_call:
-        updates["call_status"] = latest_call.parsed_status or "已公告强赎"
+        updates["call_status"] = _event_status(latest_call.event_type)
         updates["call_announce_date"] = latest_call.event_date
         # 只有**真解析到**停止交易日才写。``effective_start`` 在标题/正文都没有日期时会回落成
         # 公告日本身, 而强赎公告与停止交易之间隔着法定提示期 —— "最后交易日 = 公告当天"几乎
@@ -820,7 +836,7 @@ def apply_events_to_terms(
             updates["call_redemption_price"] = latest_call.event_price
     latest_no_call = _latest_event(active, "call_no_redemption")
     if latest_no_call and (latest_call is None or latest_no_call.event_date >= latest_call.event_date):
-        updates["call_status"] = latest_no_call.parsed_status or "不强赎"
+        updates["call_status"] = _event_status(latest_no_call.event_type)
         if latest_no_call.effective_end:
             updates["call_no_redemption_until"] = latest_no_call.effective_end
 
@@ -865,9 +881,16 @@ def apply_events_to_terms(
     if latest_conv_resume and (
         latest_conv_susp is None or latest_conv_resume.event_date >= latest_conv_susp.event_date
     ):
-        updates["conversion_suspension_status"] = latest_conv_resume.parsed_status or "恢复转股"
-        if latest_conv_resume.effective_start:
-            updates["conversion_suspension_end_date"] = latest_conv_resume.effective_start
+        updates["conversion_suspension_status"] = _event_status(latest_conv_resume.event_type)
+        # **恢复日是 effective_end 不是 effective_start**。解析层的返回约定是
+        # start=暂停起始 / end=恢复日 (parse_conversion_suspension_terms), 而恢复公告正文里
+        # 的"自 XXXX 年 X 月 X 日起暂停转股"往往引用的是几年前那次暂停 —— 拿它当"暂停结束"
+        # 会写出早于暂停开始好几年的日期。实测 127 只由 resume 分支决定取值的债里 **120 只**
+        # 写出来的值 ≠ 该事件解析到的恢复日, |差| 中位 160 天、最大 2185 天
+        # (123064.SZ resume 2026-06-01 却写入 2021-03-08)。
+        # 这个字段在事件页/定价页直接显示成「暂停转股结束」, 还参与 pricer 的转股期判定。
+        if latest_conv_resume.effective_end:
+            updates["conversion_suspension_end_date"] = latest_conv_resume.effective_end
     elif latest_conv_susp:
         if latest_conv_susp.effective_start:
             updates["conversion_suspension_start_date"] = latest_conv_susp.effective_start
@@ -877,7 +900,7 @@ def apply_events_to_terms(
             latest_conv_susp.effective_end is None
             or latest_conv_susp.effective_end >= val_date
         ):
-            updates["conversion_suspension_status"] = latest_conv_susp.parsed_status or "暂停转股"
+            updates["conversion_suspension_status"] = _event_status(latest_conv_susp.event_type)
 
     # 临停类事件: 仅在 effective_end 仍在窗口内时才标记停牌;
     # 过期超过 _TRANSIENT_CLEAR_GRACE_DAYS 才主动清空, 给 admission_status (Wind 直刷)
@@ -885,7 +908,7 @@ def apply_events_to_terms(
     latest_suspension = _latest_event(active, "suspension")
     if latest_suspension:
         if _transient_still_active(latest_suspension, val_date):
-            updates["suspension_status"] = latest_suspension.parsed_status or "停牌"
+            updates["suspension_status"] = _event_status(latest_suspension.event_type)
         elif (
             terms.suspension_status is not None
             and _transient_long_expired(latest_suspension, val_date)
@@ -907,7 +930,7 @@ def apply_events_to_terms(
         if terms.underlying_status is not None:
             updates["underlying_status"] = None
     elif latest_st:
-        updates["underlying_status"] = latest_st.parsed_status or "ST/退市风险"
+        updates["underlying_status"] = _event_status(latest_st.event_type)
 
     latest_down_rejected = _latest_event(active, "down_reset_rejected")
     if latest_down_rejected:

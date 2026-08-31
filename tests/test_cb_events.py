@@ -1033,3 +1033,91 @@ def test_delisting_date_is_not_written_from_the_announcement_date():
     patched = apply_events_to_terms("113584.SH", terms, [parsed],
                                     valuation_date=date(2026, 5, 12))
     assert patched.delisting_date == date(2026, 6, 20)
+
+
+def test_status_fields_come_from_event_type_not_the_stored_parsed_status():
+    """状态字段一律由 ``_event_status(event_type)`` 推出, 不读盘上的 ``parsed_status``。
+
+    ``parsed_status`` 是 ``_event_status`` 的冗余副本, 落库后再不校准; 而
+    ``cli/repair_events`` 的 ``_fix`` 用当前分类器**重判 event_type 却不重算它**,
+    于是重判过的行就此分叉。实测存量 92 条不符, 最严重的一条方向完全相反:
+    110077.SH 那条「不行使提前赎回权利」的核查意见 event_type=call_no_redemption 而
+    parsed_status='已公告强赎', 于是 ``call_status`` 被写成「已公告强赎」。
+
+    改用 ``_event_status`` 是**行为保持**的: 各处原先的兜底串恰好等于它的返回值,
+    只有漂移的那些会变 (重放实测状态字段差异 0 只)。
+    """
+    from datetime import date
+
+    from convertible_bond.data_providers import BondTerms
+
+    terms = BondTerms(sec_name="洪城转债", conversion_price=10.0,
+                      listing_date=date(2020, 1, 1), maturity_date=date(2030, 1, 1))
+    drifted = CBEvent(
+        bond_code="110077.SH", event_date=date(2025, 7, 12),
+        event_type="call_no_redemption",
+        parsed_status="已公告强赎",              # ← 与 event_type 方向相反的存量脏值
+        raw_title="申万宏源关于洪城转债不行使提前赎回权利的核查意见",
+    )
+    patched = apply_events_to_terms("110077.SH", terms, [drifted],
+                                    valuation_date=date(2025, 8, 1))
+    assert patched.call_status == "不强赎", "读了盘上漂移的 parsed_status"
+
+
+def test_conversion_resume_writes_the_resume_date_not_the_suspension_start():
+    """恢复转股写 ``effective_end`` (恢复日), 不是 ``effective_start`` (暂停起始日)。
+
+    恢复公告正文里的"自 XXXX 年 X 月 X 日起暂停转股"往往引用几年前那次暂停, 拿它当
+    "暂停结束"会写出早于暂停开始好几年的日期。实测 127 只由 resume 分支决定取值的债里
+    **120 只**的值 ≠ 该事件解析到的恢复日, |差| 中位 160 天、最大 2185 天。
+    """
+    from datetime import date
+
+    from convertible_bond.data_providers import BondTerms
+
+    terms = BondTerms(sec_name="测试转债", conversion_price=10.0,
+                      listing_date=date(2019, 1, 1), maturity_date=date(2030, 1, 1))
+    resume = CBEvent(
+        bond_code="123064.SZ", event_date=date(2026, 6, 1),
+        event_type="conversion_resume", parsed_status="恢复转股",
+        raw_title="关于恢复转股的公告",
+        effective_start=date(2021, 3, 8),      # 正文引用的旧暂停起始日
+        effective_end=date(2026, 6, 2),        # 真正的恢复日
+    )
+    patched = apply_events_to_terms("123064.SZ", terms, [resume],
+                                    valuation_date=date(2026, 6, 30))
+    assert patched.conversion_suspension_end_date == date(2026, 6, 2)
+
+
+def test_suspension_window_never_ends_before_it_starts():
+    """暂停窗口的 ``end`` 早于 ``start`` 时丢掉 end —— 那是误锚, 不是数据。
+
+    停止转股公告多是权益分派的配套件, 正文必然出现"以…截至2023年12月31日公司总股本…"
+    这类**基准日**表述, 而 end 的前缀表里兜了一个裸的「至/截至」。与「赎回门槛条款被当成
+    当期余额」是同一类陷阱。语义闸只挡得住这一种误锚 —— 拿 1399 份缓存正文重放, 加闸后
+    仍有 41 条 end<start (假 end 还能从 range_re 等模式来), 所以需要这条不变量兜底。
+
+    丢 end 不丢 start: start 有「暂停转股起始日」这类明确锚点, 是更可靠的那半。
+    """
+    from datetime import date
+
+    body = ("公司自2026年6月8日起暂停转股。本次利润分配以截至2023年12月31日"
+            "公司总股本为基数, 每10股派发现金红利1元。")
+    parsed = parse_conversion_suspension_terms(body)
+    assert parsed["start"] == date(2026, 6, 8)
+    assert parsed["end"] is None, f"股本基准日被当成了恢复转股日: {parsed['end']}"
+
+    # 语义闸拦不住的那一档 —— 不变量是**唯一**的网。这里 ``resume_after``
+    # (``日期 + 起恢复转股``) 匹配到了正文里回顾的旧日期, 与「截至…总股本」无关,
+    # 所以加多少前缀闸都挡不住。实测 1399 份缓存正文加闸后仍有 41 条是这个形状。
+    retro = parse_conversion_suspension_terms(
+        "公司自2026年6月8日起暂停转股。回顾: 本公司曾于2021年3月8日起恢复转股。")
+    assert retro["start"] == date(2026, 6, 8)
+    assert retro["end"] is None, f"倒着的窗口被留下了: {retro['end']}"
+
+    # 明确锚点照常解析。两个日期之间要有真实间距 —— start 的 ``negative_after=恢复`` 闸
+    # 只看日期后 12 个字符, 挨着写会把 start 一起否掉 (既有行为, 不是这次改的)。
+    ok = parse_conversion_suspension_terms(
+        "公司自2026年6月8日起暂停转股, 待本次权益分派实施完毕后另行公告。"
+        "经与中国结算深圳分公司确认, 恢复转股日为2026年6月12日。")
+    assert (ok["start"], ok["end"]) == (date(2026, 6, 8), date(2026, 6, 12))
