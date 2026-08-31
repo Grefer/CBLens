@@ -39,11 +39,8 @@ from ...batch_pricing import (
 )
 from ...pricing_api import batch_price_from_provider_threaded
 from ...market_valuation import (
-    MIN_BASELINE_COVERAGE,
-    append_history,
-    compute_snapshot,
     load_history,
-    snapshot_coverage,
+    record_snapshot,
     valuation_banner,
 )
 from ...paths import data_path
@@ -737,20 +734,21 @@ def _record_valuation_history(results, history_path=None) -> str | None:
     列诚实标出失败行), 下次重算就修好了。两者的代价完全不同, 所以分开处置。
 
     同估值日幂等覆盖; 记录失败静默降级 (它是副产品, 不能影响主流程)。
+
+    闸本身在 ``market_valuation.record_snapshot`` —— 与 ``cb-valuation --record``
+    **共用同一道**。它此前只长在这个函数里, 于是 CLI 那条路可以绕过去。
     """
-    usable, total = snapshot_coverage(results or [])
-    if total and usable < total * MIN_BASELINE_COVERAGE:
-        # **不静默跳过** —— 静默跳过和"记了"长得一模一样, 那是这个项目反复踩的形状
-        return (f"定价覆盖 {usable}/{total} ({usable / total:.0%} < "
-                f"{MIN_BASELINE_COVERAGE:.0%}), 未记入估值基线")
     try:
-        snapshot = compute_snapshot(results or [])
+        # 路径解析必须留在保护区内: ``data_path`` 会 ``mkdir(parents=True)``, 在只读 HOME /
+        # 打包桌面版上会抛 OSError —— 而 ``_batch_worker`` 的外层 try 会把它当成"批量定价
+        # 失败", 于是 `_render_batch_views` 整个不跑, 用户看到的是一片空表加一句
+        # 「❌ 批量定价失败: Read-only file system」。本函数的契约是"记录失败静默降级"。
         path = history_path or data_path("cb_valuation_history.json", seed=True)
-        append_history(path, snapshot)
-        return None
     except Exception:
-        logger.debug("估值历史自动记录失败 (忽略)", exc_info=True)
-        return "估值基线记录失败"
+        logger.debug("估值基线路径解析失败 (忽略)", exc_info=True)
+        return "估值基线写入失败: 无法定位基线文件"
+    # **不静默跳过** —— 静默跳过和"记了"长得一模一样, 那是这个项目反复踩的形状
+    return record_snapshot(path, results or [])
 
 
 def _update_valuation_banner(app, base_results) -> None:

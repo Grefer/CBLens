@@ -19,12 +19,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # ---------------- 口径版本 (caliber) ----------------
 # 中位偏差是**全市场池**的聚合量, 池口径一变, 序列前后就不严格可比。这里给每条快照
@@ -453,8 +456,78 @@ def save_history(path: Path, snapshots: Sequence[ValuationSnapshot]) -> Path:
 
 
 def append_history(path: Path, snapshot: ValuationSnapshot) -> Path:
-    """把一条快照并入历史基线; 同日期则覆盖, 避免重复记录。"""
+    """把一条快照并入历史基线; 同日期则覆盖, 避免重复记录。
+
+    **这是无闸的底层写入**。日常写入一律走 :func:`record_snapshot` —— 它带覆盖率闸。
+    """
     history = [s for s in load_history(path)
                if not (snapshot.date is not None and s.date == snapshot.date)]
     history.append(snapshot)
     return save_history(path, history)
+
+
+def baseline_refusal_reason(
+    rows: Sequence[dict[str, Any]],
+    *,
+    min_coverage: float = MIN_BASELINE_COVERAGE,
+) -> str | None:
+    """这批结果能不能记进历史基线: 能则 ``None``, 不能则返回**不记的原因**。
+
+    判据走 :func:`snapshot_coverage`, 与 :func:`compute_snapshot` 逐条同口径。
+    """
+    usable, total = snapshot_coverage(rows or [])
+    if not usable:
+        # 一条能用的都没有 —— 与"覆盖率低"分开说: 前者多半是行情整条挂了,
+        # 后者是部分失败。``total == 0`` 也走这一档 (空批次不该被判成"覆盖率正常")。
+        return f"没有可用的定价结果 (0/{total}), 未记入估值基线"
+    if total and usable < total * min_coverage:
+        return (f"定价覆盖 {usable}/{total} ({usable / total:.0%} < "
+                f"{min_coverage:.0%}), 未记入估值基线")
+    return None
+
+
+def record_snapshot(
+    path: Path,
+    rows: Sequence[dict[str, Any]],
+    *,
+    snapshot: ValuationSnapshot | None = None,
+    min_coverage: float = MIN_BASELINE_COVERAGE,
+    force: bool = False,
+) -> str | None:
+    """带覆盖率闸地把当期快照并入历史基线。记了返回 ``None``, 没记返回**不记的原因**。
+
+    **闸必须在这一层, 不能只长在某一个调用方身上。** 它此前只写在
+    ``gui/tabs/batch._record_valuation_history`` 里, 而 ``cb-valuation --record``
+    读同一份 ``batch_pricing_cache.json`` 却是无条件 ``append_history`` ——
+    于是 GUI 拒记的那份产物就留在盘上等着 CLI 来记 (``_batch_worker`` 刻意在部分失败时
+    照样写主缓存), 而 README 的日常流第 ⑦ 步正是那条命令。
+    实测按上市日切的系统性失败能造出 +48.96% vs 真实 +21.25% 的假快照, 偏离 27.7pp,
+    超过整个历史摆幅 21.2pp; 而 ``baseline_medians`` 取桶内最晚一条, 它还会当上该季度的代表。
+
+    ``force=True`` 跳过闸 (CLI 的 ``--force``): 用户明知覆盖率不足仍要记时的显式出口。
+
+    返回值分两类, 由 :func:`is_coverage_refusal` 区分 —— 调用方**必须**分开处置:
+    覆盖率拒记是"数据不够好, 可以 ``--force``", 而写盘失败是"基础设施坏了, ``--force``
+    一点用都没有" (它只跳过闸, ``append_history`` 照样在同一个地方失败)。
+    两者共用一句"确要记入请加 --force"就是给用户一个注定无效的动作。
+    """
+    if not force:
+        reason = baseline_refusal_reason(rows, min_coverage=min_coverage)
+        if reason:
+            return reason
+    try:
+        snap = snapshot if snapshot is not None else compute_snapshot(rows or [])
+        append_history(path, snap)
+        return None
+    except Exception as exc:
+        logger.debug("估值历史记录失败 (忽略)", exc_info=True)
+        # 带上异常原文: CLI 不配置 logging, debug 那条实际上无处可看
+        return f"{_WRITE_FAILURE_PREFIX}: {exc!r}"
+
+
+_WRITE_FAILURE_PREFIX = "估值基线写入失败"
+
+
+def is_coverage_refusal(reason: str | None) -> bool:
+    """``record_snapshot`` 的返回值是不是"覆盖率闸拒记" (而不是写盘失败)。"""
+    return bool(reason) and not reason.startswith(_WRITE_FAILURE_PREFIX)

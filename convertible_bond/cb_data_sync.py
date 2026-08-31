@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+import math
+from dataclasses import fields, replace
 from datetime import date
 from collections.abc import Iterable, Sequence
 
@@ -85,21 +86,62 @@ def is_terminal_terms(terms: BondTerms, on_date: date) -> str | None:
     return None
 
 
-# Wind **不是权威源**、但 get_bond_terms 仍会返回值的字段: 全量重建时必须让本地已有值胜出,
-# 否则一次 cb-sync-tradable 就把别的同步刚拉来的正确值整批盖回去。
-#
-# 目前只有 credit_rating 一个。Wind 的 ``creditrating`` 是**发行时值** (cb_data 跨 17 个版本、
-# 约 4000 次逐债重取零变化), 当前值由 ``cb-sync-ratings`` 从 akshare 刷新。日常状态刷新那条路
-# 早就堵上了 (``get_admission_status`` 显式返回 ``credit_rating=None``), 全量这条却漏了 ——
-# 实测一次全量同步把 15 只已下调到 A-/A/BBB 的债的评级盖回 Wind 冻结值, 主池 285 → 301,
-# 那 15 只全是刚被"评级过低"正确剔除的。
-#
-# Wind 仍然**兜底首次建档**: 本地为空时照常写入 (见 AGENTS.md「信用评级的当前值走第三方」)。
-_LOCALLY_AUTHORITATIVE_FIELDS = ("credit_rating",)
+def locally_authoritative_fields(provider) -> tuple[str, ...]:
+    """本次同步**不许覆盖**的字段: 这个 provider 的 ``get_bond_terms`` 根本不写的那些.
+
+    ``TermsBundle.set_many`` 是**整条记录替换**, 而 Wind 的 ``get_bond_terms`` 只覆盖条款 ——
+    于是每一次 ``cb-sync-tradable`` 都把 ``get_admission_status`` / ``cb_events`` 写入的
+    状态字段整批清成 null。实测代价: 主池 284 只债的 ``underlying_status`` /
+    ``underlying_trade_status`` / ``suspension_status`` / ``bond_turnover_amount`` /
+    ``delisting_date`` / ``last_trading_date`` **全部 0/284** (775 只死券反而保留着旧值,
+    因为 ``list_tradable_cbs`` 够不着它们 —— 所以按全库统计的覆盖率看不出问题)。后果是
+    「正股 ST/退市风险」「正股停牌」「转债停牌」「成交额过低」「临近摘牌」等六条准入判据
+    对主池全部无输入、恒为 False。
+
+    保护集**按 provider 问** (:meth:`DataProvider.authoritative_terms_fields`), 不是一张
+    全局常量 —— 那张表是从 Wind 抄来的, 套在写满全部字段的 ``CSVDataProvider`` 上会让
+    它的导入静默失效 (26 个字段改不动, 而 ``success`` 照常 +1)。provider 说"不知道"
+    (返回 None) 时退回旧行为: 只保 ``credit_rating``。
+
+    ``credit_rating`` 永远在保护集里: Wind 确实返回它, 但那是**发行时冻结值** (cb_data
+    跨 17 个版本、约 4000 次逐债重取零变化), 当前值由 ``cb-sync-ratings`` 从 akshare
+    刷新。Wind 仍然**兜底首次建档** —— 保的是"已有值", 不是"这个字段"。
+    """
+    try:
+        owned = provider.authoritative_terms_fields()
+    except Exception:
+        owned = None
+    if owned is None:
+        return ("credit_rating",)
+    return tuple(sorted(
+        ({f.name for f in fields(BondTerms)} - set(owned)) | {"credit_rating"}
+    ))
 
 
-def _keep_locally_authoritative(store, code: str, terms: BondTerms) -> BondTerms:
-    """本地已有值的"非 Wind 权威"字段不被全量同步覆盖。"""
+def _has_local_value(value) -> bool:
+    """本地这一格算不算"已有值"。
+
+    NaN 不算 —— ``NaN is not None`` 为真, 用 ``not in (None, "")`` 判会把一个 NaN
+    当成好值保下来, 而这一层保的字段里有 ``underlying_pct_change`` / ``putback_price``
+    这类数值列 (见 AGENTS.md「NaN 不是 None」)。
+
+    判据逐类型写死, **不用 ``value == "" or value == ()``** —— 那种写法对 numpy 标量会
+    走广播 (``np.float64(0.0) == ()`` 返回空数组), ``if`` 上去直接抛
+    ``ValueError: truth value of an empty array is ambiguous``。
+    """
+    if value is None:
+        return False
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    if isinstance(value, (str, tuple, list, dict)) and len(value) == 0:
+        return False
+    return True
+
+
+def _keep_locally_authoritative(
+    store, code: str, terms: BondTerms, protected: Sequence[str],
+) -> BondTerms:
+    """``protected`` 里本地已有值的字段不被本次同步覆盖。"""
     try:
         existing = store.get(code) if hasattr(store, "get") else None
     except Exception:
@@ -108,8 +150,8 @@ def _keep_locally_authoritative(store, code: str, terms: BondTerms) -> BondTerms
         return terms
     keep = {
         name: getattr(existing, name)
-        for name in _LOCALLY_AUTHORITATIVE_FIELDS
-        if getattr(existing, name, None) not in (None, "")
+        for name in protected
+        if _has_local_value(getattr(existing, name, None))
     }
     return replace(terms, **keep) if keep else terms
 
@@ -162,6 +204,7 @@ def sync_cb_terms(
     on_progress=None,
     incremental: bool = False,
     max_age_days: int = 7,
+    preserve_local: bool = True,
 ) -> dict:
     """指定代码批量同步, 返回 ``{success, failed, dropped, skipped, store_path}``.
 
@@ -170,6 +213,14 @@ def sync_cb_terms(
 
     ``incremental=True`` 时跳过本地 store 中已在 ``max_age_days`` 天内刷新的债;
     跳过的代码进入 ``skipped`` 列表, 不消耗 Wind 调用. 全量同步用 False.
+
+    ``preserve_local=False`` 恢复"整条记录替换"的老行为: provider 不写的字段一律清成
+    None。**这是一个破坏性动作**, 只给一种场景用 —— 公告误分类把 ``last_trading_date``
+    / ``call_*`` / ``putback_*`` 写坏之后, 把 cb_data 的状态字段擦回数据源口径再让
+    ``cb-sync-events --apply`` 重放 (见 ``cli/repair_events`` 的流程说明)。
+    这条路必须留着: ``apply_events_to_terms`` 与 ``merge_admission_status`` 对这批字段
+    **只写不撤**, 实测 ``last_trading_date`` 在 342 只在市未到期债上 Wind 一只都不返回,
+    所以整条替换是它仅有的橡皮擦。默认 True。
     """
     store = store or TermsBundle()
     val_date = valuation_date or market_today()
@@ -199,6 +250,8 @@ def sync_cb_terms(
                 skipped.append((code, f"已在 {max_age_days} 天内更新"))
         codes = to_fetch
 
+    protected = locally_authoritative_fields(provider) if preserve_local else ()
+
     for i, code in enumerate(codes):
         if on_progress:
             on_progress(i, len(codes), code)
@@ -212,7 +265,15 @@ def sync_cb_terms(
             if reason:
                 dropped.append((code, reason))
                 continue
-        fresh_items.append((code, _keep_locally_authoritative(store, code, terms)))
+        if protected:
+            # 放在 try 内: 这一步会读 store, 单只出问题该落进 failed 而不是把整轮
+            # 已取到的几百次调用一起拖掉 (fresh_items 要循环跑完才 set_many 落盘)。
+            try:
+                terms = _keep_locally_authoritative(store, code, terms, protected)
+            except Exception as e:
+                failed.append((code, f"合并本地权威字段失败: {e}"))
+                continue
+        fresh_items.append((code, terms))
         success.append(code)
 
     if fresh_items:
@@ -241,6 +302,7 @@ def sync_cb_data(
     on_progress=None,
     incremental: bool = False,
     max_age_days: int = 7,
+    preserve_local: bool = True,
 ) -> dict:
     """全市场同步: 拉清单 → 过滤定向 → 拉条款 → 过滤到期/违约 → 落盘.
 
@@ -270,6 +332,7 @@ def sync_cb_data(
         on_progress=on_progress,
         incremental=incremental,
         max_age_days=max_age_days,
+        preserve_local=preserve_local,
     )
     result["dropped"] = dropped_at_list + result.get("dropped", [])
     result["codes_total"] = len(codes_with_names)
@@ -283,10 +346,19 @@ def refresh_one(
     store=None,
     valuation_date: date | None = None,
     with_cashflow: bool = True,
+    preserve_local: bool = True,
 ) -> BondTerms:
-    """单只刷新 (GUI 🔄 按钮). 用户主动刷新即视为想要, 不做过滤."""
+    """单只刷新 (GUI 🔄 按钮). 用户主动刷新即视为想要, 不做过滤.
+
+    ``_keep_locally_authoritative`` 这一道不能省: 落盘同样是**整条替换**, 少了它
+    刷新一只债就把它的准入状态字段清空一次 —— 与全量同步是同一个缺陷, 只是范围是 1 只。
+    "不做过滤"说的是不剔终止态, 不是可以覆盖别的来源写的字段。
+    """
     val_date = valuation_date or market_today()
     terms = _fetch_one(provider, bond_code, val_date, with_cashflow=with_cashflow)
     if store is not None:
+        protected = locally_authoritative_fields(provider) if preserve_local else ()
+        if protected:
+            terms = _keep_locally_authoritative(store, bond_code, terms, protected)
         _store_set(store, bond_code, terms, source=provider.name)
     return terms

@@ -12,7 +12,9 @@ from convertible_bond.market_valuation import (
     ValuationSnapshot,
     caliber_note,
     append_history,
+    baseline_refusal_reason,
     classify,
+    record_snapshot,
     compute_snapshot,
     load_history,
     MIN_BASELINE_COVERAGE,
@@ -464,3 +466,54 @@ def test_snapshot_coverage_counts_the_same_rows_compute_snapshot_does():
 
     assert 0 < MIN_BASELINE_COVERAGE <= 1
 
+
+
+def test_record_snapshot_is_the_single_gate_both_writers_share(tmp_path):
+    """覆盖率闸必须长在 ``market_valuation`` 这一层, 不能只长在某个调用方身上.
+
+    它此前只写在 ``gui/tabs/batch._record_valuation_history`` 里, 而
+    ``cb-valuation --record`` 读同一份 ``batch_pricing_cache.json`` 却是无条件
+    ``append_history`` —— 两个写入方对同一个版本库文件用了两套判据。
+    """
+    path = tmp_path / "hist.json"
+    ok_rows = _rows([0.1, 0.15, 0.2])
+    bad_rows = ok_rows + [{"deviation": float("nan"), "status": "ok",
+                           "valuation_date": "2026-05-26"}] * 27
+
+    # 覆盖率够 → 记, 返回 None
+    assert record_snapshot(path, ok_rows) is None
+    assert len(load_history(path)) == 1
+
+    # 覆盖率不够 → 不记, 返回**原因** (不是静默跳过 —— 那和"记了"长得一模一样)
+    reason = record_snapshot(path, bad_rows)
+    assert reason is not None and "3/30" in reason and "10%" in reason
+    assert len(load_history(path)) == 1, "被拒的快照仍然写进去了"
+
+    # force 是显式出口
+    assert record_snapshot(path, bad_rows, force=True) is None
+
+    # baseline_refusal_reason 单独可用, 且与 record_snapshot 判据一致
+    assert baseline_refusal_reason(ok_rows) is None
+    assert baseline_refusal_reason(bad_rows) == reason
+
+
+def test_gui_batch_page_routes_through_the_shared_gate():
+    """批量页不许再自己写一份覆盖率判据 —— 两份判据分叉正是这条链的老毛病。"""
+    import ast
+    import inspect
+
+    from convertible_bond.gui.tabs import batch as batch_tab
+
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(batch_tab._record_valuation_history)))
+    # 扫 **AST 的名字**, 不扫源码文本 —— 文本扫描会把 docstring 里"阈值依据见
+    # MIN_BASELINE_COVERAGE"这句解释判红, 那是为了让规则变绿去改文档 (库内踩过一次)。
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
+    assert "record_snapshot" in names, "批量页没走共用闸"
+    assert "append_history" not in names, (
+        "批量页直接调了无闸的 append_history —— 那正是 CLI 曾经的写法")
+    assert "MIN_BASELINE_COVERAGE" not in names, "批量页又自己写了一份阈值比较"
+    assert "snapshot_coverage" not in names, "批量页又自己数了一遍覆盖率"

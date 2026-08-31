@@ -66,6 +66,11 @@ def main():
                         help="只同步指定代码 (绕过 list_tradable_cbs)")
     parser.add_argument("--incremental", "-i", action="store_true",
                         help="增量更新: 跳过本地条款库中近期已刷新的债, 只拉新债 / 过期债")
+    parser.add_argument("--reset-status", action="store_true",
+                        help="破坏性: 把 Wind 不返回的状态字段 (call_*/last_trading_date/"
+                             "putback_*/conversion_suspension_* 等) 一并擦成 None。"
+                             "只在公告误分类写坏状态、需要恢复成数据源口径后重放事件时用; "
+                             "擦完必须跑 cb-sync-events --apply 与 cb-sync-admission-status")
     parser.add_argument("--max-age-days", type=int, default=7,
                         help="增量模式下视为新鲜的最大天数 (默认 7)")
     args = parser.parse_args()
@@ -118,6 +123,10 @@ def main():
 
     mode_label = "增量" if args.incremental else "全量"
     print(f"开始 {mode_label} 同步基础信息到 {bundle.path}")
+    if args.reset_status:
+        print("  ⚠️  --reset-status: 将擦掉事件/状态刷新写入的字段 "
+              "(call_*/last_trading_date/putback_*/conversion_suspension_* 等)")
+        print("      擦完请依次跑 cb-sync-events --apply 与 cb-sync-admission-status 重建")
     if args.incremental:
         print(f"  增量模式: 跳过本地条款库中 {args.max_age_days} 天内已刷新的债")
     print(f"  注: 每只债 2 次 Wind 接口调用 (基础字段 + 完整付息计划), 预计 ~{len(codes)*0.6:.0f}s")
@@ -135,7 +144,8 @@ def main():
 
     result = sync_cb_terms(
         provider, codes, store=bundle, on_progress=progress,
-        incremental=args.incremental, max_age_days=args.max_age_days)
+        incremental=args.incremental, max_age_days=args.max_age_days,
+        preserve_local=not args.reset_status)
     elapsed = time.time() - start
 
     success = result["success"]

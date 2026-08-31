@@ -587,6 +587,100 @@ class TestBondFloor:
         bf_late = base_pricer.bond_floor_value(date(2026, 7, 1), 0.05)
         assert bf_late > bf_early
 
+    def test_reported_bond_floor_is_discounted_at_r_plus_spread(self):
+        """``price()`` 报出来的 ``bond_floor`` 必须含信用利差, 不能只用无风险利率.
+
+        上面三条都是符号/单调性检查, ``test_price_decomposition_consistency`` 是拿分解
+        跟自己比 —— 没有一条约束**折现率本身**。实测把折现率从 ``r + base_spread`` 改成
+        ``r``, 957 条测试全绿, 而长久期债的「纯债底」差 17.35 元 (81.39 → 98.74, +21.2%),
+        且这个数直接显示在定价页上。
+        """
+        pricer = _long_dated_otm_pricer()
+        r, spread = 0.022, 0.03
+        result = pricer.price(sigma=0.28, r=r, base_spread=spread, distress_k=0.05,
+                              p_down=0.0, M=200, N=500, return_greeks=True)
+
+        assert result["bond_floor"] == pytest.approx(
+            pricer.bond_floor_value(pricer.current_date, r + spread))
+        # 且必须**严格低于**只用 r 折现的那个值 —— 差额就是利差的作用
+        assert result["bond_floor"] < pricer.bond_floor_value(pricer.current_date, r) - 5.0
+
+
+# ── 8.5 信用利差的 distress 扩张 ────────────────────────────
+def _long_dated_otm_pricer(**overrides):
+    """长久期 + 深度 OTM: distress 折现真正起作用的那一档.
+
+    套件里 68 处 ``.price()`` 调用全都传了 ``distress_k=0.05``, 但用的都是短久期 /
+    地板绑定的案例 —— 在那些案例上 ``distress_k`` 从 0 扫到 2.0 价格**一个字节都不变**
+    (转股/赎回地板先绑住了)。所以"传了参数"不等于"测到了", 需要这个 fixture。
+    """
+    kwargs = dict(
+        S0=20.0, K=52.77,
+        current_date=date(2020, 1, 1),
+        maturity_date=date(2026, 7, 30),
+        issue_date=date(2020, 1, 1),
+        conversion_start_date=date(2020, 7, 1),
+        coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
+        redemption_price=107.0,
+    )
+    kwargs.update(overrides)
+    return UniversalCBPricer(**kwargs)
+
+
+class TestDistressSpread:
+    """``s(S) = base_spread + distress_k · max(0, 1 − S/K)`` 是 README/AGENTS 点名的核心特性.
+
+    实测它此前**没有任何有效覆盖**: 把 ``distress_k`` 那一项乘 0 之后套件仍然
+    957 passed, 而长久期 OTM 债的理论价变化 +11.3%, 足以让券在 5pp 的
+    ``MIN_RELATIVE_CHEAPNESS`` 闸上跨过去 —— 原因不是没写测试, 是 fixture 全落在死区。
+    """
+
+    def test_price_is_strictly_decreasing_in_distress_k(self):
+        prices = [
+            _long_dated_otm_pricer().price(
+                sigma=0.28, r=0.022, base_spread=0.03, distress_k=dk,
+                p_down=0.0, M=200, N=500)
+            for dk in (0.0, 0.05, 0.5, 2.0)
+        ]
+
+        assert prices == sorted(prices, reverse=True), (
+            f"价格必须随 distress_k 单调下降, 实得 {prices}")
+        # 光"单调"还不够 —— 乘 0 的变异体也满足单调 (全部相等)。要钉住**幅度**:
+        # 实测 0.0 → 0.05 这一步就有 ~10.96 元。
+        assert prices[0] - prices[1] > 3.0, (
+            f"distress_k 0→0.05 只改变了 {prices[0] - prices[1]:.4f} 元, "
+            f"扩张项可能已失效")
+
+    def test_short_dated_fixture_is_why_the_long_dated_one_exists(self):
+        """把"为什么必须用长久期 fixture"钉成断言, 免得后人把上面那条挪回短久期案例。
+
+        同样是 S0=20 的深度 OTM, 只把估值日从 2020 挪到 2025 (剩 1.6 年), **回售地板**
+        就先绑住了价格 —— ``distress_k`` 从 0 扫到 2.0 价格**逐位不变**。
+
+        绑住它的是 ``pricer.py`` 的 ``elif t_prev >= self._put_start_t`` 那一支
+        (S ≤ 0.7·K 时 ``V`` 被钉在 ``face + accrued``), 不是赎回价: 估值日 2025-01-01 时
+        回售期已从 2024-07-30 起生效, 而 S0=20 ≤ 0.7×52.77 = 36.94, 于是整片低 S 区被
+        钉成闭式常数 —— 实测价格 bit-exact 等于 100 + 1.804931506849315 = 101.80493150684931,
+        赎回价 107 全程没参与。所以下面那个精确 0 是**常数相等**而不是数值噪声, 不会
+        因为 numpy/scipy 版本或平台不同而飘。
+        """
+        def step(current_date):
+            p0, p1 = (
+                _long_dated_otm_pricer(current_date=current_date).price(
+                    sigma=0.28, r=0.022, base_spread=0.03, distress_k=dk,
+                    p_down=0.0, M=200, N=500)
+                for dk in (0.0, 0.05)
+            )
+            return p0 - p1
+
+        short_dated = step(date(2025, 1, 1))
+        long_dated = step(date(2020, 1, 1))
+
+        assert short_dated == pytest.approx(0.0, abs=1e-9), (
+            f"短久期 OTM 上 distress_k 竟然有区分度了 ({short_dated:.6f} 元) —— "
+            f"若属真实改进, 请同步更新本用例与 TestDistressSpread 的说明")
+        assert long_dated > 3.0
+
 
 # ── 9. 隐含波动率反解 ──────────────────────────────────────
 class TestImpliedVol:

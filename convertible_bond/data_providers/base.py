@@ -350,6 +350,19 @@ class DataProvider(ABC):
         """无风险利率参考值 (%). 默认 None."""
         return None
 
+    def authoritative_terms_fields(self) -> frozenset[str] | None:
+        """本 provider 的 ``get_bond_terms`` 真正写入 (= 有权覆盖) 的 BondTerms 字段.
+
+        全量同步落盘是**整条记录替换**, 所以 ``cb_data_sync`` 需要知道"哪些字段该由这次
+        同步说了算, 哪些该保本地已有值" —— 否则 provider 不写的字段会被写成 null,
+        把别的同步 (状态刷新 / 事件回写 / 评级同步) 的成果整批清掉。
+
+        返回 ``None`` (默认) = **不知道 / 全部字段都归它**, 同步照旧整条替换。这是向后
+        兼容的那一侧: 老 provider 与写满全部字段的 ``CSVDataProvider`` 都适用。
+        真正只写一部分字段的 provider (Wind) 必须覆写, 否则它的同步会清空别人的字段。
+        """
+        return None
+
     def get_admission_status(
         self,
         bond_code: str,

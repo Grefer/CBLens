@@ -1298,7 +1298,9 @@ def _render_watchlist_table(app):
             entry.get("bond_name", "") or "",
             # 正股**名称**优先, 缺失才回落代码。实测 cb_data 的 underlying_name
             # 只有 722/1059 —— 08-24 曾是 1033/1058, 被一次全量条款同步清掉 317 只
-            # (``_LOCALLY_AUTHORITATIVE_FIELDS`` 里只保护了 ``credit_rating``)。
+            # (当时全量同步是整条记录替换, 只保 ``credit_rating``; 现已按 provider
+            # 声明的字段所有权保护, 见 ``cb_data_sync.locally_authoritative_fields``,
+            # 但存量缺口要等下一次状态刷新才补得回来)。
             # 所以回落不是保守, 是当前必需: 直接换成名字会让三成的行变空。
             entry.get("underlying_name") or entry.get("stock_code", "") or "—",
             # 三档: 过去日期 (这只债有多新) / 未来日期 (还有几天挂牌) / 「待定」

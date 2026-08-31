@@ -19,12 +19,15 @@ import sys
 from pathlib import Path
 
 from ..market_valuation import (
-    append_history,
+    MIN_BASELINE_COVERAGE,
     classify,
     compute_snapshot,
     baseline_medians,
     caliber_note,
+    is_coverage_refusal,
     load_history,
+    record_snapshot,
+    snapshot_coverage,
 )
 from ..paths import data_path
 
@@ -53,11 +56,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--history", default="",
                         help="历史基线路径 (默认 data/cb_valuation_history.json)")
     parser.add_argument("--record", action="store_true",
-                        help="把本次中位偏差并入历史基线 (同估值日覆盖)")
+                        help="把本次中位偏差并入历史基线 (同估值日覆盖); "
+                             f"定价覆盖率低于 {MIN_BASELINE_COVERAGE:.0%} 时拒记并返回 1")
+    parser.add_argument("--force", action="store_true",
+                        help="覆盖率不足时仍然记入基线 (须与 --record 同用)")
     parser.add_argument("--include-watchlist", action="store_true",
                         help="把关注池 upcoming_results 也并入估值 (默认只用主全市场池)")
     parser.add_argument("--json", action="store_true", help="机器可读 JSON 输出")
     args = parser.parse_args(argv)
+
+    if args.force and not args.record:
+        parser.error("--force 只在与 --record 同用时有意义")
 
     cache_path = Path(args.cache) if args.cache else data_path("batch_pricing_cache.json")
     history_path = (Path(args.history) if args.history
@@ -81,8 +90,15 @@ def main(argv: list[str] | None = None) -> int:
     hist_medians = baseline_medians(history, exclude_date=snapshot.date)
     signal = classify(snapshot.median_deviation, hist_medians)
 
+    # 覆盖率必须**和信号一起报**: 只印分子 (样本 N 只) 时用户连眼估都做不到,
+    # 而"取到多少"恰恰决定这个中位数能不能信。
+    usable, total = snapshot_coverage(results)
+    refusal: str | None = None
     if args.record:
-        append_history(history_path, snapshot)
+        # 与 GUI 批量页**同一道闸** (market_valuation.record_snapshot)。此前这里是无条件
+        # append_history, 于是 GUI 拒记的那份缓存留在盘上, 换条命令照样能写进版本库。
+        refusal = record_snapshot(history_path, results,
+                                  snapshot=snapshot, force=args.force)
 
     if args.json:
         pct = None if math.isnan(signal.percentile) else signal.percentile
@@ -90,13 +106,17 @@ def main(argv: list[str] | None = None) -> int:
             "snapshot": snapshot.to_record(),
             "signal": {"label": signal.label, "percentile": pct,
                        "n_history": signal.n_history},
+            "coverage": {"usable": usable, "total": total,
+                         "min_required": MIN_BASELINE_COVERAGE},
             "caliber_note": caliber_note(history, snapshot.caliber) or None,
-            "recorded": bool(args.record),
+            "recorded": bool(args.record and refusal is None),
+            "record_refused": refusal,
         }, ensure_ascii=False, indent=2, allow_nan=False))
-        return 0
+        return 1 if refusal else 0
 
     print(f"批量定价缓存: {cache_path}")
-    print(f"估值日: {snapshot.date or '未知'}   样本: {snapshot.n} 只")
+    cover_txt = f"{usable}/{total}" + (f" ({usable / total:.0%})" if total else "")
+    print(f"估值日: {snapshot.date or '未知'}   样本: {snapshot.n} 只   定价覆盖: {cover_txt}")
     print("-" * 56)
     print(f"全市场中位偏差 (市价-理论)/理论 : {snapshot.median_deviation*100:+.1f}%")
     print(f"均值偏差                       : {snapshot.mean_deviation*100:+.1f}%")
@@ -107,8 +127,16 @@ def main(argv: list[str] | None = None) -> int:
     note = caliber_note(history, snapshot.caliber)
     if note:
         print(f"\n{note}")
-    if args.record:
+    if args.record and refusal is None:
         print(f"\n已记录到历史基线: {history_path}")
+    elif refusal and is_coverage_refusal(refusal):
+        print(f"\n⚠️  {refusal}\n    该文件进版本库且只追加, 一条坏记录会当上所在季度的代表。"
+              f"\n    确要记入请加 --force。", file=sys.stderr)
+        return 1
+    elif refusal:
+        # 写盘失败: --force 只跳过覆盖率闸, 对这一档毫无作用, 不要把它当建议给出去
+        print(f"\n❌ {refusal}\n    基线文件: {history_path}", file=sys.stderr)
+        return 1
     return 0
 
 

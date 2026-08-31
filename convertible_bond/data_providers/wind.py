@@ -260,6 +260,28 @@ class WindDataProvider(DataProvider):
         "close", "creditrating", "outstandingbalance",
     )
 
+    # ``get_bond_terms`` 真正写入的 BondTerms 字段 —— 与下面 ``BondTerms(...)`` 的构造
+    # 逐项对应, 外加 ``infer_cb_trading_metadata`` 推断出的三个派生字段。
+    # 全量同步靠它区分"该重建"与"该保本地值", 见 ``cb_data_sync._locally_authoritative_fields``。
+    # 有守护测试 (tests/test_cb_data_sync.py) 用 ast 直接比对下面的构造现场。
+    #
+    # 三个派生字段**必须**留在这张表里 (= 不受保护, 让新推断胜出): 数据源根本不提供它们
+    # (``get_admission_status`` 对 is_tradable / trading_status 显式返回 None), 缓存里读到的
+    # 只可能是 ``infer_cb_trading_metadata`` 上一次的输出 —— 保住旧值就是
+    # ``is_issued_pending_listing`` 文档里点名的自我确认陷阱 (债"已发行未上市"时留下的
+    # pending/False 在真的挂牌后永远翻不回来)。
+    _TERMS_FIELDS_WRITTEN = frozenset({
+        "sec_name", "underlying_code", "issue_date", "listing_date", "maturity_date",
+        "face_value", "conversion_price", "redemption_price",
+        "down_reset_trigger_pct", "call_trigger_pct", "put_trigger_pct", "put_obs_months",
+        "coupon_rates", "close", "credit_rating", "outstanding_balance",
+        # ↓ infer_cb_trading_metadata 的三个输出 (base.py 的 replace(terms, ...))
+        "tradable_date", "is_tradable", "trading_status",
+    })
+
+    def authoritative_terms_fields(self) -> frozenset[str]:
+        return self._TERMS_FIELDS_WRITTEN
+
     def __init__(self):
         self._w = None
         self._wind_lock = threading.RLock()

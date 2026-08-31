@@ -1512,10 +1512,11 @@ def test_underlying_column_falls_back_to_the_stock_code():
     """正股列渲染**名称**, 但缺名字时必须回落代码 —— 不能留一格空的.
 
     这不是保守写法, 是当前必需: ``cb_data.json`` 的 ``underlying_name`` 实测只有
-    722/1059。它 08-24 曾是 1033/1058, 被一次全量条款同步清掉 317 只 ——
-    ``cb_data_sync._LOCALLY_AUTHORITATIVE_FIELDS`` 里只保护了 ``credit_rating``,
-    而 ``get_bond_terms`` 对正股名取不到时返回 None 就会盖掉本地好值
-    (与 AGENTS 里 ``delisting_date`` 那一档同形)。没有回落, 三成的行正股列直接变空。
+    722/1059。它 08-24 曾是 1033/1058, 被一次全量条款同步清掉 317 只 —— 当时全量同步是
+    整条记录替换、只保 ``credit_rating``, 而 ``get_bond_terms`` 根本不返回正股名。
+    该缺陷已修 (``cb_data_sync.locally_authoritative_fields`` 按 provider 声明的字段
+    所有权保护), 但**存量缺口要等下一次状态刷新才补得回来**, 所以回落仍是当前必需:
+    直接换成名字会让三成的行变空。
 
     两张表必须同口径 —— 它们共用「正股」这个列名。
     """
