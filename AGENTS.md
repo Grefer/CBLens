@@ -61,6 +61,19 @@ CBLens/
 └── pyproject.toml              # 包定义 + ruff 配置 (E9+F, CI 阻塞)
 ```
 
+### 关于本文里的「实测」数字
+
+本文档是**决策日志**: 每条约定后面的 `实测 …` 是**做那个决定时**量到的证据, 不是当前值。
+主池规模会随评级同步、准入判据、数据修复而变, 所以你会看到 `40/284`、`41/283`、`0/284`
+这类分母 —— 它们是那一天的池子。**分母过期不等于结论过期**: 绝大多数论证依赖的是比例或
+方向, 换个池子照样成立。
+
+凡是**承重前提本身发生了反转**的地方 (比如"行色三档全 0"、"深度低估待核 23/23 都在低估
+候选里"), 都在原处用 `2026-08-31 复测` 标了出来并说明结论翻没翻。只改分母、不重新验证
+结论, 等于伪造一次没做过的复测 —— 不要那样做。
+
+当前基线 (2026-08-31 实测): **主池 312 只 · 缓存已定价 311 行 · 全库 1059 只**。
+
 ### 五层架构
 
 1. **基础信息层**: WindPy → `data/cb_data.json` (TermsBundle)
@@ -367,12 +380,21 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   **另一条: 展示名不许暗示动作**。`深度低估待核` 的展示名曾是「市价远低于市场中位·待核」,
   而页面上恰好有一个叫「需复核」的视图 —— 两个「核」不是一回事: 那个视图是"数据/
   可交易性坏了, 去**修**", 这个标签是"数是对的、便宜是真的, 去**研究**"。名字把人往
-  那边引, 而两者方向相反: 实测带这个标签的 23 只 **23/23 都在「低估候选」里**
-  (status=ok、置信度高/中、无拦截标签, 相对偏差中位 −21.9pp), 而「需复核」当前那 1 只
-  恰恰是"这行的数不能信"。**所以不要把它并进「需复核」** —— 1 : 23 会把原来那一档整个
-  淹掉, 与「深度低估待核 / 模型高估离群 曾共用一个橙色行」是同一个形状; 更早还有一次
+  那边引, 而两者方向相反。**所以不要把它并进「需复核」** —— 与「深度低估待核 /
+  模型高估离群 曾共用一个橙色行」是同一个形状; 更早还有一次
   同源事故: 用**对称**判据把便宜侧也标成"异常", 结果唯一一只机会分 ≥8 的债被自己踢出
-  低估候选。展示名收成「市价远低于市场中位」, 只陈述事实; 该做什么由 `review_notes` 说
+  低估候选。
+  **支撑它的数据换过一次, 结论没变但更强了。** 原论证是"实测 23 只带标签的 **23/23**
+  都在「低估候选」里, 而「需复核」当前只有 1 只, 1 : 23 会把原来那一档整个淹掉" ——
+  **2026-08-31 复测这个前提已不成立**: 全池 311 行里带标签 22 只、「需复核」11 只,
+  两者**重叠 7 只** (原论证的前提是重叠 0)。但重叠不是反例, 而是**机制本身**: 那 7 只
+  恰好就是掉出「低估候选」的那 7 只 (两个集合逐元素相同), 原因在它们自己的标签里 ——
+  闻泰/三房/宏图 是「正股ST」+「评级低于AA-」+ 置信度低, 宝莱/万讯/恒逸转2/鸿路 是
+  「30天内摘牌」+「剩余不足半年」。也就是说: 一只债完全可以**又真便宜、又不能信/不能买**,
+  而这两句话回答的是不同的问题。合并会恰好在最需要区分的那 7 只上把区分抹掉。
+  (带标签行相对偏差中位 −21.8pp, 与当年的 −21.9pp 几乎不变 —— 变的是「需复核」那一侧
+  从 1 只长到 11 只。)
+  展示名收成「市价远低于市场中位」, 只陈述事实; 该做什么由 `review_notes` 说
   ("这是待检验的假设不是结论; 核实行情同日性…")。守护测试扫展示名里不许出现「核」。
   另外三处无主语的说法一并补了主语: `market_valuation` 的「判高估 N%」→
   「市价高于模型价的占 N%」; 策略页「负值越大越低估」→「负 = 市价低于理论价」。
@@ -439,7 +461,7 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   display var 由 `batch_view_label()` 算出来 (有守护测试扫这两行源码)。
   **连带**: 几处以"「低估候选」是落地页"为前提的说明要跟着改 —— 「无色」是常态
   这个事实的**依据**换了 (此前是"该视图判据上不可能有 blocked", 现在是"实测全池
-  284 行三档全 0"; 结论不变。图例要不要为这一档单列一行是另一个决定, 见
+  311 行 blocked 4 / new 2 / 无色 305"; 结论不变。图例要不要为这一档单列一行是另一个决定, 见
   `row_colour_legend` —— **该决定已落地: 那一行删掉了**)、`_BATCH_COLS_SIMPLE`
   排除「可信度」的次要理由 (主论证
   "近乎常量, 实测全池 高 219 / 中 64 / 低 1" 本就是在全池上量的, 不受影响),
@@ -456,14 +478,19 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   "估值日是不是今天"; 「市价旧」(市场没给) 与「未重算」(你没点重算) 刻意用两个词,
   上一版写成「旧价」/「算于」差一个字太容易混; 「日期不明」取代黑话「无戳」。
 - **该展示而没展示的, 先查是不是数据问题**。「正股」列一律 `underlying_name` →
-  `stock_code` **回落**, 不能直接换成名字: `cb_data.json` 实测只有 722/1059 有正股名。
-  它 08-24 曾是 1033/1058, 被一次全量 `cb-sync-tradable` 清掉 311 只 ——
-  `merge_admission_status` 有 None 保护, 而 `cb_data_sync._LOCALLY_AUTHORITATIVE_FIELDS`
-  **只有 `credit_rating`**, 所以全量同步是唯一能把它写成 None 的路径 (与 `delisting_date`
-  同形, 但那个是良性的)。**这不只是展示**: `underlying_name` / `underlying_status` 是
-  `_underlying_has_st_risk` 的两个输入, 而它是准入剔除判据 —— 拿 08-24 快照回放,
-  闻泰/三房/宏图/中装2/章鼓 5 只 ST 正股的判据现在失效 (今天恰好都被「评级过低」
-  等别的判据挡着, 没有真的漏进主池)。
+  `stock_code` **回落**, 不能直接换成名字 —— 这个字段被整批清空过一次。
+  **事故与修复 (已了结, 留档是因为机制还在)**: 2026-08-24 它是 1033/1058, 被一次全量
+  `cb-sync-tradable` 清掉 311 只, 只剩 722。`merge_admission_status` 有 None 保护, 所以
+  全量同步是唯一能把它写成 None 的路径 (与 `delisting_date` 同形, 但那个是良性的)。
+  **代价不只是展示**: `underlying_name` / `underlying_status` 是 `_underlying_has_st_risk`
+  的两个输入, 而它是准入剔除判据 —— 那几天闻泰/三房/宏图/中装2/章鼓 5 只 ST 正股的
+  判据是失效的 (当时恰好都被「评级过低」等别的判据挡着, 没有真的漏进主池)。
+  **2026-08-31 复测: 已恢复, 1034/1060 有正股名**, 上述 4 只在库的都拿回了
+  `underlying_name='*ST闻泰'` 一类的值与 `underlying_status='ST/退市风险'`, 判据正常。
+  防线也换了实现: `cb_data_sync._LOCALLY_AUTHORITATIVE_FIELDS` (那时只护 `credit_rating`
+  一个字段) 已改成 `cb_data_sync.locally_authoritative_fields(provider)`, 对 Wind
+  provider **实测护住 26 个字段**。改这个函数前先想清楚: 它是"全量同步能不能覆盖某字段"
+  的唯一闸, 松一格就是又一次静默清空。
 - **整行颜色是稀缺通道, 只留给"否决", 不许表达贵/便宜**。`_resolve_row_tag` 三档:
   `new` (未进入市场, 价格类判据一律不适用, 优先级最高) → `blocked`
   (`TRADABILITY_RISK_TAGS`, 红 + **bold**, 实测 3/284) → `nodata`
@@ -495,6 +522,10 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
      全无色是设计意图, 没有那句话它和"配色坏了"长得一模一样 (与事件横幅空态同源)。
      **代价要认**: 现在区分这两者只剩"悬停标题看得到这三档确实存在"; 换来的是不再为
      **绝大多数行的常态**常驻一行说明。要加回来先想清楚这笔账。
+     **2026-08-31 复测: "三档全 0"这个前提已不成立** —— 全池 311 行里 blocked 4 /
+     new 2 / 无色 305 (98.1%)。决策不翻, 但**依据换了**: 当初怕的是"一页全无色和配色
+     坏了长得一模一样", 而现在每页都看得见几行染色的, 那个歧义本身就小了。
+     若哪天染色行又归零 (整批 blocked 被修掉), 这笔账要重算。
   ③ **逐行按各自颜色/字重渲染, 不写色名**。中间有一版因为 tooltip 是纯文本, 只能靠
      一张 `_TAG_APPEARANCE` 把「红色加粗」写成文字; 上色之后那张表**删掉** —— 在一行
      本来就是红色加粗的字前面写「红色加粗 =」是在说读者眼前就能看见的东西, 而且它是
@@ -650,7 +681,7 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   (21 期约 +4.8pp)。CLI 一直是剔的 (`cli/market_valuation.py` 里
   `if s.date != snapshot.date`), GUI 的 `valuation_banner` 没剔, 于是同一个中位偏差
   在两个地方给出不同分位、两边都不报错。已收口到
-  `_history_medians(history, exclude_date=)`。**守护用例的 fixture 要取中段值** ——
+  `baseline_medians(history, exclude_date=)`。**守护用例的 fixture 要取中段值** ——
   当期取极值时含不含自己都是 100%, 那种 fixture 会把真 bug 测成绿的。
 - **分位基线每季度只取一条 (`baseline_medians`), 而且去重在读侧**。
   `cb_valuation_history.json` 混了两种采样频率: 前 18 期是季度末 (相邻间隔中位 91 天,
@@ -856,7 +887,7 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 ### BondTerms 字段约定
 
 `BondTerms` dataclass 有 30+ 字段。新增字段需要同步更新:
-1. `data_providers.py` 中的 `BondTerms` dataclass
+1. `data_providers/base.py` 中的 `BondTerms` dataclass (`data_providers` 是包不是文件)
 2. 对应 Provider 的 `get_bond_terms()` 实现
 
 序列化无需手动登记: `cache.py` 中的 `_json_dict_to_terms()` 通过 `dataclasses.fields(BondTerms) + get_type_hints` 自动识别 `date` 与 `tuple` 字段; 只要字段类型注解写对就会被正确反序列化。
@@ -987,7 +1018,8 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   **全量 `cb-sync-tradable` 这条路也要堵**: `get_bond_terms` 照常返回冻结值, 一次全量重建
   就把第三方刷来的值整批盖回去 —— 实测 15 只已下调到 A-/A/BBB 的债被还原, 主池 285 → 301,
   那 15 只全是刚被"评级过低"正确剔除的 (中装转2 CC→AA、宏图转债 CC→A)。
-  `cb_data_sync._LOCALLY_AUTHORITATIVE_FIELDS` 让本地非空值胜出, 空值仍由 Wind 兜底。
+  `cb_data_sync.locally_authoritative_fields(provider)` 让本地非空值胜出, 空值仍由 Wind 兜底
+  (Wind 侧实测护住 26 个字段; 早期是一个只含 `credit_rating` 的常量)。
   **另一个副作用是良性的**: `get_bond_terms` 不取 `delisting_date` (只有
   `get_admission_status` 取), 所以全量同步会把它清成 None —— 但存续券的 `delist_date`
   恒等于 `maturity_date` (零信息量, 且是未来日期不触发剔除), 跑一次每日状态刷新即恢复。
@@ -1169,7 +1201,7 @@ patch 自洽 / 交叉校验 / 不变量, 外加 `--online` 的**外部对照**�
 cb-gui                                      # GUI
 cb-screen-pool --min-rating AA-             # 准入筛选报告
 cb-sync-tradable                            # 全量同步基础条款
-cb-sync-admission-status                    # 刷新状态 (全库 1058 只约 30min; --limit 仅调试用)
+cb-sync-admission-status                    # 刷新状态 (全库约 1059 只, 约 30min; --limit 仅调试用)
 cb-sync-events --apply                      # 同步公告事件并应用回 cb_data
 cb-valuation                                # 大类估值/择时信号 (--record 入基线)
 cb-strategy-backtest --start 2025-01-01 --end 2026-01-01 --freq M  # 策略回测 (--cache-dir 复跑提速)

@@ -71,6 +71,7 @@ CustomTkinter GUI 覆盖完整研究流：
 - **批量页**：全市场候选筛选（按当期横截面相对便宜度排序）
 - **定价页**：单债钻取 + 隐含波动率反解
 - **回测页**：历史模型偏差复盘
+- **策略页**：选债策略回测（调仓/持仓/基准/归因）
 - **敏感性页**：σ-S 热力图 + 报告导出
 
 </td>
@@ -278,7 +279,7 @@ CBLens/
 ├── convertible_bond/           # 主包
 │   ├── pricer.py               # PDE 定价引擎
 │   ├── pricing_api.py          # provider 驱动的单只/批量定价 helper
-│   ├── data_providers.py       # Wind / akshare / CSV 数据源
+│   ├── data_providers/         # Wind / akshare / CSV 数据源 (base / wind / akshare / csv_provider / auto)
 │   ├── cache.py                # TermsBundle / TermsCache / CachedBondDataProvider
 │   ├── batch_pricing.py        # 公开交易筛选、相对偏差、风险标签、批量结果缓存
 │   ├── admission_status.py     # 停牌、强赎、摘牌、ST、成交额等状态刷新
@@ -301,7 +302,7 @@ CBLens/
 
 | 文档 | 说明 |
 | --- | --- |
-| 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 五大页面、CLI 命令、Python API、常见问题排障 |
+| 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 六大页面、CLI 命令、Python API、常见问题排障 |
 | 🎨 [品牌说明](docs/BRAND.md) | 项目名称由来、图标含义、调色板与使用建议 |
 | 📦 [数据说明](data/README.md) | `cb_data.json`、`cb_events.json` 字段定义与刷新节奏 |
 | 🔧 [维护约定](AGENTS.md) | 给 agent 和维护者看的项目级上下文与编码规范 |
