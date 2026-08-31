@@ -178,11 +178,13 @@ def test_batch_pricing_exclusion_reason_blocks_hard_risks():
         BondTerms(sec_name="南银转债", last_trading_date=date(2026, 5, 10)),
         on_date=check_date,
     ) is None
+    # 正股 ST **不再**硬剔除: 风险较大 ≠ 不能交易, ST 正股的转债照常挂牌撮合。
+    # 改由「正股风险」标签承载, 见 test_underlying_st_is_a_tag_not_an_exclusion。
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", underlying_name="*ST 测试"),
         on_date=check_date,
-    ) == "正股 ST/退市风险"
+    ) is None
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", bond_turnover_amount=400.0),
@@ -202,10 +204,19 @@ def test_batch_pricing_exclusion_reason_blocks_hard_risks():
         on_date=check_date,
         min_outstanding_balance=0.5,
     ) == "余额过小"
+    # 评级默认**不再**硬剔除 (与余额同形): A 级债照常挂牌撮合, 准入层只管"买不买得到"。
+    # 筛选口径下沉到 ScoreStrategyConfig.min_credit_rating (默认 AA-, 比原来的 A+ 还严),
+    # 展示层由「低评级」标签承载。显式传阈值仍然生效 —— cb-screen-pool --min-rating 走这条。
     assert batch_pricing_exclusion_reason(
         "113050.SH",
         BondTerms(sec_name="南银转债", credit_rating="A"),
         on_date=check_date,
+    ) is None
+    assert batch_pricing_exclusion_reason(
+        "113050.SH",
+        BondTerms(sec_name="南银转债", credit_rating="A"),
+        on_date=check_date,
+        min_credit_rating="AA-",
     ) == "评级过低"
 
 
@@ -458,10 +469,11 @@ def test_missing_listing_date_alone_is_not_enough_to_exclude():
     实测全库"有起息日却没上市日"的 35 只, 而"有上市日却没起息日"的 **0 只**: 两个都缺
     才是确定的信号, 缺一个不是。
     """
+    # 已发行未上市**进主池** (2026-08-31 起): 它们后续会挂牌, 正是最值得提前盯的一批。
     fresh = BondTerms(sec_name="强达转债", issue_date=date(2026, 8, 19),
                       listing_date=None, maturity_date=date(2032, 8, 19))
     assert batch_pricing_exclusion_reason(
-        "123284.SZ", fresh, on_date=date(2026, 8, 20)) == "已发行未上市"
+        "123284.SZ", fresh, on_date=date(2026, 8, 20)) is None
 
     old = BondTerms(sec_name="岭南转债", issue_date=date(2018, 8, 14), listing_date=None,
                     maturity_date=date(2030, 1, 1), conversion_price=10.0,
@@ -534,8 +546,17 @@ def test_upcoming_tradable_cache_includes_issued_but_unlisted():
     assert by_code["123284.SZ"]["K"] == 84.04
 
 
-def test_exclusion_reason_reports_issued_but_unlisted():
-    """已发行未上市既买不到也没有市价可比 — 归"扫新债"关注池而不是主池."""
+def test_issued_but_unlisted_enters_the_pool_and_is_flagged_as_new():
+    """已发行未上市**进主池** —— 它后续会挂牌, 值得提前算理论价、提前盯。
+
+    此前归"扫新债"关注池而不进主池, 于是主表上根本看不见它们。放进来是安全的:
+    行色的 ``new`` 档优先级最高 (价格类判据一律不适用), 策略层的有效性守卫要求有效
+    市价所以进不了候选, 基准没有价格序列所以自然不进。唯一要额外挡的是估值基线的
+    覆盖率分母 —— 见 ``market_valuation._usable_deviations``。
+
+    ``is_tradable`` 对这一档天然是 False (``infer_cb_trading_metadata`` 的输出),
+    所以准入层必须**同时**给「不可交易」那道闸让路, 否则只是换个原因串继续剔。
+    """
     terms = BondTerms(
         sec_name="强达转债",
         issue_date=date(2026, 8, 19),
@@ -543,14 +564,25 @@ def test_exclusion_reason_reports_issued_but_unlisted():
         maturity_date=date(2032, 8, 19),
         credit_rating="AA-",
         outstanding_balance=5.5,
+        is_tradable=False,               # ← 派生字段, 不该把它挡在池外
+        trading_status="pending",
     )
-    reason = batch_pricing_exclusion_reason(
-        "123284.SZ", terms, on_date=date(2026, 8, 20))
-    assert reason == "已发行未上市"
+    assert batch_pricing_exclusion_reason(
+        "123284.SZ", terms, on_date=date(2026, 8, 20)) is None
+    assert batch_pricing.is_unlisted_new_bond(terms, date(2026, 8, 20)) is True
 
-    listed = replace(terms, listing_date=date(2026, 8, 25))
+    listed = replace(terms, listing_date=date(2026, 8, 25),
+                     is_tradable=True, trading_status="tradable")
     assert batch_pricing_exclusion_reason(
         "123284.SZ", listed, on_date=date(2026, 9, 1)) is None
+    assert batch_pricing.is_unlisted_new_bond(listed, date(2026, 9, 1)) is False
+
+    # 而**真的**不可交易 (无上市痕迹、非 pending) 仍然被剔
+    dead = BondTerms(sec_name="某定转", issue_date=date(2020, 1, 1),
+                     listing_date=date(2020, 2, 1), maturity_date=date(2030, 1, 1),
+                     is_tradable=False, trading_status="private_unknown")
+    assert batch_pricing_exclusion_reason(
+        "123284.SZ", dead, on_date=date(2026, 8, 20)) == "不可交易"
 
 
 def test_merge_upcoming_pricing_results_adds_theoretical_price():
@@ -832,11 +864,15 @@ def _annotated(**overrides):
     (0.0, "余额清零"),        # 已转股完毕/已赎回, 是退市信号不是"数据异常"
     (0.15, "触及摘牌线"),      # 低于 3,000 万法定线, 交易所将安排停止交易
     (0.29, "触及摘牌线"),
-    (0.35, "临近摘牌线"),
+    # 0.3~0.5 亿原本是「临近摘牌线」, 该档 2026-08-31 退役 —— 那一刻既无法定依据 (法定线是
+    # 0.3) 也不对应任何策略阈值 (min_outstanding_balance=1.0), 且主池在每个可测日期上都是空的。
+    # 落进这条带的债改打「小余额」, 阈值严格更宽, 不会漏标。
+    (0.35, "小余额"),
     (0.80, "小余额"),
 ])
 def test_balance_tags_follow_statutory_delisting_line(balance, tag):
     assert tag in _annotated(outstanding_balance=balance)["risk_tags"]
+    assert "临近摘牌线" not in _annotated(outstanding_balance=balance)["risk_tags"]
 
 
 def test_normal_balance_gets_no_balance_tag():
@@ -957,15 +993,33 @@ def test_dimensions_partition_the_tag_space():
     assert sum(len(tags_in(d)) for d in dims) == len(RISK_TAG_DIMENSION)
 
 
-def test_strategy_exclude_set_is_frozen_independently_of_display_tags():
-    """策略默认排除集与批量页展示用的 HARD_REVIEW_TAGS **必须解耦**。
+def test_strategy_selection_does_not_read_the_display_tag_set_at_all():
+    """标签是给全池标的做**标注**的; 策略层用自己的数值阈值筛, 不吃标签。
 
-    它曾写成 tuple(sorted(HARD_REVIEW_TAGS)) —— 那样任何为了改展示而增删标签的动作都会
-    自动变成默认选债行为变更 (实测该集合极敏感: 改成只排数据+可交易, 候选池 59 → 262)。
+    这条守护的意图没变, 机制换了、而且更强: 它此前钉的是"策略默认排除集必须与
+    ``HARD_REVIEW_TAGS`` 解耦"(因为曾写成 ``tuple(sorted(HARD_REVIEW_TAGS))``, 于是
+    任何为改展示而增删标签的动作都自动变成默认选债行为变更)。现在策略层**根本不读标签**,
+    那条耦合从源头上不存在了 —— 展示层怎么改标签都不可能影响选债。
+
+    ``exclude_risk_tags`` 保留为兼容字段 (旧快照能原样回放), 默认空。
     """
     from convertible_bond.strategy_backtest import ScoreStrategyConfig
-    assert set(ScoreStrategyConfig().exclude_risk_tags) == set(LEGACY_STRATEGY_EXCLUDE_TAGS)
-    # 拦截集只含数据质量 + 可交易性; 冻结集是历史快照, 两者本就不同
+
+    cfg = ScoreStrategyConfig()
+    assert cfg.exclude_risk_tags == (), "默认配置不该再靠标签筛"
+
+    # 默认阈值**逐条等于**它取代的那 6 个真在工作的标签的判据
+    assert cfg.max_model_premium == 0.45          # 模型溢价高
+    assert cfg.max_relative_deviation == 0.20     # 模型高估离群
+    assert cfg.min_years_to_maturity == 0.5       # 短久期
+    assert cfg.max_sigma == 0.80                  # 高HV
+    assert cfg.min_credit_rating == "AA-"         # 低评级
+    assert cfg.min_outstanding_balance == 1.0     # 小余额 (同时覆盖余额那一族的四个刻度)
+    assert cfg.exclude_underlying_st is True      # 正股风险
+    assert cfg.exclude_underlying_limit_down is True  # 正股跌停
+
+    # 冻结集本身**保留**: 旧快照里存着它, 回放要认得
+    assert "低评级" in LEGACY_STRATEGY_EXCLUDE_TAGS
     assert set(LEGACY_STRATEGY_EXCLUDE_TAGS) != tags_in("数据质量", "可交易性")
 
 
@@ -1457,3 +1511,144 @@ def test_full_pool_view_sorts_by_listing_date_newest_first():
              {"bond_code": "B", "status": "ok", "relative_deviation": -0.20}]
     assert [r["bond_code"]
             for r in sort_batch_results_for_view(cheap, "低估候选")] == ["B", "A"]
+
+
+def test_underlying_st_is_a_tag_not_an_exclusion():
+    """正股 ST 是「风险较大」而不是「不能交易」—— 四条约定一次钉住.
+
+    ST 正股的转债照常挂牌撮合 (实测 2026-08-31 主池外的 4 只: 闻泰/三房/宏图/章鼓)。
+    硬剔除把这层信息表达成"这只债不存在", 而准入层的契约是只剔真的买不到的。
+    ``_underlying_limit_down_threshold`` 的注释早就写着"ST 风险进入复核标签, 不作为
+    主池硬剔除" —— 此前代码与那句话是分叉的。
+    """
+    terms = BondTerms(sec_name="章鼓转债", underlying_name="ST章鼓", underlying_status="是")
+
+    # ① 进得了主池
+    assert batch_pricing_exclusion_reason("127093.SZ", terms, on_date=date(2026, 8, 31)) is None
+
+    row = annotate_batch_result({
+        "bond_code": "127093.SZ", "status": "ok",
+        "underlying_name": "ST章鼓", "underlying_status": "是",
+        "market_price": 120.0, "theoretical_price": 100.0, "deviation": 0.2,
+    })
+
+    # ② 表上看得见
+    assert "正股风险" in row["risk_tags"]
+
+    # ③ 但**不拦路**: 标的风险维, 不进拦截集 —— 否则「低估候选」会把它筛掉,
+    #    整行还会被染成红色加粗的「买卖受限」, 而那一档收的是真的下不了单的债。
+    assert batch_pricing.RISK_TAG_DIMENSION["正股风险"] == batch_pricing.DIM_ISSUER
+    assert "正股风险" not in batch_pricing.BLOCKING_RISK_TAGS
+    assert "正股风险" not in batch_pricing.TRADABILITY_RISK_TAGS
+
+    # ④ 自动选债仍然不碰它 —— 这次改动对策略结果零影响
+    assert "正股风险" in LEGACY_STRATEGY_EXCLUDE_TAGS
+    assert "正股风险" in HARD_REVIEW_TAGS
+    assert row["model_signal_status"] == "不适合作为买入信号"
+
+
+def test_last_trading_date_stays_a_hard_exclusion():
+    """对照组: 「已过最后交易日」是真的买不到, 必须留在硬剔除里。"""
+    assert batch_pricing_exclusion_reason(
+        "127033.SZ",
+        BondTerms(sec_name="中装转2", last_trading_date=date(2026, 8, 1)),
+        on_date=date(2026, 8, 31),
+    ) == "已过最后交易日"
+
+
+def test_limit_down_threshold_knows_main_board_st_is_five_percent():
+    """主板 ST/*ST 的日涨跌幅限制是 **±5%**, 不是 10%.
+
+    此前只有两档 (创业板/科创板 −19.5, 其余 −9.5), 于是主板 ST 股跌停当天
+    ``underlying_pct_change`` 只有 −5.0, 判据 ``pct <= -9.5`` **恒为假** ——
+    「正股跌停」对这一整类结构性不亮。
+
+    它此前不出事是因为这条路是死的: ST 债在准入层就被剔了, 根本走不到标注。
+    2026-08-31 把 ST 降级成标签之后它第一次真正生效, 而策略层的
+    ``exclude_underlying_limit_down`` 也直接读它 —— 不修的话, ST 正股跌停当天,
+    S0 钉在跌停板上算出的理论价照常产出、偏差照常偏负、行无色、直接进「低估候选」。
+
+    **创业板/科创板不分叉**: 那两个板的 ±20% 是板块级规则, ST 不改变它。
+    """
+    st_row = {"underlying_name": "*ST闻泰", "underlying_status": "是",
+              "stock_code": "600745.SH"}
+    plain_row = {"underlying_name": "闻泰科技", "underlying_status": "否",
+                 "stock_code": "600745.SH"}
+
+    # 三档阈值
+    assert batch_pricing._underlying_limit_down_threshold("600745.SH", is_st=True) == -4.5
+    assert batch_pricing._underlying_limit_down_threshold("600745.SH", is_st=False) == -9.5
+    assert batch_pricing._underlying_limit_down_threshold("300123.SZ", is_st=True) == -19.5
+    assert batch_pricing._underlying_limit_down_threshold("688001.SH", is_st=True) == -19.5
+
+    # 主板 ST 真实跌停 −5.0% 必须识别得出来 (这正是修复前漏掉的那一档)
+    assert batch_pricing._underlying_at_limit_down({**st_row, "underlying_pct_change": -5.0},
+                                                   "600745.SH") is True
+    assert batch_pricing._underlying_at_limit_down({**st_row, "underlying_pct_change": -4.0},
+                                                   "600745.SH") is False
+    # 同一只股票不带 ST 时 −5% 只是普通下跌
+    assert batch_pricing._underlying_at_limit_down({**plain_row, "underlying_pct_change": -5.0},
+                                                   "600745.SH") is False
+    assert batch_pricing._underlying_at_limit_down({**plain_row, "underlying_pct_change": -10.0},
+                                                   "600745.SH") is True
+
+    # 创业板 ST 仍走 20% 档 —— 板块规则压过 ST
+    cyb_st = {"underlying_name": "ST某某", "underlying_status": "是",
+              "stock_code": "300123.SZ"}
+    assert batch_pricing._underlying_at_limit_down({**cyb_st, "underlying_pct_change": -5.0},
+                                                   "300123.SZ") is False
+    assert batch_pricing._underlying_at_limit_down({**cyb_st, "underlying_pct_change": -20.0},
+                                                   "300123.SZ") is True
+
+    # ST 判定与「正股风险」标签共用同一个判据 —— 同一行不许一边说 ST 一边按非 ST 判跌停
+    assert batch_pricing._underlying_has_st_risk(st_row) is True
+    assert batch_pricing._underlying_has_st_risk(plain_row) is False
+
+
+def test_retired_tags_have_no_append_site_but_stay_registered():
+    """已退役标签的契约: **没有 append 现场, 但必须仍在维度表里**.
+
+    留在 ``RISK_TAG_DIMENSION`` 不是懒得删 —— 消费者是按维度派生的
+    (``TRADABILITY_RISK_TAGS`` / ``DATA_QUALITY_RISK_TAGS`` / ``BLOCKING_RISK_TAGS``
+    全走 ``tags_in()``)。字符串一旦不在册, 旧缓存里带着它的行就查不到维度, 行色与视图
+    归属会**静默**改变 —— 而 ``data/batch_pricing_cache.json`` 与
+    ``data/strategy_backtest_snapshots/`` 里存的正是这些字符串。
+
+    这是既有做法 (偏差异常 / 极小余额 / 余额异常 一直如此), 这次只是给了它一个明确清单。
+    """
+    import inspect
+    import re
+
+    appended = set(re.findall(r'risk_tags\.append\("([^"]+)"\)',
+                              inspect.getsource(batch_pricing)))
+
+    for tag in batch_pricing.RETIRED_RISK_TAGS:
+        assert tag in RISK_TAG_DIMENSION, f"{tag} 退役了但从维度表里删掉了 —— 旧缓存会静默改行为"
+        assert tag not in appended, f"{tag} 登记为已退役, 但代码里还有 append 现场"
+
+    # 反向: 没登记退役的标签必须都有 append 现场 (否则就是漏登记的死标签)
+    orphans = set(RISK_TAG_DIMENSION) - appended - set(batch_pricing.RETIRED_RISK_TAGS)
+    assert not orphans, f"这些标签没有 append 现场却没登记进 RETIRED_RISK_TAGS: {sorted(orphans)}"
+
+
+def test_missing_balance_and_rating_no_longer_tagged():
+    """余额/评级缺失不再打标签 —— 它们检测的是从不缺失的字段。
+
+    实测: 主池 0/311 缺失, 全库 1059 只里余额缺 2 (含日升转债那只撤销发行的幽灵债,
+    已被「无发行与上市日期」剔除)、评级缺 1, 7 个历史快照一致且全部在池外。
+    与「无市价」的不对称是这次保留后者的理由: 市价来自每日 HTTP 端点 (本月真的挂过),
+    而余额与评级来自本地条款库 —— cb_data.json 读不出来时是全字段一起失败。
+
+    顺带修掉一个错误的连带效果: 两者都是 DIM_DATA 因此进 ``BLOCKING_RISK_TAGS``,
+    于是"评级取不到"会把整行染灰并踢出「低估候选」, 而「评级」列只会渲染一个「—」。
+    """
+    no_balance = _annotated(outstanding_balance=None)
+    no_rating = _annotated(credit_rating=None)
+
+    assert "无余额" not in no_balance["risk_tags"]
+    assert "无评级" not in no_rating["risk_tags"]
+    # 也不该被拦截集吃掉
+    assert not (set(no_balance["risk_tags"]) & batch_pricing.BLOCKING_RISK_TAGS)
+    assert not (set(no_rating["risk_tags"]) & batch_pricing.BLOCKING_RISK_TAGS)
+    # 而「无市价」保留 —— 它的数据源确实会挂
+    assert "无市价" in _annotated(market_price=None)["risk_tags"]

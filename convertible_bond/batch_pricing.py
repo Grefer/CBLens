@@ -140,21 +140,48 @@ DIM_ISSUER = "标的风险"
 DIM_TRADABILITY = "可交易性"
 DIM_OPPORTUNITY = "机会信号"
 
+#: 已退役的标签: 代码里**没有 append 点**, 只可能从旧缓存/旧快照里读回来。
+#:
+#: 它们仍然登记在 ``RISK_TAG_DIMENSION`` 里 (而不是删掉), 因为消费者是按维度派生的 ——
+#: ``TRADABILITY_RISK_TAGS`` / ``DATA_QUALITY_RISK_TAGS`` / ``BLOCKING_RISK_TAGS`` 都走
+#: ``tags_in(...)``, 一旦某个字符串不在册, 旧缓存里带着它的行就查不到维度, 行色与视图归属
+#: 会静默改变。留在册 = 旧数据读回来行为不变, 这是既有做法 (偏差异常 / 极小余额 / 余额异常
+#: 一直就是这么处理的), 只是此前没有一个明确的清单。
+#:
+#: 有守护测试比对: 这里的每一个都必须**没有** ``risk_tags.append`` 现场, 且必须仍在
+#: ``RISK_TAG_DIMENSION`` 里。
+RETIRED_RISK_TAGS: frozenset[str] = frozenset({
+    "偏差异常",      # 拆成「模型高估离群」/「深度低估待核」之前的对称旧名
+    "极小余额",      # 余额那一族早期的扁平名
+    "余额异常",      # 同上
+    "无余额",        # 2026-08-31 退役: 字段从不缺失 (主池 0/311, 全库 2/1059 且全在池外)
+    "无评级",        # 2026-08-31 退役: 同上 (全库 1/1059)
+    "临近摘牌线",    # 2026-08-31 退役: 0.3~0.5 亿这条带主池恒空, 落进来的债改打「小余额」
+})
+
+
 RISK_TAG_DIMENSION: dict[str, str] = {
-    "数据缺口": DIM_DATA, "无偏差": DIM_DATA, "无HV": DIM_DATA, "无余额": DIM_DATA,
-    "无评级": DIM_DATA, "无市价": DIM_DATA, "理论价异常": DIM_DATA,
+    "数据缺口": DIM_DATA, "无偏差": DIM_DATA, "无HV": DIM_DATA,
+    "无市价": DIM_DATA, "理论价异常": DIM_DATA,
+    "无余额": DIM_DATA, "无评级": DIM_DATA,     # ← 已退役, 见 RETIRED_RISK_TAGS
 
     "高HV": DIM_MODEL, "较高HV": DIM_MODEL, "模型溢价高": DIM_MODEL,
     "模型高估离群": DIM_MODEL, "下修贡献高": DIM_MODEL, "下修减值": DIM_MODEL,
-    "偏差异常": DIM_MODEL,                      # legacy 名, 旧缓存里还有
+    "偏差异常": DIM_MODEL,                      # ← 已退役
 
-    "低评级": DIM_ISSUER, "小余额": DIM_ISSUER, "临近摘牌线": DIM_ISSUER,
+    "低评级": DIM_ISSUER, "小余额": DIM_ISSUER,
     "触及摘牌线": DIM_ISSUER, "短久期": DIM_ISSUER, "近到期": DIM_ISSUER,
-    "极小余额": DIM_ISSUER,                     # legacy 名
+    "临近摘牌线": DIM_ISSUER,                   # ← 已退役
+    "极小余额": DIM_ISSUER,                     # ← 已退役
+    # 「正股风险」归**标的风险**而不是可交易性: ST 正股的转债照常挂牌撮合, 它描述的是
+    # 这个发行人有多危险 (与「低评级」同族), 不是"今天买不到"。归可交易性会让它进
+    # BLOCKING_RISK_TAGS —— 那会把它从「低估候选」里筛掉、并把整行染成红色加粗的
+    # 「买卖受限」, 而那一档收的是 临近摘牌 / 正股停牌 / 转债停牌 这种真的下不了单的。
+    "正股风险": DIM_ISSUER,
 
-    "余额清零": DIM_TRADABILITY, "正股风险": DIM_TRADABILITY, "正股停牌": DIM_TRADABILITY,
+    "余额清零": DIM_TRADABILITY, "正股停牌": DIM_TRADABILITY,
     "转债停牌": DIM_TRADABILITY, "正股跌停": DIM_TRADABILITY, "临近摘牌": DIM_TRADABILITY,
-    "余额异常": DIM_TRADABILITY,                # legacy 名
+    "余额异常": DIM_TRADABILITY,                # ← 已退役
 
     "转股折价": DIM_OPPORTUNITY, "贴近转股价值": DIM_OPPORTUNITY,
     "模型低估": DIM_OPPORTUNITY, "深度低估待核": DIM_OPPORTUNITY,
@@ -250,6 +277,11 @@ HARD_REVIEW_TAGS = {
 # → 125 只; 去掉「模型溢价高」→ 94 只。量级变更, 绝不能作为展示层重构的副作用发生。
 #
 # 因此把它冻结在这里, 与 HARD_REVIEW_TAGS 解耦。要改它请单独立项并走完治理三条。
+#
+# 「正股风险」**刻意留在集合里**: 准入层已不再硬剔除 ST 正股 (改由标签承载), 但策略层
+# 是自动选债, 那里排除它才让这次改动对**策略结果零影响** —— ST 的债此前根本进不了池,
+# 现在进池了但被这个标签挡在候选之外, 两条路的结果逐只相同。要让策略也买 ST, 那是另一个
+# 决定 (走治理三条), 不该作为"准入层降级成标签"的副作用发生。
 LEGACY_STRATEGY_EXCLUDE_TAGS = frozenset({
     "高HV", "余额清零", "触及摘牌线", "临近摘牌线", "小余额", "短久期",
     "低评级", "模型溢价高", "数据缺口", "无市价", "理论价异常",
@@ -288,7 +320,18 @@ DEFAULT_DELIST_WINDOW_DAYS = 0
 # 的日期判据接管, 剔除理由也从"余额过小"变成诚实的"已退市"。余额本身改由风险标签表达。
 # 字段与语义保留, 想恢复硬过滤填个数值即可。
 DEFAULT_MIN_OUTSTANDING_BALANCE: float | None = None
-DEFAULT_MIN_CREDIT_RATING: str | None = "A+"
+# 评级**不再**是准入硬过滤 (2026-08-31), 与余额那次降级同形。
+#
+# 准入层的职责是"买不买得到", 而 A 级债照常挂牌撮合 —— 硬剔除把"信用风险大"表达成了
+# "这只债不存在"。实测它是准入层最后一条策略口径的剔除: 全库 12 条剔除原因里其余全是
+# "已退市/已到期/停牌/已过最后交易日"这类真买不到的, 或"定向债/非沪深段"这类根本不是标的。
+#
+# 降级是安全的, 因为筛选口径已经下沉到策略层: ``ScoreStrategyConfig.min_credit_rating``
+# 默认 "AA-"(比这里的 A+ 还严), 低评级债进得了全池但进不了策略候选。展示层由「低评级」
+# 标签承载 (< AA-, 实测能接住原本被剔的 27 只中的 27 只)。
+#
+# 仍保留为**可选参数**: ``cb-screen-pool --min-rating AA-`` 照常生效。
+DEFAULT_MIN_CREDIT_RATING: str | None = None
 _UNDERLYING_ST_KEYWORDS = ("ST", "*ST", "退市风险", "风险警示", "暂停上市", "终止上市", "退市")
 _UNDERLYING_SUSPENSION_KEYWORDS = ("停牌", "暂停交易", "停止交易")
 _RATING_SCORES = {
@@ -528,15 +571,39 @@ def batch_pricing_exclusion_reason(
     status_reason = _public_trading_status_reason(terms)
     if status_reason:
         return status_reason
-    if is_issued_pending_listing(raw_code, terms, check_date):
-        # 已发行但还没挂牌: 买不到, 也没有市价可比 —— 归"扫新债"关注池而不是主池
-        return "已发行未上市"
+    # 已发行未上市**不再剔除** (2026-08-31): 它们后续会挂牌, 正是最值得提前算理论价、
+    # 提前盯的一批。此前归"扫新债"关注池而不进主池, 于是主表上看不见它们。
+    #
+    # 三条连锁都已就位, 所以放进来是安全的:
+    #   · 行色: `_resolve_row_tag` 的 `new` 档优先级最高, 语义就是"还没进入市场,
+    #     价格类判据一律不适用" —— 它们天然带的「无市价」「无偏差」不会被误染成 nodata;
+    #   · 策略层: `_candidate_filter_reason` 的有效性守卫要求有效市价, 新债进不了候选;
+    #   · 基准: 没有价格序列 → `_execution_price_point` 返回 None → 自然不进等权基准。
+    #
+    # 唯一需要额外挡一道的是**估值基线的覆盖率闸**: 新债没有市价是天然状态而不是取数
+    # 失败, 放进分母会稀释覆盖率 (实测在途新债超过 35 只就把 90% 的闸压住)。
+    # 见 `market_valuation._usable_deviations` 与 `is_unlisted_new_bond`。
+    #
+    # 「🆕 扫新债」不受影响: `list_upcoming_tradable_from_cache` 读的是
+    # `trading_status == "pending"` 与 `is_issued_pending_listing`, 不是这个原因串。
     if _never_entered_market(terms):
         return "无发行与上市日期"
-    if is_tradable is False:
+    pending_listing = is_issued_pending_listing(raw_code, terms, check_date)
+    if is_tradable is False and not pending_listing:
+        # 已发行未上市的债 ``is_tradable`` 天然是 False (``infer_cb_trading_metadata``
+        # 的输出), 所以放行「已发行未上市」之后必须在这里也给它让路 —— 否则它只是
+        # 换个原因串 (「不可交易」) 继续被剔, 改动等于没做。
+        # 这一档剩下的是**真的**不可交易: 定向债、非公开标的等。
         return "不可交易"
-    if _underlying_has_st_risk(terms):
-        return "正股 ST/退市风险"
+    # 正股 ST/退市风险**不在这里剔除** —— 它是"风险较大"而不是"不能交易": ST 正股的转债
+    # 照常挂牌撮合, 只是波动更大、退市尾部风险更高。硬剔除把这层信息表达成"这只债不存在",
+    # 而准入层的契约是「字段明确才剔除」+「只剔真的买不到的」。
+    #
+    # 改由「正股风险」标签承载 (标的风险维): 表上看得见、可排序、可导出, 且
+    # ``HARD_REVIEW_TAGS`` 让它的 ``model_signal_status`` 落到"不适合作为买入信号"、
+    # ``LEGACY_STRATEGY_EXCLUDE_TAGS`` 让策略层照旧排除它 —— 净效果是"人看得到, 自动选债
+    # 仍然不碰"。``_underlying_limit_down_threshold`` 的注释早就写着"ST 风险进入复核标签,
+    # 不作为主池硬剔除", 这里此前与那句话是分叉的。
     if _underlying_suspended(terms):
         return "正股停牌"
     turnover = finite_float(_terms_value(terms, "bond_turnover_amount"))
@@ -586,6 +653,39 @@ def batch_pricing_exclusion_reason(
 # 上市首日标着"盘中停牌"、当天成交 2.57 亿, 却被这条判据整只踢出主池。这类词必须先于
 # 通用的"停牌"关键词识别, 否则子串匹配会先命中。
 _INTRADAY_HALT_KEYWORDS = ("盘中停牌", "临时停牌", "盘中临停")
+
+
+def is_unlisted_new_bond(row: Any, on_date: date | None = None) -> bool:
+    """这一行是不是"还没挂牌的新债" —— **日期是硬证据, 压过派生字段**。
+
+    单一事实源: 库层 (估值基线的覆盖率分母) 与 GUI 层 (行色的 ``new`` 档、关注池的
+    ``market_price_coverage``) 共用它。两处各写一份正是这个仓库反复踩的形状。
+
+    判据顺序不能反 (见 ``infer_cb_trading_metadata`` 里那段自我确认陷阱):
+    ``is_tradable`` / ``trading_status`` 是**派生**字段 —— 公募转债的数据源根本不提供,
+    关注池里更是加入那一刻冻结的快照, 一只债在"已发行未上市"时被扫进来、此后真的挂牌了,
+    ``watchlist.json`` 里那个 ``pending`` 也不会自己翻回来。而**已经过去的上市日**是
+    "确实挂牌了"的正面证据。所以: 未来日期 → 新债; 日期已过 → 不是新债;
+    一个日期都没有才回落到派生字段 ("已发行未上市"正是这一档)。
+    """
+    check_date = on_date or market_today()
+    listed = False
+    for key in ("tradable_date", "listing_date"):
+        d = _terms_date(row, key)
+        if d is None:
+            continue
+        if d > check_date:
+            return True
+        listed = True
+    if listed:
+        return False
+    is_tradable = _terms_value(row, "is_tradable")
+    status = str(_terms_value(row, "trading_status") or "").strip().lower()
+    if is_tradable is True or status in {"tradable", "private_tradable"}:
+        return False
+    if is_tradable is False or status in {"pending", "private_pending"}:
+        return True
+    return False
 
 
 def _never_entered_market(terms: Any) -> bool:
@@ -655,10 +755,19 @@ def _underlying_suspended(terms: Any) -> bool:
     return _text_contains_any(f"{trade_status} {status}", _UNDERLYING_SUSPENSION_KEYWORDS)
 
 
-def _underlying_limit_down_threshold(stock_code: Any) -> float:
-    """正股跌停阈值 (%, 负数). 创业板/科创板 20%, 其余主板 10%.
+def _underlying_limit_down_threshold(stock_code: Any, *, is_st: bool = False) -> float:
+    """正股跌停阈值 (%, 负数).
 
-    ST 正股的 5% 限制不在此处理: ST 风险进入复核标签, 不作为主池硬剔除。
+    三档, 按**板块**而不是按公司: 创业板 (30x) / 科创板 (68x) 一律 20% —— 那是板块级
+    规则, ST 不改变它; 沪深主板普通股 10%, 而**主板的 ST/*ST 是 5%**。
+
+    ``is_st`` 这一档此前不存在, 于是主板 ST 股跌停当天 ``underlying_pct_change``
+    只有 −5.0, 判据 ``pct <= -9.5`` **恒为假** —— 「正股跌停」对这一类结构性不亮。
+    此前这条路是死的 (ST 债在准入层就被剔了, 根本走不到标注), 而 2026-08-31 把 ST 从
+    硬剔除降级成标签之后它第一次真正生效; 策略层的 ``exclude_underlying_limit_down``
+    也直接读它。旧 docstring 里那句"ST 正股的 5% 限制不在此处理"当时是空转的, 后来还被
+    当成论据引用过 —— 这次一并改掉, 免得它继续误导。
+
     阈值留 0.5% 余量, 避免数据源 pct_chg 取整偏差导致漏识别。
     """
     raw = str(stock_code or "").upper().strip()
@@ -668,7 +777,7 @@ def _underlying_limit_down_threshold(stock_code: Any) -> float:
         plain = raw
     if plain.startswith(("30", "68")):
         return -19.5
-    return -9.5
+    return -4.5 if is_st else -9.5
 
 
 def _underlying_at_limit_down(terms_or_row: Any, stock_code: Any = None) -> bool:
@@ -676,7 +785,10 @@ def _underlying_at_limit_down(terms_or_row: Any, stock_code: Any = None) -> bool
     if pct is None:
         return False
     code = stock_code if stock_code is not None else _terms_value(terms_or_row, "underlying_code") or _terms_value(terms_or_row, "stock_code")
-    return pct <= _underlying_limit_down_threshold(code)
+    # ST 判定走同一个 ``_underlying_has_st_risk`` —— 「正股风险」标签用的也是它,
+    # 两处不许各写一份 (同一行不能一边说"正股 ST"、一边按非 ST 的阈值判跌停)。
+    return pct <= _underlying_limit_down_threshold(
+        code, is_st=_underlying_has_st_risk(terms_or_row))
 
 
 def _rating_below(rating: Any, minimum: str) -> bool:
@@ -1078,17 +1190,22 @@ def annotate_batch_result(row: dict, *,
             # 低于 3,000 万法定线, 交易所将安排停止交易 —— 可执行的判断, 不是笼统的"小"
             risk_tags.append("触及摘牌线")
             confidence_points -= 25.0
-        elif balance < 0.5:
-            risk_tags.append("临近摘牌线")
-            confidence_points -= 18.0
         elif balance < 1.0:
+            # 「临近摘牌线」(0.3~0.5 亿) 这一档已退役 (2026-08-31): 余额那一族本来就是同一个
+            # 连续量的四个刻度, 而 0.5 这一刻没有法定依据也不对应任何策略阈值 (法定线是 0.3,
+            # 策略阈值是 min_outstanding_balance=1.0)。实测主池在每个可测日期上这条带都是空的
+            # —— 全库落在 [0.3, 0.5) 的只有甬矽转债 (已退市) 与智转债K1 (不可交易, 且代码段
+            # 就不是公募转债), 两只都进不了池。落进这条带的债现在打「小余额」, 阈值严格更宽,
+            # 不会漏标。字符串仍登记在册, 旧缓存照样读得出来。
             risk_tags.append("小余额")
             confidence_points -= 14.0
         elif balance >= 10.0:
             quality_score += 2.0
-    else:
-        risk_tags.append("无余额")
-        confidence_points -= 8.0
+    # 余额缺失**不再打「无余额」** (2026-08-31): 实测主池 0/311 缺失, 全库 1059 只里只有 2 只
+    # (日升转债 —— 那只撤销发行的幽灵债, 已被「无发行与上市日期」剔除), 7 个历史快照一致 2~3 只
+    # 且全部在池外。它检测的是一个从不缺失的字段, 而余额来自本地条款库而不是每日 HTTP 端点
+    # —— cb_data.json 读不出来的话是全字段一起失败, 逐行标签帮不上忙 (这是它与「无市价」的
+    # 不对称之处: 后者的数据源本月真的挂过)。
 
     # 已公告的最后交易日 = 确定性退出安排 (强赎或到期), 与余额推断出的摘牌风险互相独立。
     # 存续券的 delisting_date 多数等于到期日 (预定摘牌), 不是事件, 因此这里只认
@@ -1135,9 +1252,11 @@ def annotate_batch_result(row: dict, *,
             risk_tags.append("低评级")
             quality_score -= 8.0
             confidence_points -= 12.0
-    else:
-        risk_tags.append("无评级")
-        confidence_points -= 8.0
+    # 评级缺失**不再打「无评级」** (2026-08-31): 与「无余额」同一条论证 —— 实测主池 0/311,
+    # 全库 1059 只里只有 1 只 (且在池外), 7 个历史快照一致。评级同样来自本地条款库。
+    # 顺带修掉一个错误的连带效果: 它是 DIM_DATA 因此进 BLOCKING_RISK_TAGS, 于是"评级取不到"
+    # 会把整行染灰并踢出「低估候选」—— 而「评级」列只会渲染一个「—」。那是标的属性缺失,
+    # 不是这一行的数坏了。
 
     if _underlying_has_st_risk(out):
         risk_tags.append("正股风险")

@@ -36,12 +36,14 @@ from . import backtest_stats
 from .batch_pricing import (
     AdmissionFilterConfig,
     BATCH_REVIEW_VIEWS,
-    LEGACY_STRATEGY_EXCLUDE_TAGS,
     view_exclusion_reason,
     batch_pricing_exclusion_reason,
     filter_batch_results_by_view,
+    _rating_below,
+    _underlying_at_limit_down,
+    _underlying_has_st_risk,
 )
-from .data_providers import DataProvider, finite_float
+from .data_providers import DataProvider, finite_float, is_issued_pending_listing
 from .pricing_api import batch_price_from_provider_threaded
 
 
@@ -89,8 +91,20 @@ class ScoreStrategyConfig:
     rebalance_freq: str = "M"
     selection_view: str = "综合机会"
     min_confidence: tuple[str, ...] | None = ("高", "中")
-    # 冻结集合, 不随批量页标签体系演化 —— 见 batch_pricing.LEGACY_STRATEGY_EXCLUDE_TAGS。
-    exclude_risk_tags: tuple[str, ...] = tuple(sorted(LEGACY_STRATEGY_EXCLUDE_TAGS))
+    #: **兼容字段, 默认空**。标签是给全池标的做**标注**的展示层产物, 判据粗 (四个余额标签
+    #: 只表达一个连续量的四个刻度), 策略层不该拿它当筛子 —— 那等于把展示层的分档常量
+    #: 冻结进选债口径, 也是 ``LEGACY_STRATEGY_EXCLUDE_TAGS`` 必须"逐字冻结"的根本原因。
+    #: 现在策略层用下面那组**显式数值阈值**, 每一条都能单独调。
+    #:
+    #: 实测这次替换是等价的: 旧的 19 个冻结标签里只有 6 个真在筛东西 (模型溢价高 76 /
+    #: 低评级 56 / 模型高估离群 31 / 短久期 26 / 高HV 20 / 小余额 1), 其余 13 个要么
+    #: 准入层已经剔掉 (正股停牌 / 转债停牌), 要么在池内结构上不可能亮 (余额清零 /
+    #: 触及摘牌线 / 临近摘牌线 —— 池内余额最小 0.65 亿), 要么是已无 append 点的死标签
+    #: (偏差异常 / 极小余额 / 余额异常)。下面阈值的默认值**逐条等于**那 6 个标签的判据,
+    #: 所以默认配置下候选池逐只相同 (实测 116/284)。
+    #:
+    #: 传入非空值仍然生效 (旧快照能原样回放), 但它是**追加**的一道闸, 不是主口径。
+    exclude_risk_tags: tuple[str, ...] = ()
     min_market_price: float | None = None
     max_market_price: float | None = None
     min_conversion_premium: float | None = None
@@ -98,7 +112,29 @@ class ScoreStrategyConfig:
     min_deviation: float | None = None
     max_deviation: float | None = None
     min_sigma: float | None = None
-    max_sigma: float | None = None
+    #: 默认 0.80 = 旧「高HV」判据 (σ > 0.80)。
+    max_sigma: float | None = 0.80
+    # ── A 过滤层: 取代标签的显式阈值 ──────────────────────────────
+    # 缺值一律**放行**, 与被取代的标签口径一致 (缺 σ/评级/余额/偏差时打的是
+    # 「无HV」「无评级」「无余额」「无偏差」, 那四个都不在旧的排除集里)。
+    # 真正"这行不能用"的三档 (缺转股价值 / 缺市价 / 理论价非正) 是**有效性守卫**,
+    # 不可配置, 见 _candidate_filter_reason。
+    #: 理论价/转股价值 − 1 的上限。默认 0.45 = 旧「模型溢价高」判据。
+    max_model_premium: float | None = 0.45
+    #: 相对全市场中位的偏差上限。默认 0.20 = 旧「模型高估离群」判据 (贵得离谱的不买)。
+    max_relative_deviation: float | None = 0.20
+    #: 剩余年限下限。默认 0.5 = 旧「短久期」判据。
+    min_years_to_maturity: float | None = 0.5
+    #: 债项评级下限。默认 "AA-" = 旧「低评级」判据 (低于 AA- 即打标签)。
+    min_credit_rating: str | None = "AA-"
+    #: 未转股余额下限 (亿元)。默认 1.0 = 旧「小余额」判据; 它同时覆盖了旧的
+    #: 「临近摘牌线」(0.5) /「触及摘牌线」(0.3) /「余额清零」(0) 三档 —— 四个标签
+    #: 本来就是同一个连续量的四个刻度, 合成一个阈值才是"更细"的口径。
+    min_outstanding_balance: float | None = 1.0
+    #: 正股被 ST/退市风险警示时是否排除。默认 True = 旧「正股风险」标签的效果。
+    exclude_underlying_st: bool = True
+    #: 正股当日跌停时是否排除 (S0 钉在跌停板上, 理论价不可信)。默认 True。
+    exclude_underlying_limit_down: bool = True
     price_lookback_days: int = 31
     max_price_staleness_days: int = 10
     # ⚠️ "signal_close" = 在"用于计算信号的那根收盘"上成交, 对低流动性偏乐观;
@@ -1506,6 +1542,13 @@ def _eligible_codes_for_date(
             if listed_dt is not None and listed_dt > on_date:
                 excluded.append((code, f"尚未上市 (上市日 {listed_dt})"))
                 continue
+            # 上市日**根本还没有**的那一档 (已发行未上市): 准入层 2026-08-31 起放行它们
+            # —— 实盘页要提前看见新债、提前算理论价。但**回测路径的问题不同**: 那天它还
+            # 没挂牌, 买不到就是买不到, 放进来只会去拉一段不存在的历史行情。
+            # 所以这道闸留在回测这一侧, 而不是靠准入层顺手挡着。
+            if is_issued_pending_listing(code, terms, on_date):
+                excluded.append((code, "已发行未上市"))
+                continue
             # 到期检查: strip_current_status_fields 不清 maturity_date, 此处冗余但安全
             maturity_dt = getattr(terms, 'maturity_date', None) if terms is not None else None
             if maturity_dt is not None and maturity_dt <= on_date:
@@ -1636,37 +1679,22 @@ def _dynamic_pool_for_date(
 
 
 def _select_candidate_rows(rows: list[dict[str, Any]], cfg: ScoreStrategyConfig) -> list[dict[str, Any]]:
+    """真正选债的那条路。判据**只此一处** —— 直接问 :func:`_candidate_filter_reason`。
+
+    它此前是 ``_candidate_filter_reason`` 的一份完整副本 (逐条重写了 status / 视图 /
+    置信度 / 标签 / 价格·溢价·偏差·σ 区间), 而那个函数只被 ``_rejection_explanation_rows``
+    消费、产出落选解释 CSV。两份实现在 2026-08-31 的标签→阈值重构里**当场分叉**: 新加的
+    8 条阈值只接进了解释那一份, 而这一份的标签排除集刚被改成空 —— 净效果是默认口径下
+    策略层的风险筛选整体消失 (实测候选 116 → 263, CLI/GUI 实际配置下 283/284),
+    低评级与 ST 正股的债一路进到持仓, 而等价性用例测的正是没接线的那一半, 全绿。
+    这与 AGENTS 记的「视图归属的单一事实源是 ``view_exclusion_reason``, 两边曾各自
+    实现一份并在重构后悄悄分叉」是同一个形状。
+
+    合并之后"选债"与"为什么落选"按定义一致: 落选解释里写的理由, 就是这里拦下它的理由。
+    """
     view = cfg.selection_view if cfg.selection_view in BATCH_REVIEW_VIEWS else "综合机会"
     ranked = filter_batch_results_by_view(rows, view)
-    rank_signal = _normalize_rank_signal(cfg.rank_signal)
-    excluded_tags = set(cfg.exclude_risk_tags or ())
-    selected: list[dict[str, Any]] = []
-    for row in ranked:
-        if row.get("status") != "ok":
-            continue
-        if rank_signal == "deviation":
-            if finite_float(row.get("deviation")) is None:
-                continue
-        if cfg.min_confidence and row.get("confidence") not in cfg.min_confidence:
-            continue
-        if excluded_tags and excluded_tags & set(row.get("risk_tags") or []):
-            continue
-        market_price = finite_float(row.get("market_price"))
-        if market_price is None or market_price <= 0:
-            continue
-        if not _passes_range(market_price, cfg.min_market_price, cfg.max_market_price):
-            continue
-        premium = finite_float(row.get("conversion_premium"))
-        if not _passes_range(premium, cfg.min_conversion_premium, cfg.max_conversion_premium):
-            continue
-        deviation = finite_float(row.get("deviation"))
-        if not _passes_range(deviation, cfg.min_deviation, cfg.max_deviation):
-            continue
-        sigma = finite_float(row.get("sigma"))
-        if not _passes_range(sigma, cfg.min_sigma, cfg.max_sigma):
-            continue
-        selected.append(row)
-    return selected
+    return [row for row in ranked if _candidate_filter_reason(row, cfg) is None]
 
 
 def _candidate_explanation_rows(
@@ -1826,9 +1854,51 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
     if hard:
         return "命中排除标签 " + "/".join(sorted(hard))
 
+    # ── 有效性守卫: 不可配置 ────────────────────────────────────
+    # 这三档不是"风险大小"而是"这一行没法用来下单/排序", 所以不给阈值:
+    # 没有转股价值就算不出模型溢价、没有市价就买不了、理论价非正说明定价坏了。
+    # 它们对应旧排除集里的「数据缺口」「无市价」「理论价异常」—— 恰好是那三个
+    # **缺值也拦**的标签, 与下面那组"缺值放行"的阈值是两回事。
     market_price = finite_float(row.get("market_price"))
     if market_price is None or market_price <= 0:
         return "缺少有效市价"
+    if finite_float(row.get("theoretical_price")) is None or (
+            finite_float(row.get("theoretical_price")) or 0.0) <= 0:
+        return "理论价异常"
+    if finite_float(row.get("parity")) is None:
+        return "缺少转股价值"
+
+    # ── 取代标签的显式阈值: 缺值一律放行 ─────────────────────────
+    reason = _threshold_reason(
+        "模型溢价", row.get("model_premium_to_parity"),
+        max_value=cfg.max_model_premium, pct=True)
+    if reason:
+        return reason
+    # ``max_inclusive``: 被取代的「模型高估离群」判据是 ``gap >= DEVIATION_ANOMALY_THRESHOLD``,
+    # 六条阈值里只有这一条是闭区间。边界不是零概率 —— 小批量标注时 median_deviation_of
+    # 样本不足会让锚回落 0.0, 此时 gap 恒等于 deviation 本身, 一个 0.20 就正好落在边界上。
+    reason = _threshold_reason(
+        "相对偏差", row.get("relative_deviation"),
+        max_value=cfg.max_relative_deviation, pct=True, max_inclusive=True)
+    if reason:
+        return reason
+    reason = _threshold_reason(
+        "剩余年限", row.get("T"), min_value=cfg.min_years_to_maturity)
+    if reason:
+        return reason
+    reason = _threshold_reason(
+        "余额(亿)", row.get("outstanding_balance"),
+        min_value=cfg.min_outstanding_balance)
+    if reason:
+        return reason
+    rating = row.get("credit_rating")
+    if cfg.min_credit_rating and rating and _rating_below(rating, cfg.min_credit_rating):
+        return f"评级 {rating} 低于 {cfg.min_credit_rating}"
+    if cfg.exclude_underlying_st and _underlying_has_st_risk(row):
+        return "正股 ST/退市风险"
+    if cfg.exclude_underlying_limit_down and _underlying_at_limit_down(
+            row, row.get("stock_code")):
+        return "正股当日跌停"
     reason = _range_filter_reason("价格", market_price, cfg.min_market_price, cfg.max_market_price)
     if reason:
         return reason
@@ -1841,10 +1911,48 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
     reason = _range_filter_reason("偏差", deviation, cfg.min_deviation, cfg.max_deviation, pct=True)
     if reason:
         return reason
-    sigma = finite_float(row.get("sigma"))
-    reason = _range_filter_reason("HV", sigma, cfg.min_sigma, cfg.max_sigma, pct=True)
+    # σ 与上面那组阈值同口径: **缺值放行**。它的 max 默认 0.80 正是旧「高HV」判据,
+    # 而缺 σ 时旧口径打的是「无HV」—— 不在排除集里, 所以是放行的。
+    reason = _threshold_reason("HV", row.get("sigma"),
+                               min_value=cfg.min_sigma, max_value=cfg.max_sigma, pct=True)
     if reason:
         return reason
+    return None
+
+
+def _threshold_reason(
+    label: str,
+    raw: Any,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    pct: bool = False,
+    max_inclusive: bool = False,
+) -> str | None:
+    """取代标签的单边阈值。**缺值放行** —— 这是与 ``_range_filter_reason`` 的唯一区别。
+
+    被取代的那批标签在缺值时打的是「无HV」「无评级」「无余额」「无偏差」, 而那四个
+    都不在旧的排除集里 —— 也就是说旧口径下"这只债没有 σ"是放行的。阈值化必须继承这个
+    语义, 否则一次数据源抖动就会把几十只债静默踢出候选, 而那是**行为变更**不是重构。
+    真正"缺了就不能用"的三档由 ``_candidate_filter_reason`` 的有效性守卫处理。
+    """
+    if min_value is None and max_value is None:
+        return None
+    value = finite_float(raw)
+    if value is None:
+        return None
+    display = value * 100.0 if pct else value
+    suffix = "%" if pct else ""
+    if min_value is not None and value < min_value:
+        bound = min_value * 100.0 if pct else min_value
+        return f"{label} {display:.2f}{suffix} 低于下限 {bound:.2f}{suffix}"
+    if max_value is not None:
+        # 比较必须在 None 判定**之内** —— 提到外面就是 `value > None`, TypeError。
+        over = value >= max_value if max_inclusive else value > max_value
+        if over:
+            bound = max_value * 100.0 if pct else max_value
+            edge = "不低于" if max_inclusive else "高于"
+            return f"{label} {display:.2f}{suffix} {edge}上限 {bound:.2f}{suffix}"
     return None
 
 

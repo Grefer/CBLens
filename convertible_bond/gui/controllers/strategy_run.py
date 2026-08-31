@@ -119,7 +119,10 @@ class StrategyRunMixin:
                 min_deviation=self._optional_pct(self.v_st_min_deviation),
                 max_deviation=self._optional_pct(self.v_st_max_deviation),
                 min_sigma=self._optional_pct(self.v_st_min_sigma),
-                max_sigma=self._optional_pct(self.v_st_max_sigma),
+                # 留空 = 沿用默认上限 (旧「高HV」判据), 不是关掉风险闸 —— 见 CLI 同处注释
+                max_sigma=(self._optional_pct(self.v_st_max_sigma)
+                           if self._optional_pct(self.v_st_max_sigma) is not None
+                           else PDEStrategyConfig.max_sigma),
                 transaction_cost=max(0.0, self._optional_float(self.v_st_cost) or 0.0) / 10000.0,
                 # 基准是回测解释口径的一部分，GUI 固定计算全池等权基准，
                 # 并在数据源支持时叠加中证转债指数。

@@ -122,11 +122,22 @@ def _usable_deviations(
     status_key: str = "status",
     require_ok: bool = True,
 ) -> tuple[list[float], list[str]]:
-    """能进快照的 (deviation 列表, 估值日列表)。``compute_snapshot`` 与覆盖率共用。"""
+    """能进快照的 (deviation 列表, 估值日列表)。``compute_snapshot`` 与覆盖率共用。
+
+    **未上市新债整行跳过** —— 分子分母都不进。它们没有市价是天然状态而不是取数失败:
+    进了分母就是拿"还没挂牌"当"今天没取到价", 实测在途新债超过 35 只就能把
+    ``MIN_BASELINE_COVERAGE`` 的 90% 闸压住, 于是发行密集期反而记不进基线。
+    关注池的 ``market_price_coverage`` 早就这么处理了 (那里 5 只里 3 只在途, 拿 5 做
+    分母会让"一切正常"永远报成 2/5); 判据共用 ``batch_pricing.is_unlisted_new_bond``。
+    """
+    from .batch_pricing import is_unlisted_new_bond   # 延迟导入: 避免模块级循环依赖
+
     devs: list[float] = []
     dates: list[str] = []
     for row in rows:
         if require_ok and status_key in row and row.get(status_key) != "ok":
+            continue
+        if is_unlisted_new_bond(row):
             continue
         dv = _finite(row.get(deviation_key))
         if dv is None:
@@ -147,8 +158,13 @@ def snapshot_coverage(rows: Sequence[dict[str, Any]], **kwargs: Any) -> tuple[in
     于是"转债行情整条挂掉、正股链路正常"会让 success_count 满员而快照样本为零。
     那一档碰巧被 ``compute_snapshot`` 抛 ValueError 兜住了, 但那是异常兜的, 不是判据。
     """
+    from .batch_pricing import is_unlisted_new_bond   # 延迟导入: 避免模块级循环依赖
+
     devs, _ = _usable_deviations(rows, **kwargs)
-    return len(devs), len(rows)
+    # 分子分母**必须一起**排除未上市新债 —— 只从分子里剔掉会让覆盖率比不剔还低,
+    # 正好把这道闸推向它要防的那个方向。
+    expected = sum(1 for row in rows if not is_unlisted_new_bond(row))
+    return len(devs), expected
 
 
 def compute_snapshot(

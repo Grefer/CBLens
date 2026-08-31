@@ -768,7 +768,9 @@ class PricingMixin:
         if self._contains_any(getattr(terms, "underlying_trade_status", None), ("停牌", "暂停")):
             return "正股停牌", RED
         if self._contains_any(getattr(terms, "underlying_status", None), ("ST", "退市", "风险警示")):
-            return "正股风险", RED
+            # ORANGE 不是 RED: 上面两档 (转债停牌 / 正股停牌) 是**现在下不了单**,
+            # 而 ST 只是风险更大, 转债照常挂牌撮合。同色会把两件事读成一件。
+            return "正股风险", ORANGE
         delisting = getattr(terms, "delisting_date", None)
         last_trading = getattr(terms, "last_trading_date", None)
         near_date = last_trading or delisting

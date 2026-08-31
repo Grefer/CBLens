@@ -2434,3 +2434,157 @@ def test_eligible_codes_excludes_bond_issued_but_not_yet_listed():
     assert "123284.SZ" not in eligible
     assert ("123284.SZ", "已发行未上市") in excluded
     assert "123285.SZ" in eligible
+
+
+def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
+    """标签→阈值的替换必须是**逐只等价**的, 不是"大致等价".
+
+    标签是给全池标的做标注的展示层产物, 判据粗 —— 余额那一族四个标签
+    (余额清零/触及摘牌线/临近摘牌线/小余额) 说的是同一个连续量的四个刻度。策略层改用
+    显式阈值之后每一条都能单独调, 但**默认值逐条等于被取代的标签判据**, 所以默认配置
+    下候选池必须一只不差。实测全池 284 行 → 候选 116 只, 两条路完全相同。
+
+    这条用例是这次重构的安全网: 阈值默认值被改动、或缺值语义写反 (标签路径缺 σ/评级/
+    余额/偏差是**放行**的), 都会让它红。
+
+    **必须断言在真正选债的那条路 ``_select_candidate_rows`` 上。** 第一版只比了
+    ``_candidate_filter_reason`` —— 而那个函数当时只被落选解释 CSV 消费, 真正选债的
+    ``_select_candidate_rows`` 是它的第二份副本、一个字节没改。于是"逐只等价 116"
+    在一个没人走的路径上成立, 而生产路径的候选池悄悄从 116 涨到 263, 用例全绿。
+    安全网架在被改的路径之外, 等于没有。
+    """
+    import json
+
+    from convertible_bond import batch_pricing as bp
+    from convertible_bond.paths import data_path
+    from convertible_bond.strategy_backtest import (
+        PDEStrategyConfig, ScoreStrategyConfig,
+        _candidate_filter_reason, _select_candidate_rows,
+    )
+
+    cache = data_path("batch_pricing_cache.json")
+    if not cache.exists():                      # 运行态缓存, gitignored
+        pytest.skip("需要 data/batch_pricing_cache.json")
+    rows = bp.annotate_batch_results(
+        json.load(open(cache, encoding="utf-8"))["results"])
+    if len(rows) < 50:
+        pytest.skip("缓存样本太小, 等价性结论没有意义")
+
+    legacy = set(bp.LEGACY_STRATEGY_EXCLUDE_TAGS)
+
+    def passes_legacy(row):
+        if row.get("status") != "ok":
+            return False
+        if bp.view_exclusion_reason(row, "综合机会") is not None:
+            return False
+        if bp.finite_float(row.get("deviation")) is None:
+            return False
+        if row.get("confidence") not in ("高", "中"):
+            return False
+        if set(row.get("risk_tags") or ()) & legacy:
+            return False
+        mkt = bp.finite_float(row.get("market_price"))
+        return mkt is not None and mkt > 0
+
+    by_tag = {r["bond_code"] for r in rows if passes_legacy(r)}
+
+    # ① 库默认配置, 走**真正选债**那条路
+    by_threshold = {r["bond_code"]
+                    for r in _select_candidate_rows(rows, ScoreStrategyConfig())}
+    assert by_threshold == by_tag, (
+        f"只在标签口径里: {sorted(by_tag - by_threshold)[:5]}; "
+        f"只在阈值口径里: {sorted(by_threshold - by_tag)[:5]}")
+
+    # ② CLI/GUI 实际构造的 config 也要等价 —— 它们对 σ 留空时**沿用默认上限**,
+    #    传 None 会把风险闸关掉 (实测那样候选池 116 → 126)。
+    cli_like = PDEStrategyConfig(min_confidence=("高", "中"), min_sigma=None,
+                                 max_sigma=PDEStrategyConfig.max_sigma)
+    assert {r["bond_code"] for r in _select_candidate_rows(rows, cli_like)} == by_tag
+
+    # ③ 选债路径与落选解释路径按定义一致: 解释里说的理由就是这里拦下它的理由
+    explained = {r["bond_code"] for r in rows
+                 if _candidate_filter_reason(r, ScoreStrategyConfig()) is None}
+    assert by_threshold <= explained
+
+
+def test_thresholds_let_missing_values_through():
+    """缺值放行 —— 与被取代的标签同口径。
+
+    缺 σ/评级/余额/偏差时标签路径打的是「无HV」「无评级」「无余额」「无偏差」, 四个都不在
+    排除集里, 也就是说旧口径下这些行是**放行**的。阈值化若把缺值当不满足, 一次数据源
+    抖动就会静默把几十只债踢出候选 —— 那是行为变更不是重构。
+    """
+    from convertible_bond.strategy_backtest import ScoreStrategyConfig, _candidate_filter_reason
+
+    row = {
+        "bond_code": "127093.SZ", "status": "ok", "confidence": "高",
+        "market_price": 105.0, "theoretical_price": 120.0, "parity": 90.0,
+        "deviation": -0.125,
+        # σ / 评级 / 余额 / 剩余年限 / 相对偏差 / 模型溢价 全缺
+    }
+
+    assert _candidate_filter_reason(row, ScoreStrategyConfig()) is None
+
+    # 而真正"这行不能用"的三档仍然无条件拦下
+    for field, expected in (("market_price", "缺少有效市价"),
+                            ("theoretical_price", "理论价异常"),
+                            ("parity", "缺少转股价值")):
+        broken = dict(row)
+        broken[field] = None
+        assert _candidate_filter_reason(broken, ScoreStrategyConfig()) == expected
+
+
+def test_cli_risk_thresholds_do_not_silently_disable_the_caps():
+    """CLI 构造 config 的那一步单独可测 —— 它此前既会静默关闸, 又会直接崩。
+
+    两个真实缺陷:
+
+    ① ``max_sigma`` 留空时传 ``None``, 把取代「高HV」的风险上限整个关掉 (实测候选池
+       116 → 126)。重构前留空时那道闸由标签照常生效, 所以"留空 = 沿用默认"才是保行为的读法。
+    ② ``--include-review-risks`` 的实现用 ``**dict(max_sigma=None, ...)`` 展开, 而调用点
+       下面还有一个显式的 ``max_sigma=`` —— 同一个调用里**重复关键字**, 一开这个开关就
+       ``TypeError: got multiple values for keyword argument``。抽成函数正是为了这个。
+    """
+    import argparse
+
+    from convertible_bond.cli.strategy_backtest import _risk_threshold_kwargs
+    from convertible_bond.strategy_backtest import PDEStrategyConfig
+
+    plain = _risk_threshold_kwargs(
+        argparse.Namespace(include_review_risks=False, max_sigma=None))
+    cfg = PDEStrategyConfig(**plain)                 # 重复关键字会在这里炸
+    assert cfg.max_sigma == PDEStrategyConfig.max_sigma == 0.80, "留空把 σ 上限关掉了"
+    assert cfg.min_credit_rating == "AA-"
+    assert cfg.exclude_underlying_st is True
+
+    explicit = _risk_threshold_kwargs(
+        argparse.Namespace(include_review_risks=False, max_sigma=65.0))
+    assert PDEStrategyConfig(**explicit).max_sigma == pytest.approx(0.65)
+
+    relaxed = _risk_threshold_kwargs(
+        argparse.Namespace(include_review_risks=True, max_sigma=None))
+    loose = PDEStrategyConfig(**relaxed)             # 同样不许重复关键字
+    assert loose.max_sigma is None and loose.min_credit_rating is None
+    assert loose.min_outstanding_balance is None and loose.min_years_to_maturity is None
+    assert loose.exclude_underlying_st is False
+    assert loose.exclude_underlying_limit_down is False
+
+
+def test_relative_deviation_cap_is_closed_at_the_tag_boundary():
+    """「模型高估离群」判据是 ``gap >= 0.20`` —— 六条阈值里唯一的闭区间。
+
+    其余五条 (模型溢价 >0.45 / σ >0.80 / 余额 <1.0 / 剩余年限 <0.5 / 评级) 都是开区间,
+    统一写成 ``>`` 会让恰好等于 0.20 的行两条路结论相反。边界不是零概率: 小批量标注时
+    ``median_deviation_of`` 样本不足会让锚回落 0.0, 此时 gap 恒等于 deviation 本身。
+    """
+    from convertible_bond.strategy_backtest import ScoreStrategyConfig, _candidate_filter_reason
+
+    def row(rel):
+        return {"bond_code": "x", "status": "ok", "confidence": "高",
+                "market_price": 110.0, "theoretical_price": 100.0, "parity": 95.0,
+                "deviation": 0.1, "relative_deviation": rel}
+
+    cfg = ScoreStrategyConfig()
+    assert _candidate_filter_reason(row(0.20), cfg) is not None, "恰好 0.20 应当被拦"
+    assert _candidate_filter_reason(row(0.1999), cfg) is None
+    assert _candidate_filter_reason(row(0.21), cfg) is not None

@@ -69,6 +69,37 @@ def _print_stability(stability) -> None:
               f"为正窗占比 {rs['rolling_sharpe_pct_positive']*100:.0f}%  ({rs['n_windows']} 窗)")
 
 
+def _risk_threshold_kwargs(args) -> dict:
+    """取代旧标签排除集的那组风险阈值。
+
+    ``--include-review-risks`` 把它们整组放开 —— 有效性守卫 (缺市价/理论价/转股价值)
+    与用户显式传的区间不动。该开关此前写的是 ``exclude_risk_tags=()``, 而标签排除
+    已经不是主口径, 保持原样会让它变成一个静默的 no-op。
+
+    ``max_sigma`` 留空 = **沿用默认上限** (0.80, 即旧「高HV」判据) 而不是关掉它:
+    重构前留空时那道闸由「高HV」标签照常生效, 所以这才是保行为的读法。
+    要真的不设上限, 传一个大数或用 ``--include-review-risks``。
+
+    单独抽出来是为了**可测**, 也为了避免它和调用点里另一个 ``max_sigma=`` 撞成
+    重复关键字 —— 那会让 ``--include-review-risks`` 直接 TypeError 崩掉。
+    """
+    if args.include_review_risks:
+        return dict(
+            max_sigma=None,
+            max_model_premium=None,
+            max_relative_deviation=None,
+            min_years_to_maturity=None,
+            min_credit_rating=None,
+            min_outstanding_balance=None,
+            exclude_underlying_st=False,
+            exclude_underlying_limit_down=False,
+        )
+    return dict(
+        max_sigma=((args.max_sigma / 100.0) if args.max_sigma is not None
+                   else PDEStrategyConfig.max_sigma),
+    )
+
+
 def main() -> int:
     default_min_balance = (
         DEFAULT_MIN_OUTSTANDING_BALANCE
@@ -159,7 +190,8 @@ def main() -> int:
     parser.add_argument("--allow-low-confidence", action="store_true",
                         help="允许低置信度结果进入候选")
     parser.add_argument("--include-review-risks", action="store_true",
-                        help="允许带硬复核标签的结果进入候选")
+                        help="放开取代标签的那组风险阈值 (评级/余额/剩余年限/σ/模型溢价/"
+                             "相对偏差/正股ST/正股跌停), 只保留有效性守卫与显式区间")
     parser.add_argument("--price-lookback-days", type=int, default=31,
                         help="期初/期末转债收盘价向前查找天数 (默认 31)")
     parser.add_argument("--max-price-staleness-days", type=int, default=10,
@@ -289,7 +321,7 @@ def main() -> int:
         rebalance_freq=args.freq,
         selection_view="综合机会",
         min_confidence=None if args.allow_low_confidence else ("高", "中"),
-        exclude_risk_tags=() if args.include_review_risks else PDEStrategyConfig().exclude_risk_tags,
+        **_risk_threshold_kwargs(args),
         min_market_price=args.min_price,
         max_market_price=args.max_price,
         min_conversion_premium=(args.min_premium / 100.0) if args.min_premium is not None else None,
@@ -297,7 +329,6 @@ def main() -> int:
         min_deviation=(args.min_deviation / 100.0) if args.min_deviation is not None else None,
         max_deviation=(max_deviation / 100.0) if max_deviation is not None else None,
         min_sigma=(args.min_sigma / 100.0) if args.min_sigma is not None else None,
-        max_sigma=(args.max_sigma / 100.0) if args.max_sigma is not None else None,
         price_lookback_days=max(1, args.price_lookback_days),
         max_price_staleness_days=max(0, args.max_price_staleness_days),
         execution_timing=args.execution_timing,

@@ -20,9 +20,11 @@ from ..theme import (
     TABLE_FONT_SIZE, TABLE_ROW_HEIGHT,
     get_color,
 )
-from ...batch_pricing import DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS, risk_tag_label
+from ...batch_pricing import (
+    DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS,
+    is_unlisted_new_bond, risk_tag_label,
+)
 from ..widgets import Tooltip
-from ...market_time import market_today
 
 
 # ── Treeview 行标签颜色 (主表 + 关注池表共用) ──────────────────
@@ -63,9 +65,12 @@ _TAG_COLORS: dict[str, tuple[str, str]] = {
 #: 行色图例文案 —— 键集必须与 ``_TAG_COLORS`` 相等 (有守护测试比对集合)。
 #:
 #: ``blocked`` 刻意**不叫**「不可交易」: 它收的是 临近摘牌 / 余额清零 / 正股停牌 /
-#: 正股跌停 / 正股风险 / 转债停牌 —— 「临近摘牌」今天照样买得到, 「正股跌停」压根
+#: 正股跌停 / 转债停牌 —— 「临近摘牌」今天照样买得到, 「正股跌停」压根
 #: 不拦转债本身。这一档的真实语义是 AGENTS 里那句"买不到 / 快买不到了", 「买卖受限」
 #: 覆盖得住而「不可交易」是把最重的那一档当成了全部。
+#:
+#: 「正股风险」(ST) **已移出这一档** —— 它归标的风险维: ST 正股的转债照常挂牌撮合,
+#: 是"风险较大"而不是"买不到"。它现在只出现在标签列里, 不染行色。
 _TAG_LEGEND: dict[str, str] = {
     "new":     "未上市",
     "blocked": "买卖受限",
@@ -158,46 +163,13 @@ def _coerce_bool(value) -> bool | None:
 
 
 def _is_new_bond(row) -> bool:
-    """新债判定: 未上市 / 尚不可自由交易才标记, 已上市标的不再按天数染色.
+    """新债判定 —— 委托给库层的 :func:`batch_pricing.is_unlisted_new_bond`。
 
-    **日期是硬证据, 压过 ``is_tradable`` / ``trading_status``**。后两个是派生字段
-    (公募转债的数据源根本不提供, Wind ``get_admission_status`` 对它们显式返回 None),
-    在关注池里更是**加入那一刻冻结的快照** —— 一只债在"已发行未上市"时被扫进关注池,
-    此后即便真的挂牌上市, ``watchlist.json`` 里那个 ``pending`` 也不会自己翻回来
-    (实测中仑转债 08-24 上市 / 派克转债 08-25 上市, 条目里至今写着
-    ``is_tradable: false``)。而**已经过去的上市日**是"这只债确实挂牌了"的正面证据。
-
-    这与 AGENTS 里那条库内判据同源: "成交额 > 0 却 ``is_tradable=False`` 是自相矛盾"
-    —— 硬事实与派生标记冲突时, 信硬事实。
-
-    此前判据顺序反着来, 但被一个巧合挡住了: 关注池取价原本让全池行无条件覆盖,
-    而全池行带着刚推断出来的 ``is_tradable=True``。取价改成按新鲜度择优之后, 热缓存行
-    (``CACHE_FIELDS`` **故意不收**这两个派生字段) 胜出, 冻结值立刻浮上来, 表现为
-    整张关注池表全部染成新债色, 原本的高估/离群区分一起消失。
+    判据本身连同它的全部理由 (日期硬证据压过派生字段、自我确认陷阱) 都在那边。
+    这里**不再另写一份**: 库层的估值基线覆盖率闸与这里的行色/关注池覆盖率问的是
+    同一个问题, 两处各写一份正是这个仓库反复踩的形状 (事件展示表、评级利差表都栽过)。
     """
-    today = market_today()
-
-    # ① 日期证据
-    listed = False
-    for key in ("tradable_date", "listing_date"):
-        d = _coerce_date(row.get(key))
-        if d is None:
-            continue
-        if d > today:
-            return True          # 可交易日还没到 —— 确实还买不到
-        listed = True            # 日子已经过了 —— 已经挂牌
-    if listed:
-        return False
-
-    # ② 一个日期都没有时才回落到派生字段。"已发行未上市"正是这一档:
-    #    连上市日都还没公告, 除了 pending 没有别的线索。
-    is_tradable = _coerce_bool(row.get("is_tradable"))
-    status = str(row.get("trading_status") or "").strip().lower()
-    if is_tradable is True or status in {"tradable", "private_tradable"}:
-        return False
-    if is_tradable is False or status in {"pending", "private_pending"}:
-        return True
-    return False
+    return is_unlisted_new_bond(row)
 
 
 def _resolve_row_tag(row) -> str | None:

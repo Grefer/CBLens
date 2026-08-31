@@ -517,3 +517,36 @@ def test_gui_batch_page_routes_through_the_shared_gate():
         "批量页直接调了无闸的 append_history —— 那正是 CLI 曾经的写法")
     assert "MIN_BASELINE_COVERAGE" not in names, "批量页又自己写了一份阈值比较"
     assert "snapshot_coverage" not in names, "批量页又自己数了一遍覆盖率"
+
+
+def test_unlisted_new_bonds_leave_the_coverage_denominator():
+    """未上市新债**分子分母都不进** —— 它们没有市价是天然状态, 不是取数失败。
+
+    准入层 2026-08-31 起放行「已发行未上市」(它们后续会挂牌, 值得提前盯), 于是主池里
+    开始出现没有市价的行。若把它们算进覆盖率分母, 就是拿"还没挂牌"当"今天没取到价":
+    实测在途新债超过 35 只就能把 ``MIN_BASELINE_COVERAGE`` 的 90% 闸压住, 结果是
+    **发行密集期反而记不进基线** —— 正好把这道闸推向它要防的反方向。
+
+    只从分子里剔掉更糟 (覆盖率比不剔还低), 所以这条用例两头都钉。
+    关注池的 ``market_price_coverage`` 早就这么处理了, 判据共用
+    ``batch_pricing.is_unlisted_new_bond``。
+    """
+    priced = [{"bond_code": f"c{i}", "status": "ok", "deviation": 0.1,
+               "listing_date": "2020-01-01", "valuation_date": "2026-08-31"}
+              for i in range(9)]
+    new_bond = {"bond_code": "new", "status": "ok", "deviation": float("nan"),
+                "listing_date": None, "trading_status": "pending",
+                "valuation_date": "2026-08-31"}
+
+    # 9 只在市 + 1 只在途 → 覆盖率是 9/9 而不是 9/10
+    assert snapshot_coverage(priced + [new_bond]) == (9, 9)
+    assert baseline_refusal_reason(priced + [new_bond]) is None
+
+    # 加到 5 只在途也一样 —— 分母不随发行节奏漂移
+    assert snapshot_coverage(priced + [new_bond] * 5) == (9, 9)
+
+    # 而**在市**债缺市价仍然照常拉低覆盖率 (那才是取数失败)
+    stale = {"bond_code": "stale", "status": "ok", "deviation": float("nan"),
+             "listing_date": "2020-01-01", "valuation_date": "2026-08-31"}
+    assert snapshot_coverage(priced + [stale] * 3) == (9, 12)
+    assert baseline_refusal_reason(priced + [stale] * 3) is not None
