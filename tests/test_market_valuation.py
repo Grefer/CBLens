@@ -8,6 +8,7 @@ from convertible_bond.market_valuation import (
     CALIBER_CHANGES,
     CALIBER_V1,
     CALIBER_V2,
+    CALIBER_V3,
     CURRENT_CALIBER,
     ValuationSnapshot,
     caliber_note,
@@ -249,8 +250,11 @@ def test_valuation_banner_insufficient_history():
 
 def test_snapshot_defaults_to_current_caliber():
     snap = compute_snapshot(_rows([0.1, 0.2, 0.3]))
-    assert snap.caliber == CURRENT_CALIBER == CALIBER_V2
-    assert snap.to_record()["caliber"] == CALIBER_V2
+    # 引用 CURRENT_CALIBER 而不是写死 v2 —— 用例的意图是「新快照打当期口径」,
+    # 写死会让每次口径变更都误红一次 (口径变更本身由
+    # test_current_caliber_is_registered_with_its_breakpoint 守着)
+    assert snap.caliber == CURRENT_CALIBER
+    assert snap.to_record()["caliber"] == CURRENT_CALIBER
 
 
 def test_load_history_treats_unlabelled_records_as_v1(tmp_path):
@@ -272,7 +276,7 @@ def test_caliber_survives_history_roundtrip(tmp_path):
     save_history(path, [old])
     append_history(path, compute_snapshot(_rows([0.1, 0.2, 0.3])))
     loaded = load_history(path)
-    assert [s.caliber for s in loaded] == [CALIBER_V1, CALIBER_V2]
+    assert [s.caliber for s in loaded] == [CALIBER_V1, CURRENT_CALIBER]
 
 
 def test_caliber_note_silent_when_single_caliber():
@@ -550,3 +554,44 @@ def test_unlisted_new_bonds_leave_the_coverage_denominator():
              "listing_date": "2020-01-01", "valuation_date": "2026-08-31"}
     assert snapshot_coverage(priced + [stale] * 3) == (9, 12)
     assert baseline_refusal_reason(priced + [stale] * 3) is not None
+
+
+def test_current_caliber_is_registered_with_its_breakpoint():
+    """``CURRENT_CALIBER`` 必须在 ``CALIBER_CHANGES`` 里登记 —— 否则断点说明是空的。
+
+    口径标记的全部作用是让横幅与 CLI 说得出"这个分位跨了几种池口径、从哪天开始变的"。
+    换了 ``CURRENT_CALIBER`` 却忘了登记, ``caliber_note`` 里的 ``change`` 会是 None,
+    那句提示就退化成"跨 N 种口径"而说不出**哪天**换的 —— 而它不报错。
+    """
+    assert CURRENT_CALIBER in CALIBER_CHANGES, (
+        f"{CURRENT_CALIBER} 没登记断点, caliber_note 说不出换口径的日期")
+    entry = CALIBER_CHANGES[CURRENT_CALIBER]
+    assert {"since", "summary", "impact"} <= set(entry)
+    from datetime import date as _date
+    _date.fromisoformat(entry["since"])          # 必须是可解析的日期
+    assert entry["impact"], "断点必须写清对中位偏差的影响量, 否则读者判断不了可比性"
+
+
+def test_pool_widening_registered_as_caliber_v3():
+    """2026-08-31 准入层收窄成"买不买得到"是一次**池口径变更**, 必须换 caliber。
+
+    中位偏差是**全市场池**的聚合量, 池成员一变前后就不严格可比。实测同一批定价结果:
+    旧口径 (评级≥A+、非 ST、已上市) n=282 中位 +21.30%,
+    新口径 n=309 中位 +20.55% —— 下移 **0.75pp**。
+
+    这个量级与当年 v1→v2 那次 (0.7pp) 相同, 而那次登记了新口径。参照系: 该指标的历史
+    摆幅是 21.2pp (+0.4% ~ +21.6%), 所以 0.75pp 属小量 —— 仍**合并算分位**、只标断点,
+    与 v2 同处置 (分段会让新序列在积满 8 个季度前完全失去分位信号)。
+    """
+    assert CURRENT_CALIBER == CALIBER_V3
+    assert CALIBER_CHANGES[CALIBER_V3]["since"] == "2026-08-31"
+
+    # 新快照默认打当期口径
+    snap = compute_snapshot(_rows([0.10, 0.15, 0.20]))
+    assert snap.caliber == CALIBER_V3
+
+    # 跨口径时断点说明要说得出日期
+    from convertible_bond.market_valuation import caliber_note
+    hist = _quarterly([0.10, 0.12, 0.14]) + [snap]
+    note = caliber_note(hist, verbose=False)
+    assert "2026-08-31" in note and "不严格可比" in note

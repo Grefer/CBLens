@@ -775,3 +775,64 @@ def test_project_terms_still_lets_snapshot_win_on_rating(tmp_path):
         terms_as_of=date(2026, 8, 20),
     ).terms
     assert projected.credit_rating == "AA"
+
+
+def test_strip_removes_the_underlying_name_so_st_cannot_leak_backwards():
+    """正股**名字**也必须剥 —— 否则 ST 判定会读到未来。
+
+    ``_underlying_has_st_risk`` 判的是 ``f"{underlying_name} {underlying_status}"``,
+    而 cb_data 里的 ``underlying_name`` 是**今天**的名字。只剥 status 不剥 name, 等于让
+    2022 年的回测从「*ST闻泰」这四个字里读出"这家公司 2026 年会被 ST"——
+    策略于是能提前躲开后来暴雷的债, 而等权基准照单全收, 超额被单边抬高。
+
+    代价实测为零: 四只当前 ST 债 (110081/110092/118027/127093) **都有**
+    ``underlying_st_risk`` 事件, 事件按估值日重放 —— 剥掉名字后它们照样被识别,
+    只是从**公告日**起而不是从回测第一天起。
+    """
+    from datetime import date
+
+    from convertible_bond import batch_pricing
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.historical_terms import strip_current_status_fields
+
+    terms = BondTerms(sec_name="闻泰转债", underlying_name="*ST闻泰",
+                      underlying_status="是", conversion_price=10.0,
+                      maturity_date=date(2030, 1, 1))
+
+    stripped = strip_current_status_fields(terms)
+    assert stripped.underlying_name is None
+    assert stripped.underlying_status is None
+    # 光剥 status 是不够的 —— 名字里就带着答案
+    assert batch_pricing._underlying_has_st_risk(stripped) is False
+
+
+def test_st_is_recognised_only_from_its_event_date_onward(tmp_path):
+    """剥掉名字之后, ST 由**事件**重建 —— 公告日之前不认, 之后认。"""
+    from datetime import date
+
+    from convertible_bond import batch_pricing
+    from convertible_bond.cb_events import CBEvent, CBEventStore, apply_events_to_terms
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.historical_terms import strip_current_status_fields
+
+    store = CBEventStore(tmp_path / "events.json")
+    store.add_many([CBEvent(
+        bond_code="110081.SH", event_date=date(2026, 4, 30),
+        event_type="underlying_st_risk", parsed_status="ST/退市风险",
+        raw_title="关于公司股票被实施退市风险警示的公告",
+    )])
+
+    base = strip_current_status_fields(BondTerms(
+        sec_name="闻泰转债", underlying_name="*ST闻泰", underlying_status="是",
+        conversion_price=10.0, maturity_date=date(2030, 1, 1)))
+
+    def st_at(on_date):
+        patched = apply_events_to_terms(
+            "110081.SH", base,
+            store.list_events(bond_code="110081.SH", through_date=on_date),
+            valuation_date=on_date)
+        return batch_pricing._underlying_has_st_risk(patched)
+
+    assert st_at(date(2022, 6, 30)) is False      # 公告前四年 —— 不该知道
+    assert st_at(date(2026, 4, 29)) is False      # 公告前一天
+    assert st_at(date(2026, 8, 31)) is True       # 公告后

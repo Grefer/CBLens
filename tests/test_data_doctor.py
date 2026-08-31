@@ -183,3 +183,38 @@ def test_pool_without_quotes_catches_a_bond_that_never_listed(monkeypatch):
     assert check.status == mod.FAIL
     assert len(check.extra) == 1 and "123095.SZ" in check.extra[0]
     assert "另有 1 只刚挂牌" in check.detail      # 今天上市的不算
+
+
+def test_pool_without_quotes_does_not_flag_bonds_that_have_not_listed_yet(monkeypatch):
+    """**还没挂牌的新债不是幽灵** —— 现货表里本来就不该有它们。
+
+    准入层 2026-08-31 起放在途新债进主池, 而这条检查的宽限原先只认"上市日已过 ≤3 天"
+    (``listing is not None and (today - listing).days <= 3``)。于是 ``listing_date`` 还是
+    None 的在途新债 (实测丰茂/强达两只) 每天被报成幽灵, 把日升转债那种**真**幽灵淹掉。
+
+    两档在途新债都要放过: 上市日未定, 以及上市日已公告但还没到。
+    """
+    import pandas as pd
+    monkeypatch.setattr("akshare.bond_zh_hs_cov_spot", lambda *a, **k: pd.DataFrame({
+        "symbol": ["sh113052"], "volume": [1_000_000],
+    }))
+    terms = {
+        "113052.SH": BondTerms(sec_name="兴业转债", listing_date=date(2022, 1, 7)),
+        "123283.SZ": BondTerms(sec_name="丰茂转债", issue_date=date(2026, 8, 18),
+                               listing_date=None, is_tradable=False,
+                               trading_status="pending"),
+        "123282.SZ": BondTerms(sec_name="震裕转02", issue_date=date(2026, 8, 17),
+                               listing_date=date(2026, 9, 2), is_tradable=False,
+                               trading_status="pending"),
+        "123095.SZ": BondTerms(sec_name="日升转债", listing_date=None),
+    }
+    bundle = TermsBundle.__new__(TermsBundle)
+    bundle.get = terms.get
+
+    check = mod.check_pool_without_quotes({
+        "online": True, "bundle": bundle, "today": date(2026, 8, 31),
+        "pool": ["113052.SH", "123283.SZ", "123282.SZ", "123095.SZ"],
+    })
+    # 只剩真幽灵 —— 两只在途新债不进 extra
+    assert len(check.extra) == 1 and "123095.SZ" in check.extra[0]
+    assert "2 只尚未挂牌" in check.detail

@@ -33,7 +33,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from ..batch_pricing import screen_batch_pool_from_cache
+from ..batch_pricing import is_unlisted_new_bond, screen_batch_pool_from_cache
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import project_events_path
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
@@ -559,12 +559,24 @@ def check_pool_without_quotes(ctx: dict) -> Check:
                      "外部对照不可用时不阻断体检", "外部对照")
 
     bundle, today = ctx["bundle"], ctx["today"]
-    ghosts, just_listed = [], 0
+    ghosts, just_listed, not_listed_yet = [], 0, 0
     for code in ctx["pool"]:
         vol = quote.get(code)
         if vol:                                   # 有成交 = 确实存在
             continue
         terms = bundle.get(code)
+        # **还没挂牌的新债不是幽灵** (2026-08-31): 准入层从这天起放它们进主池, 而现货表里
+        # 本来就不该有它们。下面那道宽限只认"上市日已过 ≤3 天", 对 `listing_date` 还是
+        # None 的在途新债 (实测丰茂/强达两只) 直接判假, 于是这条检查每天误报 2 只 —— 而它
+        # 的全部价值在于抓日升转债那种**真**幽灵 (条款齐备、市场从未存在), 常年误报会把
+        # 那一档淹掉。判据共用 `is_unlisted_new_bond` —— 与准入层同一个。
+        #
+        # **顺序不能反**: 下面那道用的是**有符号**日差, 未来的上市日 `(today - listing)`
+        # 为负也 ≤ 3, 于是"还没挂牌"会被记成「刚挂牌」—— 结果碰巧是对的 (都放过), 但
+        # 两个计数说的话是错的。
+        if is_unlisted_new_bond(terms, today):
+            not_listed_yet += 1
+            continue
         listing = getattr(terms, "listing_date", None) if terms else None
         if listing is not None and (today - listing).days <= _RECENT_STOP_GRACE_DAYS:
             just_listed += 1                      # 第一个交易时段还没开始
@@ -574,7 +586,8 @@ def check_pool_without_quotes(ctx: dict) -> Check:
     return Check(
         "主池却查无行情", FAIL if ghosts else OK,
         f"{len(ghosts)} 只主池债今日既无成交也无报价"
-        + (f"; 另有 {just_listed} 只刚挂牌" if just_listed else ""),
+        + (f"; 另有 {just_listed} 只刚挂牌" if just_listed else "")
+        + (f"; {not_listed_yet} 只尚未挂牌" if not_listed_yet else ""),
         "抓出 123095.SZ 日升转债: 2021 年撤销发行、从未上市, 却带着完整条款和 AA 评级 "
         "在主池里被定出 −14% 低估 —— 库内每一项自洽性指标都正常",
         "外部对照", extra=ghosts[:10])

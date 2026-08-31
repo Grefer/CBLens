@@ -320,6 +320,11 @@ class PricingMixin:
                         f"{code or '当前转债'} 已到/已过强赎赎回日 ({redemption_date}), 普通理论价不适用"
                     )
                 redemption_mode = True
+                # **改写前**的到期日 = 合约到期日。票息期是按它排的, 强赎只是提前把债收走,
+                # 并不改变票息表 —— 拿改写后的赎回日当到期日算应计, 最后一期会被截短。
+                # 与 ``pricing_api`` 的 ``contractual_maturity_dt`` 同口径 (那边 :370 也是
+                # 在 call_redemption 分支**之前**先把它存下来)。
+                contractual_maturity = pricer.get("maturity_date")
                 pricer["maturity_date"] = redemption_date
                 pricer["call_no_redemption_until"] = redemption_date
                 if getattr(terms, "call_redemption_price", None) is not None:
@@ -330,6 +335,7 @@ class PricingMixin:
                         face_value=face_value,
                         coupon_rates=coupon_rates,
                         issue_date=pricer.get("issue_date"),
+                        maturity_date=contractual_maturity,
                         on_date=redemption_date,
                     )
             elif getattr(terms, "call_no_redemption_until", None) is not None:

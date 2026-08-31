@@ -742,3 +742,139 @@ def test_no_down_price_uses_the_same_grid_as_theoretical(monkeypatch):
         f"no_down 价用了 {no_down_calls[0][:2]}, headline 用了 {theo_calls[0][:2]} —— "
         f"两价之差必须同网格, 否则 uplift 的符号不可信"
     )
+
+
+def test_every_accrued_interest_call_site_satisfies_the_signature():
+    """``_accrued_interest`` 的每个调用点都必须传齐 keyword-only 必填参数。
+
+    这条守护的是一类**静态检查与测试双双看不见**的缺陷: 给一个函数加 keyword-only
+    且无默认值的参数时漏改某个调用点。ruff 的 E9+F 不检查关键字实参 (F821 只看名字),
+    而 GUI 在无头环境起不来 —— 于是 ``gui/controllers/pricing.py`` 那处漏传
+    ``maturity_date`` 在 957 条用例全绿的情况下活了下来, 表现是用户打开某只**已公告强赎
+    但公告未给赎回价**的债时状态栏弹
+    「计算失败: _accrued_interest() missing 1 required keyword-only argument」。
+
+    它当时是潜伏的 (那类债当天恰好都已退市), 后来变成实打实的: 复核时库里有 3 只
+    (113667.SH / 127067.SZ / 123112.SZ) 赎回日在未来且 call_redemption_price 为空。
+    """
+    import ast
+    import inspect
+    import pathlib
+
+    from convertible_bond import pricing_api
+
+    sig = inspect.signature(pricing_api._accrued_interest)
+    required_kwonly = {
+        name for name, p in sig.parameters.items()
+        if p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty
+    }
+    assert required_kwonly, "签名里没有 keyword-only 必填参数, 这条守护就失去意义了"
+
+    root = pathlib.Path(pricing_api.__file__).parent
+    call_sites = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (func.id if isinstance(func, ast.Name)
+                    else func.attr if isinstance(func, ast.Attribute) else None)
+            if name != "_accrued_interest":
+                continue
+            passed = {kw.arg for kw in node.keywords if kw.arg}
+            splat = any(kw.arg is None for kw in node.keywords)   # **kwargs 无法静态判定
+            call_sites.append((path.relative_to(root.parent), node.lineno, passed, splat))
+
+    assert len(call_sites) >= 2, f"只找到 {len(call_sites)} 个调用点, 扫描可能失效了"
+    for rel, lineno, passed, splat in call_sites:
+        if splat:
+            continue
+        missing = required_kwonly - passed
+        assert not missing, f"{rel}:{lineno} 漏传 {sorted(missing)} —— 运行到这一支必然 TypeError"
+
+
+def test_terms_close_fallback_does_not_produce_a_deviation():
+    """条款库兜底价不参与 deviation —— 它没有 as-of, 可以任意旧。
+
+    ``_latest_bond_close_with_provenance`` 取不到行情序列时回落 ``terms.close``,
+    而那个字段没有 as-of: 日升转债库里的 99.994 是 2021 年撤销发行前的值。拿它比今天的
+    理论价, 算出来的偏差没有含义。
+
+    此前 ``market_price_source`` 只有一个消费者 (关注池「数据状态」列的文案),
+    deviation / ``snapshot_coverage`` / 策略层一个都不看它 —— 于是行情源挂一下午,
+    全池用三周前的价, 覆盖率照报 100%, 一条假快照进版本库的估值基线。
+
+    **市价本身保留** (真实成交过的价格, 展示有用), 作废的只是由它派生的偏差。
+
+    走**真实调用路径**: 第一版只扫源码文本 + 本地复述判据, 而变异体保留了那行赋值、
+    只删掉 ``and not stale_fallback``, 于是照样全绿 —— 复述不是测试。
+    """
+    import math
+
+    from convertible_bond.pricing_api import _batch_result_from_provider
+
+    class _NoHistoryProvider(SimplePricingProvider):
+        """行情序列取不到 → 触发 terms.close 兜底那一档。"""
+
+        def get_bond_history(self, bond_code, start, end):
+            return []
+
+    terms = _base_terms(close=188.8)          # 条款库里躺着一个没有 as-of 的旧价
+
+    kw = dict(valuation_date=date(2026, 8, 31), r=0.022, base_spread=0.03,
+              distress_k=0.05, p_down=0.25, vol_window_days=21,
+              sigma=None, q=None, M=120, N=300, pricer_overrides={})
+
+    row = _batch_result_from_provider(_NoHistoryProvider(terms), "123456.SZ", **kw)
+
+    assert row["status"] == "ok"
+    assert row["market_price_source"] == "terms_close", row.get("market_price_source")
+    assert row["market_price"] == pytest.approx(188.8), "市价不该被丢掉, 它是真实成交过的价"
+    assert math.isnan(row["deviation"]), "兜底价算出了 deviation"
+    assert math.isnan(row["undervaluation_rate"])
+
+    # 对照: 有真实行情时照常算
+    ok = _batch_result_from_provider(SimplePricingProvider(terms), "123456.SZ", **kw)
+    assert ok["market_price_source"] == "history"
+    assert not math.isnan(ok["deviation"])
+
+    # 而覆盖率闸现在看得见这一档了 —— 那才是它要保护的东西
+    from convertible_bond.market_valuation import snapshot_coverage
+    assert snapshot_coverage([row]) == (0, 1)
+    assert snapshot_coverage([ok]) == (1, 1)
+
+
+def test_historical_provider_never_carries_a_close_from_another_date():
+    """历史路径上 ``close`` **无条件**按估值日重取, 取不到就置 None。
+
+    它与 ``strip_current_status_fields`` 管的状态字段不是一回事: 那批由
+    ``strip_fallback_status`` 控制 (standard 口径刻意为 False), 而 ``close`` 是市场价格,
+    任何情况下都不该把别的日期的价带进这个估值日。
+
+    漏掉的是 fallback 路: history_store 没有该日快照时退回**今天**的条款, 而 standard
+    口径不剥它 —— 今天的收盘价就成了历史价, 再被当成 ``terms_close`` 兜底价用掉。
+    """
+    from datetime import date as _date
+
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.historical_terms import HistoricalBondDataProvider
+
+    class _Inner:
+        name = "fake"
+
+        def get_bond_terms(self, code, valuation_date):
+            # 今天的条款, 带着**今天**的收盘价
+            return BondTerms(sec_name="测试转债", conversion_price=10.0,
+                             maturity_date=_date(2030, 1, 1), close=188.8)
+
+        def get_bond_history(self, code, start, end):
+            return []                      # 该估值日没有行情
+
+        def terms_as_of(self, code, valuation_date):
+            return None
+
+    for strip in (True, False):            # 两种 history_mode 都不许带过来
+        provider = HistoricalBondDataProvider(_Inner(), strip_fallback_status=strip)
+        terms = provider.get_bond_terms("123456.SZ", _date(2022, 6, 30))
+        assert terms.close is None, f"strip_fallback_status={strip} 时把今天的收盘价带进了历史"

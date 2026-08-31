@@ -948,3 +948,88 @@ def test_badge_text_colour_picks_the_better_of_the_two_ends():
         chosen = badge_text_color(bg)
         other = "#11111b" if chosen == "#ffffff" else "#ffffff"
         assert contrast_ratio(chosen, bg) >= contrast_ratio(other, bg)
+
+
+def test_putback_requires_a_convertible_bond_marker_in_the_title():
+    """回售分类必须过 ``about_cb`` 闸 —— 与强赎/不强赎/摘牌同处置。
+
+    cninfo 按转债代码查不到时会 fallback 到 searchkey 全发行人搜索, 于是同发行人的
+    **普通公司债**回售公告被判成本转债的回售, 带着真实解析出来的申报窗口与回售价 100.0
+    一路进 pricer —— 而 ``putback_window_active`` 分支是**无条件**的
+    ``V = np.maximum(V, 100.0)``, 覆盖整条 S 网格, 把理论价整体抬高。
+
+    影响面已量: 全库 1089 条 putback 里 1067 条标题含转债标识, 这道闸挡掉的 22 条
+    全是法律意见书 / 评级机构关注函 / 公司债公告, 一条真实转债回售都没误伤。
+    """
+    # 公司债 —— 必须挡掉
+    for title in (
+        "山东高速路桥集团股份有限公司关于“22山路02”回售申报情况的公告",
+        "中节能太阳能股份有限公司关于“23太阳GK02”票面利率调整和回售实施办法第一次提示性公告",
+        "浙江省建设投资集团股份有限公司关于“23浙建02”不行使赎回选择权、行使票面利率调整选择权和回售实施办法第二次提示性公告",
+        "安徽天禾律师事务所关于山河药辅可转换债券回售之法律意见书",
+        "中证鹏元关于关注烟台艾迪精密机械股份有限公司变更部分募投项目并触发债券回售条款事项的公告",
+    ):
+        assert classify_announcement_title(title) != "putback", title
+
+    # 真实的转债回售 —— 必须照常识别
+    for title in (
+        "关于美锦转债回售实施的第一次提示性公告",
+        "上海洗霸科技股份有限公司关于洗霸转债回售结果的公告",
+    ):
+        assert classify_announcement_title(title) in {"putback", "balance_change"}, title
+
+
+def test_balance_change_drops_titles_that_name_a_corporate_bond():
+    """余额变动用**否定闸**而不是要求转债标识。
+
+    「未转股余额」「转股结果」是转债固有词, 一条没点名简称的合法公告不该因为缺标识被丢掉
+    (实测 1213/1218 有标识, 而无标识的 5 条全部点名了公司债)。所以这里判的是
+    "标题点名的是别的债", 不是"标题没点名本债"。
+    """
+    assert classify_announcement_title(
+        "山东高速路桥集团股份有限公司关于“22山路01”回售结果的公告") == "unknown"
+    assert classify_announcement_title(
+        "浙江省建设投资集团股份有限公司2023年面向专业投资者公开发行公司债券"
+        "（第一期）（品种二）回售结果公告") == "unknown"
+    # 而转债自己的余额公告照常识别
+    assert classify_announcement_title(
+        "关于晶瑞转债未转股余额低于三千万元的公告") == "balance_change"
+
+
+def test_delisting_date_is_not_written_from_the_announcement_date():
+    """摘牌日只认**真解析到**的日期 —— 与 ``last_trading_date`` 是同一条闸。
+
+    ``effective_start`` 在标题/正文都没有日期时回落成公告日本身, 而"摘牌日 = 提示性公告
+    当天"恒为解析失败的信号 (摘牌提示与实际摘牌之间隔着法定期)。实测全库 20 条 delisting
+    **20/20** 都是 ``effective_start == event_date`` 且 ``effective_end`` 为空 ——
+    也就是说这个字段 100% 被写成了"最后一次提示性公告的日期"。
+
+    实盘后果: 家悦转债真实摘牌日 2026-06-05, 却按 05-07 的提示公告写成已退市, 于是
+    05-12 的批量重算把一只还能交易 20 个交易日的债剔出主池。
+    """
+    from datetime import date
+
+    from convertible_bond.data_providers import BondTerms
+
+    terms = BondTerms(sec_name="家悦转债", conversion_price=10.0,
+                      listing_date=date(2020, 1, 1),
+                      maturity_date=date(2026, 6, 30),
+                      delisting_date=date(2026, 6, 5))       # Wind 给的真实摘牌日
+
+    # 解析不到日期 → effective_start 回落成公告日 → **不许**写 delisting_date
+    degraded = CBEvent(bond_code="113584.SH", event_date=date(2026, 5, 7),
+                       event_type="delisting", parsed_status="摘牌",
+                       raw_title="关于家悦转债到期兑付暨摘牌的提示性公告",
+                       effective_start=date(2026, 5, 7))
+    patched = apply_events_to_terms("113584.SH", terms, [degraded],
+                                    valuation_date=date(2026, 5, 12))
+    assert patched.delisting_date == date(2026, 6, 5), "公告日被当成摘牌日写进去了"
+
+    # 真解析到未来日期 → 照常写
+    parsed = CBEvent(bond_code="113584.SH", event_date=date(2026, 5, 7),
+                     event_type="delisting", parsed_status="摘牌",
+                     raw_title="关于家悦转债到期兑付暨摘牌的提示性公告",
+                     effective_start=date(2026, 6, 20))
+    patched = apply_events_to_terms("113584.SH", terms, [parsed],
+                                    valuation_date=date(2026, 5, 12))
+    assert patched.delisting_date == date(2026, 6, 20)

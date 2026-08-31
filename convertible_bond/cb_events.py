@@ -654,6 +654,29 @@ def _mentions_convertible_bond(text: str) -> bool:
     return bool(_CB_MENTION_RE.search(text))
 
 
+#: 公司债/企业债的简称形态: 「22山路01」「23浙建02」「23太阳GK02」——
+#: 两位年份 + 2~4 个汉字 + (可选 GK) + 两位序号。转债简称不长这样。
+_OTHER_BOND_NAME_RE = re.compile(r"\d{2}[一-龥]{2,4}(?:GK)?\d{2}")
+
+
+def _title_names_non_convertible_bond(text: str) -> bool:
+    """标题点名的是**同发行人的普通公司债**, 不是本转债。
+
+    cninfo 的 ``list_bond_announcements`` 按转债代码查不到时会 fallback 到 searchkey
+    全库搜, 返回的是**发行人**的全部公告 —— 于是「22山路02」「23太阳GK02」这类公司债
+    公告会挂到转债名下。``_title_names_other_bond`` 挡不住它们: 那个正则只认
+    ``X转债`` / ``X转N`` 形状的兄弟转债名。
+
+    实测全库: 命中 24 条 (putback 19 + balance_change 5), **误伤 0** ——
+    带转债标识的标题一条都没被判成别的债。
+    """
+    if _mentions_convertible_bond(text):
+        return False
+    # 「公司债券」单独出现不是转债标识 (「可转换公司债券」含它但反之不成立),
+    # 所以它 + 没有转债标识 = 这标题说的是普通公司债。
+    return bool(_OTHER_BOND_NAME_RE.search(text)) or "公司债券" in text
+
+
 def classify_announcement_title(title: str) -> str:
     # 空白在这里归一化, 而不是留给调用方 —— 巨潮标题里会出现「关于 晶瑞转债 到期兑付…」
     # 这种带空格的写法, 正则里的 ``.{0,30}`` 邻接约束会被撑开。
@@ -677,12 +700,26 @@ def classify_announcement_title(title: str) -> str:
     if re.search(r"转股价格调整|调整.*转股价格", text):
         return "conversion_price_adjusted"
     if re.search(r"转股结果|回售结果|赎回结果|未转股余额|债券余额|剩余可转债余额", text):
+        # 这里用**否定闸**而不是要求 about_cb: 「未转股余额」「转股结果」是转债固有词,
+        # 一条没点名债券简称的合法公告不该因为缺标识被丢掉 (实测 1213/1218 有标识,
+        # 而无标识的 5 条全部点名了公司债)。
+        if _title_names_non_convertible_bond(text):
+            return "unknown"
         return "balance_change"
     if re.search(r"恢复.{0,8}转股|转股.{0,4}恢复", text):
         return "conversion_resume"
     if re.search(r"暂停.{0,8}转股|停止.{0,8}转股|转股.{0,4}暂停", text) and "停牌" not in text:
         return "conversion_suspension"
-    if "回售" in text:
+    # **putback 必须过 about_cb 闸** —— 与 call_redemption / call_no_redemption /
+    # delisting 同处置。它此前是裸关键词, 于是同发行人的公司债回售公告被判成本转债的回售,
+    # 带着**真实解析出来的**申报窗口与回售价 100.0 进 apply_events_to_terms, 再经
+    # pricing_api 传给 pricer —— 而 pricer 的 putback_window_active 分支是**无条件**的
+    # ``V = np.maximum(V, 100.0)``, 覆盖整条 S 网格 (不像常规回售只作用在触发线以下)。
+    # 实测山路/太阳GK/浙建三只被这样写坏过。
+    #
+    # 影响面已量: 全库 1089 条 putback 里 1067 条标题含转债标识, 被这道闸挡掉的 22 条
+    # 全部是法律意见书 / 评级机构关注函 / 公司债公告 —— 一条真实的转债回售都没误伤。
+    if about_cb and "回售" in text:
         return "putback"
     if "评级" in text:
         return "rating_change"
@@ -789,7 +826,24 @@ def apply_events_to_terms(
 
     latest_delist = _latest_event(active, "delisting")
     if latest_delist:
-        updates["delisting_date"] = latest_delist.effective_end or latest_delist.effective_start
+        # 与上面 ``last_trading_date`` 是**同一条闸**: ``effective_start`` 在标题/正文都没有
+        # 日期时回落成公告日本身 (parse_event_from_announcement 的通用回落), 而"摘牌日 =
+        # 提示性公告当天"恒为解析失败的信号 —— 摘牌提示与实际摘牌之间隔着法定期。
+        #
+        # 实测全库 20 条 delisting **20/20** 都是 ``effective_start == event_date`` 且
+        # ``effective_end`` 为空, 也就是说这个字段 100% 被写成了"最后一次提示性公告的日期"。
+        # 后果: 家悦转债真实最后交易日 2026-06-01, 却按 05-07 的提示公告写成已退市,
+        # 于是 05-12 的批量重算把一只还能交易 20 个交易日的债剔出主池
+        # (batch_pricing 拿 ``delisting_date <= check_date`` 当硬剔除)。
+        #
+        # 附带治好一个非幂等: ``cb-sync-admission-status`` 每天写回 Wind 的正确值,
+        # 紧接着 ``cb-sync-events --apply`` 又改成公告日 —— 两条日常流程互相翻转同一个字段。
+        delist_on = latest_delist.effective_end
+        if delist_on is None and (latest_delist.effective_start
+                                  and latest_delist.effective_start > latest_delist.event_date):
+            delist_on = latest_delist.effective_start
+        if delist_on is not None:
+            updates["delisting_date"] = delist_on
 
     # 一只债常有几十条 putback 记录 (鸿路转债 33 条), 其中大量是法律意见书/核查意见,
     # 本来就没有申报窗口。取"最新一条"会让一份晚出的配套文件盖掉真正的窗口公告 ——

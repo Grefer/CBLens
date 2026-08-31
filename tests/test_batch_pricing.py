@@ -585,6 +585,58 @@ def test_issued_but_unlisted_enters_the_pool_and_is_flagged_as_new():
         "123284.SZ", dead, on_date=date(2026, 8, 20)) == "不可交易"
 
 
+def test_announced_future_listing_date_also_enters_the_pool():
+    """**上市日已公告但还没到**的新债同样进主池 —— 这一档曾是唯一漏网的。
+
+    准入层放行判据原先用 ``is_issued_pending_listing``, 而它的第一行是
+    ``if listing_date is not None: return False`` —— 上市日只要非空就为假, **哪怕在未来**。
+    净效果是: 上市日未知的新债放进来了, 已经公告了挂牌日的那只 (最近、最该提前盯的那只)
+    照旧被剔。实测 2026-08-31 库里三只在途新债主表上只出得来两只, 震裕转02 定于 09-02
+    挂牌, 剔除原因「不可交易」。
+
+    **两道闸必须同时让路**: 只修上面那道, 原因串会从「不可交易」变成「N 日后可交易」,
+    主池数一个不变 —— 改动等于没做。
+    """
+    soon = BondTerms(
+        sec_name="震裕转02",
+        issue_date=date(2026, 8, 17),
+        listing_date=date(2026, 9, 2),           # ← 已公告, 但还没到
+        maturity_date=date(2032, 8, 17),
+        credit_rating="AA-",
+        outstanding_balance=18.8,
+        is_tradable=False,                       # ← 派生字段
+        trading_status="pending",
+    )
+    assert batch_pricing_exclusion_reason(
+        "123282.SZ", soon, on_date=date(2026, 8, 31)) is None
+    assert batch_pricing.is_unlisted_new_bond(soon, date(2026, 8, 31)) is True
+
+    # 挂牌当天起就是普通在市债, 不再是新债
+    assert batch_pricing_exclusion_reason(
+        "123282.SZ", soon, on_date=date(2026, 9, 2)) is None
+    assert batch_pricing.is_unlisted_new_bond(soon, date(2026, 9, 2)) is False
+
+
+def test_future_tradable_date_does_not_let_private_bonds_into_the_pool():
+    """放行的是**普通公募**新债 —— 定向债不因为"可交易日在未来"跟着进来。
+
+    ``is_unlisted_new_bond`` 只看日期与派生状态, 不问代码段/命名, 所以准入层必须自己
+    与 ``standard_public`` 相与。实测库里恰好有两只未来可交易日的定向债 (富乐定转
+    2026-09-09 / 莱特定转), 它们与在途新债长得一样但不该进主池。
+    """
+    private = BondTerms(
+        sec_name="富乐定转",
+        issue_date=date(2026, 3, 9),
+        listing_date=None,
+        tradable_date=date(2026, 9, 9),
+        maturity_date=date(2032, 3, 9),
+        is_tradable=False,
+        trading_status="private_pending",
+    )
+    assert batch_pricing_exclusion_reason(
+        "124025.SZ", private, on_date=date(2026, 8, 31)) is not None
+
+
 def test_merge_upcoming_pricing_results_adds_theoretical_price():
     merged = merge_upcoming_pricing_results(
         [
@@ -632,7 +684,10 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
 
     assert row["parity"] == pytest.approx(251.69, rel=1e-3)
     assert row["conversion_premium"] == pytest.approx(-0.130, rel=1e-2)
-    assert "模型低估" in row["risk_tags"]
+    # 「模型低估」(绝对阈值 dev<−8%) 已退役 —— 便宜度只留横截面那个。
+    # ``undervaluation_rate`` 字段**保留**: 它是原始量, 不是标签。
+    assert "模型低估" not in row["risk_tags"]
+    assert "深度低估待核" in row["risk_tags"]
     assert row["undervaluation_rate"] == pytest.approx(0.294)
     assert "转股折价" in row["risk_tags"]
     assert "高HV" in row["risk_tags"]
@@ -1514,37 +1569,58 @@ def test_full_pool_view_sorts_by_listing_date_newest_first():
 
 
 def test_underlying_st_is_a_tag_not_an_exclusion():
-    """正股 ST 是「风险较大」而不是「不能交易」—— 四条约定一次钉住.
+    """正股 ST 是「风险较大」而不是「不能交易」。
 
-    ST 正股的转债照常挂牌撮合 (实测 2026-08-31 主池外的 4 只: 闻泰/三房/宏图/章鼓)。
-    硬剔除把这层信息表达成"这只债不存在", 而准入层的契约是只剔真的买不到的。
-    ``_underlying_limit_down_threshold`` 的注释早就写着"ST 风险进入复核标签, 不作为
-    主池硬剔除" —— 此前代码与那句话是分叉的。
+    ST 正股的转债照常挂牌撮合 (实测 2026-08-31 的 4 只: 闻泰/三房/宏图/章鼓)。硬剔除把
+    这层信息表达成"这只债不存在", 而准入层的契约是只剔真的买不到的。
+
+    **用完整行 + 非 ST 孪生行对照**, 不用退化行。第一版的 fixture 只填了 5 个字段, 于是
+    带着「数据缺口」「无HV」等一堆标签 —— ``model_signal_status`` 那条断言靠别的标签
+    就成立了, 把 ST 接线整个删掉也杀不掉它, 而改动真正的用户可见效果 (ST 债进得了
+    「低估候选」、不染行色) 一条断言都没有。孪生行让每一处差异都只能归因于 ST。
     """
-    terms = BondTerms(sec_name="章鼓转债", underlying_name="ST章鼓", underlying_status="是")
+    common = dict(
+        bond_code="127093.SZ", status="ok", bond_name="章鼓转债",
+        credit_rating="AA-", outstanding_balance=5.0,
+        S0=9.0, K=10.0, sigma=0.35, T=3.0,
+        market_price=105.0, theoretical_price=118.0, deviation=-0.11,
+        conversion_value=90.0,
+    )
+    st = annotate_batch_result(
+        {**common, "underlying_name": "ST章鼓", "underlying_status": "是"},
+        market_median_deviation=0.21)
+    twin = annotate_batch_result(
+        {**common, "underlying_name": "章鼓股份", "underlying_status": "否"},
+        market_median_deviation=0.21)
 
-    # ① 进得了主池
+    # ① 进得了主池 —— 准入层不再剔 ST
+    terms = BondTerms(sec_name="章鼓转债", underlying_name="ST章鼓", underlying_status="是")
     assert batch_pricing_exclusion_reason("127093.SZ", terms, on_date=date(2026, 8, 31)) is None
 
-    row = annotate_batch_result({
-        "bond_code": "127093.SZ", "status": "ok",
-        "underlying_name": "ST章鼓", "underlying_status": "是",
-        "market_price": 120.0, "theoretical_price": 100.0, "deviation": 0.2,
-    })
+    # ② 两行**只差 ST 这一个标签** —— 对照才成立
+    assert set(st["risk_tags"]) - set(twin["risk_tags"]) == {"正股风险"}
+    assert set(twin["risk_tags"]) - set(st["risk_tags"]) == set()
 
-    # ② 表上看得见
-    assert "正股风险" in row["risk_tags"]
-
-    # ③ 但**不拦路**: 标的风险维, 不进拦截集 —— 否则「低估候选」会把它筛掉,
-    #    整行还会被染成红色加粗的「买卖受限」, 而那一档收的是真的下不了单的债。
+    # ③ 不拦路: 标的风险维, 不进拦截集 → **行不染色**, 且照样进得了「低估候选」
     assert batch_pricing.RISK_TAG_DIMENSION["正股风险"] == batch_pricing.DIM_ISSUER
     assert "正股风险" not in batch_pricing.BLOCKING_RISK_TAGS
-    assert "正股风险" not in batch_pricing.TRADABILITY_RISK_TAGS
+    assert not (set(st["risk_tags"]) & batch_pricing.BLOCKING_RISK_TAGS)
+    assert view_exclusion_reason(st, "低估候选") is None, "ST 债被「低估候选」筛掉了"
+    assert st["review_bucket"] == twin["review_bucket"] == "低估候选"
 
-    # ④ 自动选债仍然不碰它 —— 这次改动对策略结果零影响
-    assert "正股风险" in LEGACY_STRATEGY_EXCLUDE_TAGS
-    assert "正股风险" in HARD_REVIEW_TAGS
-    assert row["model_signal_status"] == "不适合作为买入信号"
+    # ④ 但它**确实**削弱了这一行: 置信度与模型信号都因 ST 而变 (孪生行是对照)
+    assert (st["confidence"], twin["confidence"]) == ("中", "高")
+    assert st["model_signal_status"] == "不适合作为买入信号"
+    assert twin["model_signal_status"] != "不适合作为买入信号"
+
+    # ⑤ 自动选债不碰它 —— 但走的是**策略层的显式开关**, 不再是标签
+    from convertible_bond.strategy_backtest import (
+        ScoreStrategyConfig, _candidate_filter_reason)
+    assert _candidate_filter_reason(st, ScoreStrategyConfig()) == "正股 ST/退市风险"
+    assert _candidate_filter_reason(
+        st, ScoreStrategyConfig(exclude_underlying_st=False)) is None
+    # 孪生行在同一份配置下进得去 —— 证明拦它的确实是 ST 而不是别的闸
+    assert _candidate_filter_reason(twin, ScoreStrategyConfig()) is None
 
 
 def test_last_trading_date_stays_a_hard_exclusion():

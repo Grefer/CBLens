@@ -1348,6 +1348,17 @@ def test_direction_tags_are_relabelled_without_touching_the_frozen_string():
     assert "深度低估待核" in batch_pricing.DEEP_UNDERVALUED_TAGS
     assert batch_pricing.RISK_TAG_DIMENSION["深度低估待核"] == "机会信号"
 
+    # 「正股风险」→「正股ST」: 底层串在两个冻结集里, 所以只改展示名。
+    # 旧名太泛 —— 正股停牌 / 正股跌停 也都是"正股的风险", 而这个标签只判
+    # ``_underlying_has_st_risk`` 一件事。新名字就是判据本身, 主语「正股」还在。
+    assert batch_pricing.risk_tag_label("正股风险") == "正股ST"
+    assert "正股风险" in batch_pricing.LEGACY_STRATEGY_EXCLUDE_TAGS
+    assert "正股风险" in batch_pricing.HARD_REVIEW_TAGS
+
+    # 便宜度只留横截面那一个: 绝对阈值那个已退役, 但展示名保留供旧缓存渲染
+    assert "模型低估" in batch_pricing.RETIRED_RISK_TAGS
+    assert batch_pricing.risk_tag_label("模型低估") == "市价低于模型价"
+
     # **摘要条也要走这张表** —— 它曾经另写一份字面量「⚠ 模型高估 2」, 于是标签列
     # 已经改口而摘要条还在说旧词, 同一页两种说法。
     class _Var:
@@ -1368,8 +1379,12 @@ def test_direction_tags_are_relabelled_without_touching_the_frozen_string():
     text = app.v_watchlist_status.value
     assert "市价远高于模型价 1" in text, text
     assert "模型高估" not in text
-    # 没登记的原样返回
-    assert batch_pricing.risk_tag_label("低评级") == "低评级"
+    # 展示名现已**全覆盖** (2026-08-31): 32 个登记标签逐个有名字。此前 3/32 是最坏的
+    # 中间态 —— 3 个精心命名 + 29 个把内部变量名直接渲染给用户。
+    assert set(batch_pricing.RISK_TAG_DISPLAY_LABEL) == set(batch_pricing.RISK_TAG_DIMENSION)
+    assert batch_pricing.risk_tag_label("低评级") == "评级低于AA-"   # 名字带上阈值
+    # 没登记的仍然原样返回 (旧缓存里可能有更早的字符串)
+    assert batch_pricing.risk_tag_label("某个从未登记的标签") == "某个从未登记的标签"
     # 表放在 batch_pricing 而不是 GUI —— 事件短标签那次私有表分叉的教训
     assert not hasattr(batch_tab, "RISK_TAG_DISPLAY_LABEL")
     assert not hasattr(watchlist_tab, "RISK_TAG_DISPLAY_LABEL")
@@ -1383,9 +1398,10 @@ def test_tags_covered_by_the_data_column_are_dropped_on_the_watchlist():
     没有专属列, 挡掉就真丢了。
     """
     tags = ["无偏差", "无市价", "较高HV", "无评级"]
-    assert batch_common._format_tags(tags, drop_covered=True) == "较高HV / 无评级"
+    # 渲染走展示名 —— 「较高HV」→「正股波动偏高」, 「无评级」→「评级缺失」
+    assert batch_common._format_tags(tags, drop_covered=True) == "正股波动偏高 / 评级缺失"
     # 批量页不传 drop_covered —— 那边没有「数据状态」列
-    assert "无市价" in batch_common._format_tags(tags)
+    assert "市价缺失" in batch_common._format_tags(tags)
 
 
 def test_trigger_gap_is_a_signed_ratio_and_sorts_natively():
@@ -2687,9 +2703,10 @@ def test_tag_suppression_is_per_preset_not_global():
         assert "短久期" not in rendered
 
     # 而「较高HV」只在完整里抑制 —— 简洁/关注池没有 σ 列
-    assert "较高HV" in batch_common._format_tags(row_tags, columns=simple)
-    assert "较高HV" in batch_common._format_tags(row_tags, columns=set(watchlist))
-    assert "较高HV" not in batch_common._format_tags(row_tags, columns=full)
+    hv = batch_pricing.risk_tag_label("较高HV")          # 「正股波动偏高」
+    assert hv in batch_common._format_tags(row_tags, columns=simple)
+    assert hv in batch_common._format_tags(row_tags, columns=set(watchlist))
+    assert hv not in batch_common._format_tags(row_tags, columns=full)
 
     # 不传列集 = 不知道渲染了什么 → 一个都不挡 (保守的那一侧)
     assert batch_common._format_tags(row_tags).count("/") == 2
@@ -2707,8 +2724,9 @@ def test_suppression_does_not_touch_the_underlying_tag_set():
     row = {"bond_code": "x", "status": "ok", "risk_tags": ["低评级", "短久期", "余额清零"]}
     full = {name for name, _ in batch_tab._BATCH_COLS_FULL}
 
-    # 表上只剩「余额清零」(拦截档, 不抑制)
-    assert batch_common._format_tags(row["risk_tags"], columns=full) == "余额清零"
+    # 表上只剩「余额清零」(拦截档, 不抑制) —— 渲染成它的展示名
+    assert (batch_common._format_tags(row["risk_tags"], columns=full)
+            == batch_pricing.risk_tag_label("余额清零") == "余额已清零")
     # 但行色仍由完整的 risk_tags 决定
     assert batch_common._resolve_row_tag(row) == "blocked"
     # 底层集合一个字节没动
@@ -2744,3 +2762,58 @@ def test_both_tables_actually_pass_their_column_set_to_the_tag_cell():
             assert "columns" in kwargs, (
                 f"{module.__name__}.{func_name} 的 _format_tags 没传 columns= —— "
                 f"标签抑制会静默失效, 表照常渲染")
+
+
+def test_every_registered_tag_has_a_display_name():
+    """展示名必须**全覆盖** —— 这是 2026-08-31 的决定, 不是巧合。
+
+    此前 3/32 有名字, 那是最坏的中间态: 3 个精心命名 + 29 个把内部变量名
+    (「数据缺口」「模型溢价高」「无HV」) 直接渲染给用户。要么全补齐, 要么承认内部名
+    就是展示名 —— 选了前者, 所以这条钉住"新增标签必须同时给名字"。
+
+    命名规则 (违反会被下面几条断言接住):
+      · 必须点明**度量的是谁** —— 「无HV」→「正股σ缺失」(HV 是内部缩写);
+      · 带阈值的档位把**阈值写进名字** —— 「低评级」→「评级低于AA-」("低"低到哪?);
+      · 不许以「模型」开头、不许出现无主语的「高估/低估」、不许暗示动作 (「核」)。
+    """
+    missing = set(RISK_TAG_DIMENSION) - set(batch_pricing.RISK_TAG_DISPLAY_LABEL)
+    assert not missing, f"这些标签没有展示名, 会把内部变量名渲染给用户: {sorted(missing)}"
+
+    orphans = set(batch_pricing.RISK_TAG_DISPLAY_LABEL) - set(RISK_TAG_DIMENSION)
+    assert not orphans, f"展示名表里有未登记维度的标签: {sorted(orphans)}"
+
+    for tag, shown in batch_pricing.RISK_TAG_DISPLAY_LABEL.items():
+        assert shown and shown.strip() == shown, f"{tag} 的展示名有空白问题"
+        assert not shown.startswith("模型"), f"{shown}: 「模型」不是主语"
+        assert "高估" not in shown and "低估" not in shown, f"{shown}: 无主语的高估/低估"
+        assert "核" not in shown, f"{shown}: 在暗示动作, 而页面上有「需复核」视图"
+        # 内部缩写不许出现在展示名里 —— HV 是 hist_vol 的简写, 表上那列叫「正股σ(%)」
+        assert "HV" not in shown, f"{shown}: HV 是内部缩写"
+
+
+def test_tag_column_is_wide_enough_for_the_longest_rendered_name():
+    """标签列宽要放得下**实际渲染**的名字, 不是放得下最短的那个。
+
+    展示名全补齐 (2026-08-31) 之后名字变长了 —— 简洁预设的 p90 从 12 字符涨到 15,
+    所以列宽同步从 170/180 调到 220px。这条钉住"名字变长时列宽要跟上":
+    截断会让最有信息量的那几行反而读不全, 而它不报错、只是看着少了几个字。
+    """
+    from convertible_bond.gui.tabs import batch as batch_tab
+    from convertible_bond.gui.tabs import batch_watchlist as wl_tab
+
+    wl_headers, wl_widths = wl_tab.watchlist_columns()
+    presets = {
+        "简洁": dict(batch_tab._BATCH_COLS_SIMPLE),
+        "完整": dict(batch_tab._BATCH_COLS_FULL),
+        "关注池": dict(zip(wl_headers, wl_widths)),
+    }
+    # **逐个预设查** —— 合成一个 dict 再查会让"只有一个预设退回窄列"被后面的覆盖掉
+    # (实测这个变异体正是这样活下来的)。
+    for name, cols in presets.items():
+        assert cols["标签"] >= 220, (
+            f"{name}预设的标签列只有 {cols['标签']}px —— 展示名全补齐之后放不下, "
+            f"最长的组合是「贴近转股价值 / 市价远低于市场中位 / 正股波动极高」")
+
+    # 单个展示名不许长到一个都放不下 (220px 约 16 个中文字符)
+    for tag, shown in batch_pricing.RISK_TAG_DISPLAY_LABEL.items():
+        assert len(shown) <= 12, f"{tag} 的展示名 {shown!r} 有 {len(shown)} 字, 单个就要截断"

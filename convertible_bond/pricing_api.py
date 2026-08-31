@@ -850,7 +850,19 @@ def _batch_result_from_provider(
         )
         mkt = res.get("market_price")
         theo = res["theoretical_price"]
-        if mkt is not None and theo > 0:
+        # **条款库兜底价不参与 deviation**。``_latest_bond_close_with_provenance`` 取不到
+        # 行情序列时会回落 ``terms.close``, 而那个字段**没有 as-of**, 可以任意旧 ——
+        # 日升转债库里的 close=99.994 是 2021 年撤销发行前的值。拿它去比今天的理论价,
+        # 算出来的偏差没有任何含义。
+        #
+        # 此前 ``market_price_source`` 只有一个消费者 (关注池的「数据状态」列文案),
+        # deviation / 覆盖率闸 / 策略层一个都不看它, 于是新浪行情挂一下午 → 全池用三周前
+        # 的价 → ``snapshot_coverage`` 照报 100% → 一条假快照进版本库的估值基线。
+        #
+        # **市价本身仍然保留** (它是这只债最后一次成交的真实价格, 展示有用, 且「数据状态」
+        # 列会说清它是兜底的); 只把由它派生的 deviation 作废 —— 那才是被污染的那个数。
+        stale_fallback = res.get("market_price_source") == "terms_close"
+        if mkt is not None and theo > 0 and not stale_fallback:
             res["deviation"] = (float(mkt) - theo) / theo
             res["undervaluation_rate"] = -res["deviation"]
         else:

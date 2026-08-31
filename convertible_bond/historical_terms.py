@@ -427,10 +427,20 @@ class HistoricalBondDataProvider(DataProvider):
             self.event_store.list_events(bond_code=bond_code, through_date=valuation_date),
             valuation_date=valuation_date,
         )
+        # ``close`` **无条件按估值日重取**, 取不到就置 None —— 不许沿用 terms 里带来的那个。
+        #
+        # 它与 ``strip_current_status_fields`` 管的那批状态字段不是一回事: 那些字段由
+        # ``strip_fallback_status`` 开关控制 (standard 口径下刻意为 False, 因为条款来自
+        # 按日期归档的历史快照), 而 ``close`` 是**市场价格**, 任何情况下都不该把别的日期
+        # 的价带进这个估值日。
+        #
+        # 漏掉的那条路是 fallback: history_store 没有该日快照时会退回
+        # ``self.inner.get_bond_terms()`` = **今天**的条款, 而 standard 口径下
+        # strip_fallback_status=False 不剥它 —— 于是今天的收盘价被当成历史价。
+        # 下游 ``_latest_bond_close_with_provenance`` 又会把它当 ``terms_close`` 兜底价用,
+        # 而那一档此前对 deviation / 覆盖率闸完全隐形。
         close = _latest_bond_close(self.inner, bond_code, valuation_date)
-        if close is not None:
-            terms = replace(terms, close=close)
-        return terms
+        return replace(terms, close=close)
 
     def get_terms_source_diagnostics(self, bond_code: str, valuation_date: date) -> dict[str, Any]:
         """返回历史回测在某日使用的条款口径, 供策略回测做防未来函数提示."""
@@ -591,6 +601,17 @@ def strip_current_status_fields(terms: BondTerms) -> BondTerms:
         conversion_suspension_status=None,
         last_trading_date=None,
         delisting_date=None,
+        # **正股名字也必须剥**: ``_underlying_has_st_risk`` 判的是
+        # ``f"{underlying_name} {underlying_status}"`` 的拼接串, 而 cb_data 里的
+        # ``underlying_name`` 是**今天**的名字 —— 剥了 status 却留着名字, 等于让 2022 年的
+        # 回测从「*ST闻泰」这四个字里读出"这家公司 2026 年会被 ST"。实测四只当前 ST 债
+        # (110081/110092/118027/127093) 剥离后 ST 判据仍为 True, 全靠名字。
+        #
+        # 代价已量过, 是零: 这四只**都有 ``underlying_st_risk`` 事件**, 而事件在
+        # ``apply_events_to_terms`` 里按估值日重放 —— 剥掉名字之后它们照样被识别,
+        # 只是从**事件公告日**起而不是从回测第一天起, 那才是 point-in-time。
+        # 回测路径不渲染正股名 (只有 GUI 的「正股」列用它, 那条路不走 strip)。
+        underlying_name=None,
         underlying_status=None,
         underlying_trade_status=None,
         underlying_pct_change=None,
