@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-08-25T09:35:33"
+    "updated_at": "2026-08-30T23:32:10"
   },
   "patches": [
     {
@@ -313700,6 +313700,19 @@
       },
       "note": "outstanding_balance 6.99093->5.622073 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "bond_code": "128134.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-08",
+      "event_date": "2026-07-02",
+      "fields": {
+        "conversion_price": 17.49
+      },
+      "note": "转股价 ->17.49 | https://static.cninfo.com.cn/finalpage/2026-07-02/1225404150.PDF",
+      "raw_title": "关于鸿路转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "128134.SZ|2026-07-02|conversion_price_adjusted|关于鸿路转债转股价格调整的公告"
     },
     {
       "before_fields": {
