@@ -345,8 +345,21 @@ class UniversalCBPricer:
 
     def _price_grid(self, sigma: float, r: float, q: float, base_spread: float,
                     p_down: float, distress_k: float,
-                    M: int, N: int) -> tuple[np.ndarray, np.ndarray]:
-        """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心."""
+                    M: int, N: int, *,
+                    capture_out: dict | None = None,
+                    capture_elapsed: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+        """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心.
+
+        ``capture_out`` 给定时, 顺便截下回溯途中 ``t_prev`` **最接近**
+        ``capture_elapsed`` (距今年数) 的那一片, 写成 ``{"t": …, "V": …}``。
+
+        Θ 用它而不是"把明天当成新的一只债重解一遍": 那样两次求解的 dt 与 S_max 都变了
+        (S_max = exp(3σ√T)·K 随 T 变), 而 Θ·1日 相对价格只有 ~2e-5 量级 —— 两个各带
+        O(dt²) 离散误差的数相减, 误差不抵消反而被放大。实测重解法在生产网格上
+        **N=1000 偏 +63.8% / N=2000 偏 +9.5%** (基准 N=16000), 要到 N=4000 才收敛。
+        同一次回溯里的两片共享网格与格式, 误差同向抵消; 而且**省掉一整次求解** ——
+        ``return_greeks=True`` 原本要解 3 次 (基准 + vega 扰动 + 明天), 现在 2 次。
+        """
         # S_max 上限 _S_MAX_CAP 防止极端 σ/T (如 σ=2.0, T=10) 下 exp(3σ√T) 天文数字导致 OOM
         S_max_ref = min(max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))), _S_MAX_CAP) * self.K
         S_max = max(S_max_ref, 1.5 * self.S0)
@@ -497,6 +510,15 @@ class UniversalCBPricer:
 
             V[-1] = max(V[-1], S_grid[-1] * self.ratio)
 
+            # 沿途截片: t_prev 单调递减, 取与目标最接近的那一步 (>0 才有意义 —— t_prev=0
+            # 就是今天本身, 拿它算 Θ 恒得 0)。
+            if capture_out is not None and t_prev > 0:
+                gap = abs(t_prev - capture_elapsed)
+                if gap <= capture_out.get("gap", float("inf")):
+                    capture_out["gap"] = gap
+                    capture_out["t"] = t_prev
+                    capture_out["V"] = V.copy()
+
         return S_grid, V
 
     @overload
@@ -535,7 +557,11 @@ class UniversalCBPricer:
         if M < 3 or N < 1:
             raise ValueError("M must be >= 3 and N must be >= 1")
 
-        S_grid, V = self._price_grid(sigma, r, q, base_spread, p_down, distress_k, M, N)
+        # 只有要 Θ 时才截片 (多一次 V.copy()/步)
+        theta_slice: dict | None = {} if return_greeks else None
+        S_grid, V = self._price_grid(
+            sigma, r, q, base_spread, p_down, distress_k, M, N,
+            capture_out=theta_slice, capture_elapsed=1.0 / _DAYS_PER_YEAR)
         theo = float(np.interp(self.S0, S_grid, V))
 
         if not return_greeks:
@@ -561,22 +587,28 @@ class UniversalCBPricer:
         theo_vol = float(np.interp(S0, S_grid_v, V_v))
         vega = (theo_vol - theo)  # / d_sigma * 0.01 = / 1, 即每 1pp σ 的价格变化
 
-        # Theta: current_date + 1 日 重算; 单位 "理论价 / 天"
-        if (self.maturity_date - self.current_date).days > 1:
-            tomorrow_pricer = UniversalCBPricer(
-                **{
-                    **self._constructor_kwargs(),
-                    "current_date": self.current_date + timedelta(days=1),
-                }
-            )
-            S_grid_t, V_t = tomorrow_pricer._price_grid(
-                sigma, r, q, base_spread, p_down, distress_k, M, N)
-            theo_tomorrow = float(np.interp(S0, S_grid_t, V_t))
-            theta = theo_tomorrow - theo
+        # Theta: 取**同一次回溯**里 t≈1 天那一片, 不再把明天当成新的一只债重解。
+        # 重解法的两次求解 dt 与 S_max (= exp(3σ√T)·K, 随 T 变) 都不同, 而 Θ·1日 相对
+        # 价格只有 ~2e-5 —— 两个各带 O(dt²) 误差的数相减, 误差不抵消。实测生产网格上
+        # N=1000 偏 +63.8%、N=2000 偏 +9.5% (基准 N=16000)。同一次回溯的两片共享网格,
+        # 误差同向抵消。网格步长 dt 未必正好等于 1 天 (N=1000, T=3.3 年时 dt≈1.2 天),
+        # 所以按实际截到的 t 归一化到"每日历日"。
+        if theta_slice and theta_slice.get("t"):
+            theo_ahead = float(np.interp(S0, S_grid, theta_slice["V"]))
+            theta = (theo_ahead - theo) / (theta_slice["t"] * _DAYS_PER_YEAR)
         else:
+            # 截不到片 = 只剩 1 步 (T 极短), Θ 没有意义
             theta = float("nan")
 
-        bond_floor = float(self.bond_floor_value(self.current_date, r + base_spread))
+        # 债底要用**模型自己在 S0 处用的**那个利差, 不是裸 base_spread: 求解器里
+        # current_spreads = base_spread + distress_k·max(0, 1 − S/K), 而这里只用
+        # base_spread —— 两个数说的是同一只债的同一个量, 却各算各的。
+        # 实测生产口径 (distress_k=0.05) 下 S0/K=0.38 时报出的债底比模型自用的高 8.9 元,
+        # S0/K=0.09 时高 12.7 元; 而 option_premium = price − max(bond_floor, parity)
+        # 直接吃这个差, 会渲染出**负的期权溢价** (−0.250) —— 一个债底比全价还高的组合,
+        # 在模型自己的口径里根本不存在。
+        spread_at_s0 = base_spread + distress_k * max(0.0, 1.0 - S0 / self.K)
+        bond_floor = float(self.bond_floor_value(self.current_date, r + spread_at_s0))
         parity = float(self.S0 * self.ratio)
         # 深度实值 + 已过强赎窗口时, PDE cap 至 parity·(1+σ√t_grace),
         # 期权溢价 ≈ 强赎宽限期内的 stock optionality. call_notice_days=0 时退化为 0.

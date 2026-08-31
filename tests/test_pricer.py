@@ -587,23 +587,42 @@ class TestBondFloor:
         bf_late = base_pricer.bond_floor_value(date(2026, 7, 1), 0.05)
         assert bf_late > bf_early
 
-    def test_reported_bond_floor_is_discounted_at_r_plus_spread(self):
-        """``price()`` 报出来的 ``bond_floor`` 必须含信用利差, 不能只用无风险利率.
+    def test_reported_bond_floor_uses_the_spread_the_model_itself_uses_at_s0(self):
+        """``price()`` 报出来的 ``bond_floor`` 必须用**模型自己在 S0 处用的**那个利差.
 
         上面三条都是符号/单调性检查, ``test_price_decomposition_consistency`` 是拿分解
         跟自己比 —— 没有一条约束**折现率本身**。实测把折现率从 ``r + base_spread`` 改成
         ``r``, 957 条测试全绿, 而长久期债的「纯债底」差 17.35 元 (81.39 → 98.74, +21.2%),
         且这个数直接显示在定价页上。
+
+        它曾只用 ``base_spread``, 而求解器里是
+        ``base_spread + distress_k·max(0, 1 − S/K)`` —— 同一只债的同一个量, 两处各算各的。
+        实测生产口径 (distress_k=0.05) 下 S0/K=0.38 时报出的债底比模型自用的高 **8.9 元**,
+        S0/K=0.09 时高 **12.7 元**; 而 ``option_premium = price − max(bond_floor, parity)``
+        直接吃这个差, 会渲染出**负的期权溢价** (实测 −0.250) —— 一个"债底比全价还高"的
+        组合, 在模型自己的口径里根本不存在。
         """
         pricer = _long_dated_otm_pricer()
-        r, spread = 0.022, 0.03
-        result = pricer.price(sigma=0.28, r=r, base_spread=spread, distress_k=0.05,
+        r, spread, distress_k = 0.022, 0.03, 0.05
+        result = pricer.price(sigma=0.28, r=r, base_spread=spread, distress_k=distress_k,
                               p_down=0.0, M=200, N=500, return_greeks=True)
 
+        # 与求解器里 current_spreads 的公式逐字同形, 在 S0 处取值
+        spread_at_s0 = spread + distress_k * max(0.0, 1.0 - pricer.S0 / pricer.K)
         assert result["bond_floor"] == pytest.approx(
-            pricer.bond_floor_value(pricer.current_date, r + spread))
-        # 且必须**严格低于**只用 r 折现的那个值 —— 差额就是利差的作用
+            pricer.bond_floor_value(pricer.current_date, r + spread_at_s0))
+
+        # 这个 fixture 深度 OTM (S0/K≈0.38), distress 项必须真的起作用 —— 否则这条用例
+        # 退化成"跟 base_spread 比", 又变回它原本要防的那个形状
+        assert spread_at_s0 > spread + 0.02
+        assert result["bond_floor"] < pricer.bond_floor_value(
+            pricer.current_date, r + spread) - 3.0
+
+        # 原本那条保护留着: 必须**严格低于**只用 r 折现的值, 差额就是利差的作用
         assert result["bond_floor"] < pricer.bond_floor_value(pricer.current_date, r) - 5.0
+
+        # 期权溢价不再为负
+        assert result["option_premium"] > 0
 
 
 # ── 8.5 信用利差的 distress 扩张 ────────────────────────────
@@ -2136,3 +2155,92 @@ class TestPDEStress:
             f"高股息率应降低 OTM 定价: q=0 → {p_no_q:.2f}, q=0.025 → {p_high_q:.2f}"
 
 
+
+
+class TestThetaAccuracy:
+    """Θ 此前**一条守护都没有** —— 124 条用例全绿地放过了 +64% 的误差。"""
+
+    @staticmethod
+    def _pricer():
+        return UniversalCBPricer(
+            S0=55.0, K=52.77,
+            current_date=date(2026, 4, 20), maturity_date=date(2029, 7, 30),
+            issue_date=date(2023, 7, 30), conversion_start_date=date(2024, 2, 6),
+            coupon_rates=(0.003, 0.004, 0.008, 0.015, 0.018, 0.02),
+            redemption_price=107.0, call_notice_days=30,
+        )
+
+    def test_theta_matches_the_pde_identity(self):
+        """Θ 必须与 PDE 恒等式一致 —— 这是与网格完全独立的第二条推导。
+
+        PDE 是 ``∂V/∂t + ½σ²S²V_SS + (r−q)S·V_S − (r+s)V = 0``, 所以
+        ``∂V/∂t = (r+s)V − (r−q)S·Δ − ½σ²S²·Γ``。在没有离散票息落在窗口内、也没有约束
+        绑定的点上它是精确的, 且只用已经算好的 Δ/Γ, 不碰时间网格。
+
+        旧实现"把明天当成新的一只债重解一遍": 两次求解的 dt 与 S_max (= exp(3σ√T)·K,
+        随 T 变) 都不同, 而 Θ·1日 相对价格只有 ~2e-5 —— 两个各带 O(dt²) 误差的数相减,
+        误差不抵消反而被放大。实测偏差 **N=1000 +63.8% / N=2000 +9.5%**, 而且在 M 上
+        也不收敛到恒等式 (M=19200 仍偏 +33%)。
+        """
+        p = self._pricer()
+        r, q, spread, sigma = 0.022, 0.0, 0.03, 0.28
+        g = p.price(sigma, r, base_spread=spread, distress_k=0.0, p_down=0.0,
+                    q=q, M=300, N=1000, return_greeks=True)
+
+        identity = ((r + spread) * g["price"]
+                    - (r - q) * p.S0 * g["delta"]
+                    - 0.5 * sigma ** 2 * p.S0 ** 2 * g["gamma"]) / 365.0
+        assert g["theta"] == pytest.approx(identity, rel=0.05), (
+            f"Θ={g['theta']:.6f} 与 PDE 恒等式 {identity:.6f} 不符")
+
+    def test_theta_is_stable_across_the_time_grid(self):
+        """Θ 不该随 N 漂 —— 网格是数值手段, 不是模型参数。
+
+        旧实现在生产网格上 N=1000→N=2000 就从 +0.003561 跳到 +0.002380 (差 33%),
+        而用户看到的只是「Θ」那一格换了个数字。批量默认 N=1000、单只 N=2000, 两页
+        对同一只债会给出差三分之一的 Θ。
+        """
+        p = self._pricer()
+        thetas = [
+            p.price(0.28, 0.022, base_spread=0.03, distress_k=0.0, p_down=0.0,
+                    M=300, N=N, return_greeks=True)["theta"]
+            for N in (1000, 2000, 4000)
+        ]
+        assert max(thetas) - min(thetas) < 0.02 * abs(thetas[0]), (
+            f"Θ 随 N 漂: {thetas}")
+
+    def test_theta_costs_no_extra_pde_solve(self):
+        """截片法必须真的省掉那次重解 —— 否则改动只换了准确度没换成本。
+
+        ``return_greeks=True`` 原本解 3 次 (基准 + vega 扰动 + 明天), 现在 2 次。
+        直接数 ``_price_grid`` 的调用次数, 不看墙钟 (那会在 CI 上抖)。
+        """
+        p = self._pricer()
+        calls = []
+        real = p._price_grid
+
+        def counted(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+
+        p._price_grid = counted
+        p.price(0.28, 0.022, base_spread=0.03, distress_k=0.0, p_down=0.0,
+                M=300, N=500, return_greeks=True)
+        assert len(calls) == 2, f"解了 {len(calls)} 次, 期望 2 次 (基准 + vega)"
+
+    def test_theta_is_nan_when_there_is_no_room_for_a_slice(self):
+        """只剩一步时截不到片, Θ 没有意义 —— 必须是 NaN 而不是 0。
+
+        0 会被读成"这只债没有时间价值衰减", 而真相是"算不出来"。
+        """
+        import math
+
+        p = UniversalCBPricer(
+            S0=55.0, K=52.77,
+            current_date=date(2026, 4, 20), maturity_date=date(2026, 4, 21),
+            issue_date=date(2023, 7, 30), conversion_start_date=date(2024, 2, 6),
+            coupon_rates=(0.02,), redemption_price=107.0,
+        )
+        g = p.price(0.28, 0.022, base_spread=0.03, M=300, N=1,
+                    return_greeks=True)
+        assert math.isnan(g["theta"])
