@@ -2817,3 +2817,291 @@ def test_tag_column_is_wide_enough_for_the_longest_rendered_name():
     # 单个展示名不许长到一个都放不下 (220px 约 16 个中文字符)
     for tag, shown in batch_pricing.RISK_TAG_DISPLAY_LABEL.items():
         assert len(shown) <= 12, f"{tag} 的展示名 {shown!r} 有 {len(shown)} 字, 单个就要截断"
+
+
+# ── GUI 批量页: 排序 / 覆盖率闸 / 事件横幅 / 展示名 的守护 ──────────────
+def test_ordinal_columns_sort_by_their_own_ladder_not_by_codepoint():
+    """「评级」「可信度」是**有序分类**列, 既不是数也不该按字符串排。
+
+    ``_attach_column_sort`` 的判据是"至少一半 present 值能 float", 而这两列全部返回
+    None, 于是整列静默落进 ``str().lower()`` 分支 —— 与 AGENTS 记的「线上 123% 排在
+    线上 3% 前面」是同一个失效, 只是这次连中文前缀都没有, 更看不出来:
+
+      · 评级 ASCII 降序 = CC > BBB+ > AA- > AA+ > AA > A+ —— 垃圾级排最上面, 而
+        ``+`` (0x2B) < ``-`` (0x2D) 让 AA+ 排在 AA- 下面
+      · 置信度中文码点序是 中(0x4E2D) < 低(0x4F4E) < 高(0x9AD8), 于是「需复核」视图
+        专门加出来解释"这行为什么在这儿"的那一列, 把「低」排在中间而不是任一端
+
+    档位表必须复用 ``data_providers.base.CREDIT_RATING_RANK`` —— 仓库里曾有两份逐字
+    重复的 19 档表 (``cli/sync_ratings`` 与 ``cli/data_doctor``), GUI 再抄第三份就是
+    在等它们分叉。
+    """
+    from convertible_bond.data_providers.base import CREDIT_RATING_RANK
+    from convertible_bond.gui.tabs.batch_common import (
+        _ORDINAL_SORT_SCALES,
+        _parse_sortable_number,
+    )
+
+    # 前提: 这些值确实解析不成数 —— 否则这条用例测的是别的东西
+    for v in ("AA+", "AA-", "BBB+", "CC", "高", "中", "低"):
+        assert _parse_sortable_number(v) is None
+
+    ratings = ["AA+", "AA", "AA-", "A+", "BBB+", "CC"]
+    scale = _ORDINAL_SORT_SCALES["评级"]
+    assert scale is CREDIT_RATING_RANK, "GUI 抄了第三份评级表"
+    assert sorted(ratings, key=lambda x: scale[x], reverse=True) == [
+        "AA+", "AA", "AA-", "A+", "BBB+", "CC"]
+    # 字符串序会给出这个 —— 钉住它, 免得有人"顺手"把 scale 去掉
+    assert sorted(ratings, reverse=True) == ["CC", "BBB+", "AA-", "AA+", "AA", "A+"]
+
+    conf = _ORDINAL_SORT_SCALES["可信度"]
+    assert sorted(["高", "中", "低"], key=lambda x: conf[x], reverse=True) == [
+        "高", "中", "低"]
+    assert sorted(["高", "中", "低"]) == ["中", "低", "高"]
+
+    # 全部 19 档都要在表里 —— 少一档那一档就沉底, 不报错
+    assert set(scale) == set(CREDIT_RATING_RANK)
+
+
+def test_credit_rating_ladder_has_exactly_one_definition():
+    """评级档位表只许有一份。
+
+    ``cli/sync_ratings.RATING_ORDER`` 与 ``cli/data_doctor._RATING_ORDER`` 曾是两份
+    **逐字重复**的 19 档元组 (当时恰好一致)。这类重复不会一起被改 —— 本仓库已经在
+    ``terms_as_of`` (三份, 只修了两份) 和事件展示词表 (GUI 私有一份, 漏 4 个类型)
+    上各栽过一次。
+    """
+    from convertible_bond.cli import data_doctor, sync_ratings
+    from convertible_bond.data_providers.base import (
+        CREDIT_RATING_ORDER,
+        CREDIT_RATING_RANK,
+    )
+
+    assert sync_ratings.RATING_ORDER is CREDIT_RATING_ORDER
+    assert sync_ratings._RANK is CREDIT_RATING_RANK
+    assert data_doctor._RATING_ORDER is CREDIT_RATING_ORDER
+    assert data_doctor._RATING_RANK is CREDIT_RATING_RANK
+
+
+def test_market_price_coverage_does_not_count_the_terms_close_fallback():
+    """``terms_close`` 兜底不是"取到市价"。
+
+    转债行情整条挂掉时 ``_latest_bond_close_with_provenance`` 回落到条款库的
+    ``terms.close`` —— 那个值**没有 as-of**、可以任意旧 (日升转债库里的 99.994 是
+    2021 年撤销发行前的)。它是个有限数, 所以按 ``_is_finite`` 判就全算"取到了",
+    闸在"一个真实报价都没拿到"这一档上恰好不响。
+
+    代价不只是消息不准: 热缓存是整行 upsert, 这一轮就把昨天的真市价与真 deviation
+    换成兜底价与 NaN, 而 ``_price_state`` 仍是 ``ok``, 于是 ``stale_watchlist_codes``
+    当天再不重试。口径要与 ``market_valuation._usable_deviations`` 一致 —— 实测同一批
+    行两个闸曾给出相反结论 (关注池 5/5 vs 批量页 0/5)。
+    """
+    from convertible_bond import market_valuation as mv
+    from convertible_bond.gui.tabs.batch_watchlist import market_price_coverage
+
+    def row(source, price=99.994):
+        return {"bond_code": "123095.SZ", "status": "ok", "market_price": price,
+                "market_price_as_of": None, "market_price_source": source,
+                "deviation": float("nan"), "is_tradable": True,
+                "listing_date": "2022-01-01"}
+
+    fallback = [row("terms_close") for _ in range(5)]
+    expect, got = market_price_coverage(fallback)
+    assert len(expect) == 5 and len(got) == 0, "兜底价被当成取到了市价"
+    # 与批量页那道闸同口径
+    assert mv.snapshot_coverage(fallback)[0] == 0
+
+    real = [dict(row("history"), deviation=0.4653) for _ in range(5)]
+    expect2, got2 = market_price_coverage(real)
+    assert len(expect2) == len(got2) == 5, "真实行情反而被挡掉了"
+
+
+def test_events_banner_does_not_count_today_twice():
+    """过去窗口与未来窗口**不许共用 today 端点**。
+
+    ``_window_hit`` 两端都是闭区间, 而两次 ``collect_upcoming_events`` 曾都带上 today
+    —— 正好落在今天的事件被各数一次, 横幅写成「近 7 天 1 件 … 强赎 (08-31) | 未来
+    30 天 1 件 … 强赎 (08-31)」, 读起来像同一只债有两次强赎, 弹窗里同一行出现两遍,
+    还占掉 head=5 的展示位。而"今天到期"恰恰是横幅最该说清楚的那一档。
+
+    ``collect_upcoming_events`` 内部的 ``seen`` 去重是**每次调用各一份**, 拦不住跨调用
+    的重复 —— 所以这条必须测两次调用的合集。
+    """
+    import inspect
+
+    from convertible_bond.gui.tabs import batch_watchlist as bw
+
+    src = inspect.getsource(bw._refresh_events_banner)
+    # 过去窗口的右端点必须早于 today
+    assert "today - timedelta(days=1)" in src, "过去窗口仍以 today 收尾, 今天会被双计"
+    # 未来窗口仍从 today 开始 —— 今天归"还来得及处理"的那一侧
+    assert "store, watch_codes, today, today + timedelta(days=window_days)" in src
+
+
+def test_events_popup_title_is_derived_from_the_actual_window():
+    """弹窗标题不许写死天数, 也不许宣称已删除的池外范围。
+
+    它曾是 ``近 30 天事件 (N 件, 关注池+主池)``, 两处都在说假话: 天数写死 30 而横幅走
+    ``past_days``/``window_days``; 那个"关注池加主池"的范围是 2026-08-29 已经删掉的
+    (``_pool_scan_codes`` 一并删了)。弹窗标题于是在给它自己的内容作伪证。
+
+    判据只看**真正传给 ``win.title()`` 的那个串**, 不扫源码文本 —— 第一版扫文本, 当场
+    把上面这段解释历史的 docstring 判红。同一个教训 AGENTS 里已经记过一次
+    (关注池"不说持仓"那条守护, 第一版把解释性注释判成违规)。
+    """
+    import ast
+    import inspect
+
+    from convertible_bond.gui.tabs import batch_watchlist as bw
+
+    src = inspect.getsource(bw._show_events_banner_full)
+    tree = ast.parse(src.lstrip())
+    titles = [
+        ast.get_source_segment(src.lstrip(), node.args[0])
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "title"
+        and node.args
+    ]
+    assert titles, "找不到 win.title(...) 调用"
+    title_expr = titles[0]
+    assert "关注池+主池" not in title_expr, f"标题仍宣称已删除的池外范围: {title_expr}"
+    assert "30" not in title_expr, f"标题仍写死天数: {title_expr}"
+    assert "past_days" in title_expr and "window_days" in title_expr, (
+        f"标题没用这一轮实际的窗口: {title_expr}")
+
+    # 窗口天数本身要有单一事实源, 且横幅默认值就取它
+    assert bw._BANNER_PAST_DAYS == 7 and bw._BANNER_FUTURE_DAYS == 30
+    banner_sig = str(inspect.signature(bw._refresh_events_banner))
+    assert "past_days" in banner_sig and "window_days" in banner_sig
+    assert bw._refresh_events_banner.__kwdefaults__["past_days"] is bw._BANNER_PAST_DAYS
+    assert bw._refresh_events_banner.__kwdefaults__["window_days"] is bw._BANNER_FUTURE_DAYS
+
+
+def test_strategy_page_renders_risk_tags_through_the_display_table():
+    """策略页的**两处** risk_tags 出口都要走 ``risk_tag_label``。
+
+    AGENTS 明令"所有消费者都要走 ``risk_tag_label()``" —— 裸 ``str(tag)`` 会让同一个
+    标签在批量页读作「市价远低于市场中位」而在策略页读作「深度低估待核」, 而那两个
+    说法指向相反的动作 (研究 vs 去修数据)。
+
+    这条钉**两处**: 候选/剔除表 (~L655) 与持仓明细 (~L758)。只修一处正是"同一页两种
+    说法"的来源 —— 关注池摘要条曾私抄一份字面量, 就是这么分叉的。
+    """
+    import ast
+    import inspect
+
+    from convertible_bond.gui.controllers import strategy_render
+
+    src = inspect.getsource(strategy_render)
+    tree = ast.parse(src)
+
+    bare = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == "str"):
+            continue
+        # str(x) where the comprehension iterates risk_tags
+        seg = ast.get_source_segment(src, node) or ""
+        if seg.strip() == "str(tag)":
+            bare.append(node.lineno)
+    assert not bare, f"strategy_render 仍有裸 str(tag) 于第 {bare} 行"
+    assert src.count("risk_tag_label(tag)") >= 2, "只改了一处出口"
+
+
+class _FakeTree:
+    """够 ``_attach_column_sort`` 用的最小 Treeview 替身。
+
+    它只碰四个方法 (``set`` / ``get_children`` / ``move`` / ``heading``), 所以鸭子类型
+    就够 —— 这样能测**真实的排序代码路径**而不是只测那张档位表。
+    不建 Tk root: macOS 的 Tk 不要 X11, 本机会悄悄成功而 CI 抛
+    ``TclError: no display name``, 那是"本机全绿 CI 全红"的唯一常见来源。
+    """
+
+    def __init__(self, rows, columns):
+        self._columns = list(columns)
+        self._rows = {f"i{n}": dict(zip(columns, r)) for n, r in enumerate(rows)}
+        self._order = list(self._rows)
+        self.commands: dict[str, object] = {}
+
+    def set(self, iid, col):
+        return self._rows[iid][col]
+
+    def get_children(self, _parent=""):
+        return list(self._order)
+
+    def move(self, iid, _parent, index):
+        self._order.remove(iid)
+        self._order.insert(index, iid)
+
+    def heading(self, col, **kw):
+        if "command" in kw:
+            self.commands[col] = kw["command"]
+
+    def column_values(self, col):
+        return [self._rows[iid][col] for iid in self._order]
+
+
+def test_clicking_an_ordinal_header_actually_reorders_by_the_ladder():
+    """驱动**真实**的 ``_attach_column_sort``, 不只是断言档位表的内容。
+
+    上一版只比对 ``_ORDINAL_SORT_SCALES`` 里的字典 —— 把 ``sort_by`` 里那行
+    ``scale = _ORDINAL_SORT_SCALES.get(...)`` 改成 ``scale = None``, 排序当场退回
+    字符串序而整套测试照样全绿。测数据结构不等于测代码路径。
+    """
+    from convertible_bond.gui.tabs.batch_common import _attach_column_sort
+
+    columns, headers = ("c0", "c1"), ("评级", "可信度")
+    rows = [("AA-", "中"), ("CC", "低"), ("AA+", "高"), ("BBB+", "中")]
+    tree = _FakeTree(rows, columns)
+    _attach_column_sort(tree, columns, headers)
+
+    tree.commands["c0"]()                      # 第一次点 = 升序
+    assert tree.column_values("c0") == ["CC", "BBB+", "AA-", "AA+"], "评级不是信用序"
+    tree.commands["c0"]()                      # 再点 = 降序
+    assert tree.column_values("c0") == ["AA+", "AA-", "BBB+", "CC"]
+    # 字符串降序会给出这个 —— 钉住反例, 否则"碰巧对"也能过
+    assert sorted(["AA-", "CC", "AA+", "BBB+"], reverse=True) == [
+        "CC", "BBB+", "AA-", "AA+"]
+
+    tree2 = _FakeTree(rows, columns)
+    _attach_column_sort(tree2, columns, headers)
+    tree2.commands["c1"]()
+    assert tree2.column_values("c1") == ["低", "中", "中", "高"], "可信度不是高中低序"
+    assert sorted(["中", "低", "高", "中"]) == ["中", "中", "低", "高"]
+
+    # 缺失值无论升降都沉底 (既有约定, 顺手钉住不被序数分支带坏)
+    tree3 = _FakeTree([("AA", "高"), ("—", "低"), ("A+", "中")], columns)
+    _attach_column_sort(tree3, columns, headers)
+    tree3.commands["c0"]()
+    assert tree3.column_values("c0")[-1] == "—"
+
+
+def test_home_tooltip_gives_the_two_deviation_columns_their_own_reference():
+    """两列的**参照物不同**, 不许并成一句。
+
+    ``偏差(%)`` 比的是模型价, ``相对偏差(pp)`` 比的是全市场中位 —— 主页 tooltip 曾写成
+    「偏差(%) / 相对偏差(pp) 正 = 市价贵于模型价」, 对后者说错了。实测缓存里 135/309 行
+    两者符号相反: 一只债完全可以"比模型价贵"同时"比全市场便宜", 而主页是默认落地页,
+    这是整页唯一一条符号说明。口径以 ``COLUMN_HELP`` 为准 (那里两列本来就是分开写的)。
+
+    既有的 ``test_title_tooltip_stays_short`` 只管长度 —— 它挡不住这个。
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_home_tab import _home_tooltips
+
+    from convertible_bond.gui.tabs.batch_common import COLUMN_HELP
+
+    title = _home_tooltips()["title"]
+    assert "偏差(%)" in title and "相对偏差(pp)" in title
+    # 两个参照物都要出现, 且不能只留模型价那一个
+    assert "模型价" in title, "没说 偏差(%) 比的是模型价"
+    assert "全市场" in title, "相对偏差(pp) 被并进了模型价那一句"
+    # 与 COLUMN_HELP 的口径同向 (那里是逐列写的单一事实源)
+    assert "全市场" in COLUMN_HELP["相对偏差(pp)"]
+    assert "模型价" in COLUMN_HELP["偏差(%)"]

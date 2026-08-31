@@ -24,6 +24,7 @@ from ...batch_pricing import (
     DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS,
     is_unlisted_new_bond, risk_tag_label,
 )
+from ...data_providers.base import CREDIT_RATING_RANK
 from ..widgets import Tooltip
 
 
@@ -542,6 +543,23 @@ def _parse_sortable_number(value) -> float | None:
         return None
 
 
+#: 有序的**分类**列: 值不是数, 但也不该按字符串排。键 = 表头文本 (与 COLUMN_HELP /
+#: column_align 同一套键)。
+#:
+#: 少了这张表, ``_attach_column_sort`` 的"至少一半能 float"判据对它们全部失败, 整列
+#: 静默退化成 ``str().lower()`` 序 —— 与 AGENTS 记的「线上 123% 排在线上 3% 前面」是
+#: 同一个失效, 只是这次连中文前缀都没有, 更看不出来:
+#:   · 「评级」ASCII 降序给出 CC > BBB+ > AA- > AA+ > AA > A+ —— 垃圾级排在最上面,
+#:     而 AA+ 排在 AA- 下面 (``+`` 是 0x2B, ``-`` 是 0x2D, 所以 ``AA+`` < ``AA-``)
+#:   · 「可信度」中文码点序是 中(0x4E2D) < 低(0x4F4E) < 高(0x9AD8), 于是「需复核」视图
+#:     专门加出来解释"这行为什么在这儿"的那一列, 把「低」排在中间而不是任一端
+#: 评级档位表复用 ``data_providers.base.CREDIT_RATING_RANK`` —— 不在这里抄第三份。
+_ORDINAL_SORT_SCALES: dict[str, dict[str, int]] = {
+    "评级": CREDIT_RATING_RANK,
+    "可信度": {"低": 0, "中": 1, "高": 2},
+}
+
+
 def trigger_gap_text(gap) -> str:
     """正股价相对下修触发线, 带符号: ``S0/(K*ratio) - 1``。负 = 正股价在触发线**下方**。
 
@@ -585,7 +603,13 @@ def _attach_column_sort(tree: ttk.Treeview, columns, headers) -> None:
         # **带中文前缀的值会全部返回 None, 这一列就静默退化成字符串序** —— 曾经
         # 「线上 123%」排在「线上 3%」前面、整个「线上」组还排在「线下」组前面, 不报错。
         # 现在所有数值列都渲染成裸的带符号数, 由 test_numeric_columns_sort_numerically 守着。
-        parsed = [(_parse_sortable_number(v), iid) for v, iid in present]
+        # 有序分类列 (评级 / 可信度) 走各自的档位表; 其余列试解析成数。两条路之后的
+        # 处理完全一样 (多数命中才算数, 解析不出的沉底), 所以只换取值函数不换分支。
+        scale = _ORDINAL_SORT_SCALES.get(headers[col_idx])
+        if scale is not None:
+            parsed = [(scale.get(str(v).strip()), iid) for v, iid in present]
+        else:
+            parsed = [(_parse_sortable_number(v), iid) for v, iid in present]
         ok_numeric = sum(1 for n, _ in parsed if n is not None)
         is_numeric = present and ok_numeric >= max(1, len(present) // 2)
 

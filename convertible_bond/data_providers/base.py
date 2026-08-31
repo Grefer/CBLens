@@ -85,6 +85,18 @@ def to_date(v: Any) -> date | None:
     return date.fromisoformat(str(v)[:10])
 
 
+#: 债项信用评级由低到高。``BondTerms.credit_rating`` 的取值域, 放在这里是因为它是
+#: 那个字段的定义地, 且谁都 import 得到 (cli / GUI / 体检), 不会成环。
+#: 曾经 ``cli/sync_ratings.RATING_ORDER`` 与 ``cli/data_doctor._RATING_ORDER`` 各写一份
+#: **逐字重复**的 19 档表 (当时恰好一致), 而 GUI 排序又要第三份 —— 这个仓库反复踩的
+#: 就是"同一份表抄两遍, 只改其中一遍"。
+CREDIT_RATING_ORDER: tuple[str, ...] = (
+    "C", "CC", "CCC", "B-", "B", "B+", "BB-", "BB", "BB+", "BBB-", "BBB", "BBB+",
+    "A-", "A", "A+", "AA-", "AA", "AA+", "AAA",
+)
+CREDIT_RATING_RANK: dict[str, int] = {g: i for i, g in enumerate(CREDIT_RATING_ORDER)}
+
+
 def safe_date(v: Any) -> date | None:
     """宽松版 :func:`to_date`: 空值 / ``NaT`` / ``--`` / 解析失败一律 None, 不抛也不猜.
 

@@ -28,10 +28,11 @@ from dataclasses import replace
 from typing import Any
 
 from ..cache import TermsBundle, project_bundle_path
+from ..data_providers.base import CREDIT_RATING_ORDER, CREDIT_RATING_RANK
 
-RATING_ORDER = ("C", "CC", "CCC", "B-", "B", "B+", "BB-", "BB", "BB+", "BBB-", "BBB", "BBB+",
-                "A-", "A", "A+", "AA-", "AA", "AA+", "AAA")
-_RANK = {grade: i for i, grade in enumerate(RATING_ORDER)}
+# 档位表的单一事实源在 data_providers.base —— 这里只做别名, 供既有 import 继续用
+RATING_ORDER = CREDIT_RATING_ORDER
+_RANK = CREDIT_RATING_RANK
 
 # 上游对部分券 (科创板 118xxx 段居多) 会在评级后缀一个 "sti", 例如 "AA+sti" / "A-sti"。
 # 档位本身是标准的, 后缀只是上游的口径标记。早期实现按"值必须精确落在 _RANK 里"过滤,

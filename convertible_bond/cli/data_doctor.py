@@ -35,6 +35,7 @@ from typing import Any, Callable
 
 from ..batch_pricing import is_unlisted_new_bond, screen_batch_pool_from_cache
 from ..cache import TermsBundle, project_bundle_path
+from ..data_providers.base import CREDIT_RATING_ORDER, CREDIT_RATING_RANK
 from ..cb_events import project_events_path
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
 from ..market_time import market_today
@@ -315,9 +316,9 @@ def check_statutory_line_clustering(ctx: dict) -> Check:
 
 # ─────────────────────────── 交叉校验 ───────────────────────────
 
-_RATING_ORDER = ("C", "CC", "CCC", "B-", "B", "B+", "BB-", "BB", "BB+", "BBB-", "BBB", "BBB+",
-                 "A-", "A", "A+", "AA-", "AA", "AA+", "AAA")
-_RATING_RANK = {grade: i for i, grade in enumerate(_RATING_ORDER)}
+# 档位表的单一事实源在 data_providers.base (曾与 sync_ratings 各写一份逐字重复的表)
+_RATING_ORDER = CREDIT_RATING_ORDER
+_RATING_RANK = CREDIT_RATING_RANK
 
 
 def check_rating_divergence(ctx: dict) -> Check:

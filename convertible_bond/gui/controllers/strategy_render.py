@@ -32,6 +32,7 @@ from ..tabs.batch_common import (
     _configure_responsive_columns,
     _configure_tree_style,
 )
+from ...batch_pricing import risk_tag_label
 from ..widgets import Tooltip
 
 from .strategy_common import STRATEGY_DETAIL_TABLE_HEIGHT, STRATEGY_OVERVIEW_CHART_HEIGHT
@@ -652,7 +653,7 @@ class StrategyRenderMixin:
                     " / ".join(
                         text for text in (
                             reason_text,
-                            " / ".join(str(tag) for tag in row.get("risk_tags") or []),
+                            " / ".join(risk_tag_label(tag) for tag in row.get("risk_tags") or []),
                         ) if text
                     ),
                 ])
@@ -755,7 +756,10 @@ class StrategyRenderMixin:
                     "下修事件退出"
                     if pos.get("exit_reason") == "down_reset_event" else "调仓退出"
                 )
-                notes = [str(tag) for tag in pos.get("risk_tags") or []]
+                # 与上面候选表同一个出口: 展示名一律走 risk_tag_label。裸 str(tag) 会让
+                # 同一个标签在批量页读作「市价远低于市场中位」而在这里读作
+                # 「深度低估待核」—— AGENTS 明令"所有消费者都要走 risk_tag_label()"。
+                notes = [risk_tag_label(tag) for tag in pos.get("risk_tags") or []]
                 if pos.get("exit_event_title"):
                     notes.append(str(pos.get("exit_event_title")))
                 detail_rows.append([

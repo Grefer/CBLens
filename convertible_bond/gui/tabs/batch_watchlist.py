@@ -511,9 +511,21 @@ def market_price_coverage(ok_rows):
     判空用 :func:`_is_finite` 而不是 ``is not None``: 市价在
     ``watchlist_cache._NAN_FIELDS`` 里, 落盘走一圈读回来是 **NaN**, 而
     ``NaN is not None`` 为真。
+
+    **``terms_close`` 兜底不算"取到市价"**: ``_latest_bond_close_with_provenance`` 在转债
+    行情整条挂掉时会回落到条款库里的 ``terms.close``, 那个值**没有 as-of**、可以任意旧
+    (日升转债库里的 99.994 是 2021 年撤销发行前的)。它是个有限数, 所以按 ``_is_finite``
+    判就全部算"取到了" —— 闸在"一个真实报价都没拿到"这一档上恰好不响, 状态栏照报
+    「取到市价 N/N」, 而热缓存是整行 upsert, 这一轮就把昨天的真市价与真 deviation
+    (实测 163.18 / +0.465) 换成兜底价与 NaN, 且 ``_price_state`` 仍是 ``ok``,
+    于是 ``stale_watchlist_codes`` 当天再不重试。
+    口径与 ``market_valuation._usable_deviations`` 对齐 —— 那一侧早就排除了 terms_close,
+    实测同一批行两个闸给出相反结论 (关注池 5/5 vs 批量页 0/5)。
     """
     expect = [r for r in ok_rows if not _is_new_bond(r)]
-    got = [r for r in expect if _is_finite(r.get("market_price"))]
+    got = [r for r in expect
+           if _is_finite(r.get("market_price"))
+           and r.get("market_price_source") != "terms_close"]
     return expect, got
 
 
@@ -1569,7 +1581,15 @@ def _set_banner_tone(label, *, alert: bool) -> None:
         logger.debug("事件横幅色调设置失败 (忽略)", exc_info=True)
 
 
-def _refresh_events_banner(app, *, past_days: int = 7, window_days: int = 30,
+#: 事件横幅的两个窗口天数。**必须是单一事实源** —— 横幅文案、弹窗标题、空态文案
+#: 三处都要说同一个数字, 而弹窗标题此前写死 30 天, 与横幅的 ``window_days`` 各说各的
+#: (与 ``WATCH_REFRESH_LABEL`` 那条"按钮改名后消息还指着旧名字"是同一个形状)。
+_BANNER_PAST_DAYS = 7
+_BANNER_FUTURE_DAYS = 30
+
+
+def _refresh_events_banner(app, *, past_days: int = _BANNER_PAST_DAYS,
+                           window_days: int = _BANNER_FUTURE_DAYS,
                            head: int = 5):
     """关注池的事件区: 「近 N 天已发生」+「未来 M 天」.
 
@@ -1599,8 +1619,14 @@ def _refresh_events_banner(app, *, past_days: int = 7, window_days: int = 30,
         return
 
     today = market_today()
+    # 两个窗口在 today 上**不许重叠**: ``_window_hit`` 两端都是闭区间, 而这两次调用
+    # 共用 today 端点 —— 正好落在今天的事件会被各数一次, 横幅写成「近 7 天 1 件 …
+    # 强赎 (08-31) | 未来 30 天 1 件 … 强赎 (08-31)」, 读起来像同一只债有两次强赎,
+    # 弹窗里也是同一行出现两遍, 还占掉 head=5 的展示位。今天归**未来**那一侧
+    # (它是"还来得及处理的"那一档, 也是横幅存在的理由)。
     past = collect_upcoming_events(
-        store, watch_codes, today - timedelta(days=past_days), today)
+        store, watch_codes, today - timedelta(days=past_days),
+        today - timedelta(days=1))
     future = collect_upcoming_events(
         store, watch_codes, today, today + timedelta(days=window_days))
 
@@ -1613,6 +1639,8 @@ def _refresh_events_banner(app, *, past_days: int = 7, window_days: int = 30,
 
     # 明细留给弹窗, 一条不少; 过去的排在前面 (它们是"已经发生了而你可能没看见")
     app._batch_events_banner_full = list(past) + list(future)
+    # 弹窗标题要说**这一轮实际用的**窗口, 不是它自己猜的默认值
+    app._batch_events_banner_window = (past_days, window_days)
 
     segments = []
     if past:
@@ -1663,12 +1691,20 @@ def _group_banner_entries(upcoming, names) -> list[str]:
 
 
 def _show_events_banner_full(app):
-    """单击事件横幅 → 弹窗按日期分组展示全部事件."""
+    """单击事件横幅 → 弹窗按日期分组展示全部事件.
+
+    标题必须**由横幅的实际窗口算出来**, 不能写死: 它曾是
+    ``近 30 天事件 (N 件, 关注池+主池)``, 两处都在说假话 —— 天数写死 30 而横幅走
+    ``past_days``/``window_days``, 「关注池+主池」宣称的是 2026-08-29 已经**删掉**的
+    池外范围 (`_pool_scan_codes` 一并删了)。弹窗标题于是在给它自己的内容作伪证。
+    """
     full = getattr(app, "_batch_events_banner_full", None)
     if not full:
         return
+    past_days, window_days = getattr(
+        app, "_batch_events_banner_window", (_BANNER_PAST_DAYS, _BANNER_FUTURE_DAYS))
     win = ctk.CTkToplevel(app)
-    win.title(f"近 30 天事件 ({len(full)} 件, 关注池+主池)")
+    win.title(f"关注池事件 · 近 {past_days} 天与未来 {window_days} 天 ({len(full)} 件)")
     win.geometry("520x420")
     win.transient(app)
     body = ctk.CTkScrollableFrame(win, fg_color=BG_CARD)
