@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import site
 import sys
@@ -213,7 +214,10 @@ WIND_START_WAIT_SEC = int(os.environ.get("CBLENS_WIND_START_WAIT_SEC", "20") or 
 #: 连接失败后的冷却期 (秒)。``_ensure`` 失败时不缓存连接, 于是**每一次**取数都会
 #: 重新等一遍 —— 全池 284 只按 10 线程折算就是 284 × 20s / 10 ≈ 570s 的"假死"。
 #: 冷却期内直接复用上次的异常, 让"没有 Wind 环境"变成秒级失败而不是漫长等待。
-WIND_CONNECT_COOLDOWN_SEC = float(os.environ.get("CBLENS_WIND_CONNECT_COOLDOWN_SEC", "60"))
+# 空串要回落, 不能裸 float(): 这是**模块级**求值, `export CBLENS_...=` (设了但留空)
+# 会让整个包 import 期就抛 ValueError。同组另外两个常量早就带了 `or 0`, 只有这个漏了。
+WIND_CONNECT_COOLDOWN_SEC = float(
+    os.environ.get("CBLENS_WIND_CONNECT_COOLDOWN_SEC", "60") or 60)
 
 
 def wind_is_ready() -> bool:
@@ -449,8 +453,20 @@ class WindDataProvider(DataProvider):
         d = {f.lower(): v[0] for f, v in zip(res.Fields, res.Data)}
 
         def _f(key):
+            """数值字段。**NaN 也要当成缺失** —— Wind 对取不到的数值字段返回的是
+            ``nan`` 而不是 ``None``, 裸 ``float()`` 会把它原样写进 BondTerms 并落进
+            cb_data.json。NaN 与 None 在下游完全不同: ``x is not None`` 放行它,
+            ``x or fallback`` 也不回落, 而任何比较都恒为假 —— 一个 NaN 转股价能让
+            这只债静默定不出价, 且每次自洽性检查都说"字段齐备"。
+            """
             v = d.get(key)
-            return float(v) if v is not None else None
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if math.isfinite(f) else None
 
         terms = BondTerms(
             sec_name=d.get("sec_name"),

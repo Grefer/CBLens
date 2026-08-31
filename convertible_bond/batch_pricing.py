@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from .cache import CachedBondDataProvider
+from .cache import TERMS_SYNC_SOURCE, CachedBondDataProvider, terms_fetched_at
 from .data_providers import (
     AkshareDataProvider,
     CSVDataProvider,
@@ -31,7 +31,6 @@ from .data_providers import (
     is_standard_public_cb_code,
     looks_private_cb_name,
     safe_date,
-    to_date,
 )
 from .cb_events import CBEventStore, project_events_path
 from .historical_terms import TermsPatchStore, project_terms
@@ -1029,15 +1028,14 @@ def _admission_projection_stores():
 
 
 def _terms_cache_as_of(terms_cache, code: str) -> date | None:
-    """条款缓存里这只债的抓取日 —— 快照已含该日之前生效的全部条款变更。"""
-    getter = getattr(terms_cache, "fetched_at", None)
-    if getter is None:
-        return None
-    try:
-        ts = getter(code)
-    except Exception:
-        return None
-    return ts.date() if ts is not None else None
+    """条款缓存里这只债的抓取日 —— 快照已含该日之前生效的全部条款变更。
+
+    走 ``cache.terms_fetched_at`` 这个单一事实源。曾经这里自己写了一份**只读全局戳**的
+    实现, 而 ``cache.py`` 那两份早就改成按来源桶取了 —— 逐字重复的三份代码只有两份被修,
+    留下的这份静默给主池条款投影用错锚 (实测 3 只债的 patch 被多裁 5 天; 每跑一次
+    状态刷新/评级同步/事件同步, 全局戳就往前推一次, 影响只会变大)。
+    """
+    return terms_fetched_at(terms_cache, code, source=TERMS_SYNC_SOURCE)
 
 
 def _project_terms_for_admission(
@@ -1082,11 +1080,14 @@ def _terms_value(terms: Any, key: str):
 
 
 def _terms_date(terms: Any, key: str) -> date | None:
-    value = _terms_value(terms, key)
-    try:
-        return to_date(value)
-    except Exception:
-        return None
+    """取条款上的日期字段。
+
+    用 ``safe_date`` 不用 ``to_date``: ``pandas.NaT`` 是 ``datetime`` 的**子类**且
+    ``bool(NaT)`` 为真, ``to_date`` 既不抛异常也不回落, 会把 NaT 原样放行 ——
+    下游拿它和真 date 比较时抛 ``TypeError: Cannot compare NaT with datetime.date``,
+    而这里的 ``except Exception`` 在上游, 接不到。
+    """
+    return safe_date(_terms_value(terms, key))
 
 
 def summarize_batch_results(results: Sequence[dict]) -> dict:

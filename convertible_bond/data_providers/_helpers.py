@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .base import to_date
+from .base import safe_date, to_date
 
 
 logger = logging.getLogger(__name__)
@@ -252,9 +252,11 @@ def _stock_history_from_df(df) -> list[tuple[date, float | None]]:
         d_raw = _row_value(row, "日期", "date")
         if d_raw is None:
             continue
-        try:
-            d = to_date(d_raw)
-        except Exception:
+        # safe_date 而不是 to_date: pandas.NaT 是 datetime 子类且为真值, to_date 原样
+        # 放行它, 于是 NaT 混进序列, 末尾那次 sort 拿它和真 date 比就抛
+        # TypeError (`item[0] or date.min` 也拦不住 —— NaT 是真值)。
+        d = safe_date(d_raw)
+        if d is None:
             continue
         v = _row_value(row, "收盘", "收盘价", "close")
         try:

@@ -1728,3 +1728,62 @@ def test_missing_balance_and_rating_no_longer_tagged():
     assert not (set(no_rating["risk_tags"]) & batch_pricing.BLOCKING_RISK_TAGS)
     # 而「无市价」保留 —— 它的数据源确实会挂
     assert "无市价" in _annotated(market_price=None)["risk_tags"]
+
+
+def test_terms_as_of_anchors_the_terms_sync_bucket_not_the_global_stamp(tmp_path):
+    """条款锚必须取**全量条款同步**那一桶, 不是全局 ``fetched_at``。
+
+    实测盘上 5 个来源桶 (Wind:admission_status / Wind / cb_events / akshare:ratings /
+    akshare:new_issues), 只有 ``Wind`` 真抓条款 —— 另外四个各刷几个状态字段, 却一样把
+    **全局** 戳推到今天。用全局值当锚等于宣称"今天之前的条款变更都已含在快照里",
+    于是那段条款 patch 被 ``after=`` 整段裁掉。
+
+    这条同时钉住**三个出口共用一份实现**: ``cache.py`` 的两个 ``terms_as_of`` 与
+    ``batch_pricing._terms_cache_as_of`` 曾各写一份逐字重复的代码, 而只有前两份被修好
+    —— 第三份留在全局戳上, 静默给主池的条款投影用错锚 (实测 3 只债多裁 5 天; 每跑一次
+    状态刷新 / 评级同步 / 事件同步, 全局戳就再往前推一次, 影响只会变大)。
+    """
+    import json
+    from datetime import date
+
+    from convertible_bond.batch_pricing import _terms_cache_as_of
+    from convertible_bond.cache import (
+        TERMS_SYNC_SOURCE,
+        CachedBondDataProvider,
+        CachingDataProvider,
+        TermsBundle,
+        terms_fetched_at,
+    )
+
+    code = "128009.SZ"
+    path = tmp_path / "cb_data.json"
+    path.write_text(json.dumps({code: {
+        "sec_name": "歌尔转债", "conversion_price": 10.0,
+        "_meta": {
+            # 状态刷新把全局戳推到了今天, 但条款是 5 天前抓的
+            "fetched_at": "2026-08-30T09:00:00",
+            "source": "Wind:admission_status",
+            "fetched_at_by_source": {
+                TERMS_SYNC_SOURCE: "2026-08-25T09:00:00",
+                "Wind:admission_status": "2026-08-30T09:00:00",
+            },
+        },
+    }}, ensure_ascii=False), encoding="utf-8")
+    bundle = TermsBundle(path)
+
+    assert _terms_cache_as_of(bundle, code) == date(2026, 8, 25), (
+        "batch_pricing 读了全局戳 —— 08-25~08-30 的条款 patch 会被多裁掉")
+
+    inner = type("I", (), {"name": TERMS_SYNC_SOURCE})()
+    assert CachingDataProvider.terms_as_of(
+        type("P", (), {"cache": bundle, "inner": inner})(), code, date(2026, 8, 30),
+    ) == date(2026, 8, 25)
+    assert CachedBondDataProvider.terms_as_of(
+        type("P", (), {"cache": bundle, "static_source": inner})(),
+        code, date(2026, 8, 30),
+    ) == date(2026, 8, 25)
+
+    # 缺桶时必须回落全局戳, 不能回 None —— None 在投影层表示"不裁剪", 会把整条 patch 链
+    # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债 K 11.63 会被
+    # 盖成 17.74)。这不是假想的边界: 实测全库 739/1059 只还没有条款桶。
+    assert terms_fetched_at(bundle, code, source="从来没有过的桶") == date(2026, 8, 30)

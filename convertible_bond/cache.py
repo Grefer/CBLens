@@ -344,6 +344,52 @@ class TermsCache:
         return False
 
 
+#: 全量条款同步 (``cb-sync-tradable``) 落盘时用的来源桶名 = 那个 provider 的 ``name``。
+#: 实测盘上 5 个桶: Wind:admission_status / Wind / cb_events / akshare:ratings /
+#: akshare:new_issues —— 只有 ``Wind`` 这一桶真抓条款, 另外四个各刷几个状态字段却一样
+#: 会把**全局** fetched_at 推到今天。取条款锚必须点名这一桶。
+TERMS_SYNC_SOURCE = "Wind"
+
+
+def terms_fetched_at(cache, bond_code: str, *, source: str | None) -> date | None:
+    """条款缓存里这只债**条款那一次**的抓取日 —— 快照已含该日之前生效的全部条款变更.
+
+    ``source`` 是**全量条款同步**那个来源桶 (provider.name, 实测盘上是 ``"Wind"``)。
+    必须按来源取: 全局 ``fetched_at`` 会被每日 ``Wind:admission_status`` / 每月
+    ``akshare:ratings`` / 每日 ``cb_events`` 一起推到今天, 而这三者一个条款字段都不抓。
+    用全局值当锚等于宣称"今天之前的条款变更都已含在快照里", 于是条款 patch 被
+    ``after=`` 整段裁掉 —— 实测 live 定价路径上一条 patch 都不生效。
+
+    缺桶时**回落到全局 fetched_at**, 不是 None —— None 在投影层表示"不裁剪", 会把整条
+    patch 链从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债
+    K 11.63 会被盖成 17.74)。宁可暂时保守裁掉, 也不能反向写坏。
+
+    这个函数是**单一事实源**: 两个装饰器的 ``terms_as_of`` 与 ``batch_pricing`` 的
+    ``_terms_cache_as_of`` 曾各写一份, 而只有前两份改成了按来源取 —— 第三份留在全局戳上,
+    静默给主池的条款投影用错锚 (实测 3 只债的 patch 被多裁 5 天)。逐字重复的代码不会
+    一起被修, 这是已经发生过的事。
+    """
+    if cache is None:
+        return None
+    getter = getattr(cache, "fetched_at", None)
+    if getter is None:
+        return None
+    ts = None
+    if source:
+        try:
+            ts = getter(bond_code, source=source)
+        except TypeError:      # 旧式 cache 没有 source 形参
+            ts = None
+        except Exception:
+            return None
+    if ts is None:
+        try:
+            ts = getter(bond_code)
+        except Exception:
+            return None
+    return ts.date() if ts is not None else None
+
+
 class CachingDataProvider(DataProvider):
     """装饰器: 把 inner provider 的 get_bond_terms / get_cashflow 包一层本地缓存.
 
@@ -367,36 +413,17 @@ class CachingDataProvider(DataProvider):
         self._write_lock = threading.Lock()
 
     def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
-        """条款来自本装饰器的缓存, 锚是**条款那一次**的抓取日.
-
-        必须按来源取: 全局 ``fetched_at`` 会被每日的状态刷新 / 评级同步推到今天, 用它当锚
-        等于宣称"今天之前的条款变更都已含在快照里", 于是条款 patch 全被 ``after=`` 裁掉。
-        """
-        if self.cache is None:
-            return None
-        try:
-            ts = self.cache.fetched_at(bond_code, source=self.inner.name)
-        except TypeError:      # 旧式 cache 没有 source 形参
-            ts = None
-        except Exception:
-            return None
-        if ts is None:
-            # 还没有按来源的时间戳 (本字段是后加的, 跑一次全量同步才落库)。此时**回落到
-            # 全局 fetched_at**, 而不是 None —— None 在上层表示"不裁剪", 会把整条 patch 链
-            # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债
-            # K 11.63 会被盖成 17.74)。宁可暂时保守裁掉, 也不能反向写坏。
-            try:
-                ts = self.cache.fetched_at(bond_code)
-            except Exception:
-                return None
-        return ts.date() if ts is not None else None
+        """条款来自本装饰器的缓存, 锚是**条款那一次**的抓取日 (见 ``terms_fetched_at``)."""
+        return terms_fetched_at(self.cache, bond_code, source=self.inner.name)
 
     def get_bond_terms(self, bond_code, valuation_date):
         cached = self.cache.get(bond_code)
         stale = self.cache.is_stale(bond_code, self.max_age_days) if cached else True
 
-        # 缓存命中且未过期 → 直接返回, 不打网络
-        if cached is not None and not stale:
+        # 缓存命中且未过期 → 直接返回, 不打网络。``auto_refresh=False`` 时**过期也不回源**
+        # (与 CachedBondDataProvider 同名参数同语义) —— 此前这个参数存了不用, 传 False
+        # 被静默忽略, 装饰器照样打网络。
+        if cached is not None and (not stale or not self.auto_refresh):
             return cached
 
         # 否则尝试从 inner 拉取
@@ -416,6 +443,29 @@ class CachingDataProvider(DataProvider):
                 logger.warning("inner.get_bond_terms(%s) 失败 (%s), 沿用缓存", bond_code, e)
                 return cached
             raise
+
+
+    # ── ABC 上带默认实现的四个方法必须显式透传 ────────────────────
+    # 不透传不会报错, 只会**静默降级成 ABC 的默认值**, 而三个默认值各自都是一句谎话:
+    #   authoritative_terms_fields → None  = "全部字段归我", 全量同步整条替换,
+    #       把评级同步/状态刷新/事件回写的成果一起清掉 (AGENTS 里评级被盖回去那个坑)
+    #   get_admission_status       → 退回 self.get_bond_terms, 而本类的 get_bond_terms
+    #       读的是**缓存** —— "刷新状态"当场变成"读旧值", 实测返回的是缓存里的旧条款
+    #   list_bond_announcements    → []    , 事件同步报"0 条公告"并安全跳过
+    # (list_tradable_cbs 默认抛 NotImplementedError, 是响的那一档, 危害小得多。)
+    # backtest_disk_cache / strategy_backtest / historical_terms 三个装饰器都老实透传了,
+    # 只有这里漏了; 今天的生产链路走裸 provider 所以没踩到, 是埋着的雷。
+    def authoritative_terms_fields(self):
+        return self.inner.authoritative_terms_fields()
+
+    def get_admission_status(self, bond_code, valuation_date, base_terms=None):
+        return self.inner.get_admission_status(bond_code, valuation_date, base_terms)
+
+    def list_bond_announcements(self, bond_code, start, end):
+        return self.inner.list_bond_announcements(bond_code, start, end)
+
+    def list_tradable_cbs(self, on_date=None):
+        return self.inner.list_tradable_cbs(on_date)
 
     def force_refresh(self, bond_code: str, valuation_date: date) -> BondTerms:
         """强制从 inner 拉取最新条款, 覆盖本地缓存. 失败会抛出."""
@@ -478,31 +528,11 @@ class CachedBondDataProvider(DataProvider):
         self._risk_free_cache: dict[date, float | None] = {}
 
     def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
-        """cb_data 里这只债**条款**的抓取日 —— 快照已含该日之前生效的全部条款变更.
+        """cb_data 里这只债**条款**的抓取日 —— 取 ``static_source`` (全量条款同步) 那一次.
 
-        取的是 ``static_source`` (全量条款同步) 那一次的时间戳, 不是全局 ``fetched_at``:
-        后者被每日 ``Wind:admission_status`` / 每月 ``akshare:ratings`` / 每日 ``cb_events``
-        一起推到今天, 而这三者一个条款字段都不抓。用全局值当锚会把两次全量同步之间的
-        条款变更整段裁掉 —— 实测 live 路径上条款 patch 一条都不生效。
+        见 ``terms_fetched_at``; 用全局 ``fetched_at`` 会把条款 patch 整段裁掉。
         """
-        if self.cache is None:
-            return None
-        try:
-            ts = self.cache.fetched_at(bond_code, source=self.static_source.name)
-        except TypeError:      # 旧式 cache 没有 source 形参
-            ts = None
-        except Exception:
-            return None
-        if ts is None:
-            # 还没有按来源的时间戳 (本字段是后加的, 跑一次全量同步才落库)。此时**回落到
-            # 全局 fetched_at**, 而不是 None —— None 在上层表示"不裁剪", 会把整条 patch 链
-            # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债
-            # K 11.63 会被盖成 17.74)。宁可暂时保守裁掉, 也不能反向写坏。
-            try:
-                ts = self.cache.fetched_at(bond_code)
-            except Exception:
-                return None
-        return ts.date() if ts is not None else None
+        return terms_fetched_at(self.cache, bond_code, source=self.static_source.name)
 
     def _merge_cashflow(self, bond_code: str, terms: BondTerms) -> BondTerms:
         if not self.with_cashflow:
@@ -558,6 +588,29 @@ class CachedBondDataProvider(DataProvider):
                 logger.warning("Wind 刷新 cb_data(%s) 失败 (%s), 沿用缓存", bond_code, e)
                 return cached
             raise
+
+
+    # ── ABC 上带默认实现的四个方法必须显式透传 ────────────────────
+    # 不透传不会报错, 只会**静默降级成 ABC 的默认值**, 而三个默认值各自都是一句谎话:
+    #   authoritative_terms_fields → None  = "全部字段归我", 全量同步整条替换,
+    #       把评级同步/状态刷新/事件回写的成果一起清掉 (AGENTS 里评级被盖回去那个坑)
+    #   get_admission_status       → 退回 self.get_bond_terms, 而本类的 get_bond_terms
+    #       读的是**缓存** —— "刷新状态"当场变成"读旧值", 实测返回的是缓存里的旧条款
+    #   list_bond_announcements    → []    , 事件同步报"0 条公告"并安全跳过
+    # (list_tradable_cbs 默认抛 NotImplementedError, 是响的那一档, 危害小得多。)
+    # backtest_disk_cache / strategy_backtest / historical_terms 三个装饰器都老实透传了,
+    # 只有这里漏了; 今天的生产链路走裸 provider 所以没踩到, 是埋着的雷。
+    def authoritative_terms_fields(self):
+        return self.static_source.authoritative_terms_fields()
+
+    def get_admission_status(self, bond_code, valuation_date, base_terms=None):
+        return self.static_source.get_admission_status(bond_code, valuation_date, base_terms)
+
+    def list_bond_announcements(self, bond_code, start, end):
+        return self.static_source.list_bond_announcements(bond_code, start, end)
+
+    def list_tradable_cbs(self, on_date=None):
+        return self.static_source.list_tradable_cbs(on_date)
 
     def force_refresh(self, bond_code: str, valuation_date: date) -> BondTerms:
         """强制从 Wind 拉取静态字段并覆盖 cb_data."""
