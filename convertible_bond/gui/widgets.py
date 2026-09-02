@@ -17,6 +17,7 @@ from .theme import (
     ACCENT,
     GREEN,
     BTN_HOVER,
+    badge_text_color,
     FONT_FAMILY,
     FONT_MONO,
     get_color,
@@ -368,7 +369,14 @@ class AutocompleteEntry(ctk.CTkFrame):
         top.grid_rowconfigure(0, weight=1)
         lb = tk.Listbox(
             top, activestyle="none",
-            bg=bg, fg=fg, selectbackground=sel, selectforeground="#ffffff",
+            # 前景色必须**跟着解析后的底色**挑, 不能写死白色: ACCENT 的深色档是
+            # #89b4fa (浅蓝), 白字上去只有 2.11:1, 而 badge_text_color 会挑 #11111b
+            # 得到 8.91:1。这与 AGENTS 记的"底色由数据决定的控件不许写死前景色"
+            # (EVENT_TYPE_COLOR 那次 13/18 低于 AA) 是同一条规则, 只是这次底色由
+            # **主题**决定而不是由数据决定。GUI 里其他放在 ACCENT 上的文字都已经用
+            # ("#ffffff", "#11111b") 这一对。
+            bg=bg, fg=fg, selectbackground=sel,
+            selectforeground=badge_text_color(sel),
             highlightthickness=0, borderwidth=0,
             font=(FONT_MONO, 12), exportselection=False)
         lb.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)

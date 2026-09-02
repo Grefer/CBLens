@@ -3217,3 +3217,34 @@ def test_sensitivity_page_does_not_write_a_fabricated_s0_into_the_shared_var(tmp
                             if hasattr(pricing_ctl, "PricingMixin")
                             else pricing_ctl._collect_params)
     assert "s0_fallback" in sig.parameters, "_collect_params 没有接收本地顶替值的入口"
+
+
+def test_autocomplete_selection_foreground_follows_the_resolved_background():
+    """联想下拉选中行的前景色必须**跟着解析后的底色**挑, 不能写死白色。
+
+    ``ACCENT`` 的深色档是 #89b4fa (浅蓝) —— 白字上去只有 **2.11:1**, 而项目自己的
+    ``theme.badge_text_color`` 会挑 #11111b 得到 **8.91:1**。这与 AGENTS 记的
+    「底色由数据决定的控件不许写死前景色」(EVENT_TYPE_COLOR 那次 13/18 低于 AA)
+    是同一条规则, 只是这次底色由**主题**决定而不是由数据决定。
+    """
+    import ast
+    import inspect
+
+    from convertible_bond.gui import theme, widgets
+
+    src = inspect.getsource(widgets.AutocompleteEntry._ensure_popup)
+    tree = ast.parse(src.lstrip())
+    hardcoded = [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.keyword) and node.arg == "selectforeground"
+        and isinstance(node.value, ast.Constant)
+    ]
+    assert not hardcoded, f"selectforeground 写死了常量, 第 {hardcoded} 行"
+
+    # 两个主题档都要达到 WCAG AA (4.5:1)
+    for col in theme.ACCENT:
+        fg = theme.badge_text_color(col)
+        ratio = theme.contrast_ratio(fg, col)
+        assert ratio >= 4.5, f"底 {col} 字 {fg} 只有 {ratio:.2f}:1"
+    # 钉住反例: 深色档白字确实不合格 —— 否则这条用例可能在任何实现下都绿
+    assert theme.contrast_ratio("#ffffff", theme.ACCENT[1]) < 3.0

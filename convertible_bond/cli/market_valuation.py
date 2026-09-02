@@ -108,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
                        "n_history": signal.n_history},
             "coverage": {"usable": usable, "total": total,
                          "min_required": MIN_BASELINE_COVERAGE},
-            "caliber_note": caliber_note(history, snapshot.caliber) or None,
+            "caliber_note": caliber_note(history, snapshot.caliber,
+                                         exclude_date=snapshot.date) or None,
             "recorded": bool(args.record and refusal is None),
             "record_refused": refusal,
         }, ensure_ascii=False, indent=2, allow_nan=False))
@@ -124,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"分位区间 P25 / P75             : {snapshot.p25*100:+.1f}% / {snapshot.p75*100:+.1f}%")
     print("-" * 56)
     print(signal)
-    note = caliber_note(history, snapshot.caliber)
+    note = caliber_note(history, snapshot.caliber, exclude_date=snapshot.date)
     if note:
         print(f"\n{note}")
     if args.record and refusal is None:

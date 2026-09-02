@@ -135,6 +135,43 @@ def check_field_coverage(ctx: dict) -> list[Check]:
     return out
 
 
+#: 每日状态刷新负责的字段, 以及它们各自喂着哪个**在用的**判据。
+#: 覆盖率必须**按主池**量, 不能按全库 —— 档案库里留着退市券上一次同步的存量值
+#: (``merge_admission_status`` 有 None 保护, 不会被清), 它们会把停摆整个盖住:
+#: 实测 ``underlying_pct_change`` 全库 702/1059 (66%, 看着正常) 而**主池 0/311**。
+_DAILY_REFRESH_FIELDS = {
+    "underlying_pct_change": (
+        0.90, 0.50,
+        "「正股跌停」标签唯一的输入 —— 恒空时 _underlying_at_limit_down 一律返回 False, "
+        "检测器静默失效 (实测主池 0/311 有值、0 只被标记)"),
+    "underlying_trade_status": (
+        0.90, 0.50, "正股停牌判据的输入"),
+    "underlying_status": (
+        0.90, 0.50, "正股 ST 判据的输入 —— 2026-08 曾被一次全量同步清空 311 只"),
+}
+
+
+def check_live_pool_daily_coverage(ctx: dict) -> list[Check]:
+    """每日刷新字段在**主池**上的覆盖率。
+
+    与 ``check_field_coverage`` 分开是因为**口径不同**: 那条量全库, 对静态条款字段
+    (K / 评级 / 余额) 是对的; 但每日状态字段量全库会被档案库里的存量值撑高, 而真正
+    要问的是"今天在池子里的这些债, 状态刷新到底刷进来没有"。
+
+    这条检查对应一次**靠运气才发现**的静默事故: ``underlying_pct_change`` 在主池上
+    全空, 于是「正股跌停」这个标签从来没亮过 —— 没有异常、没有红测试, 只是一个接在
+    恒空输入上的检测器。
+    """
+    bundle, pool = ctx["bundle"], ctx["pool"]
+    out = []
+    for fname, (warn, fail, because) in _DAILY_REFRESH_FIELDS.items():
+        have = sum(1 for c in pool if getattr(bundle.get(c), fname, None) is not None)
+        ratio = have / len(pool) if pool else 0.0
+        out.append(Check(f"主池每日字段 · {fname}", _grade(ratio, warn, fail),
+                         _pct(have, len(pool)), because, "覆盖率"))
+    return out
+
+
 def check_event_time_coverage(ctx: dict) -> Check:
     by_year = collections.Counter(
         (e.get("event_date") or "?")[:4] for e in ctx["events"])
@@ -691,6 +728,7 @@ CHECKS: list[Callable[[dict], Any]] = [
     check_terms_freshness,
     check_event_sync_watermark,
     check_field_coverage,
+    check_live_pool_daily_coverage,
     check_event_time_coverage,
     check_patch_chain,
     check_patch_tail_matches_current,

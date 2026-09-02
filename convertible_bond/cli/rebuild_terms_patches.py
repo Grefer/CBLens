@@ -239,7 +239,11 @@ def rebuild(
     # 否则 --limit N --apply 会删光全库该字段的 patch, 却只补回 N 只的量。
     scanned_codes = set(all_codes)
     rebuilt_codes = {p.bond_code for p in built}
-    dropped = [p for p in store.list_patches()
+    # ``include_shadowed=True``: 预览必须和**真删**看同一个总体。``rewrite`` 遍历的是
+    # ``self._patches`` (原始文件), 而默认视图会把被权威源逐字段遮蔽的解析 patch 藏起来
+    # —— 于是 --dry-run 少报, 被遮蔽的那些**没出现在操作者审过的报告里就被删掉了**。
+    # 实测 conversion_price: 预览 4422 条 / 实删 4426 条, 差 4。
+    dropped = [p for p in store.list_patches(include_shadowed=True)
                if set(p.fields or {}) & set(target_fields)
                and p.bond_code in scanned_codes]
 

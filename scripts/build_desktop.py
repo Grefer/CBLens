@@ -231,6 +231,14 @@ for _pkg in ('curl_cffi', 'py_mini_racer'):
         pass
 
 _hidden = ['akshare', 'matplotlib.backends.backend_tkagg']
+# 「🌐 同步池」菜单按字符串模块名起子进程, 静态分析看不见 (实测 gui.py 静态可达的
+# 35 个模块里 convertible_bond.cli.* 一个都没有)。与 cli.POOL_SYNC_MODULES 一致。
+_hidden += [
+    'convertible_bond.cli.sync_tradable',
+    'convertible_bond.cli.sync_admission_status',
+    'convertible_bond.cli.sync_events',
+    'convertible_bond.cli.sync_new_issues',
+]
 if {has_windpy}:
     _hidden.append('WindPy')
 hiddenimports = _hidden

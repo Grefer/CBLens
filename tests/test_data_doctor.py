@@ -261,3 +261,90 @@ def test_event_coverage_flags_a_year_with_zero_events():
     check = dd.check_event_time_coverage({"events": events})
     assert "2024" in " ".join(check.extra), f"零事件的 2024 没被标成缺口: {check.extra}"
     assert check.status != dd.OK
+
+
+def test_daily_field_coverage_is_measured_on_the_pool_not_the_whole_library():
+    """每日刷新字段的覆盖率必须**按主池**量。
+
+    档案库里留着退市券上一次同步时的存量值 (``merge_admission_status`` 有 None 保护,
+    不会被清), 按全库量它们会把停摆整个盖住 —— 实测 ``underlying_pct_change``
+    全库 702/1059 (66%, 看着正常) 而**主池 0/311**, 于是「正股跌停」这个标签从来没
+    亮过, 没有异常、没有红测试, 只是一个接在恒空输入上的检测器。
+    """
+    from convertible_bond.cli import data_doctor as dd
+
+    class _Bundle:
+        """主池全空、库里其余的债都有值 —— 正是真实盘上的形状。"""
+
+        def __init__(self):
+            self._pool = {f"P{i}.SZ" for i in range(10)}
+            self._dead = {f"D{i}.SZ" for i in range(90)}
+
+        def list_bonds(self):
+            return sorted(self._pool | self._dead)
+
+        def get(self, code):
+            value = None if code in self._pool else 3.5
+            return type("T", (), {"underlying_pct_change": value,
+                                  "underlying_trade_status": "交易",
+                                  "underlying_status": "否"})()
+
+    bundle = _Bundle()
+    ctx = {"bundle": bundle, "pool": sorted(bundle._pool), "today": None}
+    by_name = {c.name: c for c in dd.check_live_pool_daily_coverage(ctx)}
+    pct = by_name["主池每日字段 · underlying_pct_change"]
+    assert pct.status == dd.FAIL, f"主池全空却没报警: {pct.detail}"
+    assert "0/10" in pct.detail
+
+    # 对照: 同一份数据按**全库**量是 90/100, 完全看不出问题 —— 这就是为什么要分开量
+    whole = sum(1 for c in bundle.list_bonds()
+                if bundle.get(c).underlying_pct_change is not None)
+    assert whole / len(bundle.list_bonds()) == 0.9
+
+    # 其余两个字段有值时不该跟着报警
+    assert by_name["主池每日字段 · underlying_status"].status == dd.OK
+
+
+def test_limit_down_tag_is_covered_by_the_sensitivity_grouping():
+    """「正股跌停」是 DIM_TRADABILITY 里唯一漏在 ``_sensitivity_status`` 之外的标签。"""
+    import inspect
+
+    from convertible_bond.batch_pricing import TRADABILITY_RISK_TAGS, _sensitivity_status
+
+    src = inspect.getsource(_sensitivity_status)
+    missing = [t for t in TRADABILITY_RISK_TAGS if f'"{t}"' not in src]
+    assert not missing, f"可交易性标签没进条款/流动性敏感这一档: {missing}"
+    assert _sensitivity_status(["正股跌停"], "高") == "条款/流动性敏感"
+
+
+def test_rebuild_dry_run_previews_the_same_population_it_will_delete(tmp_path):
+    """``--dry-run`` 报告的删除范围必须和 ``--apply`` 真删的是同一批。
+
+    ``TermsPatchStore.rewrite`` 遍历的是 ``self._patches`` (原始文件), 而
+    ``list_patches()`` 默认返回被权威源逐字段遮蔽后的视图 —— 于是被遮蔽的解析 patch
+    **没出现在操作者审过的报告里就被删掉了**。实测 conversion_price: 预览 4424 条 /
+    实删 4426 条。
+    """
+    import inspect
+
+    from convertible_bond.cli import rebuild_terms_patches as mod
+
+    src = inspect.getsource(mod)
+    idx = src.index("dropped = [p for p in store.list_patches")
+    line = src[idx:src.index("\n", idx)]
+    assert "include_shadowed=True" in line, f"预览仍用生效视图: {line.strip()}"
+
+    # 行为侧: 造一条被遮蔽的 patch, 它必须出现在预览里
+    from datetime import date
+
+    from convertible_bond.historical_terms import TermsPatch, TermsPatchStore
+
+    store = TermsPatchStore(tmp_path / "p.json")
+    store.add_many([
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 1, 1),
+                   fields={"conversion_price": 10.0}, source="wind_asof"),
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 2, 1),
+                   fields={"conversion_price": 99.0}, source="cninfo"),
+    ])
+    assert len(store.list_patches()) == 1, "前提不成立: 并没有被遮蔽"
+    assert len(store.list_patches(include_shadowed=True)) == 2

@@ -313,9 +313,17 @@ def test_valuation_banner_appends_caliber_note_for_mixed_history():
     assert "口径" in detail and "不严格可比" in detail
     assert CALIBER_V1 not in detail and CALIBER_V2 not in detail, (
         "悬浮里不该出现内部口径版本号")
-    # 但完整版 (CLI) 仍要列出版本与期数
+    # 但完整版 (CLI) 仍要列出版本与期数。
+    # **期数要数实际参与分位计算的那份基线**, 不是原始序列: 这里 12 条月度快照会去重成
+    # 4 个季度桶 (``baseline_medians`` 每季度只留一条), 所以是 "v1 4 期"。早先这里写死
+    # 12 —— 那个数描述的是原始 history, 而这句话警告的是**基线**的口径构成, 两者可以差
+    # 很远 (实测盘上 22 条 v1/v2/v3 混合 → 基线 17 条全 v1, 于是横幅警告了一个根本不在
+    # 基线里的断点)。
+    from convertible_bond.market_valuation import baseline_snapshots
     verbose = caliber_note(hist, CALIBER_V2)
-    assert f"{CALIBER_V1} 12 期" in verbose and CALIBER_V2 in verbose
+    n_baseline = len(baseline_snapshots(hist))
+    assert n_baseline == 4, "12 条月度快照应去重成 4 个季度桶"
+    assert f"{CALIBER_V1} {n_baseline} 期" in verbose and CALIBER_V2 in verbose
 
 
 def test_valuation_tooltip_says_how_to_read_instead_of_repeating_the_banner():

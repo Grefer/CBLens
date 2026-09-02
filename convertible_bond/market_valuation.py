@@ -333,11 +333,38 @@ def baseline_medians(
     return sorted(
         [s.median_deviation for q, s in latest.items() if q != drop] + loose)
 
+
+def baseline_snapshots(
+    history: Sequence[Any],
+    *,
+    exclude_date: str | None = None,
+) -> list[ValuationSnapshot]:
+    """真正参与分位计算的那些快照 —— 与 :func:`baseline_medians` 同一套去重规则。
+
+    存在的理由: 任何**描述基线**的东西 (口径断点说明、期数) 都必须数这一份, 不能数
+    原始 history。实测两者差得很远: 原始 22 条 (v1 18 / v2 3 / v3 1), 而喂给
+    ``percentile_rank`` 的基线是 17 条、**全部 v1** —— 于是横幅上那句"分位基线跨 3 种
+    主池口径"是假的, 它警告的断点根本不在基线里。
+    """
+    latest: dict[str, ValuationSnapshot] = {}
+    for item in history:
+        if not isinstance(item, ValuationSnapshot):
+            continue
+        quarter = _quarter_of(item.date)
+        if quarter is None:
+            continue
+        prev = latest.get(quarter)
+        if prev is None or (item.date or "") > (prev.date or ""):
+            latest[quarter] = item
+    drop = _quarter_of(exclude_date)
+    return [s for q, s in sorted(latest.items()) if q != drop]
+
 def caliber_note(
     history: Sequence[Any],
     current: str = CURRENT_CALIBER,
     *,
     verbose: bool = True,
+    exclude_date: str | None = None,
 ) -> str:
     """历史序列跨口径时返回断点说明; 全同口径返回空串。
 
@@ -348,10 +375,13 @@ def caliber_note(
     它占了 331 字里的 136 字 (41%), 而读者拿这些做不了任何决定。悬浮只需要回答
     "这个分位能不能当真": 不能完全当真, 因为基线跨了两种池口径。
     """
+    # 数的必须是**实际参与分位计算的那份基线**, 不是原始 history。``percentile_rank``
+    # 吃的是 ``baseline_medians`` 的输出 —— 每季度只留一条、且整桶剔掉当期所在季度。
+    # 实测原始 22 条 (v1 18 / v2 3 / v3 1) vs 基线 17 条 (**全部 v1**): 数原始序列会
+    # 让横幅警告一个**根本不在基线里**的口径断点。
     counts: dict[str, int] = {}
-    for snap in history:
-        if isinstance(snap, ValuationSnapshot):
-            counts[snap.caliber] = counts.get(snap.caliber, 0) + 1
+    for snap in baseline_snapshots(history, exclude_date=exclude_date):
+        counts[snap.caliber] = counts.get(snap.caliber, 0) + 1
     if not counts:
         return ""
     if set(counts) | {current} == {current}:
@@ -436,7 +466,8 @@ def _tooltip_detail(
             f"历史基线只有 {sig.n_history} 个季度 (需 ≥8), 分位信号不可靠 —— "
             "每次全量重算会自动累积, 同季度只留最新一条。")
     lines.append("只说转债大类贵不贵: 不是个券信号, 也不是操作建议。")
-    note = caliber_note(history, snap.caliber, verbose=False)
+    note = caliber_note(history, snap.caliber, verbose=False,
+                        exclude_date=snap.date)
     if note:
         lines.append(note)
     return "\n".join(lines)

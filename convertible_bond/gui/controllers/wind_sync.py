@@ -12,6 +12,8 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from ...cache import CachedBondDataProvider
+from ...cli import RUN_CLI_FLAG
+from ...paths import is_frozen_app
 from ...data_providers import (
     AkshareDataProvider,
     CSVDataProvider,
@@ -52,6 +54,21 @@ _POOL_SYNC_TARGETS = (
     ("📰 同步公告事件", "convertible_bond.cli.sync_events", [],
      "下载并解析公告标题, 写入本地事件表\n通常 1-3 分钟."),
 )
+
+
+def pool_sync_command(module: str, extra_args) -> list[str]:
+    """起同步子进程的命令行。
+
+    源码运行: ``python -u -m <模块> ...``。
+    **冻结的桌面包**: ``sys.executable`` 是 app 本身而不是解释器, PyInstaller 的
+    bootloader 会把 ``-m`` 连同模块名一起吃掉 —— 点一下菜单等于**又开一个 GUI**。
+    所以走 ``gui.py`` 自己的 ``--run-cli`` 分派 (那四个模块另外登记进了 spec 的
+    ``hiddenimports``, 否则冻结包里压根没有它们: 实测从 ``gui.py`` 静态可达的 35 个
+    模块里 ``convertible_bond.cli.*`` 一个都没有)。
+    """
+    if is_frozen_app():
+        return [sys.executable, RUN_CLI_FLAG, module, *extra_args]
+    return [sys.executable, "-u", "-m", module, *extra_args]
 
 
 class WindSyncMixin:
@@ -337,7 +354,7 @@ class WindSyncMixin:
         def worker():
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-u", "-m", module, *extra_args],
+                    pool_sync_command(module, extra_args),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,

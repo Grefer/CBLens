@@ -816,10 +816,18 @@ def _underlying_limit_down_threshold(stock_code: Any, *, is_st: bool = False) ->
 
     ``is_st`` 这一档此前不存在, 于是主板 ST 股跌停当天 ``underlying_pct_change``
     只有 −5.0, 判据 ``pct <= -9.5`` **恒为假** —— 「正股跌停」对这一类结构性不亮。
-    此前这条路是死的 (ST 债在准入层就被剔了, 根本走不到标注), 而 2026-08-31 把 ST 从
-    硬剔除降级成标签之后它第一次真正生效; 策略层的 ``exclude_underlying_limit_down``
-    也直接读它。旧 docstring 里那句"ST 正股的 5% 限制不在此处理"当时是空转的, 后来还被
-    当成论据引用过 —— 这次一并改掉, 免得它继续误导。
+    此前这条路是死的 (ST 债在准入层就被剔了, 根本走不到标注), 2026-08-31 把 ST 从硬剔除
+    降级成标签之后判据本身才有机会跑到; 策略层的 ``exclude_underlying_limit_down``
+    也直接读它。旧 docstring 里那句"ST 正股的 5% 限制不在此处理"当时是空转的。
+
+    **但"判据能跑到"不等于"检测器在工作"**: 2026-08-31 复测, 主池 311 只里
+    ``underlying_pct_change`` **一只都没有值** (全库 702/1059 有值, 但那 702 只
+    没有一只在主池里、429 只已终止 —— 是旧同步留下的存量, 靠 ``merge_admission_status``
+    的 None 保护才没被清掉)。也就是说 Wind 现在这个字段返回 None, 而
+    ``_underlying_at_limit_down`` 对 None 直接返回 False, 于是「正股跌停」实测
+    **0/311** 命中。接在恒空输入上的检测器是静默的, 不是响的 —— 所以
+    ``cb-data-doctor`` 加了一条**按主池**量的覆盖率检查 (全库口径量不出来:
+    档案库里的存量值会把停摆盖住, 全库看是 66%)。
 
     阈值留 0.5% 余量, 避免数据源 pct_chg 取整偏差导致漏识别。
     """
@@ -1881,8 +1889,10 @@ def _sensitivity_status(tags: Sequence[str], confidence: str) -> str:
     tag_set = set(tags or [])
     if {"高HV", "模型溢价高"} & tag_set:
         return "波动率敏感"
+    # 「正股跌停」此前漏在外面 —— 它是 DIM_TRADABILITY 里**唯一**没被收进来的一个,
+    # 而这一档收的就是可交易性/条款类的标签。
     if {"余额清零", "触及摘牌线", "临近摘牌线", "小余额", "临近摘牌", "短久期",
-            "低评级", "正股风险", "正股停牌", "转债停牌",
+            "低评级", "正股风险", "正股停牌", "转债停牌", "正股跌停",
             "极小余额", "余额异常"} & tag_set:
         return "条款/流动性敏感"
     if confidence == "高":
