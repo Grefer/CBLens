@@ -729,10 +729,25 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   NameError。这不是假想: 搬页时删掉一个 import 却留着两处调用, ruff 与 pytest 双双全绿。
   守护测试 `test_star_import_exemption_only_shields_real_theme_names` 把豁免收窄成
   "只放行 theme 里真实导出的名字"。新页不要把这道防线一起关掉。
-- **`LEGACY_STRATEGY_EXCLUDE_TAGS` 是冻结集, 不要跟着标签体系演化**: 它是
-  `ScoreStrategyConfig.exclude_risk_tags` 的默认值。曾写成 `tuple(sorted(HARD_REVIEW_TAGS))`,
-  于是任何为改展示而增删标签的动作都自动变成**默认选债行为变更**。实测该集合极敏感:
-  改成只排"数据质量+可交易性"候选池 59 → 262, 单去掉「偏差异常」→ 125。要改它单独立项。
+- **选债口径已从标签换成阈值 (2026-08-31), `LEGACY_STRATEGY_EXCLUDE_TAGS` 只剩兼容用途**。
+  它**曾经**是 `ScoreStrategyConfig.exclude_risk_tags` 的默认值 —— 那时它必须逐字冻结,
+  因为写成 `tuple(sorted(HARD_REVIEW_TAGS))` 会让任何为改展示而增删标签的动作自动变成
+  **默认选债行为变更**; 实测该集合极敏感: 改成只排"数据质量+可交易性"候选池 59 → 262,
+  单去掉「偏差异常」→ 125。
+  **2026-09-02 复测: 那个前提已不成立** —— `exclude_risk_tags` 的默认值现在是**空元组**,
+  而 `LEGACY_STRATEGY_EXCLUDE_TAGS` (19 个标签) 在生产代码里**没有任何取值方引用**,
+  只剩几处注释提到它。它留着是给**旧快照**回读用的。
+  现在的主口径是 `ScoreStrategyConfig` 上的数值阈值, 由 `_candidate_filter_reason`
+  (唯一的选债路径) 读取: `max_model_premium` 0.45 / `max_relative_deviation` 0.20 /
+  `min_years_to_maturity` 0.5 / `min_credit_rating` AA- / `min_outstanding_balance` 1.0 /
+  `max_sigma` 0.80 / `exclude_underlying_st` True / `exclude_underlying_limit_down` True。
+  三条随之而来的约定:
+  ① **缺值放行**: 一个数据缺口不该让标的静默出局 (与准入层"字段明确才剔除"同向)。
+  ② **`max_relative_deviation` 只在锚是全市场中位时适用**: 池子 <30 只时
+     `median_deviation_of` 返回 None, 锚回落 0.0, 那个量就变成绝对偏差 —— 判据换了度量
+     而名字没换。实测 29 → 30 只是一道悬崖 (同一批债全落选 vs 全入选)。
+  ③ 新增阈值必须同步进 `_strategy_config_summary`, 否则快照复现不出那次运行 (有守护
+     测试比对"选债读的每个 `cfg.X` 都要在快照里")。
 - **保守过滤**: 准入筛选"字段明确才剔除"，避免因数据源缺字段误杀。**连续量不做硬阈值**:
   余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
   "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用

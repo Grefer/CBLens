@@ -2927,3 +2927,163 @@ def test_period_sharpe_is_the_non_annualized_ratio():
     # 与年化版共用实现, 所以边界处置也一并继承
     assert math.isnan(_period_sharpe([0.01], 0.0))
     assert math.isnan(_period_sharpe([0.01, 0.01, 0.01], 0.0))     # 恒定收益
+
+
+def test_benchmark_is_not_filtered_by_the_strategy_price_band(monkeypatch):
+    """基准不许过策略的价格带。
+
+    ``_benchmark_period_return`` 的 docstring 明写「基准刻意不过策略的筛子 —— 唯一的闸
+    是 status == "ok"」, 理由是**基准 = 市场代理**: 让它也过一遍阈值, 衡量的就只剩"在
+    同一批候选里排序排得好不好", 而"避开了太贵/太便宜那一段"这个真实决策的贡献会被算进
+    基准里抵消掉。而 ``priced_rows`` 是 ``_pre_filter_codes_by_price`` 的输出, 那正是
+    ``ScoreStrategyConfig`` 的价格带。
+
+    缺价那一档不同 —— 没有成交价的债基准也买不进去, 那是数据事实。所以两种剔除要分开。
+    """
+    from datetime import date
+
+    provider = StrategyFakeProvider()
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+
+    def run(max_price):
+        return backtest_score_strategy(
+            provider, ["113001.SH", "113002.SH", "113003.SH"],
+            start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+            config=ScoreStrategyConfig(
+                top_n=3, rebalance_freq="M", holding_mode="pool",
+                funding_mode="full_invest", min_confidence=None, exclude_risk_tags=(),
+                compute_benchmark=True, pre_filter_prices=True,
+                max_market_price=max_price),
+        )["periods"][0]
+
+    wide = run(None)
+    narrow = run(101.0)     # 把 113002(105)/113003(115) 挡在候选之外
+    assert len(narrow["positions"]) < len(wide["positions"]), "前提不成立: 价格带没起作用"
+    assert sorted(narrow.get("benchmark_codes") or []) == sorted(
+        wide.get("benchmark_codes") or []), "基准跟着策略的价格带一起缩了"
+    assert narrow["benchmark_return"] == pytest.approx(wide["benchmark_return"])
+
+
+def test_curve_annualization_follows_the_actual_observation_spacing():
+    """年化因子按曲线**实际间距**推, 不写死 252。
+
+    曲线只在"某只持仓当天有价"的日子上出点, 一个空仓期整月只贡献**一个**点, 于是同一条
+    序列里混着日频与月频观测, 而波动率/夏普/索提诺全按"每个观测都是一个交易日"算。
+    """
+    from datetime import date, timedelta
+
+    from convertible_bond.strategy_backtest import _curve_periods_per_year
+
+    daily = [{"date": date(2025, 1, 1) + timedelta(days=i), "equity": 1.0}
+             for i in range(60) if (date(2025, 1, 1) + timedelta(days=i)).weekday() < 5]
+    monthly = [{"date": date(2025, m, 28), "equity": 1.0} for m in range(1, 13)]
+
+    assert _curve_periods_per_year(daily) == 252.0, "日频曲线不该偏离 252"
+    assert 8.0 < _curve_periods_per_year(monthly) < 16.0, "月频曲线仍按日频年化"
+    assert _curve_periods_per_year(monthly[:2]) == 252.0      # 样本不足回落
+    assert _curve_periods_per_year([]) == 252.0
+
+
+def test_equity_curve_points_never_predate_their_own_period():
+    """一期吐出的净值点不许落在本期起点之前。
+
+    建仓价可能取到一个陈旧收盘 (``signal_close`` 口径允许 lookback), 于是这一期会吐出
+    一个**上一期区间内**的点; ``_upsert_equity_points`` 对同日点是覆盖, 上一期真实的
+    盘中估值就被这一期的开仓值顶掉, 曲线上凭空多一段假横盘。
+    """
+    from datetime import date
+
+    from convertible_bond.strategy_backtest import _portfolio_mark_to_market_curve
+
+    period_start, period_end = date(2025, 2, 1), date(2025, 2, 28)
+    stale_entry = date(2025, 1, 20)      # 早于本期起点
+    positions = [{"bond_code": "A.SH", "entry_date": stale_entry,
+                  "exit_date": period_end, "start_price": 100.0, "end_price": 110.0,
+                  "exit_reason": "rebalance"}]
+    curve = _portfolio_mark_to_market_curve(
+        _bare_provider(), positions, start_equity=1.0, period_end=period_end,
+        cost=0.0, intended_count=1, period_start=period_start)
+    assert curve, "曲线不该是空的"
+    assert all(p["date"] >= period_start for p in curve), (
+        f"有点落在本期起点之前: {[p['date'] for p in curve if p['date'] < period_start]}")
+
+
+def test_excess_vs_index_requires_a_matching_window():
+    """指数没覆盖到回测起点时不许报超额。
+
+    ``_index_benchmark_curve`` 在缺价的调仓日直接跳过, 并把**第一个取得到价的日子**
+    归一成 1.0 —— 数据源前 k 个调仓日没有指数价时, 指数收益只覆盖回测尾段, 而策略收益
+    覆盖全程, 两个不同期限的数相减没有意义。
+    """
+    import inspect
+
+    from convertible_bond.strategy_backtest import _summarize_strategy
+
+    src = inspect.getsource(_summarize_strategy)
+    assert "index_covers_full_window" in src
+    # 覆盖不全时 excess 必须是 None, 而且要能与"根本没有指数基准"区分开
+    assert '"index_covers_full_window": index_covers_full_window' in src
+
+
+def test_summary_annualizes_with_the_curve_spacing_it_actually_has():
+    """``_summarize_strategy`` 必须**真的用** ``_curve_periods_per_year``。
+
+    上一版守护只测了那个 helper 本身, 于是把调用点改回写死 252 照样全绿 —— 测了函数
+    没测接线。这条直接比对同一条月频曲线下报出来的年化波动。
+    """
+    from datetime import date
+
+    from convertible_bond.strategy_backtest import _summarize_strategy
+
+    # 月频曲线: 12 个点, 收益一正一负交替
+    curve, equity = [], 1.0
+    for m in range(1, 13):
+        equity *= 1.02 if m % 2 else 0.99
+        curve.append({"date": date(2025, m, 28), "equity": equity})
+    periods = [{"period_return": 0.0}]        # 让 use_curve_returns 成立
+
+    summary = _summarize_strategy(
+        curve, periods, start_date=date(2025, 1, 1), end_date=date(2025, 12, 31),
+        freq="M", top_n=10)
+    vol = summary["annualized_volatility"]
+    assert vol is not None
+
+    import numpy as np
+    rets = [curve[i]["equity"] / curve[i - 1]["equity"] - 1.0 for i in range(1, len(curve))]
+    std = float(np.std(rets, ddof=1))
+    assert vol == pytest.approx(std * (12 ** 0.5), rel=0.25), (
+        f"月频曲线报出的年化波动 {vol:.4f} 不像 12 期/年; "
+        f"按 252 会是 {std * (252 ** 0.5):.4f}")
+
+
+def test_excess_vs_index_is_withheld_when_the_index_starts_late():
+    """指数没覆盖到回测起点时, ``excess_vs_index`` 必须是 None。
+
+    上一版守护只扫源码里有没有那个变量名, 把判据删掉照样全绿。
+    """
+    from datetime import date
+
+    from convertible_bond.strategy_backtest import _summarize_strategy
+
+    curve = [{"date": date(2025, 1, 2), "equity": 1.0},
+             {"date": date(2025, 12, 31), "equity": 1.10}]
+    periods = [{"period_return": 0.10}]
+
+    late = [{"date": date(2025, 7, 1), "equity": 1.0},
+            {"date": date(2025, 12, 31), "equity": 1.05}]
+    s_late = _summarize_strategy(curve, periods, start_date=date(2025, 1, 2),
+                                 end_date=date(2025, 12, 31), freq="M", top_n=10,
+                                 index_benchmark_curve=late)
+    assert s_late["index_covers_full_window"] is False
+    assert s_late["excess_vs_index"] is None, "指数只覆盖尾段却报了超额"
+    assert s_late["index_benchmark_total_return"] is not None   # 指数本身照常报
+
+    full = [{"date": date(2025, 1, 2), "equity": 1.0},
+            {"date": date(2025, 12, 31), "equity": 1.05}]
+    s_full = _summarize_strategy(curve, periods, start_date=date(2025, 1, 2),
+                                 end_date=date(2025, 12, 31), freq="M", top_n=10,
+                                 index_benchmark_curve=full)
+    assert s_full["index_covers_full_window"] is True
+    assert s_full["excess_vs_index"] == pytest.approx(0.10 - 0.05)

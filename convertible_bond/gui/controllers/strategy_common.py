@@ -30,6 +30,69 @@ WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT = 1000
 WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER = 10
 
 
+#: ``rank_signal`` → 展示名。下修两档只出现在**旧快照**里 (信号已删), 保留映射,
+#: 否则它们会掉进「旧机会分」。
+STRATEGY_RANK_SIGNAL_LABEL = {
+    "deviation": "估值偏差",
+    "down_reset_edge": "下修优势",
+    "down_reset_robust_edge": "稳健下修优势",
+}
+
+
+def strategy_rank_label(rank_signal) -> str:
+    return STRATEGY_RANK_SIGNAL_LABEL.get(rank_signal, "旧机会分")
+
+
+def strategy_holding_label(config: dict) -> str:
+    """持仓方式的展示片段: 「估值偏差 Top10」/「等权全池(≤30)」。
+
+    **必须只有一份**。比较表的标签曾自己拼一个只含 ``top_n`` 的简版, 于是
+    ``holding_mode="pool"`` 的运行被标成「Top10」—— 而 pool 模式压根不用 top_n, 数据面板
+    同时把它写作「等权全池」, 同一次运行在两个页面上两种说法。更糟的是**两次只差候选池
+    (selection_view) 的运行标签逐字节相同**, 比较表里认不出谁是谁。
+    """
+    holding_mode = config.get("holding_mode")
+    rank_label = strategy_rank_label(config.get("rank_signal"))
+    if holding_mode == "pool":
+        cap = config.get("max_holdings")
+        try:
+            cap_text = f"(≤{int(cap)})" if cap else ""
+        except (TypeError, ValueError):
+            cap_text = ""
+        return f"等权全池{cap_text}"
+    top_n = config.get("top_n")
+    return f"{rank_label} Top{top_n}" if top_n is not None else rank_label
+
+
+def strategy_funding_label(config: dict) -> str:
+    return "满仓等权" if config.get("funding_mode") == "full_invest" else "缺口留现金"
+
+
+def strategy_compare_label(strategy_name: str, config: dict) -> str:
+    """比较表里那一行的标签。
+
+    **区分维度必须齐**: 只用 {策略, 数据模式, 频率, 信号, top_n} 时, 两次只差候选池
+    (``selection_view``) 的运行在同一区间上标签**逐字节相同**, 比较表里认不出谁是谁;
+    而 ``holding_mode="pool"`` 的运行会被标成「Top10」—— pool 模式根本不用 top_n。
+    """
+    from ...batch_pricing import batch_view_label
+
+    history_mode = {
+        "标准": "快速验证",
+        "Wind高保真": "Wind 历史",
+    }.get(config.get("history_mode"), config.get("history_mode") or "数据模式未记录")
+    view = config.get("selection_view")
+    parts = (
+        strategy_name,
+        history_mode,
+        f"{config.get('rebalance_freq') or '—'}频",
+        batch_view_label(view) if view else None,
+        strategy_holding_label(config),
+        strategy_funding_label(config),
+    )
+    return " · ".join(x for x in parts if x)
+
+
 def _strategy_snapshot_jsonable(obj):
     """递归将 date/datetime/nan/inf 转为 JSON 安全表示.
 

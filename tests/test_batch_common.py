@@ -3308,3 +3308,96 @@ def test_strategy_dates_render_dash_not_the_literal_none():
     assert "None" not in fmt(None)
     from datetime import date
     assert fmt(date(2025, 1, 2)) == "2025-01-02"
+
+
+def test_concentration_uses_all_positive_contributors():
+    """「前三集中度」的分母是**全体**正贡献, 不是 ``top_contributors``。
+
+    那张表是 ``ranked[:10]`` —— 排在第 11 名之后的正贡献者不在分母里, 显示出来的集中度
+    系统性偏高。而这个数还要去撞 ``_strategy_robustness_notes`` /
+    ``_strategy_dynamic_suggestions`` 里 >=0.65 那道闸, 于是"收益过于集中"会被虚报。
+    """
+    from convertible_bond.strategy_backtest import _strategy_attribution
+
+    periods = [{
+        "cost": 0.0,
+        "average_cash_weight": 0.0,
+        "skipped_positions": [],
+        "positions": [
+            {"bond_code": f"{i:06d}.SZ", "bond_name": f"B{i}",
+             "return_contribution": 0.01 * (20 - i), "period_return": 0.01}
+            for i in range(20)
+        ],
+    }]
+    attribution = _strategy_attribution(periods)
+    assert len(attribution["top_contributors"]) == 10      # 前提: 表被截断了
+    assert attribution["positive_contributor_count"] == 20
+
+    from_top10 = sum(float(r["contribution"]) for r in attribution["top_contributors"]
+                     if float(r["contribution"]) > 0)
+    assert attribution["total_positive_contribution"] > from_top10, (
+        "全体正贡献不该等于前十之和 —— 这条用例的前提坏了")
+
+    honest = (attribution["top3_positive_contribution"]
+              / attribution["total_positive_contribution"])
+    inflated = sum(sorted(
+        (float(r["contribution"]) for r in attribution["top_contributors"]),
+        reverse=True)[:3]) / from_top10
+    assert honest < inflated, f"集中度没有被修正: {honest} vs {inflated}"
+
+
+def test_strategy_labels_come_from_one_shared_source():
+    """持仓/资金方式的措辞只许有一份。
+
+    比较表的标签曾自己拼一个只含 ``top_n`` 的简版, 于是 ``holding_mode="pool"`` 的运行
+    被标成「Top10」—— pool 模式压根不用 top_n, 而数据面板同时把它写作「等权全池」,
+    同一次运行两个页面两种说法。更糟的是**两次只差候选池 (selection_view) 的运行标签
+    逐字节相同**, 比较表里认不出谁是谁。
+    """
+    import inspect
+
+    from convertible_bond.gui.controllers import strategy_compare, strategy_render_analysis
+    from convertible_bond.gui.controllers.strategy_common import (
+        strategy_funding_label,
+        strategy_holding_label,
+    )
+
+    assert strategy_holding_label(
+        {"holding_mode": "pool", "max_holdings": 30, "top_n": 10}) == "等权全池(≤30)"
+    assert strategy_holding_label(
+        {"holding_mode": "top_score", "top_n": 10, "rank_signal": "deviation"}
+    ) == "估值偏差 Top10"
+    assert strategy_funding_label({"funding_mode": "full_invest"}) == "满仓等权"
+    assert strategy_funding_label({"funding_mode": "reserve_cash"}) == "缺口留现金"
+
+    # 两个页面都要用这一份, 不许各拼各的。
+    # 判据只看**真实的字符串字面量** (走 ast), 不扫源码文本 —— 第一版扫文本, 当场把
+    # 两处解释这段历史的**注释**判红。同一个教训 AGENTS 里记过 (关注池"不说持仓"那条
+    # 守护, 第一版也是把解释性注释当成了违规)。
+    import ast
+
+    for mod, expected in ((strategy_compare, "strategy_compare_label("),
+                          (strategy_render_analysis, "strategy_holding_label(")):
+        src = inspect.getsource(mod)
+        assert expected in src, f"{mod.__name__} 没用共用措辞 (期望调 {expected})"
+        literals = [
+            node.value for node in ast.walk(ast.parse(src))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        leftover = [x for x in literals if "等权全池" in x or "缺口留现金" in x]
+        assert not leftover, f"{mod.__name__} 里还留着自己拼的措辞: {leftover}"
+
+    # 候选池必须进比较标签 —— **行为断言**, 不是"源码里出现过这个词"。
+    # 只差候选池的两次运行标签必须不同, 否则比较表里认不出谁是谁。
+    from convertible_bond.gui.controllers.strategy_common import strategy_compare_label
+
+    base = {"history_mode": "标准", "rebalance_freq": "M", "rank_signal": "deviation",
+            "holding_mode": "top_score", "top_n": 10, "funding_mode": "reserve_cash"}
+    a = strategy_compare_label("估值策略", dict(base, selection_view="低估候选"))
+    b = strategy_compare_label("估值策略", dict(base, selection_view="双低"))
+    assert a != b, f"只差候选池的两次运行标签相同: {a!r}"
+
+    # pool 模式不许被标成 Top{n}
+    pool = strategy_compare_label(
+        "估值策略", dict(base, holding_mode="pool", max_holdings=30))
+    assert "Top10" not in pool and "等权全池" in pool, pool

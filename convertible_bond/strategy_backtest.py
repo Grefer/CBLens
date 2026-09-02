@@ -562,7 +562,7 @@ def _run_rebalance_period(
         phase="准入筛选",
     )
     _emit_stage_progress(stage_cb, "价格预筛", 0, len(eligible), idx, total_periods)
-    pricing_codes, prefilter_excluded = _pre_filter_codes_by_price(
+    pricing_codes, prefilter_excluded, price_band_excluded = _pre_filter_codes_by_price(
         provider,
         eligible,
         period_start,
@@ -757,9 +757,17 @@ def _run_rebalance_period(
     new_benchmark_equity = benchmark_equity
     if cfg.compute_benchmark:
         _emit_stage_progress(stage_cb, "基准估值", 0, len(priced_rows), idx, total_periods)
+        # **价格带剔除的债要加回基准**。价格带是 ScoreStrategyConfig 的策略阈值, 而
+        # ``_benchmark_period_return`` 的 docstring 明说"基准刻意不过策略的筛子 —— 唯一
+        # 的闸是 status == ok"。让基准也过一遍价格带, 衡量的就只剩"在同一批候选里排序
+        # 排得好不好", 而"避开了太贵/太便宜的那一段"这个真实决策的贡献被算进基准里抵消掉。
+        # 这些债没有定价结果 (预筛在定价之前), 但基准只用成交价, 不用 PDE 输出 ——
+        # 给一个最小行即可; 取不到成交价的那一档基准自己会跳过。
+        benchmark_rows = list(priced_rows) + [
+            {"bond_code": code, "status": "ok"} for code in price_band_excluded]
         benchmark_return, benchmark_codes = _benchmark_period_return(
             provider,
-            priced_rows,
+            benchmark_rows,
             period_start,
             period_end,
             lookback_days=cfg.price_lookback_days,
@@ -1046,7 +1054,7 @@ _SUMMARY_CSV_KEYS = (
     "avg_selected_count", "avg_turnover", "avg_cash_weight", "avg_end_cash_weight",
     "total_event_exits", "total_cost",
     "benchmark_final_equity", "benchmark_total_return", "excess_return",
-    "index_benchmark_total_return", "excess_vs_index",
+    "index_benchmark_total_return", "excess_vs_index", "index_covers_full_window",
 )
 
 
@@ -1489,13 +1497,21 @@ def _pre_filter_codes_by_price(
     *,
     progress_cb=None,
     cancel_cb=None,
-) -> tuple[list[str], list[tuple[str, str]]]:
+) -> tuple[list[str], list[tuple[str, str]], list[str]]:
+    """返回 ``(进入定价的, 剔除及原因, **仅因价格带被剔除的**)``。
+
+    第三个返回值是给**基准**用的: 价格带是 ``ScoreStrategyConfig`` 的策略阈值, 而基准
+    的口径是"市场代理", 它自己的 docstring 写着"刻意不过策略的筛子"。缺价那一档不同 ——
+    没有成交价的债基准也买不进去, 那是数据事实不是策略选择, 所以两种剔除必须分开,
+    而不是让调用方去解析理由串。
+    """
     if not cfg.pre_filter_prices or (cfg.min_market_price is None and cfg.max_market_price is None):
         if progress_cb is not None:
             progress_cb(len(codes), len(codes))
-        return codes, []
+        return codes, [], []
     kept: list[str] = []
     excluded: list[tuple[str, str]] = []
+    band_excluded: list[str] = []
     total = len(codes)
     for done, code in enumerate(codes, start=1):
         _check_cancel(cancel_cb)
@@ -1512,12 +1528,13 @@ def _pre_filter_codes_by_price(
                 continue
             if not _passes_range(point.price, cfg.min_market_price, cfg.max_market_price):
                 excluded.append((code, f"价格预筛: {point.price:.2f} 不在区间内"))
+                band_excluded.append(code)
                 continue
             kept.append(code)
         finally:
             if progress_cb is not None and _should_emit_code_progress(done, total):
                 progress_cb(done, total)
-    return kept, excluded
+    return kept, excluded, band_excluded
 
 
 def _eligible_codes_for_date(
@@ -2471,6 +2488,12 @@ def _portfolio_mark_to_market_curve(
     all_dates.add(period_end)
     curve: list[dict[str, Any]] = []
     for current_date in sorted(all_dates):
+        # **本期的点不许落在本期起点之前**。``all_dates`` 收的是各持仓的价格日期, 而
+        # 建仓价可能取到一个陈旧收盘 (``signal_close`` 口径下允许 lookback), 于是这一期
+        # 会吐出一个**上一期区间内**的点。``_upsert_equity_points`` 对同日点是覆盖,
+        # 于是上一期真实的盘中估值被这一期的开仓值顶掉, 净值曲线上凭空多一段假的横盘。
+        if period_start is not None and current_date < period_start:
+            continue
         gross_return = 0.0
         for pos in positions:
             code = str(pos.get("bond_code"))
@@ -2532,6 +2555,36 @@ def _latest_price_from_map(series: dict[date, float], on_date: date) -> float | 
             latest_date = d
             latest_price = px
     return latest_price
+
+
+def _curve_periods_per_year(equity_curve: list[dict[str, Any]]) -> float:
+    """按净值曲线**实际的观测间距**推年化因子, 不写死 252。
+
+    曲线只在"某只持仓当天有价"的日子上出点 —— 一个空仓期整月只贡献**一个**点
+    (见 ``_portfolio_mark_to_market_curve`` 的三条早返回)。于是同一条序列里混着日频与
+    月频观测, 而波动率 / 夏普 / 索提诺全按"每个观测都是一个交易日"算, 空仓越多年化
+    越离谱。
+
+    用中位间距而不是均值: 长假与停牌会拉出几个很大的间隔, 均值被它们拽偏。
+    夹在 [1, 365] 之间并在样本不足时回落 252 —— 纯日频曲线的中位间距是 1 个日历日
+    (周末被跳过, 中位仍是 1), 于是 365.25 → 略高于 252 的年化因子; 这比"把月频观测
+    当成日频"的偏差小一个量级, 而且随数据自己校准。
+    """
+    dates = [row.get("date") for row in equity_curve or []
+             if isinstance(row.get("date"), date)]
+    if len(dates) < 3:
+        return 252.0
+    gaps = [(b - a).days for a, b in zip(dates, dates[1:]) if (b - a).days > 0]
+    if not gaps:
+        return 252.0
+    gaps.sort()
+    median_gap = gaps[len(gaps) // 2]
+    if median_gap <= 0:
+        return 252.0
+    # 日频那一档保持 252 —— 中位间距 1~3 天的曲线本来就是"每个交易日一个点"
+    if median_gap <= 3:
+        return 252.0
+    return max(1.0, min(365.0, 365.25 / median_gap))
 
 
 def _upsert_equity_points(
@@ -2663,7 +2716,9 @@ def _summarize_strategy(
     curve_returns = _equity_curve_returns(equity_curve)
     use_curve_returns = len(curve_returns) > max(len(period_returns), 1)
     metric_returns = curve_returns if use_curve_returns else period_returns
-    periods_per_year = 252 if use_curve_returns else _periods_per_year(freq)
+    periods_per_year = (
+        _curve_periods_per_year(equity_curve) if use_curve_returns
+        else _periods_per_year(freq))
     rf_per_period = (risk_free_rate or 0.0) / periods_per_year
     if len(metric_returns) >= 2:
         std = float(np.std(metric_returns, ddof=1))
@@ -2694,9 +2749,18 @@ def _summarize_strategy(
         excess_return = total_return - benchmark_total_return
     index_total_return = None
     excess_vs_index = None
+    index_covers_full_window = None
     if index_benchmark_curve:
         index_total_return = float(index_benchmark_curve[-1]["equity"]) - 1.0
-        excess_vs_index = total_return - index_total_return
+        # **两条曲线要覆盖同一段窗口才谈得上超额**。``_index_benchmark_curve`` 在缺价的
+        # 调仓日直接 ``continue``, 并把**第一个取得到价的日子**归一成 1.0 —— 数据源前
+        # k 个调仓日没有指数价时, 指数收益只覆盖回测的尾段, 而策略收益覆盖全程,
+        # 两个不同期限的数相减没有意义。
+        index_start = index_benchmark_curve[0].get("date")
+        index_covers_full_window = (
+            isinstance(index_start, date) and index_start <= start_date)
+        if index_covers_full_window:
+            excess_vs_index = total_return - index_total_return
     selected_counts = [int(row.get("selected_count") or 0) for row in periods]
     turnovers = [finite_float(row.get("turnover")) for row in periods]
     finite_turnovers = [t for t in turnovers if t is not None]
@@ -2765,6 +2829,9 @@ def _summarize_strategy(
         "excess_return": excess_return,
         "index_benchmark_total_return": index_total_return,
         "excess_vs_index": excess_vs_index,
+        # None 表示"指数没覆盖到回测起点, 超额无法计算" —— 与"没有指数基准"分开,
+        # 否则页面上两种情况长得一样。
+        "index_covers_full_window": index_covers_full_window,
         "stability": stability,
     }
 
@@ -2950,6 +3017,13 @@ def _strategy_attribution(periods: list[dict[str, Any]]) -> dict[str, Any]:
             elif ret < 0:
                 bucket["losses"] += 1
     ranked = sorted(by_code.values(), key=lambda x: float(x["contribution"]), reverse=True)
+    # **集中度要在全体正贡献上算, 不能只看 top_contributors**。那张表是 ``ranked[:10]``,
+    # 排在第 11 名之后的正贡献者不在分母里, 于是显示出来的「前三集中度」系统性偏高 ——
+    # 而这个数还要去撞 ``_strategy_robustness_notes`` / ``_strategy_dynamic_suggestions``
+    # 里 >=0.65 的那道闸, 于是"收益过于集中"这句警告会被虚报出来。
+    # 在引擎侧一次算好, 展示层直接读: 让展示层自己去聚合全表, 就是把同一个口径写第二遍。
+    positives = [float(x["contribution"]) for x in ranked if float(x["contribution"]) > 0]
+    total_positive = sum(positives)
     return {
         "total_cost": sum(costs),
         "cost_drag": -sum(costs),
@@ -2957,6 +3031,9 @@ def _strategy_attribution(periods: list[dict[str, Any]]) -> dict[str, Any]:
         "skipped_positions": skipped,
         "top_contributors": ranked[:10],
         "top_detractors": list(reversed(ranked[-10:])) if ranked else [],
+        "total_positive_contribution": total_positive,
+        "top3_positive_contribution": sum(positives[:3]),
+        "positive_contributor_count": len(positives),
     }
 
 

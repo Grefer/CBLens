@@ -32,6 +32,8 @@ from .strategy_common import (
     STRATEGY_DETAIL_TABLE_HEIGHT,
     STRATEGY_RISK_CHART_HEIGHT,
     STRATEGY_SECONDARY_CHART_HEIGHT,
+    strategy_funding_label,
+    strategy_holding_label,
 )
 
 
@@ -331,13 +333,22 @@ class StrategyAnalysisRenderMixin:
         best = max(returns) if returns else None
         ret_std = float(np.std(returns, ddof=1)) if len(returns) > 1 else None
         fallback_ratio = float(data_quality.get("current_fallback_ratio") or 0.0)
-        positive_contrib = [
-            float(row.get("contribution"))
-            for row in attribution.get("top_contributors") or []
-            if row.get("contribution") is not None and float(row.get("contribution")) > 0
-        ]
-        top3_contrib = sum(positive_contrib[:3])
-        total_positive = sum(positive_contrib)
+        # 分母取引擎算好的**全体**正贡献, 不是 ``top_contributors`` —— 那张表是
+        # ``ranked[:10]``, 第 11 名之后的正贡献者不在里面, 集中度会系统性偏高, 而这个数
+        # 还要去撞 >=0.65 那道"收益过于集中"的闸。旧快照没有这两个键时退回旧算法
+        # (只能这样, 那份数据里确实没有全表), 但新跑的结果一律走引擎口径。
+        total_positive = attribution.get("total_positive_contribution")
+        top3_contrib = attribution.get("top3_positive_contribution")
+        if total_positive is None or top3_contrib is None:
+            positive_contrib = [
+                float(row.get("contribution"))
+                for row in attribution.get("top_contributors") or []
+                if row.get("contribution") is not None and float(row.get("contribution")) > 0
+            ]
+            top3_contrib = sum(positive_contrib[:3])
+            total_positive = sum(positive_contrib)
+        total_positive = float(total_positive or 0.0)
+        top3_contrib = float(top3_contrib or 0.0)
         concentration = top3_contrib / total_positive if total_positive > 0 else None
 
         # 可信度 badge
@@ -794,12 +805,10 @@ class StrategyAnalysisRenderMixin:
             "down_reset_edge": "下修优势",
             "down_reset_robust_edge": "稳健下修优势",
         }.get(rank_signal, "旧机会分")
-        if holding_mode == "pool":
-            cap = config.get("max_holdings")
-            strategy_text += " · 等权全池" + (f"(≤{int(cap)})" if cap else "")
-        elif top_n is not None:   # top_score 或旧快照
-            strategy_text += f" · {rank_label} Top{top_n}"
-        shortfall_text = "满仓等权" if funding_mode == "full_invest" else "缺口留现金"
+        # 措辞与比较表共用一份 (strategy_common) —— 此前两处各写各的, 于是
+        # holding_mode="pool" 的同一次运行在数据面板上是「等权全池」、在比较表里是「Top10」。
+        strategy_text += " · " + strategy_holding_label(config)
+        shortfall_text = strategy_funding_label(config)
         if config.get("down_reset_event_exit"):
             shortfall_text += " · 下修公告后退出"
         cost = config.get("transaction_cost")

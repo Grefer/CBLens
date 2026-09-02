@@ -27,6 +27,7 @@ from ..theme import (
     get_color,
 )
 from ...batch_pricing import batch_view_label
+from .strategy_common import strategy_compare_label
 from ..widgets import Tooltip
 
 from .strategy_common import STRATEGY_MEDIUM_TABLE_HEIGHT, STRATEGY_SECONDARY_CHART_HEIGHT
@@ -55,19 +56,8 @@ class StrategyCompareMixin:
         # 下修两档只出现在**旧快照**里 (信号已删); 保留映射, 否则它们会掉进「旧机会分」。
         rank_label = {
             "deviation": "估值偏差",
-            "down_reset_edge": "下修优势",
-            "down_reset_robust_edge": "稳健下修优势",
         }.get(config.get("rank_signal"), "旧机会分")
-        freq = config.get("rebalance_freq") or "—"
-        top_n = config.get("top_n") or "—"
-        history_mode = {
-            "标准": "快速验证",
-            "Wind高保真": "Wind 历史",
-        }.get(config.get("history_mode"), config.get("history_mode") or "数据模式未记录")
-        label = (
-            f"{strategy_name} · {history_mode} · "
-            f"{freq}频 · {rank_label} Top{top_n}"
-        )
+        label = strategy_compare_label(strategy_name, config)
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         key = (
             str(result.get("start_date")),
