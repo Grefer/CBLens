@@ -70,7 +70,7 @@ def test_calibrated_down_reset_constants_are_pinned_to_their_values():
     改这些值本身没问题, 但那是一次**模型行为变更**, 应该由这条用例红一次来确认,
     而不是悄悄生效。改校准请连同这里一起改, 并在提交信息里写明重跑了校准。
     """
-    assert dro.PROPOSED_PASS_PROB == 0.9          # 有终态 100% / 含未决 83%
+    assert dro.PROPOSED_PASS_PROB == 0.95         # 有终态 96.4% / 含未决 93.0%
     assert dro.PROPOSED_EFFECTIVE_LAG_DAYS == 17  # 提议→通过 中位 17 / 均值 19 天
     assert dro.APPROVED_PASS_PROB == 1.0          # 已通过 → 必然落地
     assert dro.APPROVED_EFFECTIVE_LAG_DAYS == 7   # 通过→生效 (登记日次日) 的兜底

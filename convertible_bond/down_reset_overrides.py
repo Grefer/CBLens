@@ -37,9 +37,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COOLDOWN_MONTHS = 6  # 多数 A 股转债募集说明书写 6 个月, 缺失时的兜底
 # 已提议下修改用"一次性近确定下修节点"建模 (见 resolve_down_reset_intensity)。
-# 经 cb_events 历史校准 (cli/calibrate_down_reset): 提议→通过通过率≈100% (含未决保守口径 83%),
-# 提议→通过滞后中位 17 天。旧的"已提议 × 倍数"语义已被 scheduled reset 取代。
-PROPOSED_PASS_PROB = 0.9  # 董事会提议后被股东会通过的概率 (校准: 有终态 100% / 含未决 83%)
+# 经 cb_events 历史校准 (cli/calibrate_down_reset): 提议→通过通过率 96.4% (有终态口径) /
+# 93.0% (含未决保守口径), 提议→通过滞后中位 17 天。旧的"已提议 × 倍数"语义已被
+# scheduled reset 取代。**这几个数会随事件表增长而漂**: 上一版写的 100%/83% 是 2024-05 起
+# 那批样本, 到 2026-09 已变 —— 改这里请重跑校准, 别照抄。
+PROPOSED_PASS_PROB = 0.95  # 董事会提议后被股东会通过的概率 (2026-09-02 校准: 96.4% / 93.0%)
 PROPOSED_EFFECTIVE_LAG_DAYS = 17  # 提议公告 → 通过公告的滞后 (校准: 中位 17 / 均值 19 天)
 # 已通过待生效 (approved-pending): 股东会已通过、新转股价尚未到生效日的窗口。
 # 下修已是定局, 通过率视为 1.0; 公告未给生效日时按这个滞后兜底估算。

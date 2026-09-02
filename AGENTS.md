@@ -1337,6 +1337,13 @@ python CB.py 128009.SZ                      # 单只定价
 - **背景** (无确定性公告): "纯触发后"模型 — 触发线下方 (S < K·trigger_ratio) 一律按 `p_down` 年化概率下修 (每步 `1-exp(-p·dt)`, 网格无关), 触发线之上为 0。`p_down` = "触发后公司跟进下修"的年化概率; 不用"越跌越可能"的 S 渐变。
 - **已公告** (确定性正贡献): 输出 `scheduled_reset_date/prob/kind/target_k` 一次性下修节点, pricer 在预期生效日近确定施加, 不再放大背景强度。两个子态:
   - `kind="proposed"` 待股东会: 生效日 = 提议日+`PROPOSED_EFFECTIVE_LAG_DAYS`, 概率 `PROPOSED_PASS_PROB`。
+    **这两个常数是校准输出, 会随事件表长而漂, 而漂了不会有任何东西红** —— 唯一的哨兵是
+    `test_calibrated_down_reset_constants_are_pinned_to_their_values` 里的字面值, 它拦的是
+    "有人手改", 拦不住"数据变了而常数没跟上"。实测确实漂过: 通过率从 100%/83% (2024-05 起
+    那批样本) 变成 **96.4%/93.0%** (2026-09-02 复跑), 建议值 0.90 → **0.95**, 代码里那个 0.90
+    在此期间一直没动、注释还写着旧数。改动影响面小但方向确定: 全库 1059 只里当天带在途提议的
+    只有 4 只, 三只可定价的理论价 **+0.13% ~ +0.52%** (0.15~0.62 元)。
+    定期重跑 `cb-calibrate-down-reset` 是这几个数唯一的纠偏机制。
   - `kind="approved"` 已通过待生效: 生效日 = 公告生效日 (缺失按 `APPROVED_EFFECTIVE_LAG_DAYS` 兜底), 概率 `APPROVED_PASS_PROB`≈1; **仅当生效日 > 估值日才建节点 (防与条款刷新双计)**。
   - `target_k` = 公告解析到的下修后新 K (`parse_down_reset_new_price` 填 `CBEvent.event_price`); 缺失时 pricer 回落 premium/floor 估算。`target_k==现 K` 时节点自动成 no-op, 天然防双计。
   - **`target_k` 严格高于现 K 一定是解析错了, 必须丢掉**。下修公告正文开头会成段引用"历次
