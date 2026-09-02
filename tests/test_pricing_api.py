@@ -878,3 +878,207 @@ def test_historical_provider_never_carries_a_close_from_another_date():
         provider = HistoricalBondDataProvider(_Inner(), strip_fallback_status=strip)
         terms = provider.get_bond_terms("123456.SZ", _date(2022, 6, 30))
         assert terms.close is None, f"strip_fallback_status={strip} 时把今天的收盘价带进了历史"
+
+
+# ── S0 来源 / 告警口径 的守护 ────────────────────────────────────
+def _self_consistent_provider(stale_days: int, *, spot: float = 20.0):
+    """一个**自洽**的假 provider: ``get_stock_close(d)`` 命中历史就返回那天的收盘,
+    否则回落到实时价 —— 这正是 akshare ``get_stock_close`` 的形状 (15 天窗口内找,
+    找不到用 ``stock_zh_a_spot_em`` 的快照)。
+
+    ``stale_days`` 控制历史序列在估值日**之前多少天**就断掉 (模拟停牌)。
+    """
+    from datetime import date, timedelta
+
+    from convertible_bond.data_providers.base import BondTerms, DataProvider
+
+    val = date(2026, 6, 30)
+
+    class _P(DataProvider):
+        name = "P"
+        valuation_date = val
+
+        def __init__(self):
+            self.calls: list[str] = []
+            self.hist: list[tuple] = []
+            px, d0 = 10.0, val - timedelta(days=60)
+            while d0 <= val - timedelta(days=stale_days):
+                px *= 0.995
+                self.hist.append((d0, px))
+                d0 += timedelta(days=1)
+
+        def get_bond_terms(self, code, d):
+            return BondTerms(
+                sec_name="测试转债", conversion_price=10.0, underlying_code="000001.SZ",
+                maturity_date=date(2029, 1, 1), issue_date=date(2023, 1, 1),
+                coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+                redemption_price=108.0,
+            )
+
+        def get_stock_history(self, s, a, b):
+            self.calls.append("stock_history")
+            return [(d, v) for d, v in self.hist if a <= d <= b]
+
+        def get_stock_close(self, s, d):
+            self.calls.append("stock_close")
+            hit = [v for dd, v in self.hist if dd == d]
+            return hit[0] if hit else spot
+
+        def get_bond_history(self, c, a, b):
+            return [(val, 130.0)]
+
+        def get_stock_dividend_yield(self, s, d):
+            return 0.0
+
+        def get_risk_free_rate(self, d):
+            return 0.022
+
+    return _P
+
+
+def test_batch_and_single_pricing_use_the_same_s0():
+    """批量与单只必须用同一个 S0。
+
+    ``_BatchStockCache.hist_vol`` 顺手把**波动率窗口里最后一笔**收盘价种进 close 缓存,
+    而 ``price_from_provider`` 是先 ``hist_vol`` 再 ``get_stock_close`` —— 种进来的值
+    永远赢, 批量模式下 ``get_stock_close`` 一次都不会被调到。停牌/节假日/数据源延迟让
+    那笔收盘价落在几天前时, 同一只债就有了两个价: 实测正股停牌 20 天时
+    单只 S0=20.00 / 批量 S0=8.14, 理论价 **200.00 vs 96.22**, 而 ``status`` 照样 ``"ok"``,
+    行里也没有任何字段说 S0 不是估值日的。
+
+    更隐蔽的是同一个批量里 S0 的来源**还会变**: 外部传了 ``sigma`` 就跳过 hist_vol,
+    于是又走回 ``get_stock_close``。所以这条要把三种组合都钉住。
+    """
+    from convertible_bond import pricing_api as pa
+
+    Provider = _self_consistent_provider(stale_days=20)
+    val = Provider.valuation_date
+
+    a, b = Provider(), Provider()
+    single = pa.price_from_provider(a, "123456.SZ", valuation_date=val)
+    batch = pa.batch_price_from_provider_threaded(
+        b, ["123456.SZ"], valuation_date=val, max_workers=1)[0]
+
+    assert batch["status"] == "ok"
+    assert batch["S0"] == pytest.approx(single["S0"]), (
+        f"批量 S0={batch['S0']} 与单只 S0={single['S0']} 不同")
+    assert batch["theoretical_price"] == pytest.approx(
+        single["theoretical_price"], rel=1e-9)
+    # 行情陈旧时必须真的回源, 让 provider 自己的陈旧判定与兜底有机会跑
+    assert "stock_close" in b.calls, "行情陈旧却没调 get_stock_close"
+
+    # 传了 sigma 也要落在同一个 S0 上
+    c = Provider()
+    with_sigma = pa.batch_price_from_provider_threaded(
+        c, ["123456.SZ"], valuation_date=val, sigma=0.30, max_workers=1)[0]
+    assert with_sigma["S0"] == pytest.approx(single["S0"])
+
+
+def test_fresh_history_still_avoids_a_stock_close_round_trip():
+    """行情新鲜时仍然不该多打一次请求 —— 修 S0 不能把批量缓存的意义修没了。
+
+    日期对得上时那两条路本来同值, 缓存纯赚; 全池 300+ 只正股, 每只多一次请求
+    在 akshare 上是实打实的限流风险 (见 AGENTS 的东财封禁那条)。
+    """
+    from convertible_bond import pricing_api as pa
+
+    Provider = _self_consistent_provider(stale_days=0)
+    p = Provider()
+    rows = pa.batch_price_from_provider_threaded(
+        p, [f"12300{i}.SZ" for i in range(4)], valuation_date=Provider.valuation_date,
+        max_workers=1)
+    assert all(r["status"] == "ok" for r in rows)
+    assert p.calls.count("stock_close") == 0, "行情新鲜却回源了"
+    assert len({r["S0"] for r in rows}) == 1
+
+
+def test_risk_warnings_do_not_fire_on_normal_status_values():
+    """三个状态字段在**正常情况下都是非空的**, 按真值判就人人有告警。
+
+    实测全库: ``suspension_status`` 交易 308 / 停牌一天 1 / None 751;
+    ``underlying_trade_status`` 交易 1017 / 停牌一天 2 / None 41;
+    ``underlying_status`` 否 1013 / 是 11 / ST/退市风险 7 / None 29。
+    按真值判会让主池 311 只里 295 / 310 / 306 只各背一条假告警 —— 实测 235/311 只债的
+    告警**全是假的**, 而真告警排在它们后面 (110092.SH: 「转债交易状态异常: 交易」
+    「正股交易状态异常: 交易」「正股风险状态: ST/退市风险」)。
+
+    口径要与同一函数下面的 ``credit_rating_outlook`` / ``credit_watch_status`` 一致:
+    白名单之外才告警, 这样新出现的异常值仍然会响。
+    """
+    from datetime import date
+
+    from convertible_bond.data_providers.base import BondTerms
+    from convertible_bond.pricing_api import _risk_warnings
+
+    val = date(2026, 8, 31)
+
+    def terms(**kw):
+        base = dict(sec_name="X", conversion_price=10.0, maturity_date=date(2029, 1, 1))
+        base.update(kw)
+        return BondTerms(**base)
+
+    normal = terms(suspension_status="交易", underlying_trade_status="交易",
+                   underlying_status="否")
+    assert _risk_warnings(normal, val) == [], f"正常值产生了告警: {_risk_warnings(normal, val)}"
+
+    # 缺值也不告警 (不知道 != 异常)
+    assert _risk_warnings(terms(), val) == []
+
+    # 异常值必须响, 而且原样带出那个值
+    halted = terms(suspension_status="停牌一天", underlying_trade_status="停牌一天",
+                   underlying_status="ST/退市风险")
+    got = _risk_warnings(halted, val)
+    assert len(got) == 3
+    assert any("停牌一天" in w and "转债" in w for w in got)
+    assert any("停牌一天" in w and "正股交易" in w for w in got)
+    assert any("ST/退市风险" in w for w in got)
+
+    # 白名单之外的新值也要响 —— 判据不是"等于某个已知异常值"
+    assert _risk_warnings(terms(underlying_status="是"), val) == ["正股风险状态: 是"]
+    assert _risk_warnings(terms(suspension_status="临时停牌"), val), "新异常值被放过了"
+
+
+def test_missing_down_reset_floor_is_recorded_not_silent():
+    """估不出下修价下限时 pricer 走**无下限**分支, 下修价值会偏高 —— 不能静默。
+
+    行里 ``down_reset_floor`` 是 None, 与"这只债没有下修条款"长得一模一样。
+    60 个日历日正常有 37~45 个交易日 (阈值是 20), 所以掉进这一档基本只有正股长期停牌
+    或次新 —— 那恰恰是最该被看见的两种。
+    """
+    from datetime import date, timedelta
+
+    from convertible_bond import pricing_api as pa
+    from convertible_bond.data_providers.base import BondTerms, DataProvider
+
+    val = date(2026, 6, 30)
+
+    class _Thin(DataProvider):
+        name = "Thin"
+
+        def get_bond_terms(self, code, d):
+            return BondTerms(sec_name="次新转债", conversion_price=10.0,
+                             underlying_code="000001.SZ", maturity_date=date(2029, 1, 1),
+                             issue_date=date(2023, 1, 1),
+                             coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+                             redemption_price=108.0)
+
+        def get_stock_history(self, s, a, b):
+            # 只有 10 条 —— 够算 σ (>=5) 但不够算 20 日均价
+            return [(val - timedelta(days=i), 10.0 + i * 0.1) for i in range(10, 0, -1)]
+
+        def get_stock_close(self, s, d):
+            return 11.0
+
+        def get_bond_history(self, c, a, b):
+            return [(val, 130.0)]
+
+        def get_stock_dividend_yield(self, s, d):
+            return 0.0
+
+        def get_risk_free_rate(self, d):
+            return 0.022
+
+    row = pa.price_from_provider(_Thin(), "123456.SZ", valuation_date=val)
+    assert row["down_reset_floor"] is None
+    assert any("下修价下限" in w for w in row["risk_warnings"]), (
+        f"下限估不出来却没留痕: {row['risk_warnings']}")

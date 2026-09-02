@@ -184,10 +184,31 @@ def _estimate_down_reset_floor(provider: DataProvider, stock_code: str, val_date
     return max(last20_avg, prev_close)
 
 
+#: 交易状态字段的**正常**取值。判据是"已知正常之外一律告警", 与下面
+#: ``credit_rating_outlook`` / ``credit_watch_status`` 用白名单是同一个口径 ——
+#: 而不是"字段非空就告警": 这三个字段在正常情况下**都是非空的**, 实测全库
+#: suspension_status 是 交易 308 / 停牌一天 1 / None 751,
+#: underlying_trade_status 是 交易 1017 / 停牌一天 2 / None 41,
+#: underlying_status 是 否 1013 / 是 11 / ST/退市风险 7 / None 29。
+#: 按真值判会让主池 311 只里 295 / 310 / 306 只分别背上一条假告警 —— 实测
+#: 235/311 只债的三条告警**全是假的**, 而真告警排在它们后面 (样例 110092.SH:
+#: 「转债交易状态异常: 交易」「正股交易状态异常: 交易」「正股风险状态: ST/退市风险」)。
+#: 只收实测到的值, 不猜同义词: 猜错的方向是"漏报", 而多报一条只是噪声。
+_NORMAL_TRADE_STATUS = frozenset({"交易"})
+_NORMAL_UNDERLYING_RISK = frozenset({"否"})
+
+
+def _abnormal(value, normal: frozenset[str]) -> str | None:
+    """字段有值、且不在已知正常集里 → 返回它 (要告警); 否则 None。"""
+    text = str(value or "").strip()
+    return text if text and text not in normal else None
+
+
 def _risk_warnings(terms, val_date: date) -> list[str]:
     warnings: list[str] = []
-    if terms.suspension_status:
-        warnings.append(f"转债交易状态异常: {terms.suspension_status}")
+    suspension = _abnormal(terms.suspension_status, _NORMAL_TRADE_STATUS)
+    if suspension:
+        warnings.append(f"转债交易状态异常: {suspension}")
     conv_status = str(getattr(terms, "conversion_suspension_status", "") or "")
     conv_start = getattr(terms, "conversion_suspension_start_date", None)
     conv_end = getattr(terms, "conversion_suspension_end_date", None)
@@ -200,10 +221,12 @@ def _risk_warnings(terms, val_date: date) -> list[str]:
         start_text = conv_start.isoformat() if conv_start else "待起始"
         end_text = conv_end.isoformat() if conv_end else "待恢复"
         warnings.append(f"转股暂停窗口: {start_text}~{end_text}")
-    if terms.underlying_trade_status:
-        warnings.append(f"正股交易状态异常: {terms.underlying_trade_status}")
-    if terms.underlying_status:
-        warnings.append(f"正股风险状态: {terms.underlying_status}")
+    stock_trade = _abnormal(terms.underlying_trade_status, _NORMAL_TRADE_STATUS)
+    if stock_trade:
+        warnings.append(f"正股交易状态异常: {stock_trade}")
+    stock_risk = _abnormal(terms.underlying_status, _NORMAL_UNDERLYING_RISK)
+    if stock_risk:
+        warnings.append(f"正股风险状态: {stock_risk}")
     outlook = str(getattr(terms, "credit_rating_outlook", "") or "").strip()
     if outlook and outlook not in {"稳定", "正面"}:
         warnings.append(f"评级展望: {outlook}")
@@ -455,6 +478,13 @@ def price_from_provider(provider: DataProvider, bond_code,
         down_reset_floor = _estimate_down_reset_floor(provider, stock_code, val_date)
         if down_reset_floor is not None:
             pricer_kwargs["down_reset_floor"] = down_reset_floor
+        else:
+            # 估不出来时 pricer 走**无下限**分支 (K_new = S/premium), 下修价值会偏高 ——
+            # 而这一档此前完全静默: 行里 down_reset_floor 是 None, 与"这只债没有下修条款"
+            # 长得一模一样。60 个日历日正常有 37~45 个交易日 (远超阈值 20), 所以掉进
+            # 这一档基本只有正股长期停牌或次新 —— 那正是最该被看见的两种。
+            # 只写进 risk_warnings 不加 risk_tag: 加标签就是默认选债行为变更 (见 AGENTS)。
+            risk_warnings.append("下修价下限无法估算 (正股近 60 日样本不足 20 条), 下修价值可能偏高")
 
     down_intensity = resolve_down_reset_intensity(
         p_down, resolved, redemption_mode=redemption_mode,
@@ -618,9 +648,10 @@ class _BatchStockCache(DataProvider):
     """装饰器: 批量定价期间缓存正股级数据, 避免同一正股重复发网络请求.
 
     在批量定价场景中, 同一只正股可能被多只转债引用 (如 A、B 两只转债对应
-    同一只正股). 此外, ``price_from_provider`` 对每只债先调 ``get_stock_close``
-    再调 ``hist_vol`` (内部又调 ``get_stock_history``), 导致同一正股的历史数据
-    被拉取两次.
+    同一只正股). ``price_from_provider`` 对每只债先调 ``hist_vol`` (内部再调
+    ``get_stock_history``) 再调 ``get_stock_close`` —— 顺序是 hist_vol **在前**,
+    这一点很关键: hist_vol 里那次 ``_close_cache.setdefault`` 因此总是先落地,
+    所以它只在日期对得上估值日时才种 (见那里的注释)。
 
     本装饰器在一次 batch run 的生命周期内:
       - get_stock_close(stock, date) → 按 (stock, date) 缓存
@@ -771,10 +802,23 @@ class _BatchStockCache(DataProvider):
                     raise ValueError(f"{stock_code} 历史样本仅 {len(closes)} 条, 无法估算波动率")
                 log_ret = np.diff(np.log(closes))
                 value = float(np.std(log_ret, ddof=1) * np.sqrt(252))
-                latest_close = _latest_price_on_or_before(history, end_date)
+                # 顺手把 S0 种进 close 缓存 —— **但只有这笔收盘价就是估值日当天的才行**。
+                # 波动率窗口取的是"不晚于 end_date 的最后一笔", 停牌/节假日/数据源延迟都会
+                # 让它落在几天前; 而 ``price_from_provider`` 是先 hist_vol 再
+                # get_stock_close (334 → 335), 所以种进来的值**永远赢**, 批量模式下
+                # ``get_stock_close`` 一次都不会被调到。后果不是"少一次请求"而是**同一只债
+                # 单只与批量定出两个价**: 实测正股停牌 20 天时单只 S0=20.00 (走 provider 的
+                # 兜底) / 批量 S0=8.14 (20 天前的收盘), 理论价 200.00 vs 96.22, 而
+                # ``status`` 照样是 ``"ok"``、行里也没有任何字段说 S0 不是估值日的。
+                # 更隐蔽的是**同一个批量里 S0 的来源还会变**: 外部传了 ``sigma`` 就跳过
+                # hist_vol, 于是又走回 get_stock_close。
+                # 日期对得上时才种: 那种情况下两条路本来就同值, 缓存纯赚; 对不上就让
+                # get_stock_close 自己跑, provider 的陈旧判定与兜底 (akshare 的 15 天窗口 +
+                # 实时快照回落) 才有机会生效。
+                latest_close, latest_date = _latest_price_with_date(history, end_date)
                 with self._lock:
                     self._vol_cache[cache_key] = value
-                    if latest_close is not None:
+                    if latest_close is not None and latest_date == end_date:
                         self._close_cache.setdefault((stock_code, end_date), latest_close)
                 return value
             except Exception:
