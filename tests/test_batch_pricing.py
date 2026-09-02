@@ -1783,6 +1783,23 @@ def test_terms_as_of_anchors_the_terms_sync_bucket_not_the_global_stamp(tmp_path
         code, date(2026, 8, 30),
     ) == date(2026, 8, 25)
 
+    # **所有**取条款锚的地方都要走这一个函数。曾经有三份逐字重复的实现、只修好两份;
+    # 后来在 ``cli/data_doctor.check_pool_terms_projection`` 里又发现第四份 (裸
+    # ``bundle.fetched_at(code)``)。守护测试扫源码: 不许再出现不带 source 的裸调用。
+    import ast
+    import inspect
+
+    from convertible_bond.cli import data_doctor
+
+    src = inspect.getsource(data_doctor)
+    bare = [
+        node.lineno for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "fetched_at"
+        and not any(kw.arg == "source" for kw in node.keywords)
+    ]
+    assert not bare, f"data_doctor 里还有不带 source 的 fetched_at 调用, 第 {bare} 行"
+
     # 缺桶时必须回落全局戳, 不能回 None —— None 在投影层表示"不裁剪", 会把整条 patch 链
     # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债 K 11.63 会被
     # 盖成 17.74)。这不是假想的边界: 实测全库 739/1059 只还没有条款桶。

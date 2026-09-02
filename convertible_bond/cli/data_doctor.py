@@ -34,7 +34,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..batch_pricing import is_unlisted_new_bond, screen_batch_pool_from_cache
-from ..cache import TermsBundle, project_bundle_path
+from ..cache import (
+    TERMS_SYNC_SOURCE,
+    TermsBundle,
+    project_bundle_path,
+    terms_fetched_at,
+)
 from ..data_providers.base import CREDIT_RATING_ORDER, CREDIT_RATING_RANK
 from ..cb_events import project_events_path
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
@@ -79,12 +84,17 @@ def _grade(value: float, warn_below: float, fail_below: float) -> str:
 # ─────────────────────────── 新鲜度 ───────────────────────────
 
 def check_terms_freshness(ctx: dict) -> Check:
+    # 这条检查的名字就是「**条款**抓取新鲜度」, 所以锚必须是**全量条款同步**那一桶。
+    # 裸 ``bundle.fetched_at(code)`` 读全局戳, 而每日状态刷新 / 每月评级同步 / 每日事件
+    # 同步都会把它推到今天 —— 一个月没跑过条款同步, 这条照样报"很新鲜"。
+    # (今天两个口径几乎重合: 739/1059 还没有条款桶, ``terms_fetched_at`` 对它们回落到
+    # 全局值。所以这是趁没出事先收口, 不是修一个正在发生的故障。)
     bundle, today = ctx["bundle"], ctx["today"]
     ages = []
     for code in bundle.list_bonds():
-        ts = bundle.fetched_at(code)
+        ts = terms_fetched_at(bundle, code, source=TERMS_SYNC_SOURCE)
         if ts is not None:
-            ages.append((today - ts.date()).days)
+            ages.append((today - ts).days)
     if not ages:
         return Check("条款抓取新鲜度", FAIL, "没有任何 fetched_at 元信息",
                      "抓取日缺失时无法判断条款是否陈旧", "新鲜度")
@@ -424,9 +434,15 @@ def check_pool_terms_projection(ctx: dict) -> Check:
         cur = getattr(terms, "conversion_price", None)
         if cur is None:
             continue
-        ts = bundle.fetched_at(code)
-        got = getattr(store.apply(code, terms, today,
-                                  after=ts.date() if ts else None), "conversion_price", None)
+        # 锚走 ``cache.terms_fetched_at`` 这个单一事实源, 不要再写第四份。
+        # 裸 ``bundle.fetched_at(code)`` 读的是**全局**戳, 而它被每日状态刷新 / 每月评级
+        # 同步 / 每日事件同步一起推到今天 —— 用它当条款锚等于宣称"今天之前的条款变更都已
+        # 含在快照里"。这份逻辑曾经存在三份、只有两份被修好 (见 AGENTS), 这是第四份。
+        # 今天实测只有 1 只债两个锚取值不同 (全局 09-01 vs 条款桶 08-30) 且投影结果相同,
+        # 所以这次是"趁没出事先收口", 不是修一个正在发生的故障。
+        ts = terms_fetched_at(bundle, code, source=TERMS_SYNC_SOURCE)
+        got = getattr(store.apply(code, terms, today, after=ts),
+                      "conversion_price", None)
         if got is not None and abs(float(cur) - float(got)) > 1e-9:
             bad.append(f"{code} cb_data={cur} 投影后={got}")
     return Check(
