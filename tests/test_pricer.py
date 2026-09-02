@@ -2318,3 +2318,79 @@ class TestPutbackClauseAbsence:
         args = dict(sigma=0.20, r=0.022, base_spread=0.03, distress_k=0.05,
                     p_down=0.0, M=300, N=600)
         assert clone.price(**args) == pytest.approx(p.price(**args))
+
+
+class TestPutbackBoundaryIsMonotone:
+    """回售期内处处给底 —— 价值曲面必须单调, Δ 不许为负。"""
+
+    @staticmethod
+    def _pricer(**over):
+        base = dict(
+            S0=10.0, K=10.0, current_date=date(2026, 9, 2),
+            maturity_date=date(2029, 9, 2), issue_date=date(2023, 9, 2),
+            coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+            redemption_price=108.0, call_notice_days=30,
+        )
+        base.update(over)
+        return UniversalCBPricer(**base)
+
+    @staticmethod
+    def _min_delta(pricer, **args):
+        grid_args = dict(sigma=0.17, r=0.0148, q=0.0, base_spread=0.03,
+                         p_down=0.0, distress_k=0.05, M=500, N=2000)
+        grid_args.update(args)
+        S_grid, V = pricer._price_grid(
+            grid_args["sigma"], grid_args["r"], grid_args["q"],
+            grid_args["base_spread"], grid_args["p_down"], grid_args["distress_k"],
+            grid_args["M"], grid_args["N"])
+        return float(np.gradient(V, float(S_grid[1] - S_grid[0])).min())
+
+    def test_no_negative_delta_anywhere_on_the_surface(self):
+        """回售底是**常数**, 只加在低价侧会让曲面在触发线上出现台阶。
+
+        回溯把台阶抹成一段非单调凹陷, ``dV/dS < 0`` —— 一只可转债不可能出现负 Δ。
+        这不是离散伪影: M 从 300 加密到 4800 (h 缩小 16 倍), 凹陷稳定在 2.08~2.14 元
+        (常银转债), 负区 S/K 带稳定在 0.629~0.783。全池 7 只有负区。
+
+        逐条消融确认 100% 归因于回售: 关掉回售 7/7 负区消失, 关掉强赎 7/7 逐位不变,
+        关掉下修 5/7 更糟。
+        """
+        # 低 σ + 已进入回售期 —— 旧实现下这一档负 Δ 最深
+        assert self._min_delta(self._pricer()) >= -1e-9
+
+        # 扫一片参数, 不靠单个 fixture 碰运气
+        worst = 0.0
+        for sigma in (0.12, 0.17, 0.25, 0.40):
+            for ratio in (0.6, 0.7, 0.8):
+                for notice in (0, 30):
+                    d = self._min_delta(
+                        self._pricer(put_trigger_ratio=ratio, call_notice_days=notice),
+                        sigma=sigma)
+                    worst = min(worst, d)
+        assert worst >= -1e-9, f"仍有负 Δ, 最深 {worst:.6f}"
+
+    def test_the_floor_still_does_its_job(self):
+        """修单调性不能把回售底本身改没了 —— 它是个大件。
+
+        实测完全关掉回售底, 全池中位少 0.07 元、最大少 26.75 元。
+        """
+        args = dict(sigma=0.17, r=0.0148, base_spread=0.03, distress_k=0.05,
+                    p_down=0.0, M=300, N=600)
+        deep = self._pricer(S0=6.0)                       # S/K = 0.6, 深在触发线下
+        with_floor = deep.price(**args)
+        without = self._pricer(S0=6.0, put_trigger_ratio=None).price(**args)
+        assert with_floor > without + 1.0, (
+            f"回售底没起作用: {with_floor:.4f} vs {without:.4f}")
+
+    def test_the_floor_is_bounded_by_the_announced_window_branch(self):
+        """通用分支与"已公告回售窗口"分支现在是同一个形状 (整格给底)。
+
+        差别只在用哪个价: 公告窗口用 ``putback_price``, 通用分支用 面值+应计。
+        这条钉住两者不再分叉 —— 分叉正是不连续的来源。
+        """
+        import inspect
+
+        src = inspect.getsource(UniversalCBPricer._price_grid)
+        # 通用分支不许再按 S 掩码
+        assert "mask_put" not in src, "通用回售分支仍在按当前 S 掩码"
+        assert src.count("V = np.maximum(V, put_price)") == 1

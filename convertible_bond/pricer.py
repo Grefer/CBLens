@@ -513,8 +513,29 @@ class UniversalCBPricer:
                 V = np.maximum(V, explicit_put_price)
                 V[0] = max(V[0], explicit_put_price)
             elif self.put_trigger_ratio is not None and t_prev >= self._put_start_t:
-                mask_put = S_grid <= self.K * self.put_trigger_ratio
-                V[mask_put] = np.maximum(V[mask_put], put_price)
+                # **回售期内处处给底, 不按当前 S 掩码**。
+                #
+                # 曾经这里是 ``V[S <= K*ratio] = max(V, put_price)`` —— 回售价是**常数**,
+                # 只加在低价侧, 于是曲面在触发线上有一个台阶。回溯把台阶抹成一段**非单调**
+                # 的凹陷, ``dV/dS < 0``: 一只可转债不可能出现负 Δ。
+                # 这不是离散伪影 —— M 从 300 加密到 4800 (h 缩小 16 倍), 凹陷稳定在
+                # 2.08~2.14 元 (常银转债), 负区 S/K 带稳定在 0.629~0.783。
+                # 逐条消融确认 100% 归因于回售: 关掉回售 7/7 负区消失, 关掉强赎 7/7 逐位
+                # 不变, 关掉下修 5/7 更糟。
+                #
+                # **为什么不照搬强赎那一侧的 σ√t 软化**: 强赎的 cap 是
+                # ``max(call_price, parity·(1+σ√t_grace))`` —— 目标**随 S 上升**, 曲面保持
+                # 单调; 回售的底是常数, 软化只让 V 连续、仍然非单调 (实测 5/7 负区还在,
+                # 常银 min Δ = −2.46), 还要 +28% 运行时和一个新自由参数。
+                #
+                # **代价要认**: 这比真实条款**宽**。真实条款是「**连续三十个交易日**收盘价
+                # 低于转股价 70%」, 外加「每年…行使回售权一次」的年度用尽规则 —— 两者在
+                # 数据模型里都没有字段 (只有 ``put_trigger_pct`` 幅度与 ``put_obs_months``),
+                # 真做路径依赖要加一维网格 (实测 31 倍运行时) 且没有日线可以种计数器。
+                # 所以这是在"按 S 掩码"与"路径依赖"之间取的那个**结构上单调**的上界:
+                # 实测全池 291/311 只价格变动 < 0.005 元, 最大 +1.0037 元 (燃23转债),
+                # 分桶 0 处变化, 「低估候选」成员 40 → 40 逐只相同, 前 30 名不变。
+                V = np.maximum(V, put_price)
                 V[0] = max(V[0], put_price)
 
             V[-1] = max(V[-1], S_grid[-1] * self.ratio)
