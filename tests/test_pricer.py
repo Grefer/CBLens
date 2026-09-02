@@ -2258,3 +2258,63 @@ class TestThetaAccuracy:
         g = p.price(0.28, 0.022, base_spread=0.03, M=300, N=1,
                     return_greeks=True)
         assert math.isnan(g["theta"])
+
+
+class TestPutbackClauseAbsence:
+    """没有回售条款的债不许被套用默认触发比。"""
+
+    @staticmethod
+    def _kwargs(**over):
+        base = dict(
+            S0=10.0, K=10.0, current_date=date(2026, 9, 2),
+            maturity_date=date(2029, 9, 2), issue_date=date(2023, 9, 2),
+            coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+            redemption_price=108.0, call_notice_days=30,
+        )
+        base.update(over)
+        return base
+
+    def test_none_trigger_ratio_disables_the_putback_entirely(self):
+        """``put_trigger_ratio=None`` = 这只债**没有回售条款**。
+
+        ``pricing_api`` 只在 ``terms.put_trigger_pct`` 非空时才传这个参数, 于是银行/券商
+        转债 (实测全库 69 只、主池 5 只: 上银/财通/兴业/重银/常银 —— 它们本来就没有回售)
+        落到 pricer 的默认 0.7, 被凭空造出一个回售权。
+
+        今天影响极小 —— 那 5 只 S/K 都在 0.87 以上, 底够不着, 实测最大 0.0014 元 ——
+        但那只是当前位置的巧合: 把常银转债的正股放到 0.60K, 虚构的回售底让它**虚增
+        5.614 元**。
+        """
+        deep_otm = self._kwargs(S0=6.0)      # S/K = 0.6, 深在 0.7 触发线之下
+        with_put = UniversalCBPricer(**deep_otm).price(
+            0.20, 0.022, base_spread=0.03, distress_k=0.05, p_down=0.0, M=300, N=600)
+        without = UniversalCBPricer(**dict(deep_otm, put_trigger_ratio=None)).price(
+            0.20, 0.022, base_spread=0.03, distress_k=0.05, p_down=0.0, M=300, N=600)
+        assert with_put > without + 1.0, (
+            f"关掉回售没有降低价格 ({with_put:.4f} vs {without:.4f}), "
+            "说明这个 fixture 的回售底本来就不起作用, 测不到东西")
+
+        # 有条款的照常生效
+        explicit = UniversalCBPricer(**dict(deep_otm, put_trigger_ratio=0.7)).price(
+            0.20, 0.022, base_spread=0.03, distress_k=0.05, p_down=0.0, M=300, N=600)
+        assert explicit == pytest.approx(with_put)
+
+    def test_pricing_api_passes_none_when_the_bond_has_no_put_clause(self):
+        """空值要**显式关掉**, 不能什么都不传 —— 不传就落到默认 0.7。"""
+        import inspect
+
+        from convertible_bond import pricing_api
+
+        src = inspect.getsource(pricing_api.price_from_provider)
+        assert 'pricer_kwargs["put_trigger_ratio"] = (' in src, "没有显式设置"
+        assert "if terms.put_trigger_pct is not None else None" in src, (
+            "空值没有落到 None")
+
+    def test_constructor_kwargs_round_trip_keeps_the_absence(self):
+        """往返克隆不能把"没有回售"变回"默认 0.7"。"""
+        p = UniversalCBPricer(**self._kwargs(put_trigger_ratio=None))
+        clone = UniversalCBPricer(**p._constructor_kwargs())
+        assert clone.put_trigger_ratio is None
+        args = dict(sigma=0.20, r=0.022, base_spread=0.03, distress_k=0.05,
+                    p_down=0.0, M=300, N=600)
+        assert clone.price(**args) == pytest.approx(p.price(**args))

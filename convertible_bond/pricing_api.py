@@ -451,8 +451,12 @@ def price_from_provider(provider: DataProvider, bond_code,
         pricer_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
     if terms.call_no_redemption_until is not None and not redemption_mode:
         pricer_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
-    if terms.put_trigger_pct is not None:
-        pricer_kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
+    # 空值要**显式关掉回售**, 不能什么都不传 —— 不传就落到 pricer 的默认 0.7, 等于给
+    # 一只没有回售条款的债凭空造一个回售权。实测全库 69 只 / 主池 5 只是这一档
+    # (上银/财通/兴业/重银/常银, 都是银行券商转债, 本来就没有回售)。
+    pricer_kwargs["put_trigger_ratio"] = (
+        float(terms.put_trigger_pct) / 100.0
+        if terms.put_trigger_pct is not None else None)
     if terms.putback_start_date is not None:
         pricer_kwargs["putback_start_date"] = terms.putback_start_date
     if terms.putback_end_date is not None:

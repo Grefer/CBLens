@@ -86,7 +86,7 @@ class UniversalCBPricer:
                  call_start_date: date | None = None,
                  coupon_rates: tuple[float, ...] | None = None, call_trigger_ratio: float = 1.3,
                  call_no_redemption_until: date | None = None,
-                 put_trigger_ratio: float = 0.7,
+                 put_trigger_ratio: float | None = 0.7,
                  put_active_years: int = 2,
                  putback_start_date: date | None = None,
                  putback_end_date: date | None = None,
@@ -168,7 +168,16 @@ class UniversalCBPricer:
             self._call_no_redemption_until_t = (
                 self.call_no_redemption_until - current_date
             ).days / _DAYS_PER_YEAR
-        self._put_start_t = (self.put_start_date - current_date).days / _DAYS_PER_YEAR
+        # ``put_trigger_ratio is None`` = **这只债没有回售条款**, 与"有条款但比例未知"
+        # 是两回事。把 ``_put_start_t`` 置为 +inf, 通用回售分支就永远进不去。
+        # 起因: ``pricing_api`` 只在 ``terms.put_trigger_pct`` 非空时才传这个参数, 于是
+        # 银行/券商转债 (实测全库 69 只、主池 5 只: 上银/财通/兴业/重银/常银 —— 它们
+        # 本来就没有回售条款) 落到 pricer 的默认 0.7, 被凭空造出一个回售权。
+        # 今天影响极小 (那 5 只 S/K 都在 0.87 以上, 底够不着, 实测最大 +0.001 元),
+        # 但那只是当前位置的巧合: 正股跌到 70% 以下就会多出一整个回售底。
+        self._put_start_t = (
+            float("inf") if self.put_trigger_ratio is None
+            else (self.put_start_date - current_date).days / _DAYS_PER_YEAR)
         self._putback_start_t: float | None = None
         self._putback_end_t: float | None = None
         if self.putback_start_date is not None:
@@ -503,7 +512,7 @@ class UniversalCBPricer:
                 )
                 V = np.maximum(V, explicit_put_price)
                 V[0] = max(V[0], explicit_put_price)
-            elif t_prev >= self._put_start_t:
+            elif self.put_trigger_ratio is not None and t_prev >= self._put_start_t:
                 mask_put = S_grid <= self.K * self.put_trigger_ratio
                 V[mask_put] = np.maximum(V[mask_put], put_price)
                 V[0] = max(V[0], put_price)
