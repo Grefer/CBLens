@@ -274,7 +274,15 @@ class CninfoAnnouncementProvider(DataProvider):
         category: str,
         searchkey: str = "",
     ) -> list[dict]:
-        """分页查询公告列表."""
+        """分页查询公告列表.
+
+        **翻页没翻完时抛 IncompleteAnnouncementList**, 不再静默截断。三种停止方式此前
+        都被当成"取完了": ① 第一页之后任何一页失败 (只在 ``all_rows`` 非空时 break);
+        ② 响应缺 ``totalAnnouncement`` —— 默认 0 让 ``page*size >= 0`` 立刻为真, 一页就停;
+        ③ ``max_pages`` × ``page_size`` 用尽而总数更多 (实测 600 条公告只取回 300, 零日志)。
+        而上层 ``sync_cb_events`` 对这三种一视同仁: 不记 ``failed``、照常
+        ``mark_synced``, **把水位推过它从没看见的公告** —— 那些公告之后永远不会再被拉取。
+        """
         all_rows: list[dict] = []
 
         for page_num in range(1, self._max_pages + 1):
@@ -308,14 +316,14 @@ class CninfoAnnouncementProvider(DataProvider):
                 logger.warning(msg)
                 if not all_rows:
                     raise RuntimeError(msg) from exc
-                break
+                raise IncompleteAnnouncementList(msg, rows=all_rows) from exc
 
             if resp.status_code != 200:
                 msg = f"cninfo 公告查询 HTTP {resp.status_code} (stock={stock})"
                 logger.warning(msg)
                 if not all_rows:
                     raise RuntimeError(msg)
-                break
+                raise IncompleteAnnouncementList(msg, rows=all_rows)
 
             try:
                 body = resp.json()
@@ -324,7 +332,7 @@ class CninfoAnnouncementProvider(DataProvider):
                 logger.warning(msg)
                 if not all_rows:
                     raise RuntimeError(msg)
-                break
+                raise IncompleteAnnouncementList(msg, rows=all_rows)
 
             announcements = body.get("announcements") or []
             if not announcements:
@@ -335,12 +343,37 @@ class CninfoAnnouncementProvider(DataProvider):
                 if row:
                     all_rows.append(row)
 
-            # 判断是否有下一页
-            total_ann = body.get("totalAnnouncement", 0)
+            # 判断是否有下一页。``totalAnnouncement`` 缺失时**不能当成 0** ——
+            # 那会让 ``page*size >= 0`` 立刻为真, 一页就停而且看上去像取完了。
+            if "totalAnnouncement" not in body:
+                raise IncompleteAnnouncementList(
+                    f"cninfo 响应缺 totalAnnouncement, 无法判断是否翻完 (stock={stock})",
+                    rows=all_rows)
+            total_ann = int(body.get("totalAnnouncement") or 0)
             if page_num * self._page_size >= total_ann:
-                break
+                return all_rows
+        else:
+            # for 正常跑完 = max_pages 用尽。总数还没取够就是截断了。
+            if len(all_rows) < total_ann:
+                raise IncompleteAnnouncementList(
+                    f"cninfo 公告超过 max_pages={self._max_pages} 上限 "
+                    f"(stock={stock}, 已取 {len(all_rows)}/{total_ann})",
+                    rows=all_rows)
 
         return all_rows
+
+
+class IncompleteAnnouncementList(RuntimeError):
+    """公告列表**没取完**。
+
+    与"一条都没取到"分开: 后者直接 ``RuntimeError``, 上层照常记进 ``failed``。这一档
+    手里有部分数据, 但把它当完整结果会让同步水位推过没看见的公告 —— 那些公告之后
+    永远不会再被拉取, 而这是**静默**的。``rows`` 带着已取到的部分, 供调用方按需降级。
+    """
+
+    def __init__(self, message: str, *, rows: list[dict] | None = None):
+        super().__init__(message)
+        self.rows = rows or []
 
 
 def _parse_announcement_item(ann: dict) -> dict | None:

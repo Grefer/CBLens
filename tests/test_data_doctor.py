@@ -530,3 +530,83 @@ def test_csv_root_is_part_of_the_disk_cache_identity(tmp_path):
     assert ident_a.endswith(str(a)) or str(a) in ident_a, f"根目录没进身份: {ident_a}"
     assert "root:/:" not in ident_a, "命中了 Path.root, 解析顺序又反了"
     assert _provider_identity(CSVDataProvider(a)) == ident_a       # 同数据集稳定
+
+
+def test_cninfo_pagination_truncation_is_loud():
+    """翻页没翻完必须抛, 不能静默返回半截列表。
+
+    三种停止方式此前都被当成"取完了": ① 第一页之后任何一页失败; ② 响应缺
+    ``totalAnnouncement`` (默认 0 让 ``page*size >= 0`` 立刻为真, 一页就停);
+    ③ ``max_pages × page_size`` 用尽而总数更多 (600 条公告只取回 300, 零日志)。
+    而 ``sync_cb_events`` 对三种一视同仁: 不记 failed、照常 ``mark_synced`` ——
+    **把水位推过它从没看见的公告**, 那些公告之后永远不会再被拉取。
+    """
+    from convertible_bond.cninfo_provider import (
+        CninfoAnnouncementProvider,
+        IncompleteAnnouncementList,
+    )
+
+    class _Resp:
+        def __init__(self, body):
+            self._body = body
+            self.status_code = 200
+
+        def json(self):
+            return self._body
+
+    def _poster(total, *, fail_page=None, omit_total=False, page_size=30):
+        def post(url, data=None, timeout=None):
+            page = int(data["pageNum"])
+            if fail_page and page == fail_page:
+                raise RuntimeError("网络抖动")
+            lo = (page - 1) * page_size
+            anns = [{"announcementTitle": f"t{i}",
+                     "announcementTime": 1700000000000 + i,
+                     "adjunctUrl": f"u{i}"} for i in range(lo, min(lo + page_size, total))]
+            body = {"announcements": anns}
+            if not omit_total:
+                body["totalAnnouncement"] = total
+            return _Resp(body)
+        return post
+
+    def _run(**kw):
+        p = object.__new__(CninfoAnnouncementProvider)
+        p._session = type("S", (), {"post": staticmethod(_poster(**kw))})()
+        p._timeout = 5
+        p._page_size = 30
+        p._max_pages = 10
+        p._request_interval = 0
+        p._throttle = lambda: None
+        return p._query_pages(stock="x", se_date="a~b", column="c", category="d")
+
+    for label, kw in (("第 2 页失败", dict(total=100, fail_page=2)),
+                      ("缺 totalAnnouncement", dict(total=100, omit_total=True)),
+                      ("max_pages 用尽", dict(total=600))):
+        with pytest.raises(IncompleteAnnouncementList) as exc:
+            _run(**kw)
+        assert exc.value.rows, f"{label}: 已取到的部分被丢了"
+
+    # 健康路径不受影响
+    assert len(_run(total=60)) == 60
+    # 第一页就失败仍是彻底失败, 不是"部分"
+    with pytest.raises(RuntimeError) as exc:
+        _run(total=100, fail_page=1)
+    assert not isinstance(exc.value, IncompleteAnnouncementList)
+
+
+def test_partial_fetch_does_not_advance_the_sync_watermark():
+    """部分取到的债不许进 ``synced_codes``。
+
+    水位一旦推过去, 没看见的公告之后**永远不会再被拉取**, 而这是静默的。
+    但已取到的部分照常解析 —— 它们是真的公告。
+    """
+    import inspect
+
+    from convertible_bond import cb_event_sync
+
+    src = inspect.getsource(cb_event_sync.sync_cb_events)
+    assert "IncompleteAnnouncementList" in src, "同步侧没有区分部分取到"
+    assert "incomplete_codes" in src
+    assert "code not in incomplete_codes" in src, "部分取到的债仍在推水位"
+    # 部分与彻底失败要分开报, 否则日志把两种状况混在一起
+    assert '"partial": partial' in src

@@ -249,7 +249,15 @@ def parse_event_from_announcement(
 
     if body and event_type in {"down_reset_rejected", "call_no_redemption"}:
         commitment = parse_commitment_period(body, event_type=event_type)
-        if commitment:
+        # **承诺期不可能在公告之前就结束**。正文常成段引用上一次的承诺
+        # (「本公司曾承诺自 2024-01-20 起六个月内不下修…」), 而解析器抓的是第一段,
+        # 于是一份 2026 年的公告解析出 2024 年的窗口。实测 21/540 条 down_reset_rejected
+        # 与 7/338 条 call_no_redemption 是这个形状; 天能转债四份公告
+        # (2025-08 / 2025-12 / 2026-06 / 2026-08) 全部解析成同一个 2024-01-20~2024-07-19。
+        # 后果是**一份还在生效的不下修承诺被当成已过期**, 下修价值照常计入。
+        # 丢掉这个窗口之后, resolve_down_reset 的 `_add_months(公告日, cooldown)` 兜底
+        # 会给出一个方向正确的冻结期 —— 那比一个自相矛盾的窗口好。
+        if commitment and _commitment_window_is_plausible(commitment, event_date):
             effective_start = commitment["start"]
             effective_end = commitment["end"]
             commitment_months = commitment["months"]
@@ -280,7 +288,8 @@ def parse_event_from_announcement(
         if putback.get("price") is not None:
             event_price = float(putback["price"])
     elif body and event_type in {"conversion_suspension", "conversion_resume"}:
-        suspension = parse_conversion_suspension_terms(body)
+        suspension = _drop_implausible_suspension_start(
+            parse_conversion_suspension_terms(body), event_date)
         if suspension.get("start"):
             effective_start = suspension["start"]
         if suspension.get("end"):
@@ -1243,6 +1252,46 @@ def _is_strict_upgrade(current: CBEvent, incoming: CBEvent) -> bool:
         if getattr(current, name) is not None and getattr(incoming, name) is None:
             return False
     return _parsed_field_count(incoming) > _parsed_field_count(current)
+
+
+#: 公告日与它所宣布的窗口起始日之间, 允许的最大**回溯**天数。
+#:
+#: 公告总是**提前**发 (实测暂停转股的提前量中位 5 天、最长 13 天), 所以一个正常的窗口
+#: 起始日应当**不早于**公告日太多。而 ``parse_conversion_suspension_terms`` 里那个裸的
+#: ``(?:自|从)`` 锚会抓到正文里对转股期/回售期的引述, 于是一份 2026 年的公告解析出
+#: 2020 年的起始日 —— 实测 508 条里 **155 条 (31%)** 的 start 早于公告日 30 天以上,
+#: 141 条早于 180 天, 最远 2072 天 (128136.SZ 立讯转债 2026-07-07 公告 → start 2020-11-03)。
+#:
+#: 留 30 天而不是 0: 偶有公告在窗口开始之后才补发, 而 30 天远小于 155 条里最小的那个
+#: 回溯量 —— 阈值同样落在空档里 (次小的是 180 天那一档)。
+_MAX_WINDOW_BACKDATE_DAYS = 30
+
+
+def _commitment_window_is_plausible(commitment: dict, event_date: date) -> bool:
+    """承诺期窗口是不是这份公告自己宣布的 (而不是正文里引用的上一期)。
+
+    判据只有一条方向性的: **结束日不能早于公告日**。一份公告不可能在发布之前就失效。
+    """
+    end = commitment.get("end")
+    return end is None or end >= event_date
+
+
+def _drop_implausible_suspension_start(
+    suspension: dict | None, event_date: date,
+) -> dict | None:
+    """暂停转股窗口: 起始日早于公告日太多时丢掉它 (见 :data:`_MAX_WINDOW_BACKDATE_DAYS`)。
+
+    只丢 ``start``, 不丢整条 —— ``end`` 走的是另一套锚点, 两者的可信度互不担保。
+    这与 AGENTS 里"start 有明确锚点所以丢 end 不丢 start"那句话方向相反: 实测数据说
+    **start 才是被引述污染的那一半** (155/508), 那句话已在 AGENTS 中更正。
+    """
+    if not suspension:
+        return suspension
+    start = suspension.get("start")
+    if start is not None and (event_date - start).days > _MAX_WINDOW_BACKDATE_DAYS:
+        suspension = dict(suspension)
+        suspension["start"] = None
+    return suspension
 
 
 def _parsed_field_count(event: CBEvent) -> int:

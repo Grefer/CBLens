@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from collections.abc import Iterable
 
 from .cache import TermsBundle
+from .cninfo_provider import IncompleteAnnouncementList
 from .cb_events import (
     CBEvent,
     CBEventStore,
@@ -139,6 +140,8 @@ def sync_cb_events(
     parsed_events: list[CBEvent] = []
     parsed_patches: list[TermsPatch] = []
     failed: list[tuple[str, str]] = []
+    #: 部分取到 (翻页被截断) —— 与彻底失败分开记, 见下面的 IncompleteAnnouncementList 分支
+    partial: list[tuple[str, str]] = []
     scanned = 0
     pdf_downloaded = 0
     pdf_failed = 0
@@ -148,6 +151,12 @@ def sync_cb_events(
             on_progress(i, len(codes), code)
         try:
             rows = provider.list_bond_announcements(code, start_date, end_date)
+        except IncompleteAnnouncementList as exc:
+            # **部分取到**: 手里的公告照常解析 (它们是真的), 但这只债不进 synced_codes ——
+            # 水位一旦推过去, 没看见的那些公告之后**永远不会再被拉取**, 而这是静默的。
+            # 与"一条都没取到"分开记, 否则日志里"失败 N 只"会把两种完全不同的状况混在一起。
+            partial.append((code, str(exc)))
+            rows = exc.rows
         except Exception as exc:
             failed.append((code, str(exc)))
             continue
@@ -214,7 +223,12 @@ def sync_cb_events(
     if term_patch_store is not None and parsed_patches:
         patches_added = term_patch_store.add_many(parsed_patches)
     failed_codes = {code for code, _err in failed}
-    synced_codes = [code for code in codes if code not in failed_codes]
+    # 部分取到的也不许推水位 —— 见上面 IncompleteAnnouncementList 那一段
+    incomplete_codes = {code for code, _err in partial}
+    synced_codes = [
+        code for code in codes
+        if code not in failed_codes and code not in incomplete_codes
+    ]
     mark_synced = getattr(store, "mark_synced", None)
     if callable(mark_synced):
         mark_synced(synced_codes)
@@ -226,6 +240,7 @@ def sync_cb_events(
         "upgraded": upgraded,
         "patches_added": patches_added,
         "failed": failed,
+        "partial": partial,
         "store_path": str(store.path),
         "pdf_downloaded": pdf_downloaded,
         "pdf_failed": pdf_failed,

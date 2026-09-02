@@ -1364,3 +1364,66 @@ def test_add_many_upgrades_a_degraded_event_in_place(tmp_path):
     strictly_more = CBEvent(**base, effective_start=date(2024, 8, 20),
                             effective_end=date(2024, 8, 26), event_price=100.489)
     assert other.add_many([strictly_more]) == 0 and other.last_upgraded == 1
+
+
+def test_commitment_window_cannot_end_before_it_was_announced():
+    """承诺期不可能在公告发布之前就结束。
+
+    正文常成段引用上一次的承诺 (「本公司曾承诺自 2024-01-20 起六个月内不下修…」), 而
+    解析器抓第一段, 于是一份 2026 年的公告解析出 2024 年的窗口。实测存量库 21/540 条
+    ``down_reset_rejected`` 与 7/338 条 ``call_no_redemption`` 是这个形状 —— 天能转债的
+    四份公告 (2025-08 / 2025-12 / 2026-06 / 2026-08) 全部解析成同一个
+    2024-01-20~2024-07-19。后果是**一份还在生效的不下修承诺被当成已过期**, 下修价值
+    照常计入; 丢掉这个窗口之后 ``resolve_down_reset`` 的 ``_add_months(公告日, cooldown)``
+    兜底会给出一个方向正确的冻结期。
+    """
+    from convertible_bond.cb_events import _commitment_window_is_plausible
+
+    announced = date(2026, 8, 14)
+    stale = {"start": date(2024, 1, 20), "end": date(2024, 7, 19), "months": 6}
+    assert not _commitment_window_is_plausible(stale, announced)
+
+    live = {"start": announced, "end": date(2027, 2, 14), "months": 6}
+    assert _commitment_window_is_plausible(live, announced)
+    # 边界: 恰好当天结束仍算数
+    assert _commitment_window_is_plausible({"end": announced}, announced)
+    assert not _commitment_window_is_plausible(
+        {"end": announced - timedelta(days=1)}, announced)
+    # 没有 end 的不拦 (那一档由别处兜底)
+    assert _commitment_window_is_plausible({"end": None}, announced)
+
+
+def test_suspension_start_far_before_the_announcement_is_dropped():
+    """暂停转股的起始日不能比公告早太多。
+
+    公告总是**提前**发 (实测提前量中位 5 天、最长 13 天), 而
+    ``parse_conversion_suspension_terms`` 里那个裸的 ``(?:自|从)`` 锚会抓到正文里对
+    转股期/回售期的引述 —— 实测 508 条里 **155 条 (31%)** 的 start 早于公告日 30 天以上,
+    141 条早于 180 天, 最远 **2072 天** (128136.SZ 立讯转债 2026-07-07 公告 → start
+    2020-11-03)。
+
+    **只丢 start, 不丢整条** —— ``end`` 走另一套锚点, 两者可信度互不担保。
+    这与 AGENTS 原先"start 有明确锚点所以丢 end 不丢 start"的说法方向相反, 数据说
+    start 才是被引述污染的那一半。
+    """
+    from convertible_bond.cb_events import (
+        _MAX_WINDOW_BACKDATE_DAYS,
+        _drop_implausible_suspension_start,
+    )
+
+    announced = date(2026, 7, 7)
+    polluted = {"start": date(2020, 11, 3), "end": date(2026, 11, 2)}
+    out = _drop_implausible_suspension_start(dict(polluted), announced)
+    assert out["start"] is None, "被引述污染的 start 没被丢掉"
+    assert out["end"] == date(2026, 11, 2), "end 被连坐丢掉了"
+
+    # 正常的提前量照常保留
+    normal = {"start": announced + timedelta(days=5), "end": None}
+    assert _drop_implausible_suspension_start(dict(normal), announced)["start"] is not None
+
+    # 边界两侧
+    edge = announced - timedelta(days=_MAX_WINDOW_BACKDATE_DAYS)
+    assert _drop_implausible_suspension_start({"start": edge}, announced)["start"] == edge
+    past = edge - timedelta(days=1)
+    assert _drop_implausible_suspension_start({"start": past}, announced)["start"] is None
+    assert _drop_implausible_suspension_start(None, announced) is None
