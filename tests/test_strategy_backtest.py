@@ -2694,3 +2694,78 @@ def test_never_filled_position_is_still_treated_as_cash(monkeypatch):
     assert len(period["positions"]) == 2
     assert period["cash_weight"] == pytest.approx(1 / 3)
     assert any(s["bond_code"] == "113003.SH" for s in period["skipped_positions"])
+
+
+def _bare_provider():
+    from convertible_bond.data_providers.base import DataProvider
+
+    class _P(DataProvider):
+        name = "bare"
+
+        def get_bond_history(self, code, a, b):
+            return []
+
+        def get_bond_terms(self, code, d):
+            return None
+
+        def get_stock_close(self, *a, **k):
+            return None
+
+        def get_stock_history(self, *a, **k):
+            return []
+
+        def hist_vol(self, *a, **k):
+            return 0.2
+
+        def get_risk_free_rate(self, *a, **k):
+            return 0.022
+
+    return _P()
+
+
+def test_cash_yield_does_not_accrue_past_the_period_end():
+    """现金腿必须按 ``period_end`` 封顶。
+
+    曲线的最后一点未必是期末: ``next_close`` 口径下平仓价落在期末之后的第一个可得
+    交易日 (实测越过 1~3 个日历日), 而下一期又从它自己的 ``period_start`` 重新起算 ——
+    重叠那几天的现金收益被付两次。后果是 ``summary.final_equity`` 不再等于逐期收益的
+    链乘, 而这两个数在同一份报告里并排给出。实测单期多计 1.62bp。
+    仓位那一腿早就封顶了 (下修事件退出的现金天数用 ``min(current_date, period_end)``),
+    只有现金腿漏了。
+    """
+    from datetime import date
+
+    from convertible_bond.strategy_backtest import _portfolio_mark_to_market_curve
+
+    start, end = date(2025, 1, 31), date(2025, 2, 28)
+    positions = [{"bond_code": "A.SH", "entry_date": start, "exit_date": date(2025, 3, 3),
+                  "start_price": 100.0, "end_price": 100.0, "exit_reason": "rebalance"}]
+    curve = _portfolio_mark_to_market_curve(
+        _bare_provider(), positions, start_equity=1.0, period_end=end, cost=0.0,
+        intended_count=10, period_start=start, cash_weight=0.9, cash_yield_rate=0.022)
+
+    assert curve[-1]["date"] > end, "前提不成立: 曲线末点没有越过期末"
+    expected = 1.0 + 0.9 * 0.022 * (end - start).days / 365.0
+    assert curve[-1]["equity"] == pytest.approx(expected, rel=1e-12), (
+        f"现金计息越过了期末: {curve[-1]['equity']} vs {expected}")
+
+
+def test_empty_period_still_charges_the_rebalance_cost():
+    """``intended_count <= 0`` 那条早返回不能漏 ``- cost``。
+
+    它的两个兄弟早返回都带着成本, 而这一档 (候选池为空 / full_invest 下零成交) 恰恰是
+    **清空整个组合**的那一期, 调仓成本最实在。漏掉之后 ``period_return`` 照常报了成本
+    而净值曲线没扣 —— 同一份报告里 final 与逐期链乘对不上 (实测 1.00275722 vs 1.0007517)。
+    """
+    from datetime import date
+
+    from convertible_bond.strategy_backtest import _portfolio_mark_to_market_curve
+
+    start, end = date(2025, 1, 31), date(2025, 2, 28)
+    for intended in (0, 10):
+        curve = _portfolio_mark_to_market_curve(
+            _bare_provider(), [], start_equity=1.0, period_end=end, cost=0.002,
+            intended_count=intended, period_start=start,
+            cash_weight=1.0, cash_yield_rate=0.0)
+        assert curve[-1]["equity"] == pytest.approx(0.998), (
+            f"intended_count={intended} 时净值 {curve[-1]['equity']}, 成本没扣")

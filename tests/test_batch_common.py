@@ -3248,3 +3248,63 @@ def test_autocomplete_selection_foreground_follows_the_resolved_background():
         assert ratio >= 4.5, f"底 {col} 字 {fg} 只有 {ratio:.2f}:1"
     # 钉住反例: 深色档白字确实不合格 —— 否则这条用例可能在任何实现下都绿
     assert theme.contrast_ratio("#ffffff", theme.ACCENT[1]) < 3.0
+
+
+def test_strategy_detail_rows_match_the_column_count():
+    """「买卖明细」两个行构造器必须都吐出与列数相同的元素数。
+
+    Treeview 对多出来的值是**静默丢弃** —— 「跳过」行曾经塞 14 个值进 13 列, 于是从
+    「买入」列起整行左移一格: 买入渲染成空, 卖出/原因显示的是**买入**的日期与价,
+    标签/事件显示的是卖出的, 而 ``reason`` (跳过行唯一说明"为什么没成交"的东西)
+    一个字都没露。不报错、不红测试, 只是每一格都落在错的表头底下。
+
+    静态比对两个 ``detail_rows.append([...])`` 的长度与那张列表的列数; 另外钉住渲染
+    入口自己也会校验 (那道闸管的是将来新加的行构造器)。
+    """
+    import ast
+    import inspect
+
+    from convertible_bond.gui.controllers import strategy_render
+
+    src = inspect.getsource(strategy_render)
+    tree = ast.parse(src)
+
+    lengths = [
+        (node.lineno, len(node.args[0].elts))
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "append"
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == "detail_rows"
+        and node.args and isinstance(node.args[0], ast.List)
+    ]
+    assert len(lengths) >= 2, "找不到两个行构造器"
+    assert len({n for _, n in lengths}) == 1, f"行长不一致: {lengths}"
+
+    # 列名要从**真正传 detail_rows 的那次调用**里取 —— 文件里另有一张同样以
+    # period/status/rank 开头的 11 列表, 按前缀去 walk 会抓错。
+    call = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_render_strategy_small_tree"
+        and any(isinstance(a, ast.Name) and a.id == "detail_rows" for a in node.args)
+    )
+    cols = next(a for a in call.args if isinstance(a, ast.List) and a.elts
+                and isinstance(a.elts[0], ast.Constant) and a.elts[0].value == "period")
+    assert lengths[0][1] == len(cols.elts), (
+        f"行长 {lengths[0][1]} != 列数 {len(cols.elts)}")
+
+    # 渲染入口本身要拦住长度不符 —— 将来新加的行构造器靠它
+    assert "表格行长与列数不符" in inspect.getsource(
+        strategy_render.StrategyRenderMixin._render_strategy_small_tree)
+
+
+def test_strategy_dates_render_dash_not_the_literal_none():
+    """``pos.get("exit_date", "—")`` 挡不住**键存在但值是 None** —— 而跳过行全是这一档。"""
+    from convertible_bond.gui.controllers.strategy_render import StrategyRenderMixin
+
+    fmt = StrategyRenderMixin._fmt_strategy_date
+    assert fmt(None) == "—"
+    assert "None" not in fmt(None)
+    from datetime import date
+    assert fmt(date(2025, 1, 2)) == "2025-01-02"

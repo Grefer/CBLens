@@ -773,11 +773,17 @@ class StrategyRenderMixin:
                     self._strategy_signal_text(pos),
                     self._fmt_strategy_pct(pos.get("effective_p_down_1y_prob")),
                     pos.get("confidence", ""),
-                    f"{pos.get('entry_date', '—')} @ {self._fmt_strategy_price(pos.get('start_price'))}",
-                    f"{pos.get('exit_date', '—')} @ {self._fmt_strategy_price(pos.get('end_price'))} · {exit_reason}",
+                    f"{self._fmt_strategy_date(pos.get('entry_date'))} @ "
+                    f"{self._fmt_strategy_price(pos.get('start_price'))}",
+                    f"{self._fmt_strategy_date(pos.get('exit_date'))} @ "
+                    f"{self._fmt_strategy_price(pos.get('end_price'))} · {exit_reason}",
                     " / ".join(notes),
                 ])
             for pos in period.get("skipped_positions") or []:
+                # **13 个值, 与上面的「成交」行等长**。此前这里是 14 个 (第 10 位多一个
+                # 空串), 而 Treeview 静默丢掉多出来的那个 —— 从「买入」列起整行左移一格:
+                # 买入渲染成空, 卖出/原因显示的是**买入**的日期与价, 标签/事件显示的是
+                # 卖出的, 而 ``reason`` (跳过行唯一说明"为什么没成交"的东西) 一个字都没露。
                 detail_rows.append([
                     period_label,
                     "跳过",
@@ -789,9 +795,10 @@ class StrategyRenderMixin:
                     "—",
                     "—",
                     "—",
-                    "",
-                    f"{pos.get('entry_date', '—')} @ {self._fmt_strategy_price(pos.get('start_price'))}",
-                    f"{pos.get('exit_date', '—')} @ {self._fmt_strategy_price(pos.get('end_price'))}",
+                    f"{self._fmt_strategy_date(pos.get('entry_date'))} @ "
+                    f"{self._fmt_strategy_price(pos.get('start_price'))}",
+                    f"{self._fmt_strategy_date(pos.get('exit_date'))} @ "
+                    f"{self._fmt_strategy_price(pos.get('end_price'))}",
                     pos.get("reason", ""),
                 ])
 
@@ -840,6 +847,15 @@ class StrategyRenderMixin:
         stretch_weights=None,
         selectmode="browse",
     ):
+        # **行长必须等于列数**。Treeview 对多出来的值是静默丢弃 —— 「买卖明细」的
+        # 「跳过」行曾经塞 14 个值进 13 列, 于是从「买入」列起整行左移一格, 而
+        # ``reason`` (那一行唯一说明"为什么没成交"的东西) 一个字都没露出来。
+        # 不报错、不红测试, 只是每一格都落在错的表头底下。
+        bad = [i for i, row in enumerate(values or ()) if len(row) != len(columns)]
+        if bad:
+            raise ValueError(
+                f"表格行长与列数不符 (列 {len(columns)}): "
+                + ", ".join(f"第 {i} 行 {len(values[i])} 个值" for i in bad[:5]))
         _configure_tree_style()
         container = ctk.CTkFrame(parent, fg_color="transparent")
         container.grid(row=row, column=col, columnspan=columnspan,
@@ -910,6 +926,13 @@ class StrategyRenderMixin:
         if not np.isfinite(f):
             return "—"
         return f"{f*100:+.2f}%" if sign else f"{f*100:.2f}%"
+
+    @staticmethod
+    @staticmethod
+    def _fmt_strategy_date(value) -> str:
+        """日期格子。``pos.get("exit_date", "—")`` 挡不住**键存在但值是 None** ——
+        而"跳过"行恰恰全是这一档, 于是表里渲染出字面的 ``None``。"""
+        return "—" if value is None else str(value)
 
     @staticmethod
     def _fmt_strategy_price(value):

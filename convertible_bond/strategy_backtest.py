@@ -2395,11 +2395,23 @@ def _portfolio_mark_to_market_curve(
     def _cash_accrual(on_date: date) -> float:
         if not cash_yield_rate or period_start is None:
             return 0.0
-        return cash_weight * cash_yield_rate * max(0, (on_date - period_start).days) / 365.0
+        # **按期末封顶**。曲线的最后一点未必是 period_end: ``next_close`` 口径下平仓价
+        # 落在期末之后的第一个可得交易日 (实测越过 1~3 个日历日), 而下一期又从它自己的
+        # period_start 重新起算 —— 重叠那几天的现金收益被付了两次。
+        # 结果是 ``summary.final_equity`` 不再等于逐期收益的链乘 (实测单期多计 1.62bp,
+        # 12 期约 20bp/年), 而这两个数在报告里是并排给出的。
+        # 仓位那一腿早就封顶了 (下修事件退出的现金天数用的是 ``min(current_date,
+        # period_end)``), 只有现金腿漏了。
+        capped = min(on_date, period_end)
+        return cash_weight * cash_yield_rate * max(0, (capped - period_start).days) / 365.0
 
     if intended_count <= 0:
+        # ``- cost`` 不能漏: 下面两个兄弟早返回都带着它, 而这一档 (候选池为空 /
+        # full_invest 下零成交) 恰恰是**清空整个组合**的那一期, 调仓成本最实在。
+        # 漏掉之后 ``period_return`` 照常报了成本而净值曲线没扣 —— 实测 final 1.00275722
+        # vs 链乘 1.0007517, 两个数在同一份报告里对不上。
         return [{"date": period_end,
-                 "equity": start_equity * (1.0 + _cash_accrual(period_end))}]
+                 "equity": start_equity * (1.0 + _cash_accrual(period_end) - cost)}]
     if not positions:
         return [{"date": period_end,
                  "equity": start_equity * (1.0 + _cash_accrual(period_end) - cost)}]
