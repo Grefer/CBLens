@@ -1121,3 +1121,109 @@ def test_suspension_window_never_ends_before_it_starts():
         "公司自2026年6月8日起暂停转股, 待本次权益分派实施完毕后另行公告。"
         "经与中国结算深圳分公司确认, 恢复转股日为2026年6月12日。")
     assert (ok["start"], ok["end"]) == (date(2026, 6, 8), date(2026, 6, 12))
+
+
+def test_conversion_suspension_without_an_end_expires(tmp_path):
+    """缺 ``effective_end`` **不等于永久暂停**。
+
+    实测事故: 全库 508 条 conversion_suspension 里 150 条没有 end, 而它们让**主池
+    50/311 只 (16%)** 常年挂着「暂停转股」—— 距起始日中位 92 天、最长 812 天。
+    上银转债一只就有五条 (2024-06 / 2024-11 / 2025-05 / 2025-09 / 2026-05), 每条 end
+    都是 None —— **有第二次就说明第一次结束了**, 这个旗标可证伪。
+    来源全是一日型的权益分派停牌 (384/508 条标题带「权益分派」)。
+
+    这条同时钉住**两件**必须一起做的事:
+      ① 判据要按 TTL 过期 (锚 ``effective_start`` —— 那 150 条全都有, 而公告总是提前
+         发, 中位 5 天; 锚 event_date 会把 TTL 提前烧掉一半);
+      ② 过期时要**显式清空**。``apply_events_to_terms`` 是增量的, 不写这个键的话
+         cb_data 里上一次同步落下的旧值原样活着 —— 实测只改判据不清空, 63 只一只都不掉。
+    """
+    from datetime import timedelta
+
+    from convertible_bond.cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
+    from convertible_bond.data_providers import BondTerms
+
+    val = date(2026, 9, 2)
+    start = val - timedelta(days=90)          # 90 天前的分红停牌
+    stale = CBEvent(bond_code="113042.SH", event_date=start - timedelta(days=5),
+                    event_type="conversion_suspension",
+                    raw_title="关于实施2025年度权益分派时“上银转债”停止转股的提示性公告",
+                    effective_start=start, effective_end=None)
+
+    # 库里已经存着上一次同步落下的旧状态 —— 这正是现实中的形状
+    terms = BondTerms(sec_name="上银转债", conversion_price=10.0,
+                      maturity_date=date(2029, 1, 1),
+                      conversion_suspension_status="暂停转股",
+                      conversion_suspension_start_date=start)
+    out = apply_events_to_terms("113042.SH", terms, [stale], valuation_date=val)
+    assert out.conversion_suspension_status is None, (
+        "过期的分红停牌没被清掉 —— 只改判据不清空是没用的")
+
+    # 还在窗口内的照常标记
+    fresh_start = val - timedelta(days=1)
+    fresh = CBEvent(bond_code="113042.SH", event_date=fresh_start - timedelta(days=5),
+                    event_type="conversion_suspension", raw_title="同上",
+                    effective_start=fresh_start, effective_end=None)
+    out2 = apply_events_to_terms("113042.SH", terms, [fresh], valuation_date=val)
+    assert out2.conversion_suspension_status == "暂停转股"
+
+    # TTL 恰好到期那天仍算有效, 次日失效 (边界两侧都钉)
+    edge = val - timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS)
+    on_edge = CBEvent(bond_code="X.SZ", event_date=edge, event_type="conversion_suspension",
+                      raw_title="t", effective_start=edge, effective_end=None)
+    assert apply_events_to_terms("X.SZ", terms, [on_edge],
+                                 valuation_date=val).conversion_suspension_status == "暂停转股"
+    past = edge - timedelta(days=1)
+    off_edge = CBEvent(bond_code="X.SZ", event_date=past, event_type="conversion_suspension",
+                       raw_title="t", effective_start=past, effective_end=None)
+    assert apply_events_to_terms("X.SZ", terms, [off_edge],
+                                 valuation_date=val).conversion_suspension_status is None
+
+    # 真解析到的 end 优先于 TTL —— 兜底不许盖掉真值
+    long_real = CBEvent(bond_code="Y.SZ", event_date=start, event_type="conversion_suspension",
+                        raw_title="t", effective_start=start,
+                        effective_end=val + timedelta(days=30))
+    assert apply_events_to_terms("Y.SZ", terms, [long_real],
+                                 valuation_date=val).conversion_suspension_status == "暂停转股"
+
+    # **锚必须是 effective_start, 不是 event_date**。公告总是提前发 (实测提前量中位 5 天、
+    # 最长 13 天), 提前量超过 TTL 时锚 event_date 会算出一个**早于停牌开始**的截止日 ——
+    # 一次还没开始的停牌被判成已过期。这条构造的正是那种形状。
+    lead = _CONVERSION_SUSPENSION_TTL_DAYS + 3
+    begins_today = CBEvent(bond_code="Z.SZ", event_date=val - timedelta(days=lead),
+                           event_type="conversion_suspension", raw_title="t",
+                           effective_start=val, effective_end=None)
+    assert apply_events_to_terms("Z.SZ", terms, [begins_today],
+                                 valuation_date=val).conversion_suspension_status == "暂停转股", (
+        "锚成了公告日 —— 一次今天才开始的停牌被判成已过期")
+
+
+def test_transient_event_ttl_fallback_is_exercised():
+    """``_transient_event_end`` 的 TTL 回落分支必须被跑到。
+
+    实测它此前是**死代码**: tests 里每个 ``apply_events_to_terms`` 的 fixture 都显式给了
+    ``effective_end``, 所以 ``event.effective_end or (event_date + TTL)`` 的 or 右侧从没
+    执行过 —— 把 TTL 改成 0 或 9999 天, 整套测试全绿。
+    """
+    from datetime import timedelta
+
+    from convertible_bond.cb_events import (
+        _TRANSIENT_EVENT_TTL_DAYS,
+        _transient_event_end,
+        _transient_still_active,
+    )
+
+    d = date(2026, 9, 2)
+    no_end = CBEvent(bond_code="A.SZ", event_date=d, event_type="suspension",
+                     raw_title="t", effective_end=None)
+    # **字面值**, 不是从常数本身算出来的期望 —— 后者把 TTL 改成 0 或 9999 照样绿,
+    # 正是 AGENTS 记过的那个陷阱 (校准常数那条守护也是为此改成钉字面值的)。
+    assert _TRANSIENT_EVENT_TTL_DAYS == 5, "改 TTL 是行为变更, 请连同这条一起改"
+    assert _transient_event_end(no_end) == date(2026, 9, 7)
+    assert _transient_still_active(no_end, date(2026, 9, 7))
+    assert not _transient_still_active(no_end, date(2026, 9, 8))
+
+    # 真 end 优先
+    with_end = CBEvent(bond_code="A.SZ", event_date=d, event_type="suspension",
+                       raw_title="t", effective_end=d + timedelta(days=99))
+    assert _transient_event_end(with_end) == d + timedelta(days=99)

@@ -52,6 +52,24 @@ _TRANSIENT_EVENT_TYPES = frozenset({"suspension", "underlying_suspension"})
 # 当天又被 Wind 标停, 没 grace 就会被旧事件误擦。30 天足够覆盖一次完整刷新周期。
 _TRANSIENT_CLEAR_GRACE_DAYS = 30
 
+#: 暂停转股缺 ``effective_end`` 时的兜底时长, 从**暂停起始日**起算。
+#:
+#: 这个字段不能按"缺 end 就永久有效"处理: 实测全库 508 条 conversion_suspension 里
+#: 150 条没有 end, 而它们让**主池 50/311 只 (16%)** 常年挂着「暂停转股」—— 距起始日
+#: 中位 92 天、最长 812 天。上银转债一只就有五条 (2024-06/2024-11/2025-05/2025-09/
+#: 2026-05), 每条 end 都是 None —— 有第二次就说明第一次结束了, 这个旗标可证伪。
+#:
+#: **为什么不能靠 end 自己**: 那个字段被回售期区间污染得很厉害 (AGENTS 记过宝莱转债
+#: 「关于回售期间…暂停转股」解析出 start=2021-03-11 end=2026-09-03), 实测 358 条有
+#: start+end 的时长中位 **1202 天**, 还有 74 条扎堆在 ~2000 天。
+#:
+#: **为什么锚 effective_start 而不是 event_date**: 那 150 条**全部**有 start, 而公告
+#: 总是提前发 (公告日→起始日 中位 5 天)。锚公告日会把 TTL 提前烧掉一半。
+#:
+#: **10 天这个值不敏感**: 384/508 条标题是「权益分派」—— 那是**一日**停牌; 而现存
+#: 最近的一条距今 49 天。阈值落在 10~49 的空档里, 取 8 或 20 结果一样。
+_CONVERSION_SUSPENSION_TTL_DAYS = 10
+
 
 def project_events_path() -> Path:
     return data_path("cb_events.json", seed=True)
@@ -896,11 +914,19 @@ def apply_events_to_terms(
             updates["conversion_suspension_start_date"] = latest_conv_susp.effective_start
         if latest_conv_susp.effective_end:
             updates["conversion_suspension_end_date"] = latest_conv_susp.effective_end
-        if (
-            latest_conv_susp.effective_end is None
-            or latest_conv_susp.effective_end >= val_date
-        ):
+        # **缺 end 不等于永久暂停**。此前这里是 ``effective_end is None or end >= val_date``,
+        # 于是一条几个月前的分红停牌把「暂停转股」永久挂在债上 —— 实测主池 50/311 只
+        # (16%) 中招, 距起始日中位 92 天、最长 812 天。走 _conversion_suspension_end 兜底。
+        # 只拦状态, **不伪造 end 日期**: 推出来的截止日是个估计值, 写进
+        # ``conversion_suspension_end_date`` 会让它和真解析到的日期长得一样。
+        if _conversion_suspension_end(latest_conv_susp) >= val_date:
             updates["conversion_suspension_status"] = _event_status(latest_conv_susp.event_type)
+        elif terms.conversion_suspension_status is not None:
+            # **过期了要显式清空**, 不能只是"不写"。``apply_events_to_terms`` 是增量的:
+            # 不写这个键, cb_data 里上一次同步落下的旧值就原样活着 —— 实测 63 只债的
+            # 「暂停转股」正是这么留在库里的 (改判据但不清空, 一只都不会掉)。
+            # 与上面 suspension / underlying_suspension 那两族同一个写法。
+            updates["conversion_suspension_status"] = None
 
     # 临停类事件: 仅在 effective_end 仍在窗口内时才标记停牌;
     # 过期超过 _TRANSIENT_CLEAR_GRACE_DAYS 才主动清空, 给 admission_status (Wind 直刷)
@@ -973,6 +999,17 @@ def reload_default_event_store() -> CBEventStore:
     global _default_event_store
     _default_event_store = CBEventStore()
     return _default_event_store
+
+
+def _conversion_suspension_end(event: CBEvent) -> date:
+    """暂停转股的有效截止日: 有 ``effective_end`` 用它, 否则从起始日 + TTL 兜底。
+
+    见 :data:`_CONVERSION_SUSPENSION_TTL_DAYS` —— 缺 end 不等于"永久暂停"。
+    """
+    if event.effective_end is not None:
+        return event.effective_end
+    anchor = event.effective_start or event.event_date
+    return anchor + timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS)
 
 
 def _transient_event_end(event: CBEvent) -> date:

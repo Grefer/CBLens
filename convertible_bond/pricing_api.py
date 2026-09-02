@@ -26,6 +26,7 @@ from .pricer import (
 from .data_providers import DataProvider, WindDataProvider, auto_data_provider, finite_float
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
+from .cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
 from .market_time import market_today
@@ -212,10 +213,18 @@ def _risk_warnings(terms, val_date: date) -> list[str]:
     conv_status = str(getattr(terms, "conversion_suspension_status", "") or "")
     conv_start = getattr(terms, "conversion_suspension_start_date", None)
     conv_end = getattr(terms, "conversion_suspension_end_date", None)
+    # ``conv_end is None`` **不等于"永远暂停"**。这是与 ``cb_events`` 那条同形的判据,
+    # 而且是**独立**的一条: 清掉 ``conversion_suspension_status`` 也关不掉它, 因为它看的
+    # 是日期。实测主池 311 只里 50 只 (16%) 由这条常年亮着「转股暂停窗口」, 起始日中位
+    # 92 天前、最长 812 天 —— 来源全是一日型的权益分派停牌 (全库 384/508 条标题带
+    # 「权益分派」), 而同一只债有第二次分红停牌就说明第一次早结束了。
+    # 缺 end 时按 ``_CONVERSION_SUSPENSION_TTL_DAYS`` 从起始日兜底, 与事件层同一个常量。
+    if conv_end is None and conv_start is not None:
+        conv_end = conv_start + timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS)
     conversion_paused = "暂停" in conv_status or (
         conv_start is not None
         and conv_start <= val_date
-        and (conv_end is None or val_date <= conv_end)
+        and val_date <= conv_end
     )
     if conversion_paused:
         start_text = conv_start.isoformat() if conv_start else "待起始"

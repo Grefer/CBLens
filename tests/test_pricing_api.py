@@ -1082,3 +1082,38 @@ def test_missing_down_reset_floor_is_recorded_not_silent():
     assert row["down_reset_floor"] is None
     assert any("下修价下限" in w for w in row["risk_warnings"]), (
         f"下限估不出来却没留痕: {row['risk_warnings']}")
+
+
+def test_conversion_pause_warning_expires_without_an_end_date():
+    """``_risk_warnings`` 那条按**日期**判的暂停判据是**独立**的一条。
+
+    清掉 ``conversion_suspension_status`` 关不掉它 —— 它看的是
+    ``conv_start <= val_date and (conv_end is None or val_date <= conv_end)``,
+    而 ``conv_end is None`` 恒真。实测主池 311 只里 **50 只 (16%)** 由这条常年亮着
+    「转股暂停窗口」, 起始日中位 92 天前、最长 812 天; 修了事件层之后**这 50 只一只
+    都不掉**, 必须两边一起改。缺 end 时与事件层共用同一个 TTL 常量。
+    """
+    from datetime import date, timedelta
+
+    from convertible_bond.cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
+    from convertible_bond.data_providers.base import BondTerms
+    from convertible_bond.pricing_api import _risk_warnings
+
+    val = date(2026, 9, 2)
+
+    def warns(start, end=None, status=None):
+        t = BondTerms(sec_name="X", conversion_price=10.0, maturity_date=date(2029, 1, 1),
+                      conversion_suspension_start_date=start,
+                      conversion_suspension_end_date=end,
+                      conversion_suspension_status=status)
+        return [w for w in _risk_warnings(t, val) if "转股暂停窗口" in w]
+
+    assert not warns(val - timedelta(days=90)), "90 天前的分红停牌仍在报警"
+    assert warns(val - timedelta(days=1)), "昨天开始的停牌没报警"
+    # 边界两侧
+    assert warns(val - timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS))
+    assert not warns(val - timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS + 1))
+    # 真 end 优先于兜底
+    assert warns(val - timedelta(days=90), end=val + timedelta(days=5))
+    # 状态字段独立成立: 即使日期过期, 显式的「暂停转股」状态照报
+    assert warns(val - timedelta(days=90), status="暂停转股")
