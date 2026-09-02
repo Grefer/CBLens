@@ -2644,10 +2644,8 @@ def test_gamma_guards_use_a_realistic_down_reset_floor():
     ``p_down=0.1``, 于是走的是**无 floor** 分支 —— 而生产上 311/311 只都有 floor,
     184 只的 floor 恰好等于 S0。守护跑在一个生产中不存在的形状上。
     """
+    import ast
     import inspect
-
-    src = inspect.getsource(UniversalCBPricer)      # 仅为确认字段存在
-    assert "down_reset_floor" in src
 
     from tests import test_pricer as self_mod
 
@@ -2659,6 +2657,16 @@ def test_gamma_guards_use_a_realistic_down_reset_floor():
                 fn = getattr(attr, name)
                 break
         assert fn is not None, f"找不到 {name}"
-        body = inspect.getsource(fn)
-        assert "down_reset_floor" in body, (
-            f"{name} 没带 down_reset_floor —— 它测的是生产中不存在的形状")
+        # **看真实的关键字参数, 不扫源码文本**。第一版扫文本, 而那两条用例的注释里
+        # 恰好也写着 "down_reset_floor" —— 把 kwarg 删掉、注释留着, 守护照样绿。
+        # 同一个陷阱本项目已经踩过三次 (关注池"不说持仓"、策略页共用措辞、这里)。
+        tree = ast.parse(inspect.getsource(fn).lstrip())
+        passed = {
+            kw.arg
+            for node in ast.walk(tree) if isinstance(node, ast.Call)
+            for kw in node.keywords if kw.arg
+        }
+        assert "down_reset_floor" in passed, (
+            f"{name} 没**传** down_reset_floor —— 它测的是生产中不存在的形状")
+        assert "p_down" in passed, (
+            f"{name} 用的是 price() 的默认 p_down, 生产上 308/311 只是 0.25")
