@@ -263,4 +263,13 @@ def _variant_name(overrides: dict[str, Any]) -> str:
 
 
 def _period_sharpe(period_returns: list[float], rf_per_period: float) -> float | None:
-    return backtest_stats.per_period_sharpe(period_returns, rf_per_period=rf_per_period)
+    """逐期 (未年化) 夏普。
+
+    此前这里调的是 ``backtest_stats.per_period_sharpe`` —— 那个函数**不存在**, 于是每次
+    参数扫描都抛 AttributeError, 而且是在**第一个完整变体回测跑完之后**才崩, 代价先付了
+    再失败。``annualized_sharpe(..., periods_per_year=1)`` 就是它: 年化因子取 1 时
+    ``sqrt(1) = 1``, 公式退化成 ``(mean - rf) / std(ddof=1)``, 且样本 < 2 或恒定收益
+    返回 NaN 的处置也一并复用, 不必再写第二份。
+    """
+    return backtest_stats.annualized_sharpe(
+        period_returns, periods_per_year=1, rf_per_period=rf_per_period)

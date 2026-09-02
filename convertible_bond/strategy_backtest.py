@@ -484,6 +484,17 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
         "max_deviation": cfg.max_deviation,
         "min_sigma": cfg.min_sigma,
         "max_sigma": cfg.max_sigma,
+        # 2026-08-31 标签→阈值重构引入的**主口径**七条。它们是 _candidate_filter_reason
+        # (唯一的选债路径) 真正在读的东西, 而这份快照的职责就是"供 GUI/CSV 展示与复现"
+        # —— 漏掉它们等于快照复现不出那次运行。上面那批 (exclude_risk_tags / 价格带 /
+        # 溢价 / 偏差 / σ) 是重构**之前**的字段, 留着是为了旧快照能读。
+        "max_model_premium": cfg.max_model_premium,
+        "max_relative_deviation": cfg.max_relative_deviation,
+        "min_years_to_maturity": cfg.min_years_to_maturity,
+        "min_credit_rating": cfg.min_credit_rating,
+        "min_outstanding_balance": cfg.min_outstanding_balance,
+        "exclude_underlying_st": bool(cfg.exclude_underlying_st),
+        "exclude_underlying_limit_down": bool(cfg.exclude_underlying_limit_down),
         "price_lookback_days": cfg.price_lookback_days,
         "max_price_staleness_days": cfg.max_price_staleness_days,
         "execution_timing": _normalize_execution_timing(cfg.execution_timing),

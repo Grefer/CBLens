@@ -1760,10 +1760,24 @@ class TestAkshareStockFallbacks:
                     "最新价": [12.34, 7.89],
                 })
 
+        from convertible_bond.market_time import market_today
+
         provider = object.__new__(AkshareDataProvider)
         provider._ak = FakeAk()
 
-        assert provider.get_stock_close("000001.SZ", date(2025, 1, 10)) == 12.34
+        # 当日: 实时快照是合法兜底
+        assert provider.get_stock_close("000001.SZ", market_today()) == 12.34
+
+        # **历史估值日: 不许拿实时快照顶**。那是未来的价, 而 S0 驱动整个 PDE。
+        # 回测确实走得到这条路 (_BacktestCacheProvider → DiskCacheProvider →
+        # HistoricalBondDataProvider → CachedBondDataProvider → 这里), 而那个
+        # (D-15, D) 的窄请求两层回测缓存都不接 —— 正股停牌超过 15 天、或那次请求恰好
+        # 撞上东财按 IP 封禁, 就会把今天的价当成 D 的 S0。实测停牌起 2022-06-06、
+        # 估值日 2022-06-30、spot=999 时: status ok、S0 999、理论价 9990、
+        # deviation −98.8%, 且 max_model_premium 拦不住 (parity 同样按 S0 缩放),
+        # 于是它以 confidence 高 排在候选第一。
+        with pytest.raises(RuntimeError, match="实时快照只适用于当日"):
+            provider.get_stock_close("000001.SZ", date(2025, 1, 10))
 
     def test_stock_close_warns_when_history_price_is_stale(self, caplog):
         from convertible_bond.data_providers import AkshareDataProvider

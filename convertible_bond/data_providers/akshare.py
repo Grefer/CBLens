@@ -348,6 +348,21 @@ class AkshareDataProvider(DataProvider):
                 )
             return px
 
+        # **实时快照只能顶今天, 不能顶历史**。这里回落的是 ``stock_zh_a_spot_em`` 的
+        # 「最新价」—— 对历史估值日而言那是**未来**的价, 而 S0 驱动整个 PDE。
+        # 回测确实走得到这条路: _BacktestCacheProvider → DiskCacheProvider →
+        # HistoricalBondDataProvider → CachedBondDataProvider → 这里, 而上面那个
+        # (D-15, D) 的窄请求两层回测缓存都不接, 所以正股停牌超过 15 天、或者那一次
+        # 请求恰好碰上东财按 IP 封禁 (AGENTS 记的常态), 就会把今天的价当成 D 的 S0。
+        # 实测: 停牌起 2022-06-06, 估值日 2022-06-30, spot=999 → status ok、S0 999、
+        # 理论价 9990、deviation −98.8%, 而 max_model_premium 那道闸拦不住 (parity 同样
+        # 按 S0 缩放, 比值不变), 于是它以 confidence 高 排在候选第一。
+        # 这是 AGENTS 已经记过的 get_stock_dividend_yield 同一类问题, 只是 S0 更要命。
+        if on_date < market_today():
+            raise RuntimeError(
+                f"akshare 取正股 {stock_code} 在 {on_date} 的收盘价为空; "
+                f"实时快照只适用于当日, 不用于历史估值日")
+
         plain = _wind_to_ak_stock(stock_code).zfill(6)
         try:
             spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em",

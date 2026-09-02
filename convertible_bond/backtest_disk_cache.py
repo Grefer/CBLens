@@ -54,12 +54,22 @@ def _provider_identity(provider: Any) -> str:
         obj = getattr(provider, nested, None)
         if obj is not None and obj is not provider and hasattr(obj, "get_bond_terms"):
             parts.append(_provider_identity(obj))
-    for attr in ("history_store", "patch_store", "event_store", "path", "bundle", "cache"):
+    # ``root`` 必须在名单里: ``CSVDataProvider`` 把数据根目录存在 ``self.root``,
+    # 而嵌套递归也够不到它 —— 于是 ``--csv-root`` 完全不进缓存身份, 两次指向**不同
+    # 数据集**、共用同一个 ``--cache-dir`` 的 csv 回测会算出一模一样的身份串,
+    # 第二次直接把第一次的缓存当有效, 静默拿另一个数据集的条款定价。
+    for attr in ("history_store", "patch_store", "event_store",
+                 "path", "root", "bundle", "cache"):
         obj = getattr(provider, attr, None)
         if obj is None:
             continue
-        path = getattr(obj, "root", None) or getattr(obj, "path", None) or (
-            obj if isinstance(obj, (str, Path)) else None)
+        # **先判"它本身就是路径"**。原来的顺序把 isinstance 放在最后, 于是一个
+        # ``Path`` 对象会先命中 ``Path.root`` 这个属性 (它返回 ``"/"``), 所有 csv 数据集
+        # 因此得到同一个身份串 ``root:/``。判据要按具体到抽象排, 不能按书写顺序排。
+        if isinstance(obj, (str, Path)):
+            path = obj
+        else:
+            path = getattr(obj, "root", None) or getattr(obj, "path", None)
         if path is None:
             continue
         p = Path(path)
@@ -104,6 +114,18 @@ class DiskCacheProvider(DataProvider):
             if stored is not None:
                 logger.info("磁盘缓存身份变更, 弃用旧缓存: %s", self.cache_dir)
             self._terms, self._bond_hist, self._stock_hist = {}, {}, {}
+            # **失效必须落到盘上, 不能只清内存**。``flush()`` 只重写 dirty 的那几个 store,
+            # 却无条件把 ``_meta.json`` 盖成新身份 —— 一次只弄脏了一部分的运行 (比如在
+            # 准入阶段就中断, 那时只取过条款、还没碰行情) 会留下旧身份的
+            # bond_history.json / stock_history.json 顶着新身份的 meta。下一次启动看到
+            # ``stored == identity``, 就把那些文件当成新身份的缓存读回来了。
+            for stale in (self._terms_path, self._bond_hist_path, self._stock_hist_path):
+                try:
+                    stale.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    logger.warning("清理陈旧缓存文件失败 %s: %s", stale, e)
         self._dirty: set[str] = set()
 
     def __getattr__(self, name):  # 透传未显式实现的属性/方法

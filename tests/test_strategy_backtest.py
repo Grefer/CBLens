@@ -2876,3 +2876,54 @@ def test_disk_cache_does_not_freeze_an_empty_series(tmp_path):
     third = DiskCacheProvider(_Inner(healthy=True), cache_dir=tmp_path)
     second.flush()
     assert third.get_stock_history("000001.SZ", start, end) == [(date(2024, 6, 3), 10.0)]
+
+
+def test_config_summary_echoes_every_field_the_selector_reads():
+    """配置快照必须回显**选债真正读的**每一个字段。
+
+    它的职责写在 docstring 里: 「供 GUI/CSV 展示与复现」。而 2026-08-31 标签→阈值
+    重构引入的七条主口径 (max_model_premium / max_relative_deviation /
+    min_years_to_maturity / min_credit_rating / min_outstanding_balance /
+    exclude_underlying_st / exclude_underlying_limit_down) 一条都没进去 —— 快照因此
+    复现不出那次运行, 而它上面回显的恰恰是重构**之前**那批已经不当主口径的字段。
+
+    判据不是"这七个名字在不在", 而是**结构性**的: ``_candidate_filter_reason`` 里
+    读到的每个 ``cfg.X`` 都要出现在快照里。将来再加阈值, 忘了同步就会红。
+    """
+    import dataclasses
+    import inspect
+
+    from convertible_bond.strategy_backtest import (
+        ScoreStrategyConfig,
+        _candidate_filter_reason,
+        _strategy_config_summary,
+    )
+
+    src = inspect.getsource(_candidate_filter_reason)
+    consumed = {f.name for f in dataclasses.fields(ScoreStrategyConfig)
+                if f"cfg.{f.name}" in src}
+    assert len(consumed) >= 15, f"只认出 {len(consumed)} 个字段, 扫描方式可能失效了"
+
+    summary = _strategy_config_summary(ScoreStrategyConfig())
+    missing = sorted(consumed - set(summary))
+    assert not missing, f"选债读了但快照没回显: {missing}"
+
+
+def test_period_sharpe_is_the_non_annualized_ratio():
+    """参数扫描的逐期夏普必须能算出来。
+
+    此前 ``_period_sharpe`` 调的是 ``backtest_stats.per_period_sharpe`` —— 那个函数
+    **不存在**, 每次扫描都抛 AttributeError, 而且是在**第一个完整变体回测跑完之后**
+    才崩: 代价先付了再失败。
+    """
+    import math
+    import statistics
+
+    from convertible_bond.strategy_sweep import _period_sharpe
+
+    rs = [0.01, -0.02, 0.03, 0.005, -0.01]
+    expected = (statistics.mean(rs) - 0.001) / statistics.stdev(rs)
+    assert _period_sharpe(rs, 0.001) == pytest.approx(expected, rel=1e-12)
+    # 与年化版共用实现, 所以边界处置也一并继承
+    assert math.isnan(_period_sharpe([0.01], 0.0))
+    assert math.isnan(_period_sharpe([0.01, 0.01, 0.01], 0.0))     # 恒定收益

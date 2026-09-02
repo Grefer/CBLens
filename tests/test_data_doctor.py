@@ -448,3 +448,85 @@ def test_strategy_cli_summary_prints_the_normalized_rank_signal():
                 raw_reads.append(node.lineno)
     assert not raw_reads, f"摘要打印了未归一化的 rank_signal, 第 {raw_reads} 行"
     assert "_normalize_rank_signal(strategy_config.rank_signal)" in src
+
+
+def test_disk_cache_identity_change_wipes_the_store_files(tmp_path):
+    """身份变更必须**立刻落到盘上**, 不能只清内存。
+
+    ``flush()`` 只重写 dirty 的那几个 store, 却无条件把 ``_meta.json`` 盖成新身份 ——
+    一次只弄脏了一部分的运行 (例如在准入阶段就中断, 那时只取过条款、还没碰行情) 会留下
+    旧身份的 bond_history.json / stock_history.json 顶着新身份的 meta。下一次启动看到
+    ``stored == identity``, 就把那些文件当成新身份的缓存读回来了。
+    """
+    from datetime import date
+
+    from convertible_bond.backtest_disk_cache import DiskCacheProvider
+    from convertible_bond.data_providers.base import DataProvider
+
+    class _Inner(DataProvider):
+        name = "i"
+
+        def __init__(self, value):
+            self.value = value
+
+        def get_bond_history(self, code, a, b):
+            return [(date(2024, 6, 3), self.value)]
+
+        def get_stock_history(self, code, a, b):
+            return [(date(2024, 6, 3), self.value)]
+
+        def get_bond_terms(self, code, d):
+            return None
+
+        def get_stock_close(self, *a, **k):
+            return None
+
+        def hist_vol(self, *a, **k):
+            return 0.2
+
+        def get_risk_free_rate(self, *a, **k):
+            return 0.022
+
+    start, end = date(2024, 1, 1), date(2024, 6, 28)
+
+    first = DiskCacheProvider(_Inner(100.0), cache_dir=tmp_path, namespace="ID-A")
+    first.get_bond_history("X.SH", start, end)
+    first.get_stock_history("Y.SZ", start, end)
+    first.flush()
+    assert (tmp_path / "bond_history.json").exists()
+
+    # 换身份 → 旧 store 文件当场消失, 不等 flush
+    DiskCacheProvider(_Inner(200.0), cache_dir=tmp_path, namespace="ID-B")
+    assert not (tmp_path / "bond_history.json").exists(), "旧身份的行情缓存还留在盘上"
+    assert not (tmp_path / "stock_history.json").exists()
+
+    # 以新身份重新启动必须真的回源
+    third = DiskCacheProvider(_Inner(999.0), cache_dir=tmp_path, namespace="ID-B")
+    assert third.get_bond_history("X.SH", start, end) == [(date(2024, 6, 3), 999.0)]
+
+
+def test_csv_root_is_part_of_the_disk_cache_identity(tmp_path):
+    """``--csv-root`` 必须进缓存身份。
+
+    ``CSVDataProvider`` 把数据根目录存在 ``self.root``, 而身份扫描的属性名单里没有它,
+    嵌套递归也够不到 —— 两次指向**不同数据集**、共用同一个 ``--cache-dir`` 的 csv 回测
+    会算出一模一样的身份串, 第二次直接把第一次的缓存当有效。
+
+    修法里有个坑要一并钉住: 路径解析必须**先判"它本身就是路径"**。原来的顺序把
+    isinstance 放最后, 于是一个 ``Path`` 对象先命中 ``Path.root`` 这个属性 (返回 "/"),
+    所有数据集又都得到同一个身份 ``root:/``。
+    """
+    from convertible_bond.backtest_disk_cache import _provider_identity
+    from convertible_bond.data_providers import CSVDataProvider
+
+    a, b = tmp_path / "ds_a", tmp_path / "ds_b"
+    for root in (a, b):
+        for sub in ("bonds", "stocks", "terms"):
+            (root / sub).mkdir(parents=True, exist_ok=True)
+
+    ident_a = _provider_identity(CSVDataProvider(a))
+    ident_b = _provider_identity(CSVDataProvider(b))
+    assert ident_a != ident_b, f"两个数据集身份相同: {ident_a}"
+    assert ident_a.endswith(str(a)) or str(a) in ident_a, f"根目录没进身份: {ident_a}"
+    assert "root:/:" not in ident_a, "命中了 Path.root, 解析顺序又反了"
+    assert _provider_identity(CSVDataProvider(a)) == ident_a       # 同数据集稳定
