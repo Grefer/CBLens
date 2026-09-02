@@ -2433,3 +2433,136 @@ def test_theta_across_a_coupon_is_the_ex_coupon_drop():
 
     quiet = _pricer(date(2026, 6, 2)).price(**args)["theta"]
     assert 0.0 < quiet < 0.05, f"无票息的常态 Θ 应是小的正数, 实测 {quiet:.6f}"
+
+
+class TestGridResolutionAtS0:
+    """S0 附近的分辨率与希腊值网格一致性。"""
+
+    #: σ 取 0.40 而不是更高: 再高 ``_S_MAX_CAP`` 就绑定了, 那时 σ 变化**不会**改变
+    #: S_max, 于是"两次解跑在不同网格上"这件事根本测不到 (实测 σ=0.95 时 σ 与 σ+0.01
+    #: 的 S_max 都是 1000.0)。0.40 下 exp(3σ√T) ≈ 8.9 < 50, 上限不绑定。
+    SIGMA = 0.40
+
+    @staticmethod
+    def _high_sigma_otm():
+        """S0 远低于 K —— S_max 由 K 与 σ√T 定, 与 S0 无关, 于是分辨率全花在高价区。"""
+        return dict(
+            S0=4.0, K=20.0, current_date=date(2026, 9, 2),
+            maturity_date=date(2029, 12, 25), issue_date=date(2023, 12, 25),
+            coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+            redemption_price=108.0, call_notice_days=30,
+        )
+
+    def test_grid_is_refined_when_s0_would_be_starved(self):
+        """S0 以下的格点数有下限, 不够就自动加密。
+
+        网格在 [0, S_max] 上均匀, 而 ``S_max = min(exp(3σ√T), 50)·K`` **只由 K 与 σ√T 定,
+        与 S0 无关**。实测生产 M=500 下主池 311 只里 **50 只**在 S0 以下不足 20 个格点,
+        最少的 118066.SH 只有 **5.6 个** —— 价格误差最大 **+2.78 元 (+1.90%)**、vega
+        **+33.6%**, 而 N 早已收敛 (N 2000→8000 中位只动 0.0013 元), 所以是纯空间误差。
+
+        **修法是加密不是缩小 S_max**: 后者会截断定义域 —— 实测把 ``_S_MAX_CAP`` 从 50
+        降到 6 时最大误差反而从 2.72 涨到 **5.11 元**。加密是单调改进, 没有新失效模式。
+        """
+        import convertible_bond.pricer as pricer_mod
+
+        p = UniversalCBPricer(**self._high_sigma_otm())
+        args = dict(sigma=self.SIGMA, r=0.0148, base_spread=0.03,
+                    distress_k=0.05, p_down=0.0)
+
+        S_grid, _ = p._price_grid(args["sigma"], args["r"], 0.0, args["base_spread"],
+                                  args["p_down"], args["distress_k"], 500, 2000)
+        nodes_below = p.S0 / float(S_grid[1] - S_grid[0])
+        assert nodes_below >= pricer_mod._MIN_NODES_BELOW_S0 - 1, (
+            f"S0 以下只有 {nodes_below:.1f} 个格点")
+
+        # 前提: 不加密的话确实是饿着的 —— 否则这条用例什么也没测
+        old = pricer_mod._MIN_NODES_BELOW_S0
+        pricer_mod._MIN_NODES_BELOW_S0 = 0
+        try:
+            starved, _ = p._price_grid(args["sigma"], args["r"], 0.0, args["base_spread"],
+                                       args["p_down"], args["distress_k"], 500, 2000)
+            starved_nodes = p.S0 / float(starved[1] - starved[0])
+            coarse = p.price(M=500, N=2000, **args)
+        finally:
+            pricer_mod._MIN_NODES_BELOW_S0 = old
+        assert starved_nodes < 20, f"fixture 没有饿着 ({starved_nodes:.1f} 个格点)"
+
+        # 加密之后要更接近收敛值
+        refined = p.price(M=500, N=2000, **args)
+        converged = p.price(M=8000, N=2000, **args)
+        assert abs(refined - converged) < abs(coarse - converged), (
+            f"加密没有更准: 粗 {coarse:.4f} 细 {refined:.4f} 收敛 {converged:.4f}")
+
+        # 上限要生效, 免得 S0/S_max 极小时把 M 撑到天文数字
+        tiny = UniversalCBPricer(**dict(self._high_sigma_otm(), S0=0.02))
+        g, _ = tiny._price_grid(self.SIGMA, 0.0148, 0.0, 0.03, 0.0, 0.05, 500, 200)
+        assert len(g) - 1 <= pricer_mod._MAX_ADAPTIVE_M
+
+    def test_vega_uses_the_same_s_grid_as_the_base_solve(self):
+        """vega 的两次解必须跑在同一张 S 网格上。
+
+        ``S_max = exp(3σ√T)·K`` 随 σ 变, 所以扰动解的 h 会变、强赎触发掩码
+        ``S_grid >= K·call_trigger_ratio`` 会吸附到不同格点。于是 vega 里混进 O(h) 的
+        网格抖动 —— 而 vega·1pp 相对价格只有 1e-3 量级, 两个各带网格误差的数相减不抵消
+        反而放大。实测生产网格上 vega 偏 **+33.6%** (万凯转债 0.6190 vs 收敛值 0.4633)。
+        """
+        p = UniversalCBPricer(**self._high_sigma_otm())
+        args = dict(sigma=self.SIGMA, r=0.0148, base_spread=0.03,
+                    distress_k=0.05, p_down=0.0)
+
+        base_grid, _ = p._price_grid(args["sigma"], args["r"], 0.0, args["base_spread"],
+                                     args["p_down"], args["distress_k"], 500, 2000)
+        bumped_free, _ = p._price_grid(args["sigma"] + 0.01, args["r"], 0.0,
+                                       args["base_spread"], args["p_down"],
+                                       args["distress_k"], 500, 2000)
+        assert float(bumped_free[-1]) != pytest.approx(float(base_grid[-1])), (
+            "前提不成立: σ 变了 S_max 却没变, 这条用例测不到东西")
+
+        bumped_locked, _ = p._price_grid(args["sigma"] + 0.01, args["r"], 0.0,
+                                         args["base_spread"], args["p_down"],
+                                         args["distress_k"], 500, 2000,
+                                         s_max_override=float(base_grid[-1]))
+        assert float(bumped_locked[-1]) == pytest.approx(float(base_grid[-1]))
+        assert len(bumped_locked) == len(base_grid)
+
+        # vega 要收敛: 粗网格与细网格的差距必须小
+        coarse = p.price(M=500, N=2000, return_greeks=True, **args)["vega"]
+        fine = p.price(M=4000, N=2000, return_greeks=True, **args)["vega"]
+        assert abs(coarse / fine - 1.0) < 0.10, (
+            f"vega 随网格漂: 粗 {coarse:.4f} vs 细 {fine:.4f}")
+
+    def test_price_actually_locks_the_vega_grid(self):
+        """``price()`` 必须**真的**把基准网格传下去 —— 光有 ``s_max_override`` 形参不算。
+
+        自适应加密之后网格抖动小了很多, 但没有消失: 用 127053.SZ 的真实参数实测,
+        锁网格 vega = 0.489, 不锁 = 0.338 —— **差 30.8%**。所以这条比对
+        ``price()`` 报出来的 vega 与手工锁网格算出来的, 两者必须一致。
+        """
+        real = UniversalCBPricer(
+            S0=24.52, K=17.23, current_date=date(2026, 9, 3),
+            maturity_date=date(2028, 1, 24), issue_date=date(2022, 1, 24),
+            coupon_rates=(0.003, 0.006, 0.01, 0.016, 0.025, 0.03),
+            redemption_price=118.0, call_notice_days=30,
+            put_trigger_ratio=0.70, down_reset_floor=24.52,
+        )
+        args = dict(sigma=0.6328, r=0.0148, base_spread=0.035,
+                    distress_k=0.05, p_down=0.25)
+        reported = real.price(M=500, N=2000, return_greeks=True, **args)["vega"]
+
+        def _solve(sigma, override=None):
+            grid, values = real._price_grid(
+                sigma, args["r"], 0.0, args["base_spread"], args["p_down"],
+                args["distress_k"], 500, 2000,
+                **({"s_max_override": override} if override is not None else {}))
+            return grid, float(np.interp(real.S0, grid, values))
+
+        base_grid, base = _solve(args["sigma"])
+        _, locked = _solve(args["sigma"] + 0.01, override=float(base_grid[-1]))
+        _, unlocked = _solve(args["sigma"] + 0.01)
+
+        # 前提: 这只债上锁不锁确实差很多, 否则这条用例测不到东西
+        assert abs((locked - base) - (unlocked - base)) > 0.05, (
+            "这只 fixture 上锁网格没有影响, 换一只")
+        assert reported == pytest.approx(locked - base, abs=1e-12), (
+            f"price() 报的 vega {reported:.5f} 不等于锁网格的 {locked - base:.5f}")

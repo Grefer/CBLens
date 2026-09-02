@@ -4,6 +4,8 @@
 不依赖任何数据源, 纯数值计算. 从 CB.py 拆分而来.
 """
 import logging
+import math
+
 import numpy as np
 from scipy.linalg import solve_banded
 from scipy.optimize import brentq
@@ -19,6 +21,12 @@ DEFAULT_COUPON_RATES: tuple[float, ...] = (0.003, 0.004, 0.008, 0.015, 0.018, 0.
 DEFAULT_FACE_VALUE: float = 100.0
 DEFAULT_REDEMPTION_PRICE: float = 107.0
 _DAYS_PER_YEAR: float = 365.0
+#: S0 以下的最少格点数, 不够就自动加密 (见 _price_grid 里的说明)。
+#: 60 这个值是量出来的: 受影响的 73 只债误差中位 0.0622 → 0.0035, 最大 2.72 → 0.77;
+#: 再提到 80 只多换来 0.001 的中位改善却多花 24% 时间。
+_MIN_NODES_BELOW_S0 = 60
+#: 自适应加密的上限 —— 防止 S0/S_max 极小时把 M 撑到天文数字。
+_MAX_ADAPTIVE_M = 4000
 _S_MAX_CAP: float = 50.0  # 网格上界 S_max/K 的上限, 防止极端 σ/T 下内存爆炸
 
 
@@ -356,7 +364,8 @@ class UniversalCBPricer:
                     p_down: float, distress_k: float,
                     M: int, N: int, *,
                     capture_out: dict | None = None,
-                    capture_elapsed: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+                    capture_elapsed: float = 0.0,
+                    s_max_override: float | None = None) -> tuple[np.ndarray, np.ndarray]:
         """求解 PDE 并返回 (S_grid, V). price() 与希腊值扰动共用此核心.
 
         ``capture_out`` 给定时, 顺便截下回溯途中 ``t_prev`` **最接近**
@@ -370,8 +379,28 @@ class UniversalCBPricer:
         ``return_greeks=True`` 原本要解 3 次 (基准 + vega 扰动 + 明天), 现在 2 次。
         """
         # S_max 上限 _S_MAX_CAP 防止极端 σ/T (如 σ=2.0, T=10) 下 exp(3σ√T) 天文数字导致 OOM
-        S_max_ref = min(max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))), _S_MAX_CAP) * self.K
-        S_max = max(S_max_ref, 1.5 * self.S0)
+        if s_max_override is not None:
+            # 希腊值扰动共用基准解的 S 网格 —— 见 price() 里 vega 那一段。
+            S_max = float(s_max_override)
+        else:
+            S_max_ref = min(
+                max(4.0, float(np.exp(3.0 * sigma * np.sqrt(self.T)))), _S_MAX_CAP) * self.K
+            S_max = max(S_max_ref, 1.5 * self.S0)
+        # **S0 附近的格点数有下限**。网格在 [0, S_max] 上均匀, 而 S_max 只由 K 与 σ√T 定,
+        # 与 S0 无关 —— 高 σ / 深度 OTM 的债于是把分辨率全花在了一段没有价值的高价区。
+        # 实测生产 M=500 下, 主池 311 只里 50 只在 S0 以下不足 20 个格点, 最少的
+        # 118066.SH 只有 **5.6 个**; 价格误差最大 **+2.78 元 (+1.90%)**、vega **+33.6%**,
+        # 而 N 早已收敛 (N 从 2000 加到 8000 中位只动 0.0013 元) —— 纯空间误差。
+        # **修法选加密而不是缩小 S_max**: 后者会截断定义域, 实测 cap 从 50 降到 6 时
+        # 最大误差反而从 2.72 涨到 5.11 元 (某些债的上边界被切进了有价值的区域)。
+        # 加密是单调改进, 没有新的失效模式。实测 S0 下保底 60 格 (M 上限 4000):
+        # 受影响的 73 只误差中位 0.0622 → **0.0035**, 最大 2.7167 → **0.7693**,
+        # 那批的耗时 4.8s → 10.0s (全池约 19s → 24s, 其余 238 只一个字节不变)。
+        if self.S0 > 0 and M > 0:
+            nodes_below_s0 = self.S0 * M / S_max
+            if nodes_below_s0 < _MIN_NODES_BELOW_S0:
+                M = int(min(_MAX_ADAPTIVE_M,
+                            max(M, math.ceil(_MIN_NODES_BELOW_S0 * S_max / self.S0))))
         dt = self.T / N
         S_grid = np.linspace(0, S_max, M + 1)
         risk_neutral_drift = r - q
@@ -610,10 +639,17 @@ class UniversalCBPricer:
         delta = float(np.interp(S0, S_grid, delta_grid))
         gamma = float(np.interp(S0, S_grid, gamma_grid))
 
-        # Vega: σ +1pp 整局重算; 单位为 "理论价 / 1pp σ"
+        # Vega: σ +1pp 整局重算; 单位为 "理论价 / 1pp σ"。
+        # **两次解必须跑在同一张 S 网格上**。``S_max = exp(3σ√T)·K`` 随 σ 变, 所以扰动解
+        # 的 h 会变、强赎触发掩码 ``S_grid >= K·call_trigger_ratio`` 会吸附到不同的格点。
+        # 于是 vega 里混进了 O(h) 的网格抖动 —— 而 vega·1pp 相对价格本来就只有 1e-3 量级,
+        # 两个各自带网格误差的数相减不抵消反而放大。实测生产网格上 vega 偏 **+33.6%**
+        # (万凯转债 0.6190 vs 收敛值 0.4633)。
+        # 传 s_max_override 锁死网格之后, 两个解只差 σ 这一个量。
         d_sigma = 0.01
         S_grid_v, V_v = self._price_grid(sigma + d_sigma, r, q, base_spread,
-                                         p_down, distress_k, M, N)
+                                         p_down, distress_k, M, N,
+                                         s_max_override=float(S_grid[-1]))
         theo_vol = float(np.interp(S0, S_grid_v, V_v))
         vega = (theo_vol - theo)  # / d_sigma * 0.01 = / 1, 即每 1pp σ 的价格变化
 
