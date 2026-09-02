@@ -875,3 +875,203 @@ def test_patch_shadowing_is_scoped_to_one_bond(tmp_path):
     # 全库一次调用与逐债累计必须给出同一个结果
     per_bond = sum(len(store.list_patches(bond_code=c)) for c in ("A.SZ", "B.SZ"))
     assert per_bond == len(whole)
+
+
+def _real_stores():
+    from convertible_bond.cache import TermsBundle, project_bundle_path
+    from convertible_bond.historical_terms import (
+        TermsPatchStore,
+        project_terms_patches_path,
+    )
+    return TermsBundle(project_bundle_path()), TermsPatchStore(project_terms_patches_path())
+
+
+def test_snapshot_anchor_is_clamped_to_the_valuation_date():
+    """锚落在**估值日之后**时必须作废 —— 它什么也证明不了。
+
+    ``terms_as_of`` 的全部含义是"基础条款是 X 日拍的快照, X 之前的 patch 它已经含着了"。
+    这句话只在 ``X <= 估值日`` 时成立。而 ``CachedBondDataProvider.terms_as_of`` 返回的是
+    cb_data 的条款抓取日, **与估值日无关** —— 实测对 2024-01-02 和 2022-06-01 都返回
+    2026-08-30。没有 Wind 的机器 (``标准`` 口径回测) 走的正是这条链, 于是历史 patch 被
+    整条裁光: 实测估值日 2024-01-02, 766 只在市债里 **508 只 K 是错的、270 只偏离超过
+    10%** (山鹰转债真值 2.37 → 视图 1.54), 也就是 2024 年的回测"知道"2025/2026 才发生
+    的下修。没有异常, ``get_terms_source_diagnostics`` 还报 uses_current_fallback=False。
+    """
+    from datetime import date
+
+    from convertible_bond.historical_terms import clamp_snapshot_anchor
+
+    val = date(2024, 1, 2)
+    assert clamp_snapshot_anchor(date(2026, 8, 30), val) is None, "未来的锚没被作废"
+    assert clamp_snapshot_anchor(date(2023, 6, 1), val) == date(2023, 6, 1)
+    assert clamp_snapshot_anchor(val, val) == val, "锚正好等于估值日时仍然有效"
+    assert clamp_snapshot_anchor(None, val) is None
+
+
+def test_historical_view_reproduces_the_as_of_terms_on_the_real_library():
+    """在真实条款库上, 历史视角的 K 与余额必须等于 wind_asof 链给出的真值。
+
+    真值定义: 生效日 <= 估值日的最后一条 wind_asof patch; 一条都没有时取链头的
+    ``before_fields`` (那正是变更前的值, 实测 17113/17113 条余额 patch 都带着它)。
+
+    改动前: K 508/766 只不符 (>10% 的 270 只), 而 ``outstanding_balance`` 有 213 只
+    显示 <0.5 亿 而真值 >=0.5 亿 —— 回测里它们会被 ``min_outstanding_balance`` 当成
+    "余额过小"整批剔掉 (立昂转债 2024 年真实余额 33.9 亿, 视图里是 0)。
+    """
+    from datetime import date
+
+    from convertible_bond.cache import CachedBondDataProvider
+    from convertible_bond.cb_events import CBEventStore, project_events_path
+    from convertible_bond.data_providers.base import DataProvider
+    from convertible_bond.historical_terms import HistoricalBondDataProvider
+
+    bundle, store = _real_stores()
+    val = date(2024, 1, 2)
+
+    class _Inner(DataProvider):
+        name = "akshare"
+
+        def get_bond_terms(self, code, d):
+            return bundle.get(code)
+
+        def get_stock_close(self, *a, **k):
+            return None
+
+        def get_stock_history(self, *a, **k):
+            return []
+
+        def get_bond_history(self, *a, **k):
+            return []
+
+        def hist_vol(self, *a, **k):
+            return 0.2
+
+        def get_risk_free_rate(self, *a, **k):
+            return 0.022
+
+        def get_admission_status(self, code, d, base_terms=None):
+            return None
+
+    # 与 gui/controllers/strategy_run.py 的「标准」口径同配置
+    provider = HistoricalBondDataProvider(
+        CachedBondDataProvider(_Inner(), bundle, static_source=_Inner()),
+        patch_store=store, event_store=CBEventStore(project_events_path()),
+        history_store=None, strip_fallback_status=False, merge_admission_status=True)
+
+    def truth(code, field):
+        chain = sorted(
+            (p for p in store.list_patches(bond_code=code, include_shadowed=True)
+             if p.source == "wind_asof" and field in (p.fields or {})),
+            key=lambda p: p.effective_date)
+        if not chain:
+            return None
+        earlier = [p for p in chain if p.effective_date <= val]
+        if earlier:
+            return float(earlier[-1].fields[field])
+        before = chain[0].before_fields or {}
+        return float(before[field]) if field in before else None
+
+    for field in ("conversion_price", "outstanding_balance"):
+        wrong, checked = [], 0
+        for code in bundle.list_bonds():
+            terms = bundle.get(code)
+            listing = getattr(terms, "listing_date", None)
+            maturity = getattr(terms, "maturity_date", None)
+            if not (listing and maturity and listing <= val <= maturity):
+                continue
+            expected = truth(code, field)
+            if expected is None:
+                continue
+            checked += 1
+            got = getattr(provider.get_bond_terms(code, val), field, None)
+            if got is not None and abs(float(got) - expected) > 1e-6:
+                wrong.append((code, expected, float(got)))
+        assert checked > 300, f"{field} 只检查了 {checked} 只, 样本太小说明前提坏了"
+        assert not wrong, f"{field} 与真值不符 {len(wrong)} 只, 例: {wrong[:3]}"
+
+
+def test_apply_uses_the_same_per_field_cut_as_project_terms():
+    """``apply()`` 与 ``project_terms`` 必须共用逐字段裁剪判据。
+
+    ``_SNAPSHOT_UNCOVERED_FIELDS`` 那个豁免集是为"快照里根本没有这个字段"准备的
+    (cb_data 与每一份历史快照里 ``credit_rating_outlook`` 都是 0/1058)。``apply()``
+    此前用 ``list_patches(after=...)`` 一刀切, 于是这两个字段被连坐裁掉 —— 同一天
+    同一只债走 provider 是 None、走 project_terms 是「稳定」, 实测 345 / 14 处不一致。
+    """
+    from datetime import date
+
+    from convertible_bond.historical_terms import (
+        _SNAPSHOT_UNCOVERED_FIELDS,
+        TermsPatch,
+        TermsPatchStore,
+        project_terms,
+    )
+
+    assert _SNAPSHOT_UNCOVERED_FIELDS  # 前提: 豁免集非空
+
+    import tempfile
+    from pathlib import Path
+
+    from convertible_bond.data_providers.base import BondTerms
+
+    tmp = Path(tempfile.mkdtemp()) / "p.json"
+    store = TermsPatchStore(tmp)
+    anchor = date(2026, 8, 26)
+    store.add_many([
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 6, 1),
+                   fields={"credit_rating_outlook": "稳定", "conversion_price": 9.0},
+                   source="cninfo"),
+    ])
+    base = BondTerms(sec_name="A", conversion_price=10.0, maturity_date=date(2030, 1, 1))
+
+    applied = store.apply("A.SZ", base, anchor, after=anchor)
+    projected = project_terms("A.SZ", base, anchor, patch_store=store,
+                              terms_as_of=anchor).terms
+
+    # 快照覆盖不到的字段: 两条路都要留下它
+    assert applied.credit_rating_outlook == "稳定", "apply 把豁免字段一起裁掉了"
+    assert projected.credit_rating_outlook == "稳定"
+    # 快照覆盖得到的字段: 两条路都该裁掉 (快照里已经含着了)
+    assert applied.conversion_price == 10.0 and projected.conversion_price == 10.0
+
+
+def test_future_lifecycle_fields_are_all_scrubbed_from_a_historical_view():
+    """六个公告派生的生命周期字段也要按估值日剥掉未来值。
+
+    ``_strip_unannounced_future_status`` 是「标准」口径回测路径上**唯一**的净化器
+    (那条路 ``strip_fallback_status=False``, 剥得更干净的 ``strip_current_status_fields``
+    根本不跑), 而它此前只处理强赎那一族。实测估值日 2024-01-02:
+    ``down_reset_block_until`` 泄漏 201 只 —— 南航转债带着 2027-01-11 的不下修承诺,
+    把整个 2024 年的下修博弈关掉了。
+    """
+    from datetime import date
+
+    from convertible_bond.historical_terms import _strip_unannounced_future_status
+
+    bundle, _ = _real_stores()
+    val = date(2024, 1, 2)
+    watched = ("putback_start_date", "putback_end_date",
+               "conversion_suspension_start_date", "down_reset_block_until",
+               "call_no_redemption_until")
+    leaks: dict[str, int] = {}
+    checked = 0
+    for code in bundle.list_bonds():
+        terms = bundle.get(code)
+        listing = getattr(terms, "listing_date", None)
+        maturity = getattr(terms, "maturity_date", None)
+        if not (listing and maturity and listing <= val <= maturity):
+            continue
+        checked += 1
+        out = _strip_unannounced_future_status(terms, val)
+        for field in watched:
+            value = getattr(out, field, None)
+            if value is not None and value > val:
+                leaks[field] = leaks.get(field, 0) + 1
+        # 结束日只在"窗口当时确实开着"时才允许留在未来
+        end = getattr(out, "conversion_suspension_end_date", None)
+        start = getattr(out, "conversion_suspension_start_date", None)
+        if end is not None and end > val and not (start is not None and start <= val):
+            leaks["conversion_suspension_end_date(孤儿)"] = (
+                leaks.get("conversion_suspension_end_date(孤儿)", 0) + 1)
+    assert checked > 300, f"只检查了 {checked} 只, 样本太小说明前提坏了"
+    assert not leaks, f"未来值仍然泄漏: {leaks}"

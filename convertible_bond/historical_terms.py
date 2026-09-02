@@ -59,6 +59,79 @@ _AUTHORITATIVE_PATCH_SOURCES = frozenset({"wind_asof"})
 _SNAPSHOT_UNCOVERED_FIELDS = frozenset({"credit_rating_outlook", "credit_watch_status"})
 
 
+def clamp_snapshot_anchor(terms_as_of: date | None, valuation_date: date) -> date | None:
+    """把快照锚夹到估值日 —— **锚在未来时它什么也证明不了**。
+
+    ``terms_as_of`` 的全部含义是"这份基础条款是 X 日拍的快照, 所以 X 之前生效的 patch
+    它已经含着了"。这句话只有在 ``X <= 估值日`` 时成立: 锚落在估值日**之后**时, 快照
+    含的是**估值日之后**发生的变更, 拿它当"已含"的证据等于把整条历史 patch 链裁光,
+    于是历史视角直接退化成今天的值。
+
+    这不是假想: ``CachedBondDataProvider.terms_as_of`` 返回的是 cb_data 的条款抓取日,
+    **与估值日无关** —— 实测对 2024-01-02 和 2022-06-01 都返回 2026-08-30。而没有 Wind
+    的机器 (``标准`` 口径回测) 用的正是这条链。实测估值日 2024-01-02: 766 只在市债里
+    **508 只 K 是错的, 270 只偏离超过 10%** (山鹰转债真值 2.37 → 视图 1.54), 也就是
+    2024 年的回测"知道"2025/2026 才发生的下修。没有异常、没有告警,
+    ``get_terms_source_diagnostics`` 还报 ``uses_current_fallback=False``。
+    """
+    if terms_as_of is not None and terms_as_of > valuation_date:
+        return None
+    return terms_as_of
+
+
+def _patch_field_is_covered_by_snapshot(
+    key: str, effective_date: date, terms_as_of: date | None,
+) -> bool:
+    """这条 patch 的这个字段, 是不是"快照里已经含着了"因而该裁掉。
+
+    ``project_terms`` 与 ``TermsPatchStore.apply`` **必须共用这一条判据**。此前
+    ``apply`` 用的是 ``list_patches(after=...)`` 一刀切, 不看
+    ``_SNAPSHOT_UNCOVERED_FIELDS`` —— 而那个豁免集恰恰是为"快照里根本没有这个字段"
+    准备的 (cb_data 与每一份历史快照里 ``credit_rating_outlook`` 都是 0/1058)。
+    实测两条路在同一天同一批债上给出 **345 处展望不一致 / 14 处观察不一致**:
+    走 provider 的 (策略回测) 全是 None, 走 project_terms 的 (live 定价) 是「稳定」。
+    """
+    if terms_as_of is None or effective_date > terms_as_of:
+        return False
+    return key not in _SNAPSHOT_UNCOVERED_FIELDS
+
+
+def _seed_from_chain_head(
+    store: "TermsPatchStore", bond_code: str, valuation_date: date,
+    already_patched: set[str],
+) -> dict[str, Any]:
+    """估值日**早于**某字段的第一条 patch 时, 用那条 patch 的 ``before_fields`` 顶上。
+
+    投影只会套用 ``effective_date <= 估值日`` 的 patch。对每条链的**链头之前**那一段,
+    一条都套不上, 于是今天的 cb_data 值原样活下来 —— 而 cb_data 是**当前**值, 它已经
+    内含了那次尚未发生的变更。
+
+    ``before_fields`` 恰好记着变更前的值 (实测 17113/17113 条余额 patch 都有), 但此前
+    从没有人读它。实测估值日 2024-01-02: 74 只债的 K 因此偏高/偏低 (46 只超过 10%),
+    ``outstanding_balance`` 有 270 只拿到今天的余额, 其中 213 只显示 <0.5 亿 而链头
+    写着 >=0.5 亿 —— 那 213 只会在回测里被 ``min_outstanding_balance`` 当成"余额过小"
+    整批剔掉 (立昂转债 2024 年真实余额 33.9 亿, 视图里是 0)。
+
+    只顶 ``already_patched`` 之外的字段: 有 patch 套上的说明链头在估值日之前, 轮不到它。
+    """
+    seeded: dict[str, Any] = {}
+    head: dict[str, TermsPatch] = {}
+    for patch in store.list_patches(bond_code=bond_code):
+        if patch.effective_date <= valuation_date:
+            continue
+        for key in (patch.fields or {}):
+            prev = head.get(key)
+            if prev is None or patch.effective_date < prev.effective_date:
+                head[key] = patch
+    for key, patch in head.items():
+        if key in already_patched or key not in _BOND_FIELD_NAMES:
+            continue
+        before = (patch.before_fields or {})
+        if key in before and before[key] is not None:
+            seeded[key] = _coerce_bond_field_value(key, before[key])
+    return seeded
+
+
 def _drop_shadowed_patches(patches: list["TermsPatch"]) -> list["TermsPatch"]:
     """**逐债逐字段**: 某只债的某个字段有权威源, 就丢掉**这只债**该字段的解析源 patch。
 
@@ -200,13 +273,30 @@ class TermsPatchStore:
 
     def apply(self, bond_code: str, terms: BondTerms, valuation_date: date,
               *, after: date | None = None) -> BondTerms:
+        """把 patch 投影到 *valuation_date* 的视角。
+
+        *after* 是基础条款那份快照的截止日。**裁剪逐字段判**, 与 :func:`project_terms`
+        共用 :func:`_patch_field_is_covered_by_snapshot` —— 此前这里是
+        ``list_patches(after=...)`` 一刀切, 于是 ``_SNAPSHOT_UNCOVERED_FIELDS`` 里那两个
+        "快照根本覆盖不到"的字段被连坐裁掉, 同一天同一只债走这条路是 None、走
+        ``project_terms`` 是「稳定」(实测 345 / 14 处不一致)。
+
+        锚还会先被 :func:`clamp_snapshot_anchor` 夹到估值日: 落在未来的锚证明不了
+        "快照已含", 只会把整条链裁光。
+        """
+        anchor = clamp_snapshot_anchor(after, valuation_date)
         updates: dict[str, Any] = {}
         for patch in self.list_patches(
-                bond_code=bond_code, through_date=valuation_date, after=after):
+                bond_code=bond_code, through_date=valuation_date):
             for key, value in patch.fields.items():
                 if key not in _BOND_FIELD_NAMES:
                     continue
+                if _patch_field_is_covered_by_snapshot(
+                        key, patch.effective_date, anchor):
+                    continue
                 updates[key] = _coerce_bond_field_value(key, value)
+        seeded = _seed_from_chain_head(self, bond_code, valuation_date, set(updates))
+        updates = {**seeded, **updates}
         return replace(terms, **updates) if updates else terms
 
     def add_many(self, patches: list[TermsPatch] | tuple[TermsPatch, ...]) -> int:
@@ -288,6 +378,8 @@ def project_terms(
     # 全量取出后**逐字段**决定要不要按 terms_as_of 裁剪 —— 快照覆盖不到的字段不能裁
     # (见 _SNAPSHOT_UNCOVERED_FIELDS)。用 after= 一刀切会把它们连同别的字段一起丢掉。
     patches = store.list_patches(bond_code=bond_code, through_date=valuation_date)
+    # 锚先夹到估值日 —— 落在未来的锚会把整条链裁光 (见 clamp_snapshot_anchor)
+    terms_as_of = clamp_snapshot_anchor(terms_as_of, valuation_date)
     projected = terms
     patch_fields: set[str] = set()
     applied: list[TermsPatch] = []
@@ -543,6 +635,20 @@ def _strip_unannounced_future_status(terms: BondTerms, valuation_date: date) -> 
 
     这类字段只有在已经公告或已经发生时才合并进历史视角; 未来已知但当时
     不可见的强赎、最后交易、摘牌信息交给公告事件层按 ``event_date`` 应用。
+
+    **强赎那一族与其余生命周期字段分开处理**, 因为它们的可见性判据不同: 强赎的
+    最后交易日/摘牌日是不是"当时可见", 取决于强赎公告发没发 (``call_visible``);
+    而回售窗口、暂停转股窗口、不下修/不强赎承诺各自只看**自己的起始日**有没有到。
+
+    此前只处理了强赎那四个 (``call_announce_date`` / ``call_redemption_date`` /
+    ``call_redemption_price`` / ``call_status`` / ``last_trading_date`` /
+    ``delisting_date``), 另外六个公告派生的字段原样留着未来值。而这个函数是
+    ``标准`` 口径回测路径上**唯一**的净化器 (那条路 ``strip_fallback_status=False``,
+    所以剥得更干净的 ``strip_current_status_fields`` 根本不跑)。实测估值日 2024-01-02:
+    ``down_reset_block_until`` 泄漏 201 只 (南航转债带着 2027-01-11 的不下修承诺, 整个
+    2024 年的下修博弈被它关掉)、``putback_start_date``/``end_date`` 各 100 只、
+    ``conversion_suspension_start/end`` 74/108 只、``call_no_redemption_until`` 53 只。
+    理论价被静默偏移, 没有任何告警。
     """
     call_announce = terms.call_announce_date
     call_announced = call_announce is not None and call_announce <= valuation_date
@@ -552,6 +658,32 @@ def _strip_unannounced_future_status(terms: BondTerms, valuation_date: date) -> 
     )
     delisted = terms.delisting_date is not None and terms.delisting_date <= valuation_date
     call_visible = call_announced or call_redeemed or delisted
+    # 其余公告派生字段: 各自只看自己的起始日。窗口类的起始日在未来 → 整段窗口 (含
+    # 结束日与价格) 都还没公告; 承诺类 (不下修/不强赎) 的截止日在未来 → 那份承诺是
+    # 后来才做出的, 当时不该生效。
+    _future = lambda v: v is not None and v > valuation_date          # noqa: E731
+    unannounced: dict[str, Any] = {}
+    if _future(terms.putback_start_date):
+        unannounced.update({"putback_start_date": None, "putback_end_date": None,
+                            "putback_price": None})
+    if _future(terms.conversion_suspension_start_date):
+        unannounced.update({"conversion_suspension_start_date": None,
+                            "conversion_suspension_end_date": None,
+                            "conversion_suspension_status": None})
+    elif terms.conversion_suspension_start_date is None and _future(
+            terms.conversion_suspension_end_date):
+        # **孤儿结束日**: 没有起始日却带着未来的结束日 —— 那不是"窗口正在进行中",
+        # 而是解析残留 (AGENTS 记过: conversion_suspension 的 end 被公告正文里的
+        # 回售期区间污染过, 宝莱转债解析出 start=2021-03-11 end=2026-09-03)。
+        # 实测估值日 2024-01-02 有 81 条是这个形状, 只有 1 条是真的"起始日已到、
+        # 结束日在未来" —— 那一条要留着: 公告说了"从 A 停到 B", A 到了 B 就是已知的。
+        unannounced.update({"conversion_suspension_end_date": None,
+                            "conversion_suspension_status": None})
+    if _future(terms.down_reset_block_until):
+        unannounced["down_reset_block_until"] = None
+    if _future(terms.call_no_redemption_until):
+        unannounced["call_no_redemption_until"] = None
+
     has_future_lifecycle = any(
         value is not None and value > valuation_date
         for value in (
@@ -562,8 +694,8 @@ def _strip_unannounced_future_status(terms: BondTerms, valuation_date: date) -> 
         )
     )
     if not has_future_lifecycle:
-        return terms
-    updates: dict[str, Any] = {}
+        return replace(terms, **unannounced) if unannounced else terms
+    updates: dict[str, Any] = dict(unannounced)
 
     if call_announce is not None and call_announce > valuation_date:
         updates["call_announce_date"] = None
