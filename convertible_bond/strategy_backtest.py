@@ -2114,6 +2114,31 @@ def _position_returns(
                     exit_point = event_exit_point
                     exit_event = candidate_event
                     exit_signal_date = candidate_event.event_date
+        if entry_point is not None and exit_point is None:
+            # **建了仓就不能当没买过**。此前 entry/exit 缺任何一个都把仓位整条删掉,
+            # 而这两种情况的经济含义完全相反:
+            #   · 没有期初价 = 根本没成交 → 那个槽位确实是现金 (ScoreStrategyConfig
+            #     docstring 写的"缺收盘价无法建仓的标的按现金(0 收益)计入分母"说的是这一档);
+            #   · 有期初价、没有期末价 = **买到了, 然后停牌/摘牌/强赎摘牌/到了最后交易日**。
+            #     把它删掉等于用建仓之后才知道的信息决定"这笔成交算不算发生过", 而且
+            #     它的已实现盈亏被整个抹平。
+            # 实测同一只债 95→45 暴跌: 照常成交到期末时区间收益 −17.54%, 期末停牌时
+            # 变成 +0.06% —— 同一段经济事实, 一个月差 17.6pp; 基准同时从 −8.77% 变成
+            # 0.00% 且成分静默 6→5。而状态栏那句"N 个入选仓位因现金替代"是在替这个
+            # 错误经济学作证。
+            # 处置: 用**期末之前最后一个可得收盘价**平出 (不设陈旧上限 —— 停牌债的最后
+            # 一口价就是它当时唯一能被记账的价), 并单列 exit_reason 让它在明细里认得出来。
+            fallback_exit = _latest_bond_price_point(
+                provider, code, end_date,
+                lookback_days=max(lookback_days, 365), max_staleness_days=None)
+            if fallback_exit is not None and fallback_exit.date >= entry_point.date:
+                exit_point = fallback_exit
+                exit_reason_override = "no_exit_price"
+            else:
+                exit_reason_override = None
+        else:
+            exit_reason_override = None
+
         if entry_point is None or exit_point is None:
             skipped.append({
                 "rank": rank,
@@ -2160,7 +2185,9 @@ def _position_returns(
             "price_return": price_return,
             "post_exit_cash_return": post_exit_cash_return,
             "period_return": ret,
-            "exit_reason": "down_reset_event" if exit_event is not None else "rebalance",
+            "exit_reason": (
+                "down_reset_event" if exit_event is not None
+                else (exit_reason_override or "rebalance")),
             "exit_signal_date": exit_signal_date,
             "exit_event_type": getattr(exit_event, "event_type", None),
             "exit_event_title": getattr(exit_event, "raw_title", None),
@@ -2225,6 +2252,15 @@ def _benchmark_period_return(
             lookahead_days=execution_lookahead_days,
             cache=price_cache,
         )
+        if entry_point is not None and exit_point is None:
+            # 与持仓侧同一条规则: 建了仓 (有期初价) 就不能因为期末停牌而把成分删掉。
+            # 此前这里连诊断都没有 —— 基准成分静默从 6 变成 5, excess_return 跟着错,
+            # 而 CSV 里一行痕迹都不留。
+            fallback = _latest_bond_price_point(
+                provider, code, end_date,
+                lookback_days=max(lookback_days, 365), max_staleness_days=None)
+            if fallback is not None and fallback.date >= entry_point.date:
+                exit_point = fallback
         if entry_point is None or exit_point is None:
             continue
         returns.append(exit_point.price / entry_point.price - 1.0)

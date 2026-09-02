@@ -273,7 +273,11 @@ def test_equal_pool_redistributes_missing_price_positions(monkeypatch):
     """data-gap: 选中但缺成交价的标的权重摊回已持仓, 不留现金。"""
     provider = StrategyFakeProvider()
     # 113003 仅有期初价、无期末价 (staleness 超限) → 无法建仓 → 应被摊回
-    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]
+    # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
+    # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
+    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
         _positive_bonus_batch_price)
@@ -295,7 +299,11 @@ def test_equal_pool_redistributes_missing_price_positions(monkeypatch):
 def test_pool_with_reserve_cash_leaves_gap_as_cash(monkeypatch):
     """三层矩阵: pool + reserve_cash → 持全池但缺价槽位留现金 (与 full_invest 摊回对照)。"""
     provider = StrategyFakeProvider()
-    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]   # 无期末价 → 缺价
+    # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
+    # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
+    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
         _positive_bonus_batch_price)
@@ -415,7 +423,11 @@ def test_exposure_valuation_floor(monkeypatch):
 def test_cash_yield_accrues_on_reserved_cash(monkeypatch):
     """P1: 闲置现金按年化 cash_yield_rate 计息 (缺价槽位留现金场景)。"""
     provider = StrategyFakeProvider()
-    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]   # 缺期末价 → 现金 1/3
+    # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
+    # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
+    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
         _positive_bonus_batch_price)
@@ -454,7 +466,11 @@ def test_cash_yield_accrues_on_exposure_scaled_cash(monkeypatch):
 def test_cash_yield_reflected_in_mark_to_market_curve(monkeypatch):
     """P1: 日频净值曲线与区间记账同口径计息 (期末点一致)。"""
     provider = StrategyFakeProvider()
-    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0)]
+    # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
+    # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
+    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
         _positive_bonus_batch_price)
@@ -743,13 +759,18 @@ def test_backtest_cache_history_end_never_extends_into_future():
 def test_turnover_cost_uses_actual_holdings_not_phantom_selected(monkeypatch):
     """换手/成本必须基于实际持仓码, 不能把'选中但缺成交价'的票当真实持仓。
 
-    P1 持 {A,B,C}(各1/3); P2 中 C 缺期末价被剔除 → 实际持 {A,B}(各1/2)。
+    P1 持 {A,B,C}(各1/3); P2 中 C **建不了仓** (期初无可用价) → 实际持 {A,B}(各1/2)。
     正确单边换手 = 卖出 C(1/3) = 1/3; 旧实现用 selected_codes(含C) + 分母=held,
     权重和>1, 会算出错误换手 (0.25)。
+
+    fixture 改过一次: 原来给 C 的最后一口价在 01-31 (P2 期初), 于是 P2 **买得到** C,
+    靠"期末无价 → 整条删掉"才得到 {A,B}。那正是 BT-1 修掉的语义 —— 现在买到了就会按
+    最后可得价平出并留在持仓里。要测换手就得让 C 在 P2 真的建不了仓。
     """
     provider = StrategyFakeProvider()
-    # C 只到 01-31: P1 可建仓 (entry 01-02/exit 01-31), P2 期末(02-28)无价且 01-31 过旧 → 缺价
-    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0), (date(2025, 1, 31), 95.0)]
+    # C 的价只到 01-15: P1 可建仓 (entry 01-02, 期末按最后可得价 01-15 平出);
+    # P2 期初 (01-31) 已无可用价 → 建不了仓
+    provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0), (date(2025, 1, 15), 95.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
         _positive_bonus_batch_price)
@@ -2588,3 +2609,88 @@ def test_relative_deviation_cap_is_closed_at_the_tag_boundary():
     assert _candidate_filter_reason(row(0.20), cfg) is not None, "恰好 0.20 应当被拦"
     assert _candidate_filter_reason(row(0.1999), cfg) is None
     assert _candidate_filter_reason(row(0.21), cfg) is not None
+
+
+def test_position_bought_then_halted_is_marked_out_not_deleted(monkeypatch):
+    """建了仓再停牌的持仓, 必须按最后可得价平出, 不能整条删掉。
+
+    此前 entry/exit 缺任何一个都走同一条 ``continue``, 而两者的经济含义正好相反:
+    没有期初价 = 根本没成交 (那个槽位确实是现金); **有期初价、没有期末价 = 买到了,
+    然后停牌 / 摘牌 / 强赎摘牌 / 到了最后交易日**。删掉它等于用建仓之后才知道的信息
+    决定"这笔成交算不算发生过", 并把已实现盈亏整个抹平 —— 暴雷的亏损被向上删掉,
+    强赎的收益被向下删掉。
+
+    这条用例把两个跑法的**唯一**差别设成"期末还有没有报价", 暴跌本身完全相同。
+    """
+    from datetime import date
+
+    def _mk(halted: bool):
+        provider = StrategyFakeProvider()
+        # C: 01-02 建仓 90, 次日暴跌到 45
+        hist = [(date(2025, 1, 2), 90.0), (date(2025, 1, 6), 45.0)]
+        if not halted:
+            hist.append((date(2025, 1, 31), 45.0))     # 照常成交到期末
+        provider.bond_history["113003.SH"] = hist
+        return provider
+
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+
+    out = {}
+    for halted in (False, True):
+        result = backtest_score_strategy(
+            _mk(halted), ["113001.SH", "113002.SH", "113003.SH"],
+            start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+            config=ScoreStrategyConfig(
+                top_n=3, rebalance_freq="M", holding_mode="pool",
+                funding_mode="full_invest", min_confidence=None,
+                exclude_risk_tags=(), compute_benchmark=True),
+        )
+        period = result["periods"][0]
+        out[halted] = period
+
+    normal, halted = out[False], out[True]
+    # 停牌那一跑必须仍然持有 C, 并且认得出它是怎么平的
+    codes = {p["bond_code"] for p in halted["positions"]}
+    assert "113003.SH" in codes, "暴跌后停牌的持仓被整条删掉了"
+    c = next(p for p in halted["positions"] if p["bond_code"] == "113003.SH")
+    assert c["exit_reason"] == "no_exit_price"
+    assert c["end_price"] == pytest.approx(45.0), "没有按最后可得价平出"
+
+    # 两跑的经济事实相同 → 区间收益必须一致 (此前实测差 17.6pp)
+    assert halted["gross_return"] == pytest.approx(normal["gross_return"], abs=1e-9)
+    assert halted["cash_weight"] == pytest.approx(0.0)
+
+    # 基准成分也不许静默少人 (此前 6 → 5, excess_return 跟着错且 CSV 无痕迹)
+    assert len(halted.get("benchmark_codes") or []) == len(
+        normal.get("benchmark_codes") or [])
+    assert halted["benchmark_return"] == pytest.approx(
+        normal["benchmark_return"], abs=1e-9)
+
+
+def test_never_filled_position_is_still_treated_as_cash(monkeypatch):
+    """反向守护: **真的没成交**的那一档语义不许被上面那条改掉。
+
+    没有期初价 = 根本没买到, 它的槽位就该按 ScoreStrategyConfig docstring 说的
+    "按现金(0 收益)计入分母"处理 (reserve_cash) 或摊回 (full_invest)。
+    """
+    from datetime import date
+
+    provider = StrategyFakeProvider()
+    provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]   # 只有远古价
+    monkeypatch.setattr(
+        "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
+        _positive_bonus_batch_price)
+    result = backtest_score_strategy(
+        provider, ["113001.SH", "113002.SH", "113003.SH"],
+        start_date=date(2025, 1, 2), end_date=date(2025, 1, 31),
+        config=ScoreStrategyConfig(
+            top_n=3, rebalance_freq="M", holding_mode="pool",
+            funding_mode="reserve_cash", min_confidence=None,
+            exclude_risk_tags=(), compute_benchmark=False),
+    )
+    period = result["periods"][0]
+    assert len(period["positions"]) == 2
+    assert period["cash_weight"] == pytest.approx(1 / 3)
+    assert any(s["bond_code"] == "113003.SH" for s in period["skipped_positions"])

@@ -348,3 +348,103 @@ def test_rebuild_dry_run_previews_the_same_population_it_will_delete(tmp_path):
     ])
     assert len(store.list_patches()) == 1, "前提不成立: 并没有被遮蔽"
     assert len(store.list_patches(include_shadowed=True)) == 2
+
+
+def test_every_cli_reads_only_arguments_its_parser_registers():
+    """``args.X`` 必须有对应的 ``add_argument`` —— 否则 ``main()`` 一跑就 AttributeError。
+
+    实测事故: ``--pde-sigma-band`` / ``--pde-spread-band`` 随「下修优势」一起从 parser
+    删掉了, 但两个消费者留在原地, 于是 ``cb-strategy-backtest`` **每次调用都在取数之前
+    崩掉**。``--help`` 恰好走 ``parse_args`` 的提前退出所以看不出来, 而套件里没有任何
+    用例调 ``main()`` —— 一个 README 里写在每日流程上的命令就这么死着。
+
+    这条守护扫的是**整类**问题, 不是那两个名字: 静态比对每个 CLI 模块里
+    ``add_argument`` 注册的 dest 与 ``args.<attr>`` 的读取。位置参数 (``add_argument
+    ("codes", nargs="*")``) 也算注册 —— 第一版漏了它, 把 ``sync_terms`` 误报成 bug。
+    """
+    import ast
+    from pathlib import Path
+
+    cli_dir = Path(__file__).resolve().parent.parent / "convertible_bond" / "cli"
+    problems: dict[str, dict[str, int]] = {}
+    for path in sorted(cli_dir.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        dests: set[str] = set()
+        reads: dict[str, int] = {}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "add_argument"):
+                explicit = next(
+                    (kw.value.value for kw in node.keywords
+                     if kw.arg == "dest" and isinstance(kw.value, ast.Constant)), None)
+                if explicit:
+                    dests.add(explicit)
+                    continue
+                for arg in node.args:
+                    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                        continue
+                    if arg.value.startswith("--"):
+                        dests.add(arg.value[2:].replace("-", "_"))
+                    elif not arg.value.startswith("-"):
+                        dests.add(arg.value.replace("-", "_"))   # 位置参数
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name) and node.value.id == "args"):
+                reads.setdefault(node.attr, node.lineno)
+        if not dests:
+            continue
+        missing = {k: v for k, v in reads.items() if k not in dests}
+        if missing:
+            problems[path.name] = missing
+    assert not problems, f"CLI 读了未注册的参数: {problems}"
+
+
+def test_strategy_cli_main_survives_argument_handling():
+    """``cb-strategy-backtest`` 必须能走完参数处理。
+
+    上面那条是静态的; 这条真的调一次 ``main()``, 停在"没给 CSV 根目录"这个**正确**的
+    错误上 —— 只要参数处理段有孤儿读取, 它就会先抛 AttributeError。不联网: CSV 源在
+    build provider 时就失败了。
+    """
+    import sys
+
+    import convertible_bond.cli.strategy_backtest as mod
+
+    argv = sys.argv
+    sys.argv = ["cb-strategy-backtest", "--start", "2024-01-01", "--end", "2024-03-01",
+                "--freq", "M", "--source", "csv"]
+    try:
+        with pytest.raises((RuntimeError, SystemExit, ValueError)) as excinfo:
+            mod.main()
+    finally:
+        sys.argv = argv
+    assert not isinstance(excinfo.value, AttributeError)
+    assert "pde_" not in str(excinfo.value)
+
+
+def test_strategy_cli_summary_prints_the_normalized_rank_signal():
+    """摘要要打**归一化后**的排序信号。
+
+    ``--rank-signal down_reset_edge`` 这类已删除的值仍被 choices 接受 (向后兼容), 但
+    ``_normalize_rank_signal`` 会把它们落到 ``deviation``。照原样打印会让屏幕上写着
+    「策略信号: down_reset_edge」而引擎实际按估值偏差排序 —— 结果对不上解释。
+    """
+    import ast
+    import inspect
+
+    import convertible_bond.cli.strategy_backtest as mod
+
+    src = inspect.getsource(mod)
+    tree = ast.parse(src)
+    raw_reads = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        for value in node.values:
+            if not isinstance(value, ast.FormattedValue):
+                continue
+            seg = ast.get_source_segment(src, value.value) or ""
+            if seg.strip() == "strategy_config.rank_signal":
+                raw_reads.append(node.lineno)
+    assert not raw_reads, f"摘要打印了未归一化的 rank_signal, 第 {raw_reads} 行"
+    assert "_normalize_rank_signal(strategy_config.rank_signal)" in src

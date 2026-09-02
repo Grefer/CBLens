@@ -29,6 +29,7 @@ from ..historical_terms import (
 )
 from ..strategy_backtest import (
     PDEStrategyConfig,
+    _normalize_rank_signal,
     backtest_pde_strategy,
     write_strategy_backtest_csv,
 )
@@ -257,8 +258,11 @@ def main() -> int:
     parser.add_argument("--show-holdings", action="store_true",
                         help="打印每期选中持仓")
     args = parser.parse_args()
-    if args.pde_sigma_band < 0 or args.pde_spread_band < 0:
-        parser.error("稳健情景扰动带不能为负")
+    # `--pde-sigma-band` / `--pde-spread-band` 随「下修优势」一起从 parser 删掉了
+    # (见 AGENTS 的删除清单), 但这里的校验和下面那行摘要打印**没跟着删** —— 于是
+    # `main()` 每次都在这一行抛 AttributeError, 取数之前就死。`--help` 恰好走的是
+    # `parse_args` 的提前退出, 所以连手动冒烟都看不出来, 而套件里没有任何用例调
+    # `main()`。这就是"不留孤儿"那条规矩要防的东西。
     if args.p_down < 0:
         parser.error("--p-down 不能为负")
     if args.top_n <= 0:
@@ -410,11 +414,10 @@ def main() -> int:
     print(f"区间: {result['start_date']} ~ {result['end_date']}")
     print(f"样本池: {len(codes)} | top_n: {summary['top_n']} | 调仓: {summary['rebalance_freq']}")
     print(f"模式: {args.mode} | 网格: M={grid_M}, N={grid_N}")
-    print(
-        f"策略信号: {strategy_config.rank_signal} | p_down={args.p_down:.2%} | "
-        f"HV扰动=±{args.pde_sigma_band:.0%} | "
-        f"利差扰动=±{args.pde_spread_band*10000:.0f}bp"
-    )
+    # 打**归一化后**的信号: `--rank-signal down_reset_edge` 这类已删除的值仍被
+    # choices 接受并落到 deviation, 而屏幕上照着原样打会让人以为引擎真在按它排序。
+    print(f"策略信号: {_normalize_rank_signal(strategy_config.rank_signal)} | "
+          f"p_down={args.p_down:.2%}")
     print(f"成交: {strategy_config.execution_timing} | 日频净值: {'是' if strategy_config.mark_to_market else '否'}")
     print(f"期数: {summary['periods']}")
     print(f"最终净值: {summary['final_equity']:.4f}")
