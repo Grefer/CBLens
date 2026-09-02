@@ -3105,3 +3105,115 @@ def test_home_tooltip_gives_the_two_deviation_columns_their_own_reference():
     # 与 COLUMN_HELP 的口径同向 (那里是逐列写的单一事实源)
     assert "全市场" in COLUMN_HELP["相对偏差(pp)"]
     assert "模型价" in COLUMN_HELP["偏差(%)"]
+
+
+def test_daily_watchlist_snapshot_is_append_only_within_a_day(tmp_path):
+    """当天的窄快照必须**按 bond_code 合并**, 不能被一轮部分刷新整份重写。
+
+    ``save_watchlist_pricing`` 曾只写本轮的 ``fresh``。而部分刷新是常态 —— 关注池里
+    只重算几只、自愈只挑 ``_price_state != "ok"`` 的那几只 —— 于是当天文件被重写成
+    那几行, 同一天早些时候写进去的其他债**永久消失**。实测: 第一轮写 A/B/C, 第二轮
+    只刷 A, 当天文件只剩 A, 而热缓存 (merge-upsert) 三只都在 —— 同一批数据两个文件
+    两个答案, 且这个目录是只追加的历史, 丢了不可恢复。
+
+    合并只发生在**同一个估值日内** (文件名就按日期分片), 所以不存在"隔夜旧行混进
+    今天"的风险 —— 原实现担心的正是那件事, 但那件事由分片本身挡住了。
+    """
+    import json
+    from datetime import date
+
+    from convertible_bond import watchlist_cache as wc
+
+    val = date(2026, 8, 31)
+
+    def row(code, price):
+        return {"bond_code": code, "bond_name": code, "market_price": price,
+                "theoretical_price": 100.0, "deviation": 0.1,
+                "valuation_date": val.isoformat(), "status": "ok"}
+
+    kw = dict(valuation_date=val, cache_path=tmp_path / "hot.json",
+              daily_dir=tmp_path / "daily")
+    wc.save_watchlist_pricing(
+        [row(c, 100 + i) for i, c in enumerate(["A.SZ", "B.SZ", "C.SZ"])], **kw)
+    wc.save_watchlist_pricing([row("A.SZ", 999.0)], **kw)
+
+    payload = json.loads((tmp_path / "daily" / f"{val}.json").read_text(encoding="utf-8"))
+    codes = [r["bond_code"] for r in payload["records"]]
+    assert codes == ["A.SZ", "B.SZ", "C.SZ"], f"部分刷新截断了当天快照: {codes}"
+    a_price = next(r["market_price"] for r in payload["records"] if r["bond_code"] == "A.SZ")
+    assert a_price == 999.0, "重刷的那只没有被更新"
+    # 计数要说文件里实际有多少条, 本轮刷了几只另记 —— 合并之后这两个数不再相等
+    assert payload["_meta"]["n_records"] == 3
+    assert payload["_meta"]["n_fresh"] == 1
+
+
+def test_terms_bundle_does_not_drop_another_writers_bonds(tmp_path):
+    """整份重写不能吃掉别的写入方新增的债。
+
+    ``_save`` 是 ``json.dump(self._data)`` —— 一个长命实例只要快照比盘上旧, 下一次写
+    就静默删掉别人新增的条目, 而 ``_bundle_meta.n_bonds`` 跟着改小, 连"少了"都看不出来。
+    实测: a 与 b 都读到 {A}, a 写 B, b 写 C → 盘上只剩 {A, C}。
+
+    这不是假想的并发: GUI 的「🌐 同步池」菜单就是在 GUI 持有 bundle 的同时起子进程
+    去写同一个文件。``reload()`` 是给这个场景准备的, 但它要人显式调, 两次写之间的
+    任何一次 ``set()`` 都来不及。
+    """
+    import json
+
+    from convertible_bond.cache import TermsBundle
+    from convertible_bond.data_providers.base import BondTerms
+
+    path = tmp_path / "cb.json"
+    a = TermsBundle(path)
+    a.set("A.SZ", BondTerms(sec_name="A", conversion_price=10.0), source="Wind")
+
+    b = TermsBundle(path)                    # b 的快照停在 {A}
+    a.set("B.SZ", BondTerms(sec_name="B", conversion_price=11.0), source="Wind")
+    b.set("C.SZ", BondTerms(sec_name="C", conversion_price=12.0), source="Wind")
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    codes = sorted(k for k in raw if not k.startswith("_"))
+    assert codes == ["A.SZ", "B.SZ", "C.SZ"], f"并发写丢了条目: {codes}"
+    assert raw["_bundle_meta"]["n_bonds"] == 3
+
+    # 两边都有的键**以写入方为准** —— 它才是这一次带着新值来的
+    a.set("C.SZ", BondTerms(sec_name="C-新", conversion_price=99.0), source="Wind")
+    raw2 = json.loads(path.read_text(encoding="utf-8"))
+    assert raw2["C.SZ"]["sec_name"] == "C-新"
+
+
+def test_sensitivity_page_does_not_write_a_fabricated_s0_into_the_shared_var(tmp_path):
+    """敏感性页不许把 K 写进共享的 ``v_S0``。
+
+    ``v_S0`` 是**两页共享**的 (`tabs/pricing.py` 的「正股价 S」输入框, 以及
+    `_collect_params` 里真正拿去定价的那个值)。敏感性页曾在行情未到时直接
+    ``self.v_S0.set(self.v_K.get())`` 来让 `_collect_params` 通过 —— 于是"行情还没到
+    就点了一次敏感性"之后, 定价页会一直用 **正股价 = 转股价** 这个捏造的数算理论价,
+    页面上没有任何提示说它是编的。
+
+    改成本地 ``s0_fallback``: 只在 ``v_S0`` 为空时顶上, 不写回。热力图不受影响
+    (S0 在 ``compute_sensitivity_grid`` 内被逐点覆盖); 图上那颗"当前点"星标本来就
+    包在 try/except 里, S0 未知时不画 —— 那比画一个 S/K 恒等于 1 的假点诚实。
+    """
+    import ast
+    import inspect
+
+    from convertible_bond.gui.controllers import pricing as pricing_ctl
+    from convertible_bond.gui.controllers import sensitivity as sens
+
+    src = inspect.getsource(sens)
+    tree = ast.parse(src)
+    writes = [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute) and node.func.attr == "set"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "v_S0"
+    ]
+    assert not writes, f"敏感性页仍在写共享 v_S0, 第 {writes} 行"
+
+    # 顶替值必须有地方进得去
+    sig = inspect.signature(pricing_ctl.PricingMixin._collect_params
+                            if hasattr(pricing_ctl, "PricingMixin")
+                            else pricing_ctl._collect_params)
+    assert "s0_fallback" in sig.parameters, "_collect_params 没有接收本地顶替值的入口"

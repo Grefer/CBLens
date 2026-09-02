@@ -289,6 +289,7 @@ def save_watchlist_pricing(
     })
 
     daily_file = daily_snapshot_path(val_date, daily_dir=daily_dir)
+    daily_records = _merge_daily_records(daily_file, fresh)
     _atomic_write(daily_file, {
         META_KEY: {
             "schema": CACHE_SCHEMA,
@@ -296,16 +297,50 @@ def save_watchlist_pricing(
             "valuation_date": val_date.isoformat(),
             "source": source,
             "market_median_deviation": (cross_section or {}).get("market_median_deviation"),
-            "n_records": len(fresh),
+            # 文件里**实际有多少条**, 不是本轮刷了多少条 —— 合并之后这两个数不再相等,
+            # 而 n_records 是给读盘方核对用的。本轮刷了几只由 n_fresh 单独记。
+            "n_records": len(daily_records),
+            "n_fresh": len(fresh),
         },
-        # 只写**本轮**算出来的行: 窄快照回答的是"那一天这些债多少钱", 把热缓存里
-        # 隔夜的旧行也塞进今天的文件, 会让明天的"涨跌"拿旧值当今天的基准。
-        "records": [_json_ready(to_narrow(row)) for _, row in sorted(fresh.items())],
+        # 与**当天已有的**记录合并, 按 bond_code 覆盖。
+        #
+        # 只写 ``fresh`` 是错的: 一轮**部分**刷新 (关注池里只重算了几只、自愈只挑
+        # ``_price_state != "ok"`` 的那几只) 会把当天文件整份重写成那几行, 把同一天
+        # 早些时候已经写进去的其他债**永久删掉** —— 实测第一轮写 A/B/C 三只, 第二轮
+        # 只刷 A, 当天文件就只剩 A, 而热缓存 (它是 merge-upsert) 三只都还在。
+        # 同一批数据两个文件给出不同答案, 而这个目录是**只追加的历史**, 丢了不可恢复
+        # (AGENTS 记过这条: "只追加的日志停写就是永久丢历史")。
+        #
+        # 合并只在**同一个估值日**内发生, 所以不存在"隔夜旧行混进今天"的风险 ——
+        # 原注释担心的那件事由文件名按日期分片本身挡住了; 真正要防的是同一天内
+        # 早写的行被后一轮抹掉。
+        "records": daily_records,
     })
     return {"cache": cache_file, "daily": daily_file}
 
 
 # ── 读 ──────────────────────────────────────────────────────────────
+
+def _merge_daily_records(daily_file: Path, fresh: dict[str, dict]) -> list[dict]:
+    """当天窄快照 = 盘上已有的那份 按 bond_code 覆盖上本轮的 ``fresh``。
+
+    读盘失败按空处理: 顶多退化成"只写本轮", 与修复前同行为, 不会因为一个坏文件
+    让整轮刷新失败 (这条路在关注池刷新的主线程上)。
+    """
+    existing: dict[str, dict] = {}
+    try:
+        if daily_file.exists():
+            payload = json.loads(daily_file.read_text(encoding="utf-8"))
+            for rec in payload.get("records") or []:
+                code = rec.get("bond_code")
+                if code:
+                    existing[str(code)] = rec
+    except Exception:
+        logger.debug("读当天窄快照失败, 按只写本轮处理: %s", daily_file, exc_info=True)
+        existing = {}
+    existing.update({code: _json_ready(to_narrow(row)) for code, row in fresh.items()})
+    return [existing[code] for code in sorted(existing)]
+
 
 def load_watchlist_pricing(path: str | Path | None = None) -> dict:
     """读热缓存; 文件不存在或损坏时返回空壳而不是抛异常.

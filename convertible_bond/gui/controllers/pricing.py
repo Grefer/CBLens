@@ -256,7 +256,15 @@ class PricingMixin:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_calc.configure(state="normal"))
 
-    def _collect_params(self):
+    def _collect_params(self, *, s0_fallback: float | None = None):
+        """收集定价参数。
+
+        ``s0_fallback`` 只在 ``v_S0`` **为空**时顶上, 而且**不写回那个变量** ——
+        敏感性页曾直接 ``self.v_S0.set(self.v_K.get())`` 来让这里通过, 但 ``v_S0`` 是
+        **两页共享**的 (``tabs/pricing.py:93` 的「正股价 S」输入框, 以及下面 287 行真正
+        拿去定价的那个值)。于是"行情还没到就点了一次敏感性"之后, 定价页会拿
+        **正股价 = 转股价**这个捏造的数算理论价, 而且不留任何痕迹。
+        """
         def pf(v, label):
             val = v.get().strip()
             try:
@@ -283,8 +291,13 @@ class PricingMixin:
                              for x in coupon_str.split(",") if x.strip())
 
         current_date = pd(self.v_cur_date, "估值日期")
+        def _s0():
+            if not self.v_S0.get().strip() and s0_fallback is not None:
+                return float(s0_fallback)
+            return pf(self.v_S0, "正股价 S")
+
         pricer = dict(
-            S0=pf(self.v_S0, "正股价 S"),
+            S0=_s0(),
             K=pf(self.v_K, "转股价 K"),
             face_value=pf(self.v_face, "面值"),
             redemption_price=pf(self.v_redemp, "到期赎回价"),

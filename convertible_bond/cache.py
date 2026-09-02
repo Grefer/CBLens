@@ -132,6 +132,7 @@ class TermsBundle:
     def _load(self):
         if not self.path.exists():
             self._data = {}
+            self._disk_stamp = None
             return
         try:
             with open(self.path, "r", encoding="utf-8") as f:
@@ -139,8 +140,53 @@ class TermsBundle:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("bundle 文件 %s 解析失败: %s; 视为空", self.path, e)
             self._data = {}
+        self._disk_stamp = self._stat_stamp()
+
+    def _stat_stamp(self) -> tuple | None:
+        """盘上这份文件的身份戳 —— 用来判断"我读过之后有没有别人写过"。"""
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _merge_foreign_writes(self) -> int:
+        """把**别人写进盘、而我内存里没有**的条目补回来, 返回补了几条。
+
+        ``_save`` 是整份重写 (``json.dump(self._data)``), 所以一个长命实例只要快照
+        比盘上旧, 下一次写就会静默删掉别人新增的债。实测: 实例 a 与 b 都读到 {A},
+        a 写入 B, b 再写入 C —— 盘上只剩 {A, C}, B 无声消失, 而 ``_bundle_meta.n_bonds``
+        跟着一起被改小, 连"少了"都看不出来。
+
+        这不是假想的并发: GUI 的「🌐 同步池」菜单**就是**在 GUI 持有 bundle 的同时
+        起子进程去写同一个文件 (``gui/controllers/wind_sync.py``)。``reload()`` 是给这个
+        场景准备的, 但它要人显式调, 而两次写之间的任何一次 ``set()`` 都来不及。
+
+        本 bundle 是**只增不删**的 (见类 docstring), 所以合并规则很简单: 盘上有而我
+        没有的补进来; 两边都有的**以我为准** —— 我是这一次的写入方, 我的值更新。
+        """
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                on_disk = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("bundle %s 合并前重读失败, 按整份重写处理: %s", self.path, e)
+            return 0
+        added = 0
+        for key, value in on_disk.items():
+            if key == self.BUNDLE_META_KEY:
+                continue
+            if key not in self._data:
+                self._data[key] = value
+                added += 1
+        return added
 
     def _save(self):
+        # 我读过之后别人动过这个文件 → 先把他们新增的条目并回来, 再整份重写。
+        # 戳没变时一个字节都不读, 所以独占写 (全量同步的常态) 零开销。
+        if getattr(self, "_disk_stamp", None) != self._stat_stamp():
+            added = self._merge_foreign_writes()
+            if added:
+                logger.info("bundle %s 合并了外部写入的 %d 条记录", self.path, added)
         # 元信息
         n = sum(1 for k in self._data if not k.startswith("_"))
         meta = self._data.get(self.BUNDLE_META_KEY, {})
@@ -152,6 +198,7 @@ class TermsBundle:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2, sort_keys=True)
         tmp.replace(self.path)
+        self._disk_stamp = self._stat_stamp()
 
     def reload(self):
         """重新读取磁盘上的 bundle.

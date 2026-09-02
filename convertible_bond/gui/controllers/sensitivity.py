@@ -25,12 +25,23 @@ class SensitivityMixin:
         # K/dates 这些缓存字段都没填, _collect_params 会报 "需要有效数字, 当前值: ''".
         # 主动 flush 防抖, 让条款缓存字段同步可用; 行情 (S0/σ) 仍走异步 Wind/akshare.
         self._flush_pending_bond_autoload()
-        # S0 仍空 (Wind 行情未返回) → 退回到 K 作为初始锚. 敏感性遍历 S 网格,
-        # S0 在 compute_sensitivity_grid 内被逐点覆盖, 退回到 K 不影响结果.
-        if not self.v_S0.get().strip() and self.v_K.get().strip():
-            self.v_S0.set(self.v_K.get().strip())
+        # S0 仍空 (行情未返回) → 用 K 顶一个**本地**锚。敏感性遍历 S 网格, S0 在
+        # compute_sensitivity_grid 内被逐点覆盖, 所以用什么锚都不影响热力图。
+        # **但不许写回 v_S0** —— 它是两页共享的那个变量, 定价页 (`_collect_params` 里
+        # 287 行) 拿它真去算理论价。此前这里是 `self.v_S0.set(self.v_K.get())`, 于是
+        # "行情还没到就点了一次敏感性"会让定价页此后一直用 正股价 = 转股价 定价,
+        # 页面上没有任何提示说这个数是编的。
+        # 图上那颗"当前点"星标同理: S0 未知时它本来就不存在, 两处读取都已经用
+        # try/except 包着, 拿不到就不画 —— 那比画一个 S/K 恒等于 1 的假点诚实。
+        s0_fallback = None
+        k_text = self.v_K.get().strip()
+        if not self.v_S0.get().strip() and k_text:
+            try:
+                s0_fallback = float(k_text)
+            except ValueError:
+                s0_fallback = None
         try:
-            params = self._collect_params()
+            params = self._collect_params(s0_fallback=s0_fallback)
         except ValueError as exc:
             if "当前值: ''" in str(exc):
                 messagebox.showwarning(
