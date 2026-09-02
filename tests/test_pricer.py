@@ -2670,3 +2670,95 @@ def test_gamma_guards_use_a_realistic_down_reset_floor():
             f"{name} 没**传** down_reset_floor —— 它测的是生产中不存在的形状")
         assert "p_down" in passed, (
             f"{name} 用的是 price() 的默认 p_down, 生产上 308/311 只是 0.25")
+
+
+class TestImpliedVolBracket:
+    """反解无解时必须说清是**哪一侧**。"""
+
+    @staticmethod
+    def _pricer():
+        return UniversalCBPricer(
+            S0=10.0, K=10.0, current_date=date(2026, 9, 3),
+            maturity_date=date(2029, 9, 3), issue_date=date(2023, 9, 3),
+            coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+            redemption_price=108.0, call_notice_days=30)
+
+    ARGS = dict(r=0.0148, base_spread=0.03, distress_k=0.05, p_down=0.0, M=300, N=1000)
+
+    def test_out_of_band_failures_report_their_direction(self):
+        """两种无解方向**相反**, 不能都报"区间内无解"。
+
+        · 市价**高于** σ=200% 的模型价 → 再高的波动率也够不着, 模型上限被强赎 cap
+          ``max(call_price, parity·(1+σ√t_grace))`` 封住了。实测主池 309 只里 **76 只**。
+        · 市价**低于** σ=5% 的模型价 → 市场比模型的债底还悲观 (信用/退市风险)。**12 只**。
+
+        合计 88/309 (28%), 而此前界面上是同一句话 —— 读者据此要做的事完全不同。
+        这与已删除的 ``solve_implied_p_down`` 是同一形状 (带太窄 + 静默弃权), 区别是
+        这次**把可达带交出来**而不是只回一个 NaN。
+        """
+        import math
+
+        p = self._pricer()
+        lo = p.price(sigma=0.05, **self.ARGS)
+        hi = p.price(sigma=2.0, **self.ARGS)
+        assert hi > lo + 10, "fixture 的可达带太窄, 测不出方向"
+
+        for target, expected in ((hi + 20, "above_ceiling"), (lo - 20, "below_floor")):
+            bracket: dict = {}
+            iv = p.solve_implied_vol(target_price=target, bracket_out=bracket,
+                                     **self.ARGS)
+            assert math.isnan(iv)
+            assert bracket["reason"] == expected, (
+                f"市价 {target:.2f} 的无解方向报成了 {bracket['reason']}")
+            assert bracket["price_lo"] == pytest.approx(lo, rel=1e-9)
+            assert bracket["price_hi"] == pytest.approx(hi, rel=1e-9)
+
+        # 带内照常解出来, 且 reason 清空
+        bracket = {}
+        iv = p.solve_implied_vol(target_price=(lo + hi) / 2, bracket_out=bracket,
+                                 **self.ARGS)
+        assert not math.isnan(iv) and 0.05 < iv < 2.0
+        assert bracket["reason"] is None
+
+        # bracket_out 是可选的 —— 不传也不能崩
+        assert math.isnan(p.solve_implied_vol(target_price=hi + 20, **self.ARGS))
+
+    def test_gui_message_names_the_direction(self):
+        """定价页要把方向说出来, 不能停在"区间内无解"。"""
+        import ast
+        import inspect
+
+        from convertible_bond.gui.controllers import pricing as mod
+
+        src = inspect.getsource(mod)
+        literals = [
+            n.value for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        ]
+        joined = " ".join(literals)
+        assert "强赎 cap 封住了模型上限" in joined
+        assert "市场比模型的债底更悲观" in joined
+        assert "bracket_out" in src
+
+
+def test_vega_is_stable_across_the_time_grid():
+    """Θ 有三条守护 (PDE 恒等式 / N 稳定性 / 求解次数), vega 只有一条"为正"。
+
+    而 vega 恰恰是这轮被查出偏 **+33.6%** 的那个量 —— 一个只断言符号的守护看不见
+    三分之一的误差。这条补上 N 与 M 两个方向的稳定性。
+    """
+    p = UniversalCBPricer(
+        S0=10.0, K=10.0, current_date=date(2026, 9, 3),
+        maturity_date=date(2029, 9, 3), issue_date=date(2023, 9, 3),
+        coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+        redemption_price=108.0, call_notice_days=30)
+    args = dict(sigma=0.35, r=0.0148, base_spread=0.03, distress_k=0.05, p_down=0.0)
+
+    by_n = [p.price(M=500, N=N, return_greeks=True, **args)["vega"]
+            for N in (1000, 2000, 4000)]
+    assert all(v > 0 for v in by_n), f"vega 出现非正值: {by_n}"
+    assert (max(by_n) - min(by_n)) / max(by_n) < 0.05, f"vega 随 N 漂: {by_n}"
+
+    by_m = [p.price(M=M, N=2000, return_greeks=True, **args)["vega"]
+            for M in (500, 1000, 2000)]
+    assert (max(by_m) - min(by_m)) / max(by_m) < 0.05, f"vega 随 M 漂: {by_m}"

@@ -705,11 +705,25 @@ class UniversalCBPricer:
                           M: int = 300, N: int = 1000,
                           sigma_lo: float = 0.05, sigma_hi: float = 2.0,
                           tol: float = 1e-3,
-                          q: float = 0.0) -> float:
+                          q: float = 0.0,
+                          bracket_out: dict | None = None) -> float:
         """反解使理论价 == target_price 的隐含波动率 (年化, 小数). 失败返回 NaN.
 
         网格默认 M=300/N=1000 与批量定价一致, 比单只定价 (M=500/N=2000) 粗一档,
         是为了在 brentq 多次求值时控制总耗时; 精度足以满足 IV 反解的 tol=1e-3。
+
+        ``bracket_out`` 给定时填入 ``{"price_lo", "price_hi", "reason"}`` —— **无解的
+        两种成因方向完全相反, 不能都报"区间内无解"**:
+
+        · ``above_ceiling``: 市价**高于** σ=σ_hi 时的模型价 —— 再高的波动率也够不着。
+          这不是数值失败, 而是模型的上限被强赎 cap `max(call_price, parity·(1+σ√t))`
+          封住了。实测主池 309 只里 **76 只**是这一档。
+        · ``below_floor``: 市价**低于** σ=σ_lo 时的模型价 —— 市场比模型的债底还悲观
+          (通常是信用/退市风险)。实测 **12 只**。
+
+        两者合计 88/309 (28%), 而此前它们在界面上是同一句话。这与已删除的
+        ``solve_implied_p_down`` 是同一个形状 (带太窄 + 静默弃权), 区别是这次
+        **把带交出来**而不是只回一个 NaN。
         """
         def diff(s: float) -> float:
             return float(self.price(sigma=s, r=r, base_spread=base_spread,
@@ -720,11 +734,23 @@ class UniversalCBPricer:
             f_lo = diff(sigma_lo)
             f_hi = diff(sigma_hi)
         except Exception:
+            if bracket_out is not None:
+                bracket_out.update(price_lo=None, price_hi=None, reason="pricing_failed")
             return float("nan")
+        if bracket_out is not None:
+            bracket_out.update(price_lo=f_lo + target_price, price_hi=f_hi + target_price)
         if f_lo * f_hi > 0:
-            # 目标价超出可达区间 (低于 σ_lo 价或高于 σ_hi 价), 无解
+            # 目标价超出可达区间 —— 方向要留痕, 见 docstring
+            if bracket_out is not None:
+                bracket_out["reason"] = (
+                    "above_ceiling" if f_hi < 0 else "below_floor")
             return float("nan")
         try:
-            return float(brentq(diff, sigma_lo, sigma_hi, xtol=tol, maxiter=40))
+            solved = float(brentq(diff, sigma_lo, sigma_hi, xtol=tol, maxiter=40))
         except Exception:
+            if bracket_out is not None:
+                bracket_out["reason"] = "solver_failed"
             return float("nan")
+        if bracket_out is not None:
+            bracket_out["reason"] = None
+        return solved

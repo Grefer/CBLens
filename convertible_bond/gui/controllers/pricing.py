@@ -1609,16 +1609,29 @@ class PricingMixin:
             params = self._collect_params()
             pricer = UniversalCBPricer(**params["pricer"])
             m = params["model"]
+            bracket: dict = {}
             iv = pricer.solve_implied_vol(
                 target_price=target, r=m["r"], base_spread=m["base_spread"],
                 p_down=m["p_down"], distress_k=m["distress_k"],
                 M=max(150, m["M"] // 3), N=max(500, m["N"] // 3),
-                q=m["q"],
+                q=m["q"], bracket_out=bracket,
             )
             if iv != iv:  # NaN
+                # **无解的两种成因方向相反, 不能都说"区间内无解"**: 市价高于 σ=200%
+                # 的模型价 = 模型上限被强赎 cap 封住了 (实测主池 76 只), 市价低于
+                # σ=5% 的模型价 = 市场比模型的债底还悲观 (12 只)。前者是模型能力边界,
+                # 后者通常是信用/退市风险 —— 读者要做的事完全不同。
+                lo, hi = bracket.get("price_lo"), bracket.get("price_hi")
+                if bracket.get("reason") == "above_ceiling" and hi is not None:
+                    msg = (f"❌ 反解无解: 市价 {target:.2f} 高于模型在 σ=200% 时的 "
+                           f"{hi:.2f} —— 强赎 cap 封住了模型上限")
+                elif bracket.get("reason") == "below_floor" and lo is not None:
+                    msg = (f"❌ 反解无解: 市价 {target:.2f} 低于模型在 σ=5% 时的 "
+                           f"{lo:.2f} —— 市场比模型的债底更悲观 (信用/退市风险?)")
+                else:
+                    msg = f"❌ 反解失败: 市价 {target:.2f} 在 σ ∈ [5%, 200%] 区间内无解"
                 self.after(0, lambda: self.v_iv.set("—"))
-                self.after(0, lambda: self.v_status.set(
-                    f"❌ 反解失败: 市价 {target:.2f} 在 σ ∈ [5%, 200%] 区间内无解"))
+                self.after(0, lambda m2=msg: self.v_status.set(m2))
             else:
                 self.after(0, lambda: self.v_iv.set(f"{iv*100:.2f}%"))
                 hist = float(self.v_sigma.get())
