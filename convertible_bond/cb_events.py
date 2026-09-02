@@ -106,6 +106,8 @@ class CBEventStore:
         self.path = Path(path) if path else project_events_path()
         self._events: list[CBEvent] = []
         self._meta: dict = {}
+        #: 上一次 add_many 原地升级了几条 (与新增分开报, 见 add_many 的说明)
+        self.last_upgraded = 0
         self._load()
 
     def _load(self) -> None:
@@ -147,15 +149,37 @@ class CBEventStore:
         return sorted(events, key=_event_sort_key)
 
     def add_many(self, events: Iterable[CBEvent]) -> int:
+        """写入新事件, 并在同 key 的入参**解析得更全**时原地升级。
+
+        返回值仍是"新增条数", 升级条数另经 :attr:`last_upgraded` 暴露 —— 改返回值的语义
+        会让现有调用方把升级当成新增。
+
+        **为什么必须能升级**: ``key()`` 只含 (代码, 日期, 类型, 标题), 不含任何解析字段。
+        正文取不到时 (网络失败 / 扫描件 PDF / ``--no-pdf`` 快路径) 产生的降级事件因此会
+        **永久占位** —— 修好解析器或带上 PDF 重跑一遍, 报告写 ``added: 0``, 库里一个字节
+        没变。实测拿 ``data/announcement_text_cache`` 里 1368 份正文重放:
+        **330 份**在带正文时能解析出严格更多的字段, 而 ``key()`` 逐位相同。
+        存量库今天还算干净, 靠的是 ``cb-repair-*`` 那几条一次性回洗命令, 不是这条路。
+
+        升级判据是**严格更全**: 字段数更多, 且原有的非空值一个都不丢。这样重跑一个更差
+        的解析器 (或没带正文的那次) 不会把好数据擦掉。
+        """
         existing = {e.key(): e for e in self._events}
         added = 0
+        upgraded = 0
         for event in events:
-            if event.key() in existing:
+            key = event.key()
+            current = existing.get(key)
+            if current is None:
+                existing[key] = event
+                added += 1
                 continue
-            existing[event.key()] = event
-            added += 1
+            if _is_strict_upgrade(current, event):
+                existing[key] = event
+                upgraded += 1
         self._events = list(existing.values())
-        if added:
+        self.last_upgraded = upgraded
+        if added or upgraded:
             self._save()
         return added
 
@@ -1208,9 +1232,56 @@ def _extract_dates(text: str) -> list[date]:
     return sorted(set(out))
 
 
+def _is_strict_upgrade(current: CBEvent, incoming: CBEvent) -> bool:
+    """*incoming* 是不是 *current* 的**严格**更优版本。
+
+    严格 = 解析出的字段更多, **且**原有的非空值一个都不被抹成 None。后半条是防线:
+    重跑一个更差的解析器 (或没带正文的那一次) 不许把已经解析好的数据擦掉。
+    """
+    fields = ("effective_start", "effective_end", "event_price")
+    for name in fields:
+        if getattr(current, name) is not None and getattr(incoming, name) is None:
+            return False
+    return _parsed_field_count(incoming) > _parsed_field_count(current)
+
+
+def _parsed_field_count(event: CBEvent) -> int:
+    """这条事件真正解析出了几个字段。
+
+    ``effective_start`` 只在**严格晚于公告日**时才算 —— 解析不到时的通用回落值就是
+    公告日本身, 它不携带信息 (AGENTS 记过: "最后交易日/申报期从公告当天开始"几乎恒为
+    解析失败的信号)。
+    """
+    fields = (
+        event.effective_start if (
+            event.effective_start is not None
+            and event.effective_start > event.event_date) else None,
+        event.effective_end,
+        event.event_price,
+    )
+    return sum(1 for f in fields if f is not None)
+
+
+def _event_selection_key(event: CBEvent) -> tuple:
+    """``_latest_event`` 挑代表用的键 —— **与落盘排序键分开**。
+
+    ``_event_sort_key`` 还负责 ``cb_events.json`` 的落盘顺序与 ``list_events`` 的输出
+    顺序, 动它会把整个数据文件重排, 所以选择逻辑单独一把键。
+
+    日期仍是主键 (最新的赢), 但**同日先比解析出的字段数**, 最后才拿标题兜底。
+    此前同日直接落到 ``raw_title`` 的 Unicode 序, 而中文标题的排序把赢面系统性地给了
+    承销商核查意见 / 律所法律意见书 (标题以「申万宏源」「国浩律师」这类机构名开头,
+    排序靠后), 而带日期与价格的恰恰是发行人的「关于…的公告」。
+    实测全库 697 组同 (债, 日, 类型) 里 **82 组**选中的那条比同组最富的少解析出字段,
+    例: 127041.SZ 2024-08-23 选中国浩律师的核查意见 (0 个字段) 而不是
+    「关于"弘亚转债"回售的公告」(3 个字段) —— 回售申报窗口与回售价就这么丢了。
+    """
+    return (event.event_date, _parsed_field_count(event), event.raw_title)
+
+
 def _latest_event(events: Sequence[CBEvent], event_type: str) -> CBEvent | None:
     matched = [e for e in events if e.event_type == event_type]
-    return max(matched, key=_event_sort_key) if matched else None
+    return max(matched, key=_event_selection_key) if matched else None
 
 
 def _down_reset_block_until_from_event(event: CBEvent, *, cooldown_months: int) -> date:

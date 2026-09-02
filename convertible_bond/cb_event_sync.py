@@ -207,6 +207,9 @@ def sync_cb_events(
                     parsed_patches.append(patch)
 
     added = store.add_many(parsed_events)
+    # 升级数与新增数分开报: 「added 0」在没有新公告与"重跑一遍什么都没变好"之间是歧义的,
+    # 而修完解析器重跑一次恰恰是要看后者 (见 CBEventStore.add_many 的说明)。
+    upgraded = int(getattr(store, "last_upgraded", 0) or 0)
     patches_added = 0
     if term_patch_store is not None and parsed_patches:
         patches_added = term_patch_store.add_many(parsed_patches)
@@ -220,6 +223,7 @@ def sync_cb_events(
         "parsed_events": parsed_events,
         "parsed_patches": parsed_patches,
         "added": added,
+        "upgraded": upgraded,
         "patches_added": patches_added,
         "failed": failed,
         "store_path": str(store.path),

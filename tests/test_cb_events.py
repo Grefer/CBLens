@@ -1227,3 +1227,140 @@ def test_transient_event_ttl_fallback_is_exercised():
     with_end = CBEvent(bond_code="A.SZ", event_date=d, event_type="suspension",
                        raw_title="t", effective_end=d + timedelta(days=99))
     assert _transient_event_end(with_end) == d + timedelta(days=99)
+
+
+def test_same_day_events_are_chosen_by_what_they_parsed_not_by_title_order():
+    """同日多条时, 代表要选**解析得最全**的那条, 不能落到标题的 Unicode 序。
+
+    ``_event_sort_key`` 的末位是 ``raw_title``, 而中文标题的排序把赢面系统性地给了
+    承销商核查意见 / 律所法律意见书 (标题以「申万宏源」「国浩律师」这类机构名开头,
+    排序靠后), 偏偏带日期与价格的是发行人的「关于…的公告」。实测全库 697 组同
+    (债, 日, 类型) 里 **82 组**选中的那条比同组最富的少解析出字段 —— 例如
+    127041.SZ 2024-08-23 选了国浩律师的核查意见 (0 个字段) 而不是「关于"弘亚转债"回售
+    的公告」(3 个字段), 回售申报窗口与回售价就这么丢了。
+
+    选择键必须与**落盘排序键分开**: 后者还决定 ``cb_events.json`` 的文件顺序, 动它会把
+    整个数据文件重排。
+    """
+    from convertible_bond.cb_events import _event_sort_key, _latest_event
+
+    day = date(2026, 3, 2)
+    poor = CBEvent(bond_code="127041.SZ", event_date=day, event_type="putback",
+                   raw_title="国浩律师（深圳）事务所关于…可转换公司债券回售的核查意见")
+    rich = CBEvent(bond_code="127041.SZ", event_date=day, event_type="putback",
+                   raw_title="关于“弘亚转债”回售的公告",
+                   effective_start=day + timedelta(days=8),
+                   effective_end=day + timedelta(days=14), event_price=100.5)
+
+    # 前提: 按旧的标题序, 差的那条会赢
+    assert max([poor, rich], key=_event_sort_key) is poor
+
+    assert _latest_event([poor, rich], "putback") is rich
+    assert _latest_event([rich, poor], "putback") is rich      # 与入参顺序无关
+
+    # 日期仍是主键 —— 更新的一条即使更穷也该赢 (它是更晚的事实)
+    newer_poor = CBEvent(bond_code="127041.SZ", event_date=day + timedelta(days=1),
+                         event_type="putback", raw_title="后来的公告")
+    assert _latest_event([rich, newer_poor], "putback") is newer_poor
+
+    # 落盘排序键不许被动过
+    assert _event_sort_key(poor) == (poor.event_date, poor.bond_code,
+                                     poor.event_type, poor.raw_title)
+
+    # **回落的 effective_start 不算"解析出来了"**。解析不到时通用回落值就是公告日本身,
+    # 它不携带信息 (AGENTS: "最后交易日/申报期从公告当天开始"几乎恒为解析失败的信号)。
+    # 把它算进富度会让一条纯回落的事件看起来比真解析到价格的那条更富。
+    from convertible_bond.cb_events import _parsed_field_count
+
+    fallback_only = CBEvent(bond_code="X.SZ", event_date=day, event_type="putback",
+                            raw_title="a", effective_start=day)
+    assert _parsed_field_count(fallback_only) == 0, "回落的 start 被算成了解析结果"
+    real_start = CBEvent(bond_code="X.SZ", event_date=day, event_type="putback",
+                         raw_title="a", effective_start=day + timedelta(days=1))
+    assert _parsed_field_count(real_start) == 1
+    priced = CBEvent(bond_code="X.SZ", event_date=day, event_type="putback",
+                     raw_title="b", event_price=100.5)
+    assert _latest_event([fallback_only, priced], "putback") is priced
+
+
+def test_add_many_upgrades_a_degraded_event_in_place(tmp_path):
+    """同 key 的入参解析得更全时要**原地升级**, 不能被先到先得挡住。
+
+    ``key()`` 只含 (代码, 日期, 类型, 标题), 不含任何解析字段。正文取不到时
+    (网络失败 / 扫描件 PDF / ``--no-pdf`` 快路径) 产生的降级事件因此会**永久占位** ——
+    修好解析器或带上 PDF 重跑一遍, 报告写 ``added: 0``, 库里一个字节没变。
+    实测拿 ``data/announcement_text_cache`` 的 1368 份正文重放, **330 份**在带正文时能
+    解析出严格更多的字段而 ``key()`` 逐位相同。
+
+    升级判据必须是**严格更全**: 字段更多**且**原有非空值一个不丢 —— 否则重跑一个更差的
+    解析器会把好数据擦掉。
+    """
+    from convertible_bond.cb_events import _parsed_field_count
+
+    store = CBEventStore(tmp_path / "events.json")
+    common = dict(bond_code="127018.SZ", event_date=date(2024, 8, 12),
+                  event_type="putback", raw_title="国泰君安…回售有关事项的核查意见")
+    poor = CBEvent(**common)
+    rich = CBEvent(**common, effective_start=date(2024, 8, 20),
+                   effective_end=date(2024, 8, 26), event_price=100.489)
+    assert poor.key() == rich.key(), "前提不成立: 两者 key 不同"
+
+    assert store.add_many([poor]) == 1 and store.last_upgraded == 0
+    assert store.add_many([rich]) == 0, "升级不该计入 added"
+    assert store.last_upgraded == 1
+    kept = store.list_events()[0]
+    assert kept.event_price == pytest.approx(100.489)
+    assert _parsed_field_count(kept) == 3
+
+    # 倒退要被拒绝
+    assert store.add_many([poor]) == 0 and store.last_upgraded == 0
+    assert store.list_events()[0].event_price == pytest.approx(100.489)
+
+    # "字段更多但抹掉了一个已有值" 也不算升级。
+    # 这一条要**真的更多**才测得到那半条判据: 下面这版有 start+price 共 2 个,
+    # 而库里那条是 3 个 —— 那样光靠"字段更多"就挡住了, 测不出"不许抹值"。
+    # 所以再给它补一个库里没有的字段, 让它字段数**超过**库里那条, 唯一的拦截理由就只剩
+    # "抹掉了 effective_end"。
+    from convertible_bond.cb_events import _parsed_field_count
+
+    stored = store.list_events()[0]
+    assert _parsed_field_count(stored) == 3
+    erasing = CBEvent(**common, effective_start=date(2024, 8, 20),
+                      effective_end=None, event_price=100.489)
+    assert _parsed_field_count(erasing) == 2      # 更少 → 靠字段数就挡住了
+    assert store.add_many([erasing]) == 0 and store.last_upgraded == 0
+    assert store.list_events()[0].effective_end == date(2024, 8, 26)
+
+    # **平级不许覆盖**: 字段数相同的另一版本不算升级 (否则同步顺序决定留哪条)
+    same_count = CBEvent(**common, effective_start=date(2024, 8, 21),
+                         effective_end=date(2024, 8, 27), event_price=999.0)
+    assert _parsed_field_count(same_count) == _parsed_field_count(stored)
+    assert store.add_many([same_count]) == 0 and store.last_upgraded == 0
+    assert store.list_events()[0].event_price == pytest.approx(100.489), (
+        "平级版本覆盖了已有值 —— 判据成了 >= ")
+
+    # 落盘后读回来仍是升级后的那条
+    reloaded = CBEventStore(tmp_path / "events.json").list_events()[0]
+    assert reloaded.event_price == pytest.approx(100.489)
+
+    # **"字段更多**但**抹掉了一个已有值"必须被拒**。上面那个反例字段数更少, 光靠计数就
+    # 挡住了 —— 测不到判据的后半条。这里让库里只有 1 个字段, 入参有 2 个 (确实更多)
+    # 却把那 1 个抹成 None: 唯一能拦住它的就是"原有非空值一个都不许丢"。
+    other = CBEventStore(tmp_path / "other.json")
+    base = dict(bond_code="Z.SZ", event_date=date(2024, 8, 12),
+                event_type="putback", raw_title="t")
+    only_end = CBEvent(**base, effective_end=date(2024, 8, 26))
+    assert other.add_many([only_end]) == 1
+    assert _parsed_field_count(only_end) == 1
+
+    more_but_erases = CBEvent(**base, effective_start=date(2024, 8, 20),
+                              effective_end=None, event_price=100.489)
+    assert _parsed_field_count(more_but_erases) == 2, "前提不成立: 它并没有更多字段"
+    assert other.add_many([more_but_erases]) == 0 and other.last_upgraded == 0, (
+        "字段更多就被放行了 —— 判据丢了'不许抹值'那半条")
+    assert other.list_events()[0].effective_end == date(2024, 8, 26)
+
+    # 不抹值地补齐则照常升级
+    strictly_more = CBEvent(**base, effective_start=date(2024, 8, 20),
+                            effective_end=date(2024, 8, 26), event_price=100.489)
+    assert other.add_many([strictly_more]) == 0 and other.last_upgraded == 1
