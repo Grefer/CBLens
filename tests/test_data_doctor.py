@@ -218,3 +218,46 @@ def test_pool_without_quotes_does_not_flag_bonds_that_have_not_listed_yet(monkey
     # 只剩真幽灵 —— 两只在途新债不进 extra
     assert len(check.extra) == 1 and "123095.SZ" in check.extra[0]
     assert "2 只尚未挂牌" in check.detail
+
+
+def test_patch_checks_read_the_raw_file_not_the_effective_view(tmp_path):
+    """体检一律看**文件里到底有什么**, 不看被权威源遮蔽后的生效视图。
+
+    ``list_patches()`` 自己的 docstring 就写了这条: "数据体检与存量回洗要的是文件里
+    到底有什么, 传 include_shadowed=True —— 否则一条被 Wind 遮蔽的脏 patch 会既扫不到、
+    也删不掉, 等哪天权威源覆盖收窄就原地复活"。三处 patch 组检查此前都用了默认视图,
+    于是对被遮蔽的那部分是瞎的 (实测盘上 4 条)。
+    """
+    from datetime import date
+
+    from convertible_bond.cli import data_doctor as dd
+    from convertible_bond.historical_terms import TermsPatch, TermsPatchStore
+
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 1, 1),
+                   fields={"conversion_price": 10.0}, source="wind_asof"),
+        # 被上面那条逐字段遮蔽 —— 但它就在文件里, 体检必须看得见
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 2, 1),
+                   fields={"conversion_price": 999.0}, source="cninfo"),
+    ])
+    assert len(store.list_patches()) == 1, "前提不成立: 那条并没有被遮蔽"
+
+    seen = dd._patches_by_field(store, "conversion_price")["A.SZ"]
+    assert len(seen) == 2, f"体检只看到 {len(seen)} 条, 遮蔽掉的那条没进来"
+    assert any(p.source == "cninfo" for p in seen)
+
+
+def test_event_coverage_flags_a_year_with_zero_events():
+    """**整年 0 条**必须算缺口 —— 那正是这条检查存在的理由。
+
+    ``by_year`` 是从事件表自己的键 build 出来的, 所以一个零事件的年份**压根不在里面**,
+    ``by_year[y] < 50`` 永远看不到它。检查的 extra 文案写的就是 "2024 年之前全库 0 条
+    事件", 而那种情况恰好是它唯一漏掉的。
+    """
+    from convertible_bond.cli import data_doctor as dd
+
+    events = ([{"event_date": "2023-05-01"}] * 60) + ([{"event_date": "2025-05-01"}] * 60)
+    check = dd.check_event_time_coverage({"events": events})
+    assert "2024" in " ".join(check.extra), f"零事件的 2024 没被标成缺口: {check.extra}"
+    assert check.status != dd.OK

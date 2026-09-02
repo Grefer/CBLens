@@ -58,18 +58,46 @@ from .repair_putback_windows import (
 RATING_FIELDS = ("credit_rating", "credit_rating_outlook", "credit_watch_status")
 
 
-def _url_index(event_path: Path | str) -> dict[tuple[str, str], str]:
-    """``(债券代码, 公告标题) → PDF url``, 用于把 patch 接回它的源公告。"""
-    index: dict[tuple[str, str], str] = {}
+def _url_index(event_path: Path | str) -> tuple[dict[tuple, str], dict[tuple, str]]:
+    """返回两级索引: ``(代码, 标题, 公告日) → url`` 和 ``(代码, 标题) → url``。
+
+    **日期必须进主键**。发行人会用**一模一样的标题**发多份公告 —— 定期跟踪评级报告
+    每年一份, 标题里连年份都不带 (「关于"皖天转债"定期跟踪评级结果的公告」)。实测
+    评级类事件 1298 条里 ``(代码, 标题)`` 只有 1197 个不同键、**77 组撞车**
+    (123192.SZ 有 3 份同名), 加上公告日之后 1298 个键、**0 组撞车**。
+    键撞车 + ``setdefault`` = 整条评级链上每条 patch 都被接到**第一份** PDF 上, 重放
+    出来是同一个 (错年份的) 评级 —— 实测 1037 条评级 patch 里 **62 条 (6.0%)** 会接错,
+    而这个命令把重放结果**直接写回库**。这与 AGENTS 记的"标题点名了兄弟债"是同一类
+    归属错误, 只是这次撞的是同一只债的不同年份。
+
+    第二级只收**该债下标题唯一**的那些: 老 patch 可能没有 ``event_date`` (那个字段是
+    后加的), 对它们退回按标题查是安全的; 而标题本身就撞车、又没有日期可消歧时,
+    这里**查不到**才是正确结果 —— 让它落进 ``no_url``, 命令原样保留那条 patch。
+    "取不到证据 ≠ 证据为否"。
+    """
+    exact: dict[tuple, str] = {}
+    urls_by_title: dict[tuple, set[str]] = {}
     for event in CBEventStore(event_path).list_events():
-        if event.url and event.raw_title:
-            index.setdefault((event.bond_code, event.raw_title), event.url)
-    return index
+        if not (event.url and event.raw_title):
+            continue
+        exact.setdefault((event.bond_code, event.raw_title, event.event_date), event.url)
+        urls_by_title.setdefault((event.bond_code, event.raw_title), set()).add(event.url)
+    unique = {k: next(iter(v)) for k, v in urls_by_title.items() if len(v) == 1}
+    return exact, unique
+
+
+def _lookup_url(exact: dict, unique: dict, patch) -> str | None:
+    title = patch.raw_title or ""
+    if patch.event_date is not None:
+        hit = exact.get((patch.bond_code, title, patch.event_date))
+        if hit:
+            return hit
+    return unique.get((patch.bond_code, title))
 
 
 def scan(patches_path: Path | str, event_path: Path | str) -> dict:
     store = TermsPatchStore(patches_path)
-    urls = _url_index(event_path)
+    exact_urls, unique_urls = _url_index(event_path)
     targets, no_url = [], []
     # ``include_shadowed=True`` 是必须的, 两个原因: ① 回洗要的是**文件里到底有什么**,
     # 被权威源遮蔽的脏 patch 否则既扫不到也删不掉; ② 遮蔽视图返回的是 ``replace(patch,
@@ -78,7 +106,7 @@ def scan(patches_path: Path | str, event_path: Path | str) -> dict:
     for patch in store.list_patches(include_shadowed=True):
         if not any(f in (patch.fields or {}) for f in RATING_FIELDS):
             continue
-        url = urls.get((patch.bond_code, patch.raw_title or ""))
+        url = _lookup_url(exact_urls, unique_urls, patch)
         (targets if url else no_url).append((patch, url))
     return {
         "n_patches": len(store.list_patches(include_shadowed=True)),

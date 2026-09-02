@@ -138,7 +138,11 @@ def check_field_coverage(ctx: dict) -> list[Check]:
 def check_event_time_coverage(ctx: dict) -> Check:
     by_year = collections.Counter(
         (e.get("event_date") or "?")[:4] for e in ctx["events"])
-    years = sorted(y for y in by_year if y.isdigit())
+    seen = sorted(y for y in by_year if y.isdigit())
+    # **年份区间要连续枚举**, 不能只看事件表自己有的那些键 —— 一个**零事件**的年份
+    # 压根不在 by_year 里, 于是 `by_year[y] < 50` 永远看不到它, 而"整年 0 条"恰恰是
+    # 这条检查存在的理由 (extra 文案写的就是"2024 年之前全库 0 条事件")。
+    years = ([str(y) for y in range(int(seen[0]), int(seen[-1]) + 1)] if seen else [])
     gaps = [y for y in years if by_year[y] < 50]
     span = f"{years[0]}–{years[-1]}" if years else "空"
     return Check(
@@ -153,8 +157,15 @@ def check_event_time_coverage(ctx: dict) -> Check:
 # ─────────────────────────── patch 自洽性 ───────────────────────────
 
 def _patches_by_field(store: TermsPatchStore, fname: str) -> dict[str, list]:
+    """体检一律看**原始文件**, 不看生效视图。
+
+    ``list_patches()`` 默认返回被权威源逐字段遮蔽后的视图 —— 它自己的 docstring 就写了
+    "数据体检与存量回洗要的是文件里到底有什么, 传 include_shadowed=True, 否则一条被
+    Wind 遮蔽的脏 patch 会既扫不到、也删不掉, 等哪天权威源覆盖收窄就原地复活"。
+    这里以及下面两处此前都用了默认视图, 于是体检对被遮蔽的那部分是瞎的。
+    """
     out: dict[str, list] = collections.defaultdict(list)
-    for p in store.list_patches():
+    for p in store.list_patches(include_shadowed=True):
         if fname in (p.fields or {}):
             out[p.bond_code].append(p)
     for v in out.values():
@@ -238,7 +249,8 @@ def check_patch_authority(ctx: dict) -> Check:
     worst = OK
     for fname in _AUTHORITATIVE_FIELDS:
         by_source = collections.Counter(
-            p.source for p in store.list_patches() if fname in (p.fields or {}))
+            p.source for p in store.list_patches(include_shadowed=True)
+            if fname in (p.fields or {}))
         total = sum(by_source.values())
         auth = by_source.get("wind_asof", 0)
         ratio = auth / total if total else 0.0
@@ -302,7 +314,8 @@ def check_statutory_line_clustering(ctx: dict) -> Check:
     """余额值扎堆在法定门槛上 = 把'少于3,000万元时'这句条款当成了当期余额。"""
     store = ctx["patch_store"]
     values = [round(float(p.fields["outstanding_balance"]), 6)
-              for p in store.list_patches() if "outstanding_balance" in (p.fields or {})]
+              for p in store.list_patches(include_shadowed=True)
+              if "outstanding_balance" in (p.fields or {})]
     if not values:
         return Check("门槛值扎堆", OK, "无余额 patch", "—", "patch")
     at_line = sum(1 for v in values if abs(v - _STATUTORY_BALANCE_LINE) < 1e-9)

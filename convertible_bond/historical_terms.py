@@ -60,21 +60,30 @@ _SNAPSHOT_UNCOVERED_FIELDS = frozenset({"credit_rating_outlook", "credit_watch_s
 
 
 def _drop_shadowed_patches(patches: list["TermsPatch"]) -> list["TermsPatch"]:
-    """逐字段: 有权威源就丢掉该字段的解析源 patch。"""
-    authoritative_fields = {
-        key
-        for patch in patches if patch.source in _AUTHORITATIVE_PATCH_SOURCES
-        for key in (patch.fields or {})
-    }
-    if not authoritative_fields:
+    """**逐债逐字段**: 某只债的某个字段有权威源, 就丢掉**这只债**该字段的解析源 patch。
+
+    权威字段集必须按 ``bond_code`` 分组算。此前它是在**整个传进来的列表**上算的 ——
+    ``list_patches(bond_code=...)`` 传的是单债列表所以没事 (投影路径 ``apply()`` 走的
+    正是这一条), 但全库调用 (数据体检、存量回洗) 传的是所有债, 于是**A 债的一条
+    wind_asof patch 会遮蔽 B 债该字段的解析 patch**, 而 B 债在那个字段上可能根本没有
+    权威源。实测差 2 条 (逐债累计 22724 vs 全库一次 22722) —— 今天很小, 但它随解析
+    patch 累积增长, 且方向是"越修越看不见"。
+
+    docstring 与 AGENTS 记的规则一直都是"同一只债的同一个字段", 是实现漏了分组。
+    """
+    by_bond: dict[str, set[str]] = {}
+    for patch in patches:
+        if patch.source in _AUTHORITATIVE_PATCH_SOURCES:
+            by_bond.setdefault(patch.bond_code, set()).update(patch.fields or {})
+    if not by_bond:
         return patches
     kept: list[TermsPatch] = []
     for patch in patches:
         if patch.source in _AUTHORITATIVE_PATCH_SOURCES:
             kept.append(patch)
             continue
-        fields = {k: v for k, v in (patch.fields or {}).items()
-                  if k not in authoritative_fields}
+        shadowed = by_bond.get(patch.bond_code) or set()
+        fields = {k: v for k, v in (patch.fields or {}).items() if k not in shadowed}
         if fields:
             kept.append(replace(patch, fields=fields))
     return kept

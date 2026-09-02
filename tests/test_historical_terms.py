@@ -836,3 +836,42 @@ def test_st_is_recognised_only_from_its_event_date_onward(tmp_path):
     assert st_at(date(2022, 6, 30)) is False      # 公告前四年 —— 不该知道
     assert st_at(date(2026, 4, 29)) is False      # 公告前一天
     assert st_at(date(2026, 8, 31)) is True       # 公告后
+
+
+def test_patch_shadowing_is_scoped_to_one_bond(tmp_path):
+    """遮蔽必须**逐债逐字段**算, 不能拿 A 债的权威 patch 去遮 B 债的解析 patch。
+
+    ``_drop_shadowed_patches`` 的权威字段集此前是在**整个传进来的列表**上算的。
+    ``list_patches(bond_code=...)`` 传单债列表所以投影路径 (``apply()``) 没事, 但
+    全库调用 (数据体检、存量回洗) 传的是所有债 —— 于是 A 债的一条 wind_asof patch
+    会遮蔽 B 债该字段的解析 patch, 而 B 债在那个字段上可能根本没有权威源。
+    实测差 2 条 (逐债累计 22724 vs 全库一次 22722): 今天很小, 但方向是"越修越看不见"。
+    """
+    from datetime import date
+
+    from convertible_bond.historical_terms import TermsPatch, TermsPatchStore
+
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        # A 债: conversion_price 有权威源
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 1, 1),
+                   fields={"conversion_price": 10.0}, source="wind_asof"),
+        TermsPatch(bond_code="A.SZ", effective_date=date(2026, 2, 1),
+                   fields={"conversion_price": 9.0}, source="cninfo"),
+        # B 债: 同一个字段**只有**解析源 —— 不该被 A 债连累
+        TermsPatch(bond_code="B.SZ", effective_date=date(2026, 2, 1),
+                   fields={"conversion_price": 8.0}, source="cninfo"),
+    ])
+
+    whole = store.list_patches()
+    b_rows = [p for p in whole if p.bond_code == "B.SZ"]
+    assert b_rows and "conversion_price" in (b_rows[0].fields or {}), (
+        "B 债的解析 patch 被 A 债的权威 patch 遮蔽了")
+
+    # A 债自己的解析 patch 照旧被遮蔽掉
+    a_parsed = [p for p in whole if p.bond_code == "A.SZ" and p.source == "cninfo"]
+    assert not a_parsed, "同一只债的遮蔽失效了"
+
+    # 全库一次调用与逐债累计必须给出同一个结果
+    per_bond = sum(len(store.list_patches(bond_code=c)) for c in ("A.SZ", "B.SZ"))
+    assert per_bond == len(whole)

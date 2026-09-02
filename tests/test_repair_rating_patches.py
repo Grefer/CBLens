@@ -109,3 +109,53 @@ def test_scan_sees_shadowed_patches(tmp_path):
     assert len(targets) == 1
     # 拿到的必须是**未被遮蔽**的原件: conversion_price 还在, key() 才对得上磁盘
     assert "conversion_price" in targets[0][0].fields
+
+
+def test_same_titled_announcements_do_not_share_one_pdf(tmp_path):
+    """同一只债的**同名**公告必须各自接回自己的 PDF。
+
+    定期跟踪评级报告每年一份, 标题里连年份都不带 —— 实测评级类事件 1298 条里
+    ``(代码, 标题)`` 只有 1197 个不同键、**77 组撞车** (123192.SZ 有 3 份同名)。
+    键撞车 + ``setdefault`` 会把整条评级链上的每条 patch 都接到**第一份** PDF 上,
+    重放出来是同一个 (错年份的) 评级, 而这个命令把重放结果**直接写回库**:
+    实测 1037 条评级 patch 里 **62 条 (6.0%)** 会接错。
+    """
+    from convertible_bond.cli.repair_rating_patches import _lookup_url, _url_index
+
+    events = tmp_path / "events.json"
+    title = "关于“皖天转债”定期跟踪评级结果的公告"
+    CBEventStore(events).add_many([
+        CBEvent(bond_code="113631.SH", event_date=date(2024, 6, 20),
+                event_type="rating_change", raw_title=title,
+                url="https://x/2024.pdf", source="cninfo"),
+        CBEvent(bond_code="113631.SH", event_date=date(2025, 6, 24),
+                event_type="rating_change", raw_title=title,
+                url="https://x/2025.pdf", source="cninfo"),
+    ])
+    exact, unique = _url_index(events)
+
+    def patch(day, event_date):
+        return TermsPatch(bond_code="113631.SH", effective_date=day,
+                          fields={"credit_rating": "AA"}, source="cninfo",
+                          raw_title=title, event_date=event_date)
+
+    assert _lookup_url(exact, unique, patch(date(2024, 6, 20), date(2024, 6, 20))) \
+        == "https://x/2024.pdf"
+    assert _lookup_url(exact, unique, patch(date(2025, 6, 24), date(2025, 6, 24))) \
+        == "https://x/2025.pdf"
+
+    # 标题撞车、又没有日期可消歧 → 必须查**不到**, 让它落进 no_url 原样保留。
+    # "取不到证据 ≠ 证据为否" —— 猜一个 PDF 会把正确的评级改错。
+    assert _lookup_url(exact, unique, patch(date(2025, 6, 24), None)) is None
+
+    # 标题唯一时, 没有 event_date 的老 patch 仍按标题接得回去
+    CBEventStore(events).add_many([
+        CBEvent(bond_code="113631.SH", event_date=date(2023, 3, 1),
+                event_type="rating_change", raw_title="独一无二的标题",
+                url="https://x/solo.pdf", source="cninfo"),
+    ])
+    exact2, unique2 = _url_index(events)
+    solo = TermsPatch(bond_code="113631.SH", effective_date=date(2023, 3, 1),
+                      fields={"credit_rating": "AA"}, source="cninfo",
+                      raw_title="独一无二的标题", event_date=None)
+    assert _lookup_url(exact2, unique2, solo) == "https://x/solo.pdf"
