@@ -23,7 +23,8 @@ from .pricer import (
     accrued_interest_amount,
     build_coupon_periods,
 )
-from .data_providers import DataProvider, WindDataProvider, auto_data_provider, finite_float
+from .data_providers import (
+    BondTerms, DataProvider, WindDataProvider, auto_data_provider, finite_float)
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
 from .cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
@@ -314,6 +315,117 @@ def _one_year_probability(intensity: float) -> float:
     return float(-np.expm1(-max(0.0, float(intensity))))
 
 
+def build_pricer_kwargs(
+    bond_code: str,
+    terms: BondTerms,
+    cf,
+    *,
+    S0: float,
+    valuation_date: date,
+) -> tuple[dict, dict]:
+    """条款 → ``UniversalCBPricer`` 构造参数. **定价页与回测页共用这一份**.
+
+    这段口径此前有两份实现: 这里一份, `backtest._build_backtest_pricer_kwargs`
+    一份。抄过去的那份漏了四处, 于是同一只债同一天两个页面给出不同的理论价:
+
+    - 已公告强赎 (`call_redemption_date`) 完全没处理 —— 到期日不截断、赎回价不替换、
+      触发式强赎 cap 不关。实测全库 541 只带这个字段。
+    - `put_trigger_ratio` 缺值时不显式关掉, 落到 pricer 默认 0.7, 等于给没有回售条款
+      的债凭空造一个回售权。实测全库 69 只是这一档 (银行/券商转债)。
+
+    返回 ``(kwargs, meta)``; ``meta`` 是调用方后续还要用的派生量
+    (`redemption_mode` / `contractual_maturity_date` / `down_reset_trigger_source`),
+    它们都是这段里算出来的, 让调用方自己再算一遍就是下一次分叉的起点。
+    """
+    issue_dt = terms.issue_date
+    conv_start_dt = issue_dt + timedelta(days=180) if issue_dt else None
+    coupon_rates = cf.coupon_rates if (cf and cf.coupon_rates) else terms.coupon_rates
+    maturity_dt = cf.maturity_date if (cf and cf.maturity_date) else terms.maturity_date
+    if maturity_dt is None:
+        raise ValueError(f"{bond_code} 数据源未返回到期日, 无法定价")
+    contractual_maturity_dt = maturity_dt
+    val_date = valuation_date
+    if cf and cf.redemption_price is not None:
+        redemption_price = float(cf.redemption_price)
+    elif terms.redemption_price is not None:
+        redemption_price = float(terms.redemption_price)
+    else:
+        redemption_price = DEFAULT_REDEMPTION_PRICE
+
+    if terms.conversion_price is None:
+        raise ValueError(f"{bond_code} 数据源未返回转股价 K, 无法定价")
+
+    redemption_mode = False
+    if terms.call_redemption_date is not None:
+        redemption_mode = True
+        maturity_dt = terms.call_redemption_date
+        if terms.call_redemption_price is not None:
+            redemption_price = float(terms.call_redemption_price)
+        else:
+            face_value_for_call = float(terms.face_value or DEFAULT_FACE_VALUE)
+            redemption_price = face_value_for_call + _accrued_interest(
+                face_value=face_value_for_call,
+                coupon_rates=coupon_rates,
+                issue_date=issue_dt,
+                maturity_date=contractual_maturity_dt,
+                on_date=terms.call_redemption_date,
+            )
+
+    pricer_kwargs = dict(
+        S0=S0,
+        K=float(terms.conversion_price),
+        face_value=float(terms.face_value or DEFAULT_FACE_VALUE),
+        current_date=val_date,
+        maturity_date=maturity_dt,
+        issue_date=issue_dt,
+        conversion_start_date=conv_start_dt,
+        redemption_price=float(redemption_price),
+        coupon_rates=coupon_rates,
+    )
+    if redemption_mode:
+        # 已公告强赎时, 终点已经是赎回/转股二择一, 不再套用普通触发式强赎 cap。
+        pricer_kwargs["call_no_redemption_until"] = maturity_dt
+    down_reset_trigger_source = "terms"
+    if terms.down_reset_trigger_pct is None:
+        down_reset_trigger_pct = DEFAULT_DOWN_RESET_TRIGGER_PCT
+        down_reset_trigger_source = "default"
+    else:
+        down_reset_trigger_pct = float(terms.down_reset_trigger_pct)
+    pricer_kwargs["down_reset_trigger_ratio"] = down_reset_trigger_pct / 100.0
+    if terms.call_trigger_pct is not None:
+        pricer_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
+    if terms.call_no_redemption_until is not None and not redemption_mode:
+        pricer_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
+    # 空值要**显式关掉回售**, 不能什么都不传 —— 不传就落到 pricer 的默认 0.7, 等于给
+    # 一只没有回售条款的债凭空造一个回售权。实测全库 69 只 / 主池 5 只是这一档
+    # (上银/财通/兴业/重银/常银, 都是银行券商转债, 本来就没有回售)。
+    pricer_kwargs["put_trigger_ratio"] = (
+        float(terms.put_trigger_pct) / 100.0
+        if terms.put_trigger_pct is not None else None)
+    if terms.putback_start_date is not None:
+        pricer_kwargs["putback_start_date"] = terms.putback_start_date
+    if terms.putback_end_date is not None:
+        pricer_kwargs["putback_end_date"] = terms.putback_end_date
+    if terms.putback_price is not None:
+        pricer_kwargs["putback_price"] = float(terms.putback_price)
+
+    if terms.put_obs_months is not None and issue_dt and (contractual_maturity_dt or maturity_dt):
+        put_maturity = contractual_maturity_dt or maturity_dt
+        total_months = (put_maturity - issue_dt).days / 30.4375
+        active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
+        pricer_kwargs["put_active_years"] = int(round(active_years))
+    return pricer_kwargs, {
+        "redemption_mode": redemption_mode,
+        "contractual_maturity_date": contractual_maturity_dt,
+        "maturity_date": maturity_dt,
+        "redemption_price": redemption_price,
+        "down_reset_trigger_source": down_reset_trigger_source,
+        "issue_date": issue_dt,
+        "conversion_start_date": conv_start_dt,
+        "coupon_rates": coupon_rates,
+    }
+
+
 def price_from_provider(provider: DataProvider, bond_code,
                         r=0.022, base_spread=0.03,
                         distress_k=0.05, p_down=0.15,
@@ -409,75 +521,13 @@ def price_from_provider(provider: DataProvider, bond_code,
         maturity_date=maturity_dt,
     )
 
-    if cf and cf.redemption_price is not None:
-        redemption_price = float(cf.redemption_price)
-    elif terms.redemption_price is not None:
-        redemption_price = float(terms.redemption_price)
-    else:
-        redemption_price = DEFAULT_REDEMPTION_PRICE
-
-    if terms.conversion_price is None:
-        raise ValueError(f"{bond_code} 数据源未返回转股价 K, 无法定价")
-
-    redemption_mode = False
-    if terms.call_redemption_date is not None:
-        redemption_mode = True
-        maturity_dt = terms.call_redemption_date
-        if terms.call_redemption_price is not None:
-            redemption_price = float(terms.call_redemption_price)
-        else:
-            face_value_for_call = float(terms.face_value or DEFAULT_FACE_VALUE)
-            redemption_price = face_value_for_call + _accrued_interest(
-                face_value=face_value_for_call,
-                coupon_rates=coupon_rates,
-                issue_date=issue_dt,
-                maturity_date=contractual_maturity_dt,
-                on_date=terms.call_redemption_date,
-            )
-
-    pricer_kwargs = dict(
-        S0=S0,
-        K=float(terms.conversion_price),
-        face_value=float(terms.face_value or DEFAULT_FACE_VALUE),
-        current_date=val_date,
-        maturity_date=maturity_dt,
-        issue_date=issue_dt,
-        conversion_start_date=conv_start_dt,
-        redemption_price=float(redemption_price),
-        coupon_rates=coupon_rates,
-    )
-    if redemption_mode:
-        # 已公告强赎时, 终点已经是赎回/转股二择一, 不再套用普通触发式强赎 cap。
-        pricer_kwargs["call_no_redemption_until"] = maturity_dt
-    down_reset_trigger_source = "terms"
-    if terms.down_reset_trigger_pct is None:
-        down_reset_trigger_pct = DEFAULT_DOWN_RESET_TRIGGER_PCT
-        down_reset_trigger_source = "default"
-    else:
-        down_reset_trigger_pct = float(terms.down_reset_trigger_pct)
-    pricer_kwargs["down_reset_trigger_ratio"] = down_reset_trigger_pct / 100.0
-    if terms.call_trigger_pct is not None:
-        pricer_kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
-    if terms.call_no_redemption_until is not None and not redemption_mode:
-        pricer_kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
-    # 空值要**显式关掉回售**, 不能什么都不传 —— 不传就落到 pricer 的默认 0.7, 等于给
-    # 一只没有回售条款的债凭空造一个回售权。实测全库 69 只 / 主池 5 只是这一档
-    # (上银/财通/兴业/重银/常银, 都是银行券商转债, 本来就没有回售)。
-    pricer_kwargs["put_trigger_ratio"] = (
-        float(terms.put_trigger_pct) / 100.0
-        if terms.put_trigger_pct is not None else None)
-    if terms.putback_start_date is not None:
-        pricer_kwargs["putback_start_date"] = terms.putback_start_date
-    if terms.putback_end_date is not None:
-        pricer_kwargs["putback_end_date"] = terms.putback_end_date
-    if terms.putback_price is not None:
-        pricer_kwargs["putback_price"] = float(terms.putback_price)
-
-    if terms.put_obs_months is not None and issue_dt and (contractual_maturity_dt or maturity_dt):
-        put_maturity = contractual_maturity_dt or maturity_dt
-        total_months = (put_maturity - issue_dt).days / 30.4375
-        active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
-        pricer_kwargs["put_active_years"] = int(round(active_years))
+    pricer_kwargs, _kw_meta = build_pricer_kwargs(
+        bond_code, terms, cf, S0=S0, valuation_date=val_date)
+    redemption_mode = _kw_meta["redemption_mode"]
+    contractual_maturity_dt = _kw_meta["contractual_maturity_date"]
+    maturity_dt = _kw_meta["maturity_date"]
+    redemption_price = _kw_meta["redemption_price"]
+    down_reset_trigger_source = _kw_meta["down_reset_trigger_source"]
     resolved = resolve_down_reset(
         bond_code,
         terms,

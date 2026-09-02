@@ -8,10 +8,14 @@ import logging
 import numpy as np
 from datetime import date, timedelta
 
-from .pricer import UniversalCBPricer, DEFAULT_REDEMPTION_PRICE, DEFAULT_FACE_VALUE
+from .pricer import UniversalCBPricer
 from .data_providers import DataProvider, WindDataProvider, BondTerms
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
-from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_RATIO
+from .historical_terms import (
+    HistoricalBondDataProvider, TermsPatchStore, project_terms_patches_path)
+from .cb_events import CBEventStore, project_events_path
+from .pricing_api import (
+    build_pricer_kwargs, _estimate_down_reset_floor, _rating_spread_floor)
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +37,23 @@ def backtest_theoretical_price(
     solve_iv=False,
     progress_cb=None,
     provider: DataProvider | None = None,
+    point_in_time: bool = True,
     **pricer_overrides,
 ):
     """
     对历史时间区间内每个采样日逐点计算理论价, 返回与转债实际收盘价的对比序列.
 
-    条款按采样日 ``valuation_date`` 逐点从 provider 读取; 若 provider 包装了
-    HistoricalBondDataProvider, 可复用策略回测的历史快照/patch/公告事件口径。
+    条款按采样日 ``valuation_date`` 逐点从 provider 读取, 并**默认**在外面包一层
+    HistoricalBondDataProvider (patch + 公告事件投影), 与策略回测同口径。传进来的
+    provider 若本身就是那一层则原样使用。定价口径 (强赎截断 / 回售关闭 / 评级利差
+    下限 / 下修价下限) 与批量页共用 `pricing_api.build_pricer_kwargs`。
     正股 S0 与滚动 σ 取历史值。
 
     参数:
         provider: DataProvider 实例 (Wind/akshare/CSV); 默认 WindDataProvider
+        point_in_time: 是否自动叠加历史条款投影层。**只在你确知传进来的 provider
+            已经是逐日口径、或刻意要看"用今天条款回看历史"时才关掉** —— 关掉等于
+            让每个历史采样日都拿到今天的转股价。
         freq: "D"/"W"/"M" 采样频率
         solve_iv: True 时逐点反解 IV (耗时 ~5x)
         progress_cb: callable(i, total) 用于 UI 进度反馈
@@ -53,6 +63,20 @@ def backtest_theoretical_price(
     """
     if provider is None:
         provider = WindDataProvider()
+    if point_in_time and not isinstance(provider, HistoricalBondDataProvider):
+        # 「逐点读取条款」此前只是**注释里的承诺**: GUI 回测页传进来的是
+        # `CachedBondDataProvider`, 它的 `get_bond_terms(code, val_date)` 根本不看
+        # val_date, 一律回今天那一行 —— 于是每个历史采样日都用**下修之后**的 K 定价,
+        # 而这一页的全部用途就是看模型偏差随时间怎么走。实测 12 个月度采样点上,
+        # 全库 322/1059 只 (30.4%) 至少有一个采样日 K 用错, 采样点口径 21.4% 用的是
+        # 未来的 K, 最大偏离 115% (128119.SZ: 4.20 vs 当日 1.95)。
+        # 策略页早就在外面包了这一层 (strategy_run.py), 单债页漏了。
+        provider = HistoricalBondDataProvider(
+            provider,
+            history_store=None,
+            patch_store=TermsPatchStore(project_terms_patches_path()),
+            event_store=CBEventStore(project_events_path()),
+        )
 
     # 1) 拉基础条款以确定正股代码; 具体定价条款在每个采样日逐点读取, 避免
     # 把 end_date 或当前条款带回历史日期。
@@ -114,6 +138,7 @@ def backtest_theoretical_price(
                 bond_code,
                 terms,
                 cf,
+                val_date,
             )
         except ValueError as exc:
             # 单个采样日条款不全 (例如发行前历史日缺转股价/到期日) 仅跳过该点,
@@ -163,6 +188,13 @@ def backtest_theoretical_price(
             )
             if resolved_down_reset.block_until is not None:
                 point_kwargs["down_reset_block_until"] = resolved_down_reset.block_until
+            # 下修价下限: 与 `price_from_provider` 同口径 (近 20 交易日均价 vs 前收)。
+            # 估不出来时 pricer 走无下限分支, 下修价值偏高 —— 与批量页一致地静默回落,
+            # 但这里连"估不出来"都不该悄悄发生在**只有回测页缺这一步**的情况下。
+            if "down_reset_floor" not in pricer_overrides:
+                dr_floor = _estimate_down_reset_floor(provider, stock_code, val_date)
+                if dr_floor is not None:
+                    point_kwargs["down_reset_floor"] = dr_floor
             point_kwargs.update(pricer_overrides)
             down_intensity = resolve_down_reset_intensity(
                 p_down, resolved_down_reset,
@@ -181,22 +213,30 @@ def backtest_theoretical_price(
                     point_kwargs.setdefault(
                         "scheduled_reset_target_k", down_intensity.scheduled_reset_target_k)
 
+            # 评级信用利差下限: 陈旧/偏低的 base_spread 会系统性高估困境债的理论价,
+            # 批量页一直有这道闸而回测页没有 —— 实测全库 532/1059 只的评级下限高于
+            # 回测页默认的 0.03 (A- 是 0.08, 差 2.7 倍)。两页必须同口径, 否则
+            # "回测说模型准" 与 "批量页说模型贵" 可以同时成立而没人看得出为什么。
+            rating_floor = _rating_spread_floor(terms.credit_rating)
+            point_base_spread = float(base_spread)
+            if rating_floor is not None:
+                point_base_spread = max(point_base_spread, float(rating_floor))
             pricer = UniversalCBPricer(
                 S0=S0, current_date=val_date, **point_kwargs)  # type: ignore[arg-type]
-            theo = pricer.price(sigma=sigma, r=r, q=q, base_spread=base_spread,
+            theo = pricer.price(sigma=sigma, r=r, q=q, base_spread=point_base_spread,
                                 distress_k=distress_k, p_down=effective_p_down, M=M, N=N)
         except Exception as exc:
             logger.debug("回测采样日 %s 定价失败: %s", val_date, exc)
             continue
 
-        bond_floor = float(pricer.bond_floor_value(val_date, r + base_spread))
+        bond_floor = float(pricer.bond_floor_value(val_date, r + point_base_spread))
         parity = float(S0 * pricer.ratio)
 
         iv_val = float("nan")
         if solve_iv and market_px is not None and market_px > 0:
             try:
                 iv_val = float(pricer.solve_implied_vol(
-                    target_price=float(market_px), r=r, base_spread=base_spread,
+                    target_price=float(market_px), r=r, base_spread=point_base_spread,
                     p_down=effective_p_down, distress_k=distress_k,
                     M=iv_M, N=iv_N, q=q))
             except Exception as exc:
@@ -243,55 +283,22 @@ def _build_backtest_pricer_kwargs(
     bond_code: str,
     terms: BondTerms,
     cf,
+    val_date: date,
 ) -> tuple[dict, date | None, date]:
-    """按估值日条款构建 UniversalCBPricer 参数."""
-    issue_dt = terms.issue_date
-    coupon_rates = (cf.coupon_rates if cf and cf.coupon_rates else terms.coupon_rates)
-    maturity_dt = (cf.maturity_date if cf and cf.maturity_date else terms.maturity_date)
-    if cf and cf.redemption_price is not None:
-        redemption_price = float(cf.redemption_price)
-    elif terms.redemption_price is not None:
-        redemption_price = float(terms.redemption_price)
-    else:
-        redemption_price = DEFAULT_REDEMPTION_PRICE
+    """按估值日条款构建 UniversalCBPricer 参数.
 
-    if terms.conversion_price is None:
-        raise ValueError(f"{bond_code} 数据源未返回转股价 K")
-    if maturity_dt is None:
-        raise ValueError(f"{bond_code} 数据源未返回到期日 maturity_date")
-
-    conv_start_dt = issue_dt + timedelta(days=180) if issue_dt else None
-    kwargs = dict(
-        K=float(terms.conversion_price),
-        face_value=float(terms.face_value or DEFAULT_FACE_VALUE),
-        maturity_date=maturity_dt,
-        issue_date=issue_dt,
-        conversion_start_date=conv_start_dt,
-        redemption_price=redemption_price,
-        coupon_rates=coupon_rates,
-    )
-    kwargs["down_reset_trigger_ratio"] = (
-        float(terms.down_reset_trigger_pct) / 100.0
-        if terms.down_reset_trigger_pct is not None
-        else DEFAULT_DOWN_RESET_TRIGGER_RATIO
-    )
-    if terms.call_trigger_pct is not None:
-        kwargs["call_trigger_ratio"] = float(terms.call_trigger_pct) / 100.0
-    if terms.call_no_redemption_until is not None:
-        kwargs["call_no_redemption_until"] = terms.call_no_redemption_until
-    if terms.put_trigger_pct is not None:
-        kwargs["put_trigger_ratio"] = float(terms.put_trigger_pct) / 100.0
-    if terms.putback_start_date is not None:
-        kwargs["putback_start_date"] = terms.putback_start_date
-    if terms.putback_end_date is not None:
-        kwargs["putback_end_date"] = terms.putback_end_date
-    if terms.putback_price is not None:
-        kwargs["putback_price"] = float(terms.putback_price)
-    if terms.put_obs_months is not None and issue_dt and maturity_dt:
-        total_months = (maturity_dt - issue_dt).days / 30.4375
-        active_years = max(0, (total_months - float(terms.put_obs_months)) / 12)
-        kwargs["put_active_years"] = int(round(active_years))
-    return kwargs, issue_dt, maturity_dt
+    **口径由 `pricing_api.build_pricer_kwargs` 说了算, 这里不再自己写一份。**
+    此前这个函数是那段的手抄副本, 抄漏了两处, 于是同一只债同一天回测页与批量页
+    给出不同的理论价: 已公告强赎完全没处理 (全库 541 只带 `call_redemption_date`),
+    以及 `put_trigger_ratio` 缺值不显式关掉 → 给 69 只本来没有回售条款的债凭空造
+    一个回售权。
+    """
+    kwargs, meta = build_pricer_kwargs(
+        bond_code, terms, cf, S0=0.0, valuation_date=val_date)
+    # S0 / current_date 由调用方逐采样日填 (每个点的股价和日期都不同)
+    kwargs.pop("S0", None)
+    kwargs.pop("current_date", None)
+    return kwargs, meta["issue_date"], meta["maturity_date"]
 
 
 def _terms_source_diagnostic(provider: DataProvider, bond_code: str, valuation_date: date) -> dict:

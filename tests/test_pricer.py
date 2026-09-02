@@ -1142,6 +1142,10 @@ class TestBacktest:
         bt.backtest_theoretical_price(
             "123001.SZ", start_date=start, end_date=end,
             freq="M", p_down=0.15, M=80, N=200, provider=provider,
+            # 关掉历史条款投影: 这条测的是"字段有没有传到 pricer"这段管道, 而投影层
+            # 会把无公告支撑的状态字段当未来信息剥掉 —— fixture 正是直接往 terms 上
+            # 塞的。默认开着这一层由 test_backtest_wraps_the_provider_… 单独守。
+            point_in_time=False,
         )
 
         assert seen_p_down
@@ -1171,6 +1175,10 @@ class TestBacktest:
         bt.backtest_theoretical_price(
             "123001.SZ", start_date=start, end_date=end,
             freq="M", p_down=0.15, M=80, N=200, provider=provider,
+            # 关掉历史条款投影: 这条测的是"字段有没有传到 pricer"这段管道, 而投影层
+            # 会把无公告支撑的状态字段当未来信息剥掉 —— fixture 正是直接往 terms 上
+            # 塞的。默认开着这一层由 test_backtest_wraps_the_provider_… 单独守。
+            point_in_time=False,
         )
 
         assert seen_until
@@ -2347,15 +2355,30 @@ class TestPutbackClauseAbsence:
         assert explicit == pytest.approx(with_put)
 
     def test_pricing_api_passes_none_when_the_bond_has_no_put_clause(self):
-        """空值要**显式关掉**, 不能什么都不传 —— 不传就落到默认 0.7。"""
-        import inspect
+        """空值要**显式关掉**, 不能什么都不传 —— 不传就落到默认 0.7。
 
-        from convertible_bond import pricing_api
+        原来这条扫的是 `price_from_provider` 的**源码文本**, 于是这段口径抽成
+        `build_pricer_kwargs` 共用之后它就红了 —— 而口径本身一个字没变。
+        改成直接问构建器: 键必须在, 值必须是 None。
+        """
+        from convertible_bond.data_providers import BondTerms
+        from convertible_bond.pricing_api import build_pricer_kwargs
 
-        src = inspect.getsource(pricing_api.price_from_provider)
-        assert 'pricer_kwargs["put_trigger_ratio"] = (' in src, "没有显式设置"
-        assert "if terms.put_trigger_pct is not None else None" in src, (
-            "空值没有落到 None")
+        base = dict(
+            underlying_code="300953.SZ", conversion_price=10.0,
+            issue_date=date(2023, 1, 1), maturity_date=date(2029, 1, 1),
+            face_value=100.0,
+        )
+        no_put, _ = build_pricer_kwargs(
+            "128000.SZ", BondTerms(put_trigger_pct=None, **base), None,
+            S0=10.0, valuation_date=date(2026, 1, 1))
+        assert "put_trigger_ratio" in no_put, "键必须在 —— 不传就落到 pricer 默认 0.7"
+        assert no_put["put_trigger_ratio"] is None
+
+        with_put, _ = build_pricer_kwargs(
+            "128001.SZ", BondTerms(put_trigger_pct=70.0, **base), None,
+            S0=10.0, valuation_date=date(2026, 1, 1))
+        assert with_put["put_trigger_ratio"] == pytest.approx(0.70)
 
     def test_constructor_kwargs_round_trip_keeps_the_absence(self):
         """往返克隆不能把"没有回售"变回"默认 0.7"。"""
@@ -2799,3 +2822,141 @@ def test_vega_is_stable_across_the_time_grid():
     by_m = [p.price(M=M, N=2000, return_greeks=True, **args)["vega"]
             for M in (500, 1000, 2000)]
     assert (max(by_m) - min(by_m)) / max(by_m) < 0.05, f"vega 随 M 漂: {by_m}"
+
+
+class TestBacktestSharesTheProductionCaliber:
+    """单债回测页与批量页必须是同一套口径 —— 曾经是两份手抄的实现.
+
+    `backtest._build_backtest_pricer_kwargs` 此前逐行抄自 `price_from_provider`,
+    抄漏了四处, 于是同一只债同一天两个页面给出不同的理论价, 而页面上没有任何
+    线索说得出为什么。这四条各守一处。
+    """
+
+    @staticmethod
+    def _provider(terms, start, end):
+        """用现成的 FakeProvider 铺一段工作日行情."""
+        bond_close, stock_close = [], []
+        d = start
+        while d <= end:
+            if d.weekday() < 5:
+                bond_close.append((d, 110.0))
+                stock_close.append((d, 9.0 + (d.toordinal() % 5) * 0.1))
+            d += timedelta(days=1)
+        return FakeProvider("123001.SZ", terms.underlying_code, terms,
+                            bond_close, stock_close)
+
+    @staticmethod
+    def _terms(**over):
+        from convertible_bond.data_providers import BondTerms
+        base = dict(
+            underlying_code="300953.SZ", conversion_price=10.0,
+            issue_date=date(2023, 1, 1), maturity_date=date(2029, 1, 1),
+            face_value=100.0, put_trigger_pct=70.0,
+        )
+        base.update(over)
+        return BondTerms(**base)
+
+    def test_backtest_and_pricing_api_build_identical_pricer_kwargs(self):
+        """两页共用同一个构建器 —— 这是"不再分叉"的唯一保证。"""
+        from convertible_bond.backtest import _build_backtest_pricer_kwargs
+        from convertible_bond.pricing_api import build_pricer_kwargs
+
+        val = date(2026, 1, 1)
+        terms = self._terms(call_redemption_date=date(2026, 3, 1),
+                            call_redemption_price=103.5)
+        bt_kwargs, _, _ = _build_backtest_pricer_kwargs("128000.SZ", terms, None, val)
+        api_kwargs, _ = build_pricer_kwargs(
+            "128000.SZ", terms, None, S0=9.0, valuation_date=val)
+        # 回测页逐点自己填 S0 / current_date, 其余必须一字不差
+        api_kwargs.pop("S0"); api_kwargs.pop("current_date")
+        assert bt_kwargs == api_kwargs
+
+    def test_announced_forced_redemption_truncates_maturity_and_closes_the_call(self):
+        """已公告强赎: 到期日截断到赎回日, 赎回价换成公告价, 触发式 cap 关掉。
+
+        回测页此前完全没有这个分支 —— 一只已公告强赎的债照常按剩余全部期权寿命
+        和永远收不到的票息定价。实测全库 541 只带 `call_redemption_date`。
+        """
+        from convertible_bond.backtest import _build_backtest_pricer_kwargs
+
+        kwargs, _, maturity = _build_backtest_pricer_kwargs(
+            "128000.SZ",
+            self._terms(call_redemption_date=date(2026, 3, 1),
+                        call_redemption_price=103.5),
+            None, date(2026, 1, 1))
+        assert kwargs["maturity_date"] == date(2026, 3, 1)
+        assert maturity == date(2026, 3, 1)
+        assert kwargs["redemption_price"] == pytest.approx(103.5)
+        assert kwargs["call_no_redemption_until"] == date(2026, 3, 1)
+
+    def test_no_put_clause_is_switched_off_not_left_to_the_default(self):
+        """没有回售条款时必须显式 None —— 缺这一步等于凭空造一个回售权 (全库 69 只)。"""
+        from convertible_bond.backtest import _build_backtest_pricer_kwargs
+
+        kwargs, _, _ = _build_backtest_pricer_kwargs(
+            "128000.SZ", self._terms(put_trigger_pct=None), None, date(2026, 1, 1))
+        assert "put_trigger_ratio" in kwargs
+        assert kwargs["put_trigger_ratio"] is None
+
+    def test_rating_spread_floor_applies_to_the_backtest_too(self, monkeypatch):
+        """评级利差下限: 回测页此前不套, 实测全库 532/1059 只的下限高于默认 0.03。"""
+        import convertible_bond.backtest as bt
+
+        seen = []
+
+        class SpyPricer:
+            def __init__(self, **kwargs):
+                self.ratio = 100.0 / float(kwargs["K"])
+
+            def price(self, **kwargs):
+                seen.append(kwargs["base_spread"])
+                return 100.0
+
+            def bond_floor_value(self, *_a, **_k):
+                return 95.0
+
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+        provider = self._provider(self._terms(credit_rating="A-"),
+                                  date(2025, 6, 2), date(2025, 9, 30))
+        bt.backtest_theoretical_price(
+            "123001.SZ", start_date=date(2025, 6, 2), end_date=date(2025, 9, 30),
+            freq="M", provider=provider, base_spread=0.03,
+            point_in_time=False, M=60, N=120)
+        assert seen, "一个采样点都没定价, 这条守护测不到东西"
+        # A- 的下限 0.08 必须压过传入的 0.03
+        assert all(s == pytest.approx(0.08) for s in seen), seen
+
+    def test_backtest_wraps_the_provider_in_the_point_in_time_layer(self, monkeypatch):
+        """默认必须叠历史条款投影层 —— 否则每个历史采样日都用今天的转股价。
+
+        实测 12 个月度采样点上, 全库 322/1059 只 (30.4%) 至少有一个采样日 K 用错,
+        采样点口径 21.4%, 最大偏离 115%。而 GUI 回测页传进来的
+        `CachedBondDataProvider` 的 `get_bond_terms(code, val_date)` 根本不看 val_date。
+        """
+        import convertible_bond.backtest as bt
+
+        built = []
+
+        class SpyLayer:
+            def __init__(self, inner, **kwargs):
+                built.append(inner)
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        monkeypatch.setattr(bt, "HistoricalBondDataProvider", SpyLayer)
+        monkeypatch.setattr(bt, "TermsPatchStore", lambda *a, **k: None)
+        monkeypatch.setattr(bt, "CBEventStore", lambda *a, **k: None)
+
+        provider = self._provider(self._terms(),
+                                  date(2025, 6, 2), date(2025, 9, 30))
+        kw = dict(bond_code="123001.SZ", start_date=date(2025, 6, 2),
+                  end_date=date(2025, 9, 30), freq="M", provider=provider,
+                  M=60, N=120)
+        bt.backtest_theoretical_price(**kw)
+        assert built == [provider], "默认没有包历史条款投影层"
+
+        built.clear()
+        bt.backtest_theoretical_price(**kw, point_in_time=False)
+        assert built == [], "point_in_time=False 时不该包"
