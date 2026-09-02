@@ -333,6 +333,43 @@ class TestRegression:
 
         assert with_floor <= no_floor
 
+    def test_down_reset_value_maps_moneyness_and_takes_conversion_floor(self):
+        """逐点钉死 `_down_reset_value` 三个分支的算术, 而不只是一个单调不等式.
+
+        既有的 `test_down_reset_floor_caps_reset_value` 只断言 `有下限 <= 无下限`,
+        任何**保序**的改写 (premium 挪个位置、K/target_k 写反、face 换成 K) 都能
+        让它照常通过 —— 而这段映射是三 regime 下修建模的全部算术。
+
+        ``V`` 刻意取非单调 (先涨后跌): 真实网格上 V 恒 ≥ 转股价值, `np.maximum`
+        的转股价值那一侧永远赢不了, 于是那一半算术不可观测。这里两侧都要看得见。
+        """
+        base = dict(
+            S0=20.0, K=20.0,
+            current_date=date(2026, 1, 1),
+            maturity_date=date(2028, 1, 1),
+            issue_date=date(2023, 1, 1),
+            conversion_start_date=date(2023, 7, 1),
+            down_reset_premium=1.05,
+        )
+        S = np.array([0.0, 10.0, 20.0, 30.0, 40.0])
+        V = np.array([0.0, 100.0, 150.0, 60.0, 20.0])
+
+        # ① 公告给定新 K: 逐点映射到 moneyness 相同的旧网格 (equiv = K·S/target_k
+        #    = 0.8·S), 以 face·S/target_k = 4·S 作转股价值下限。两侧交替胜出。
+        got = UniversalCBPricer(**base)._down_reset_value(S, V, target_k=25.0)
+        assert got == pytest.approx([0.0, 80.0, 130.0, 120.0, 160.0])
+
+        # ② 有下限: target_k = max(S/1.05, 15) → 低股价段被 15 钉住 (equiv 随 S 变),
+        #    高股价段 equiv 恒为 K·premium = 21 —— 那个常数就是 premium 的观测点。
+        got = UniversalCBPricer(**base, down_reset_floor=15.0)._down_reset_value(S, V)
+        assert got == pytest.approx([0.0, 116.666667, 141.0, 141.0, 141.0])
+
+        # ③ 无下限: 退化成标量 max(interp(K·premium), face·premium)。两侧各取一次 ——
+        #    只测延续价值胜出那一档时, 「face·premium」整个可以删掉而测试照常绿。
+        assert UniversalCBPricer(**base)._down_reset_value(S, V) == pytest.approx(141.0)
+        V_low = np.array([0.0, 40.0, 60.0, 70.0, 80.0])   # interp@21 = 61 < 105
+        assert UniversalCBPricer(**base)._down_reset_value(S, V_low) == pytest.approx(105.0)
+
     def test_explicit_putback_window_sets_price_floor(self):
         """已公告回售申报期内, 回售价应成为全状态价格底."""
         pricer = UniversalCBPricer(

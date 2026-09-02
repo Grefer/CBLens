@@ -691,7 +691,7 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
     assert row["undervaluation_rate"] == pytest.approx(0.294)
     assert "转股折价" in row["risk_tags"]
     assert "高HV" in row["risk_tags"]
-    assert row["confidence"] in {"中", "低"}
+    assert row["confidence"] == "中"
     assert row["model_signal_status"] == "不适合作为买入信号"
     assert row["sensitivity_status"] == "波动率敏感"
     # 「高HV」属模型适用性维度 —— 模型在这只债上不可靠, 但那是**永久属性**, 不是
@@ -699,6 +699,48 @@ def test_annotate_batch_result_adds_review_metrics_and_tags():
     # 需复核只留数据质量 + 可交易性 (这一行现在不能用, 得先去拉数据/确认能不能交易)。
     assert row["review_bucket"] == "模型存疑"
     assert row["review_notes"]
+
+
+@pytest.mark.parametrize("sigma, confidence", [
+    # 门是严格 `>`: σ 恰为 0.80 归「较高HV」(扣 6), 还够不着高 HV 那条线。
+    (0.80, "高"),
+    # 高 HV 惩罚 = min(28, 10 + (σ−0.80)·35), 而 高/中 的分界是扣满 22 分。
+    # 解出来 σ* = 0.80 + 22/35 = 1.142857 —— 把它夹在中间, 斜率与截距各自可观测。
+    (1.14, "高"),
+    (1.15, "中"),
+    # 上限**存在**的唯一观测点: 没有它 σ=2.0 要扣 52 分 → 落到「低」。
+    # 但上限的**具体数值**在这个接口上观测不到 —— 输出只有 高/中/低 三档,
+    # 而 100−28=72 与 100−40=60 同属「中」。要钉住 28 就得再叠一个别处的扣分项
+    # 把分数推到 55 那条线附近, 那会让这条守护跟着那个无关的惩罚一起红。
+    (2.00, "中"),
+])
+def test_high_hv_confidence_penalty_slope_offset_and_cap(sigma, confidence):
+    """钉住高 HV 惩罚的斜率/截距/上限, 而不是"落在某个集合里".
+
+    `confidence` 只导出 高/中/低 三档, 所以要让这条公式可观测, 行本身必须**干净**
+    (无其他扣分项) —— 否则别处的惩罚会把分数推过界, 测的就不是这条公式了。
+    ``σ=0.55`` 那一档 (下面的断言) 就是这个前提的看门人。
+    """
+    row = annotate_batch_result({
+        "bond_code": "128000.SZ", "status": "ok",
+        "S0": 10.0, "K": 10.0, "sigma": sigma,
+        "theoretical_price": 110.0, "market_price": 112.0, "deviation": 0.0182,
+        "credit_rating": "AAA", "outstanding_balance": 20.0, "T": 3.0,
+    })
+    assert row["confidence"] == confidence
+    assert ("高HV" in row["risk_tags"]) is (sigma > 0.80)
+
+
+def test_high_hv_penalty_fixture_is_otherwise_unpenalised():
+    """看门人: 上面那个 fixture 除高 HV 外不许有任何扣分项."""
+    row = annotate_batch_result({
+        "bond_code": "128000.SZ", "status": "ok",
+        "S0": 10.0, "K": 10.0, "sigma": 0.55,
+        "theoretical_price": 110.0, "market_price": 112.0, "deviation": 0.0182,
+        "credit_rating": "AAA", "outstanding_balance": 20.0, "T": 3.0,
+    })
+    assert row["risk_tags"] == []
+    assert row["confidence"] == "高"
 
 
 def test_annotate_batch_result_flags_underlying_risk_and_down_uplift():

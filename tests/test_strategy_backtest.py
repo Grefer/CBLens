@@ -2443,6 +2443,14 @@ def test_eligible_codes_excludes_bond_issued_but_not_yet_listed():
         "123284.SZ": BondTerms(issue_date=date(2026, 7, 24), listing_date=None, **base),
         # 缺上市日 + 起息已久 (超过 UNLISTED_MAX_DAYS) → 视为数据缺口而非未挂牌, 保留
         "123285.SZ": BondTerms(issue_date=date(2024, 1, 10), listing_date=None, **base),
+        # ↓ 两条**边界**行: 上面四只的日期全是离边界好几天的, 于是两个比较符
+        #   (`listed_dt > on_date` / `maturity_dt <= on_date`) 各自都能被松紧一格
+        #   而测试照常绿。上市当天买得到, 到期当天买不到 —— 各给一个等号用例。
+        "123286.SZ": BondTerms(issue_date=date(2026, 7, 30),
+                               listing_date=date(2026, 8, 20), **base),
+        "123287.SZ": BondTerms(issue_date=date(2020, 8, 20),
+                               listing_date=date(2020, 9, 10),
+                               **{**base, "maturity_date": date(2026, 8, 20)}),
     }
     provider = _Provider(terms)
 
@@ -2455,6 +2463,11 @@ def test_eligible_codes_excludes_bond_issued_but_not_yet_listed():
     assert "123284.SZ" not in eligible
     assert ("123284.SZ", "已发行未上市") in excluded
     assert "123285.SZ" in eligible
+    # 上市日 == 估值日: 当天就能买, 必须进池
+    assert "123286.SZ" in eligible
+    # 到期日 == 估值日: 当天已经不是可交易标的
+    assert "123287.SZ" not in eligible
+    assert ("123287.SZ", "已到期 (到期日 2026-08-20)") in excluded
 
 
 def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
