@@ -2750,6 +2750,38 @@ def test_cash_yield_does_not_accrue_past_the_period_end():
         f"现金计息越过了期末: {curve[-1]['equity']} vs {expected}")
 
 
+def test_the_main_curve_subtracts_the_rebalance_cost():
+    """**主**净值曲线的成本方向必须钉住。
+
+    上一版只盖了两条早返回分支 (空仓 / 无价格图), 而真正跑绝大多数期的是循环里那一行
+    ``start_equity * (1 + gross_return + _cash_accrual(...) - cost)``。实测把那个减号翻成
+    加号, **1081 条测试全绿** —— 我自己写的守护, 犯的正是这一路反复挑出来的那个毛病:
+    测了 helper 没测接线。
+
+    这条直接比对有成本与无成本两条曲线, 差额必须**恰好是** ``start_equity * cost``,
+    方向为负。
+    """
+    from datetime import date
+
+    from convertible_bond.strategy_backtest import _portfolio_mark_to_market_curve
+
+    start, end = date(2025, 1, 31), date(2025, 2, 28)
+    positions = [{"bond_code": "A.SH", "entry_date": start, "exit_date": end,
+                  "start_price": 100.0, "end_price": 110.0, "exit_reason": "rebalance"}]
+    kw = dict(start_equity=1.0, period_end=end, intended_count=1,
+              period_start=start, cash_weight=0.0, cash_yield_rate=0.0)
+
+    free = _portfolio_mark_to_market_curve(_bare_provider(), positions, cost=0.0, **kw)
+    charged = _portfolio_mark_to_market_curve(
+        _bare_provider(), positions, cost=0.002, **kw)
+
+    assert len(free) == len(charged) >= 2, "前提不成立: 曲线太短, 走的是早返回分支"
+    for a, b in zip(free, charged):
+        assert b["equity"] == pytest.approx(a["equity"] - 1.0 * 0.002, abs=1e-12), (
+            f"{a['date']}: 成本方向或大小不对 ({a['equity']} → {b['equity']})")
+    assert charged[-1]["equity"] < free[-1]["equity"]
+
+
 def test_empty_period_still_charges_the_rebalance_cost():
     """``intended_count <= 0`` 那条早返回不能漏 ``- cost``。
 
@@ -3008,6 +3040,18 @@ def test_equity_curve_points_never_predate_their_own_period():
     assert curve, "曲线不该是空的"
     assert all(p["date"] >= period_start for p in curve), (
         f"有点落在本期起点之前: {[p['date'] for p in curve if p['date'] < period_start]}")
+
+    # **边界两侧都要钉**。上一版断言是单侧的 (只查"不早于"), 而 fixture 又不产生
+    # ``period_start`` **当天**的点 —— 于是把判据从 ``< period_start`` 收紧成
+    # ``<= period_start`` 也看不见, 而那会把本期起点那一天的估值一起丢掉。
+    on_start = [{"bond_code": "B.SH", "entry_date": period_start,
+                 "exit_date": period_end, "start_price": 100.0, "end_price": 110.0,
+                 "exit_reason": "rebalance"}]
+    curve2 = _portfolio_mark_to_market_curve(
+        _bare_provider(), on_start, start_equity=1.0, period_end=period_end,
+        cost=0.0, intended_count=1, period_start=period_start)
+    assert any(p["date"] == period_start for p in curve2), (
+        "起点当天的点被一起裁掉了 —— 判据从 < 收紧成了 <=")
 
 
 def test_excess_vs_index_requires_a_matching_window():

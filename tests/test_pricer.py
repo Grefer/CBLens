@@ -2394,3 +2394,42 @@ class TestPutbackBoundaryIsMonotone:
         # 通用分支不许再按 S 掩码
         assert "mask_put" not in src, "通用回售分支仍在按当前 S 掩码"
         assert src.count("V = np.maximum(V, put_price)") == 1
+
+
+def test_theta_across_a_coupon_is_the_ex_coupon_drop():
+    """票息落在截片窗口内时 Θ 是**除息下跌**, 不是时间价值衰减 —— 这是脏价的真实行为。
+
+    理论价含应计, 债券在除息日就是会掉一个票息。这不是 2026-08-31 那次截片改写引入的:
+    旧的"重解明天"写法给同一个结果 (票息 1.0 元时 旧法 −0.996 / 新法 −0.907, 而无票息
+    的常态是 +0.005)。
+
+    钉住它是为了**防止有人把它"修"掉** —— 剔掉票息会让 Θ 变成净价 Θ, 与 ``price`` 的
+    脏价口径分叉, 那是比现状更糟的不一致。
+    同时钉住已知的局限: 归一化按时间比例摊薄了这个离散跳变 (截片落在 1.09 天时 −1.0
+    的跳被报成 −0.92), 所以这一档的 Θ 只说得清方向, 说不清速率。
+    """
+    issue = date(2023, 9, 3)
+
+    def _pricer(current):
+        return UniversalCBPricer(
+            S0=100.0, K=100.0, current_date=current,
+            maturity_date=date(2029, 9, 3), issue_date=issue,
+            coupon_rates=(0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+            redemption_price=108.0, call_notice_days=30)
+
+    args = dict(sigma=0.25, r=0.022, base_spread=0.03, distress_k=0.05,
+                p_down=0.0, M=300, N=2000, return_greeks=True)
+
+    on_coupon = _pricer(date(2026, 9, 2))          # 次日 09-03 付息 1.0 元
+    coupons = dict(on_coupon._coupon_payment_events)
+    nearest = min(coupons, key=abs)
+    assert nearest * 365 < 2.0, "前提不成立: 票息不在截片窗口内"
+    amount = coupons[nearest]
+    assert amount == pytest.approx(1.0)
+
+    theta_ex = on_coupon.price(**args)["theta"]
+    assert -amount * 1.2 < theta_ex < -amount * 0.7, (
+        f"Θ={theta_ex:.4f} 不像一个 {amount} 元的除息下跌")
+
+    quiet = _pricer(date(2026, 6, 2)).price(**args)["theta"]
+    assert 0.0 < quiet < 0.05, f"无票息的常态 Θ 应是小的正数, 实测 {quiet:.6f}"
