@@ -797,9 +797,14 @@ class TestGreeks:
             S0=97.66, K=104.85,
             current_date=date(2026, 8, 24),
             maturity_date=date(2031, 3, 1),
+            # **必须带 down_reset_floor**: 生产上 311/311 只都有它, 而 184 只的 floor
+            # 恰好等于 S0 (取数是 max(20日均价, 前一交易日收盘))。不给它就走无 floor
+            # 分支 —— 那是生产中不存在的形状, Γ 的守护会看不见真正的那个折点
+            # (见 test_frozen_down_reset_floor_puts_a_kink_right_at_s0)。
+            down_reset_floor=97.66,
         )
         result = pricer.price(sigma=0.65, r=0.015, q=0.002, base_spread=0.035,
-                              return_greeks=True)
+                              p_down=0.25, return_greeks=True)
         assert result["gamma"] > 0, f"Γ={result['gamma']:.8f} 不应退化为 0"
 
     def test_gamma_stable_across_grid_refinement(self):
@@ -808,10 +813,15 @@ class TestGreeks:
             S0=97.66, K=104.85,
             current_date=date(2026, 8, 24),
             maturity_date=date(2031, 3, 1),
+            # **必须带 down_reset_floor**: 生产上 311/311 只都有它, 而 184 只的 floor
+            # 恰好等于 S0 (取数是 max(20日均价, 前一交易日收盘))。不给它就走无 floor
+            # 分支 —— 那是生产中不存在的形状, Γ 的守护会看不见真正的那个折点
+            # (见 test_frozen_down_reset_floor_puts_a_kink_right_at_s0)。
+            down_reset_floor=97.66,
         )
         gammas = [
             pricer.price(sigma=0.65, r=0.015, q=0.002, base_spread=0.035,
-                         M=M, N=1000, return_greeks=True)["gamma"]
+                         p_down=0.25, M=M, N=1000, return_greeks=True)["gamma"]
             for M in (500, 1000, 2000)
         ]
         assert all(g > 0 for g in gammas), f"Γ 出现非正值: {gammas}"
@@ -2566,3 +2576,89 @@ class TestGridResolutionAtS0:
             "这只 fixture 上锁网格没有影响, 换一只")
         assert reported == pytest.approx(locked - base, abs=1e-12), (
             f"price() 报的 vega {reported:.5f} 不等于锁网格的 {locked - base:.5f}")
+
+
+def test_frozen_down_reset_floor_puts_a_kink_right_at_s0():
+    """**已知模型边界**: 冻结的下修价下限在 ≈1.02·S0 处留下一个折点, Γ(S0) 因此可能为负。
+
+    ``_estimate_down_reset_floor`` 返回 ``max(20日均价, 前一交易日收盘)`` —— 后者**就是
+    S0**, 所以 floor ≥ S0 恒成立, 实测主池 **184/311 只 floor 恰好等于 S0**。
+    而 ``_down_reset_value`` 的有 floor 分支是 ``target_k = max(S/premium, floor)``:
+    它在 ``S = premium·floor ≈ 1.02·S0`` 处从常数切成线性 —— 折点正好落在读取
+    价格/Δ/Γ 的那一点上。实测 **39/311 只**的 Γ(S0) < 0 (最深 127062.SZ −0.75)。
+
+    **根因是 floor 被冻结在今天**: 真实监管下限是"下修**当时**的 20 日均价", 它应当
+    随 S 走; 随 S 走时 ``target_k`` 对 S 线性, 折点消失。
+
+    **为什么不改**: 实测把 floor 改成按 S 比例走, 39 只负 Γ 全清零, 但价格中位
+    **+0.89 元**、均值 +1.91、最大 **+11.13 元**, 192/311 只动超过 0.5 元 —— 那是与
+    下修价值本身同量级的**模型口径变更**, 不是补丁 (作为对照: 2026-09-02 回售那次
+    口径变更全池最大只动 0.45 元)。而且"随 S 走"用哪个比例本身是个建模问题: 下跌行情里
+    20 日均价高于现价, ratio 应当 >1, 而今天 184 只的 ratio 恰好是 1.0 只因为它们的
+    最新收盘高于 20 日均价。
+
+    这条用例钉住**现状**与它的量级, 免得有人顺手"修"掉而没意识到那是口径变更。
+    """
+    import json
+    from pathlib import Path
+
+    from convertible_bond.cache import TermsBundle, project_bundle_path
+    from convertible_bond.market_time import market_today
+
+    cache = Path("data/batch_pricing_cache.json")
+    if not cache.exists():
+        pytest.skip("需要 batch_pricing_cache.json")
+    rows = {r["bond_code"]: r for r in json.loads(cache.read_text())["results"]}
+    bundle = TermsBundle(project_bundle_path())
+    today = market_today()
+
+    equal_floor = sum(
+        1 for r in rows.values()
+        if r.get("down_reset_floor") is not None and r.get("S0")
+        and abs(float(r["down_reset_floor"]) - float(r["S0"])) < 1e-9)
+    assert equal_floor > 100, (
+        f"只有 {equal_floor} 只 floor == S0 —— 取数口径变了, 这条记录要重新量")
+
+    # 折点位置: target_k 在 S = premium·floor 处从常数切成线性
+    code = "110100.SH"
+    row, terms = rows.get(code), bundle.get(code)
+    if not (row and terms and terms.maturity_date and terms.maturity_date > today):
+        pytest.skip(f"{code} 不在当前池里")
+    p = UniversalCBPricer(
+        S0=float(row["S0"]), K=float(terms.conversion_price), current_date=today,
+        maturity_date=terms.maturity_date,
+        issue_date=terms.issue_date or date(2023, 1, 1),
+        coupon_rates=terms.coupon_rates or (0.003, 0.005, 0.01, 0.015, 0.018, 0.02),
+        redemption_price=terms.redemption_price or 108.0, call_notice_days=30,
+        down_reset_floor=float(row["down_reset_floor"]),
+    )
+    kink = p.down_reset_premium * float(row["down_reset_floor"])
+    assert 0.99 < kink / p.S0 < 1.05, (
+        f"折点在 {kink / p.S0:.3f}·S0 —— 不再落在读数点上, 这条记录要重新量")
+
+
+def test_gamma_guards_use_a_realistic_down_reset_floor():
+    """Γ 的两条守护必须带 ``down_reset_floor`` —— 否则看不见生产上真正的那个形状。
+
+    它们构造 pricer 时既不给 floor 也不给 trigger_ratio, 又用 ``price()`` 的默认
+    ``p_down=0.1``, 于是走的是**无 floor** 分支 —— 而生产上 311/311 只都有 floor,
+    184 只的 floor 恰好等于 S0。守护跑在一个生产中不存在的形状上。
+    """
+    import inspect
+
+    src = inspect.getsource(UniversalCBPricer)      # 仅为确认字段存在
+    assert "down_reset_floor" in src
+
+    from tests import test_pricer as self_mod
+
+    for name in ("test_gamma_positive_under_coarse_grid",
+                 "test_gamma_stable_across_grid_refinement"):
+        fn = None
+        for attr in vars(self_mod).values():
+            if inspect.isclass(attr) and hasattr(attr, name):
+                fn = getattr(attr, name)
+                break
+        assert fn is not None, f"找不到 {name}"
+        body = inspect.getsource(fn)
+        assert "down_reset_floor" in body, (
+            f"{name} 没带 down_reset_floor —— 它测的是生产中不存在的形状")
