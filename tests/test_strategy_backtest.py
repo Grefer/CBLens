@@ -2769,3 +2769,110 @@ def test_empty_period_still_charges_the_rebalance_cost():
             cash_weight=1.0, cash_yield_rate=0.0)
         assert curve[-1]["equity"] == pytest.approx(0.998), (
             f"intended_count={intended} 时净值 {curve[-1]['equity']}, 成本没扣")
+
+
+def test_relative_deviation_gate_only_applies_to_a_market_wide_anchor():
+    """锚不是全市场中位时, ``max_relative_deviation`` 这条闸不适用。
+
+    ``relative_deviation`` 的定义是"比当期全市场中位贵多少"。而
+    ``median_deviation_of`` 在样本 < 30 时返回 None, ``annotate_batch_result`` 于是回落
+    ``anchor = 0.0``、把 ``relative_deviation`` 写成 ``deviation`` 本身并标
+    ``cross_section_origin = "absolute_fallback"``。继续套用上限, 判据就从**横截面**
+    悄悄变成**绝对**偏差阈值 —— 度量换了, 名字没换。
+
+    实测在池子 29 → 30 上有一道悬崖: 同一批"人人 deviation=+25%"的债 (没有谁相对市场
+    贵), 29 只时候选 0 且理由写「相对偏差 25.00% 不低于上限 20.00%」, 30 只时全部入选、
+    相对偏差 0.00%。回测里每期可定价池的大小是变的, 于是同一只债的去留取决于那一期
+    恰好有多少债定价成功。
+
+    处置与 ``_threshold_reason`` 的既有契约一致: 缺值放行。
+    """
+    from convertible_bond.strategy_backtest import (
+        PDEStrategyConfig,
+        _candidate_filter_reason,
+    )
+
+    cfg = PDEStrategyConfig()
+    assert cfg.max_relative_deviation == 0.20     # 前提
+
+    base = dict(bond_code="123001.SZ", status="ok", market_price=120.0,
+                theoretical_price=96.0, deviation=0.25, confidence="高", risk_tags=[],
+                sigma=0.25, parity=100.0, conversion_value=100.0, conversion_premium=0.2,
+                outstanding_balance=5.0, credit_rating="AA",
+                model_premium_to_parity=0.0, T=3.0, quality_score=6.0)
+
+    real = dict(base, relative_deviation=0.25, cross_section_origin="market_median")
+    assert "相对偏差" in (_candidate_filter_reason(real, cfg) or ""), "真锚下这条闸失效了"
+
+    fake = dict(base, relative_deviation=0.25, cross_section_origin="absolute_fallback")
+    assert _candidate_filter_reason(fake, cfg) is None, "假锚下仍按绝对阈值卡人"
+
+    # 缺 origin 键的存量行按**真锚**处理 (与 _anchor_is_market_wide 的既定口径一致)
+    legacy = dict(base, relative_deviation=0.25)
+    assert "相对偏差" in (_candidate_filter_reason(legacy, cfg) or "")
+
+    # 真锚且在上限内照常放行
+    assert _candidate_filter_reason(
+        dict(base, relative_deviation=0.15, cross_section_origin="market_median"),
+        cfg) is None
+
+
+def test_disk_cache_does_not_freeze_an_empty_series(tmp_path):
+    """取数失败返回的空序列不能被当权威缓存写盘。
+
+    彻底失败与"这个窗口本来就没有行情"在 provider 层长得一模一样 —— akshare 两个端点
+    都抛异常时返回的也是 ``[]``, 而东财集群按出口 IP 封禁是常态。把它写下去之后每次
+    复跑都零网络地喂回空序列, 那一次抖动波及的债从此**永久**掉出候选池, 而 ``_meta``
+    的身份只跟踪本地条款文件的 mtime, 什么都不会让它失效。
+    """
+    from datetime import date
+
+    from convertible_bond.backtest_disk_cache import DiskCacheProvider
+    from convertible_bond.data_providers.base import DataProvider
+
+    class _Inner(DataProvider):
+        name = "inner"
+
+        def __init__(self, healthy):
+            self.healthy = healthy
+            self.calls = 0
+
+        def get_stock_history(self, code, a, b):
+            self.calls += 1
+            return [(date(2024, 6, 3), 10.0)] if self.healthy else []
+
+        def get_bond_history(self, code, a, b):
+            self.calls += 1
+            return [(date(2024, 6, 3), 120.0)] if self.healthy else []
+
+        def get_bond_terms(self, code, d):
+            return None
+
+        def get_stock_close(self, *a, **k):
+            return None
+
+        def hist_vol(self, *a, **k):
+            return 0.2
+
+        def get_risk_free_rate(self, *a, **k):
+            return 0.022
+
+    start, end = date(2024, 1, 1), date(2024, 6, 28)
+
+    down = _Inner(healthy=False)
+    first = DiskCacheProvider(down, cache_dir=tmp_path)
+    assert first.get_stock_history("000001.SZ", start, end) == []
+    assert first.get_bond_history("113001.SH", start, end) == []
+    first.flush()
+
+    # 网络恢复后必须真的回源, 而不是从盘上读回那个空序列
+    up = _Inner(healthy=True)
+    second = DiskCacheProvider(up, cache_dir=tmp_path)
+    assert second.get_stock_history("000001.SZ", start, end) == [(date(2024, 6, 3), 10.0)]
+    assert second.get_bond_history("113001.SH", start, end) == [(date(2024, 6, 3), 120.0)]
+    assert up.calls == 2, "空序列被冻在盘上了"
+
+    # 非空序列照常缓存 (不能把缓存整个关掉)
+    third = DiskCacheProvider(_Inner(healthy=True), cache_dir=tmp_path)
+    second.flush()
+    assert third.get_stock_history("000001.SZ", start, end) == [(date(2024, 6, 3), 10.0)]

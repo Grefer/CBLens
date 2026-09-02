@@ -159,8 +159,15 @@ class DiskCacheProvider(DataProvider):
             return cached
         self.stats["bond_history_misses"] += 1
         history = self.inner.get_bond_history(bond_code, start, end)
-        self._bond_hist[key] = _history_to_json(history)
-        self._dirty.add("bond_hist")
+        # **空序列不落盘**。取数彻底失败与"这个窗口本来就没有行情"在 provider 层
+        # 长得一模一样 —— akshare 两个端点都抛异常时 ``get_stock_history`` 返回的也是
+        # ``[]`` (而东财集群按出口 IP 封禁是常态, 见 AGENTS)。把它当权威缓存写下去,
+        # 之后每一次复跑都零网络地喂回这个空序列: 那一次抖动波及的债从此**永久**掉出
+        # 候选池, 而 ``_meta`` 的身份只跟踪本地条款文件的 mtime, 什么都不会让它失效。
+        # 代价是真正空窗口的那一小撮每次都重取 —— 那是安全的方向, 而且量很小。
+        if history:
+            self._bond_hist[key] = _history_to_json(history)
+            self._dirty.add("bond_hist")
         return history
 
     def get_stock_history(self, stock_code: str, start: date, end: date):
@@ -173,8 +180,15 @@ class DiskCacheProvider(DataProvider):
             return cached
         self.stats["stock_history_misses"] += 1
         history = self.inner.get_stock_history(stock_code, start, end)
-        self._stock_hist[key] = _history_to_json(history)
-        self._dirty.add("stock_hist")
+        # **空序列不落盘**。取数彻底失败与"这个窗口本来就没有行情"在 provider 层
+        # 长得一模一样 —— akshare 两个端点都抛异常时 ``get_stock_history`` 返回的也是
+        # ``[]`` (而东财集群按出口 IP 封禁是常态, 见 AGENTS)。把它当权威缓存写下去,
+        # 之后每一次复跑都零网络地喂回这个空序列: 那一次抖动波及的债从此**永久**掉出
+        # 候选池, 而 ``_meta`` 的身份只跟踪本地条款文件的 mtime, 什么都不会让它失效。
+        # 代价是真正空窗口的那一小撮每次都重取 —— 那是安全的方向, 而且量很小。
+        if history:
+            self._stock_hist[key] = _history_to_json(history)
+            self._dirty.add("stock_hist")
         return history
 
     # ---------------- 透传 (不缓存, 但补齐 ABC 契约) ----------------

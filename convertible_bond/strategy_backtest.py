@@ -39,6 +39,7 @@ from .batch_pricing import (
     view_exclusion_reason,
     batch_pricing_exclusion_reason,
     filter_batch_results_by_view,
+    _anchor_is_market_wide,
     _rating_below,
     _underlying_at_limit_down,
     _underlying_has_st_risk,
@@ -1875,13 +1876,26 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
     if reason:
         return reason
     # ``max_inclusive``: 被取代的「模型高估离群」判据是 ``gap >= DEVIATION_ANOMALY_THRESHOLD``,
-    # 六条阈值里只有这一条是闭区间。边界不是零概率 —— 小批量标注时 median_deviation_of
-    # 样本不足会让锚回落 0.0, 此时 gap 恒等于 deviation 本身, 一个 0.20 就正好落在边界上。
-    reason = _threshold_reason(
-        "相对偏差", row.get("relative_deviation"),
-        max_value=cfg.max_relative_deviation, pct=True, max_inclusive=True)
-    if reason:
-        return reason
+    # 六条阈值里只有这一条是闭区间。
+    #
+    # **锚不是全市场中位时这条闸不适用**。``relative_deviation`` 的定义是"比当期全市场
+    # 中位贵多少", 而 ``median_deviation_of`` 在样本 < 30 时返回 None,
+    # ``annotate_batch_result`` 于是回落 ``anchor = 0.0`` 并把 ``relative_deviation``
+    # 写成 ``deviation`` 本身、``cross_section_origin`` 标成 ``absolute_fallback``。
+    # 此时继续套用这个上限, 判据就从**横截面**悄悄变成了**绝对**偏差阈值 —— 度量换了,
+    # 名字没换。实测在池子大小 29 → 30 上有一道悬崖: 同一批"人人 deviation=+25%"的债
+    # (即没有谁相对市场贵), 池子 29 只时候选 0、理由写「相对偏差 25.00% 不低于上限
+    # 20.00%」, 池子 30 只时全部入选、相对偏差 0.00%。回测里每期的可定价池大小是变的,
+    # 于是同一只债的去留取决于那一期恰好有多少债定价成功。
+    #
+    # 处置与 ``_threshold_reason`` 的既有契约一致: **缺值放行**。假锚下这个量根本不存在,
+    # 按"没有这个值"处理, 而不是拿一个换了含义的数去卡。
+    if _anchor_is_market_wide(row):
+        reason = _threshold_reason(
+            "相对偏差", row.get("relative_deviation"),
+            max_value=cfg.max_relative_deviation, pct=True, max_inclusive=True)
+        if reason:
+            return reason
     reason = _threshold_reason(
         "剩余年限", row.get("T"), min_value=cfg.min_years_to_maturity)
     if reason:
