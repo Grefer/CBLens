@@ -5,6 +5,7 @@
 """
 import bisect
 import logging
+from collections import Counter
 import numpy as np
 from datetime import date, timedelta
 
@@ -131,6 +132,7 @@ def backtest_theoretical_price(
     iv_N = max(500, N // 3)
 
     last_terms_value_error: ValueError | None = None
+    iv_failures: Counter = Counter()
     for i, (val_date, market_px) in enumerate(sample_points):
         try:
             terms = provider.get_bond_terms(bond_code, val_date)
@@ -234,13 +236,21 @@ def backtest_theoretical_price(
 
         iv_val = float("nan")
         if solve_iv and market_px is not None and market_px > 0:
+            # 反解失败要**记账**: 落在模型可解带之外的天数被丢掉是**单向**的 ——
+            # 市价高于 σ=200% 那一端 (`above_ceiling`) 恰恰是"贵"的那些天, 全丢掉之后
+            # 剩下的均值只代表便宜的那一半。实测 8 天里 4 天出带, 界面照常报
+            # 「IV-HV +25.16pp」而不说少了一半样本。
+            bracket: dict = {}
             try:
                 iv_val = float(pricer.solve_implied_vol(
                     target_price=float(market_px), r=r, base_spread=point_base_spread,
                     p_down=effective_p_down, distress_k=distress_k,
-                    M=iv_M, N=iv_N, q=q))
+                    M=iv_M, N=iv_N, q=q, bracket_out=bracket))
             except Exception as exc:
                 logger.debug("回测采样日 %s IV 反解失败: %s", val_date, exc)
+                bracket.setdefault("reason", "pricing_failed")
+            if not np.isfinite(iv_val):
+                iv_failures[bracket.get("reason") or "unknown"] += 1
 
         dates_out.append(val_date)
         theo_out.append(float(theo))
@@ -274,6 +284,9 @@ def backtest_theoretical_price(
         "ivs": iv_out,
         "conversion_prices": k_out,
         "terms_source_diagnostics": diag_out,
+        # IV 反解失败的天数, 按原因分档 (above_ceiling / below_floor / pricing_failed /
+        # solver_failed)。空 dict = 一天都没丢。消费方要把它显示出来 —— 丢样本是单向的。
+        "iv_failures": dict(iv_failures),
         "bond_code": bond_code,
         "stock_code": stock_code,
     }

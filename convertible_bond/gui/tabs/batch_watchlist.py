@@ -290,7 +290,8 @@ STALE_REFRESH_DEBOUNCE_SEC = 15 * 60
 #: 需要重算的取价状态。``ok`` 之外**全部**要重来, 其中 ``no_market`` 那一档最容易
 #: 被漏: 实测 118076.SH 先锋转债 ``status=="ok"``、``valuation_date`` 就是今天、
 #: 唯独市价是 None —— 只看"是不是今天算的"会让它当天永远不再重试。
-_STALE_PRICE_STATES = frozenset({"unpriced", "failed", "no_market", "stale"})
+_STALE_PRICE_STATES = frozenset(
+    {"unpriced", "failed", "no_market", "stale", "undated_market"})
 
 
 def stale_watchlist_codes(app, *, rows=None) -> list[str]:
@@ -890,7 +891,7 @@ def _priced_rows_by_code(app) -> dict[str, dict]:
 
 
 def _derive_price_state(merged: dict, priced: dict | None, today) -> str:
-    """这一行的取价状态, 六选一.
+    """这一行的取价状态, 七选一.
 
     今天三种「—」在表上长得一模一样, 而成因完全不同 (实测同一份关注池里同时存在):
     ``unpriced`` 是没算过, ``no_market`` 是算了但数据源没给市价 (118076.SH 先锋转债),
@@ -902,6 +903,11 @@ def _derive_price_state(merged: dict, priced: dict | None, today) -> str:
         return "failed"
     if not _is_finite(merged.get(_PRICE_FIELD)):
         return "no_market"
+    if merged.get("market_price_source") == "terms_close":
+        # 条款库兜底价: 有数, 但**没有 as-of**、可以任意旧 (日升转债那个 99.994 是
+        # 2021 年撤销发行前的值)。此前它判 "ok" —— 而 "ok" 的含义是"今天真取到了",
+        # 于是 `stale_watchlist_codes` 当天再不重试, 一次行情抖动就把这一行钉死到明天。
+        return "undated_market"
     value = priced.get("valuation_date")
     try:
         if value is None or _parse_watchlist_date(value) != today:
@@ -1134,9 +1140,12 @@ def _row_data_label(entry, *, terms_cache=None, admission_config=None,
         # 永远带日期。写死的「旧」在出差一周回来时六行仍全写「旧」, 而真实估值日
         # 在整个主页只有一个出口 —— 取不到就只说「未重算」, 不编一个日期。
         return f"未重算 {val_date.strftime('%m-%d')}" if val_date else "未重算"
+    if state == "undated_market":
+        return _NO_STAMP_LABEL
     if state != "ok":
         return "—"
     if entry.get("market_price_source") == "terms_close":
+        # 老行 (缓存里没有 _price_state 的) 仍走这条 —— 展示文案不变
         return _NO_STAMP_LABEL
     as_of = _parse_watchlist_date(entry.get("market_price_as_of"))
     if as_of is None:

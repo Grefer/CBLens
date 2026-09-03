@@ -2883,6 +2883,111 @@ def test_credit_rating_ladder_has_exactly_one_definition():
     assert data_doctor._RATING_RANK is CREDIT_RATING_RANK
 
 
+def test_terms_close_fallback_row_is_re_requested_not_frozen_as_ok():
+    """条款库兜底价不能判 "ok" —— "ok" 的含义是"今天真取到了".
+
+    `_latest_bond_close_with_provenance` 在转债行情挂掉时回落到 `terms.close`,
+    那个值**没有 as-of**、可以任意旧 (日升转债库里的 99.994 是 2021 年撤销发行前的)。
+    判 "ok" 就把这一行钉死到明天: `stale_watchlist_codes` 只重取
+    `_STALE_PRICE_STATES` 里的档, 而 "ok" 不在里面。
+
+    展示文案刻意不变 (仍是「日期不明」) —— 改的只是自愈行为。
+    """
+    from convertible_bond.gui.tabs.batch_watchlist import (
+        _STALE_PRICE_STATES, _derive_price_state, _row_data_label)
+
+    today = date(2026, 9, 3)
+    priced = {"status": "ok", "valuation_date": today}
+
+    fallback = _derive_price_state(
+        {"market_price": 99.994, "market_price_source": "terms_close"}, priced, today)
+    assert fallback == "undated_market"
+    assert fallback in _STALE_PRICE_STATES, "兜底行不会被重新取价"
+    assert _row_data_label(
+        {"_price_state": fallback, "market_price_source": "terms_close"}) == "日期不明"
+
+    # 真实行情照旧 ok, 不跟着一起被拖去重取
+    real = _derive_price_state(
+        {"market_price": 158.40, "market_price_source": "history"}, priced, today)
+    assert real == "ok"
+    assert real not in _STALE_PRICE_STATES
+
+
+def test_a_fallback_quote_does_not_overwrite_yesterdays_real_one():
+    """整行 upsert 不许用**更差**的市价盖掉更好的.
+
+    「全失败守卫」是全或无的 (`expect_price and not with_price`), 而"取到市价"是
+    **逐只**成败的 —— 一只回落到 terms_close、另一只正常, 就从守卫底下整只穿过去,
+    而热缓存 `merged.update(fresh)` 会把昨天那个真实的 158.40 / as_of 2026-09-01 /
+    deviation +0.42 换成 99.994 / None / NaN。
+
+    只护市价那条腿: 理论价是本轮真算出来的, 照旧覆盖。
+    """
+    from convertible_bond.watchlist_cache import _keep_better_market_fields
+
+    yesterday = {
+        "market_price": 158.40, "market_price_as_of": "2026-09-01",
+        "market_price_source": "history", "deviation": 0.42,
+        "theoretical_price": 111.5,
+    }
+    today_fallback = {
+        "market_price": 99.994, "market_price_as_of": None,
+        "market_price_source": "terms_close", "deviation": float("nan"),
+        "theoretical_price": 112.7,
+    }
+    kept = _keep_better_market_fields(yesterday, today_fallback)
+    assert kept["market_price"] == 158.40
+    assert kept["market_price_as_of"] == "2026-09-01"
+    assert kept["deviation"] == 0.42
+    assert kept["theoretical_price"] == 112.7, "理论价是本轮真算的, 不该护"
+
+    # 今天拿到真价 → 照常覆盖
+    today_real = dict(today_fallback, market_price=160.0,
+                      market_price_as_of="2026-09-03",
+                      market_price_source="history", deviation=0.44)
+    assert _keep_better_market_fields(yesterday, today_real)["market_price"] == 160.0
+
+    # 昨天本来就没有真价 → 今天的兜底照常写进去 (总比空着强)
+    assert _keep_better_market_fields(
+        {"market_price": None}, today_fallback)["market_price"] == 99.994
+    assert _keep_better_market_fields(None, today_fallback)["market_price"] == 99.994
+
+    # terms_close 判据要单独可观测: 上面那些 fixture 的 as_of 都是 None, 于是
+    # "没有 as_of" 那一条先命中, terms_close 那一条删掉也测不出来。给它一个带戳的。
+    stamped_fallback = dict(today_fallback,
+                            market_price_as_of="2026-09-03",
+                            market_price_source="terms_close")
+    assert _keep_better_market_fields(yesterday, stamped_fallback)["market_price"] == 158.40
+
+
+def test_save_watchlist_pricing_wires_the_market_leg_guard(tmp_path):
+    """接线也要守 —— 只测 helper 等于没守住 `save_watchlist_pricing` 里那一行.
+
+    实测: 把那两行换回 `merged.update(fresh)`, helper 那条用例照常绿。
+    """
+    from convertible_bond.watchlist_cache import (
+        load_watchlist_pricing, save_watchlist_pricing)
+
+    cache = tmp_path / "hot.json"
+    daily = tmp_path / "daily"
+    save_watchlist_pricing(
+        [{"bond_code": "128000.SZ", "market_price": 158.40,
+          "market_price_as_of": "2026-09-01", "market_price_source": "history",
+          "deviation": 0.42, "theoretical_price": 111.5, "status": "ok"}],
+        valuation_date=date(2026, 9, 1), cache_path=cache, daily_dir=daily)
+
+    save_watchlist_pricing(
+        [{"bond_code": "128000.SZ", "market_price": 99.994,
+          "market_price_as_of": None, "market_price_source": "terms_close",
+          "deviation": float("nan"), "theoretical_price": 112.7, "status": "ok"}],
+        valuation_date=date(2026, 9, 2), cache_path=cache, daily_dir=daily)
+
+    row = load_watchlist_pricing(cache)["rows"]["128000.SZ"]
+    assert row["market_price"] == 158.40, "兜底价盖掉了昨天的真市价"
+    assert row["market_price_as_of"] == date(2026, 9, 1)   # 读回来是 date 不是串
+    assert row["theoretical_price"] == 112.7, "理论价该被本轮覆盖"
+
+
 def test_market_price_coverage_does_not_count_the_terms_close_fallback():
     """``terms_close`` 兜底不是"取到市价"。
 

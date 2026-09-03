@@ -262,6 +262,7 @@ class BacktestMixin:
         self._update_backtest_stats(
             metrics["mean_dev"], metrics["rmse"], metrics["max_abs"],
             metrics["hit_rate"], metrics["corr"], metrics["iv_hv_pp"],
+            metrics.get("iv_used"), metrics.get("iv_total"),
         )
         self._render_backtest_result_panel(result, metrics)
         status_parts = [
@@ -305,10 +306,12 @@ class BacktestMixin:
             max_abs_idx = under_idx = over_idx = latest_idx = None
 
         iv_hv_pp: float | None = None
+        iv_used = iv_total = 0
         if iv_arr.size:
             hv_arr = np.array(sigmas, dtype=float)
             n = min(iv_arr.size, hv_arr.size)
             iv_valid_mask = np.isfinite(iv_arr[:n]) & np.isfinite(hv_arr[:n])
+            iv_used, iv_total = int(np.sum(iv_valid_mask)), int(n)
             if np.any(iv_valid_mask):
                 iv_hv_pp = float(
                     np.mean(iv_arr[:n][iv_valid_mask] - hv_arr[:n][iv_valid_mask])
@@ -342,6 +345,10 @@ class BacktestMixin:
             "hit_rate": hit_rate,
             "corr": corr,
             "iv_hv_pp": iv_hv_pp,
+            # 丢样本是**单向**的: 市价高于模型可解带上界的那些天正是"贵"的那些天,
+            # 全丢掉之后 IV-HV 只代表便宜的那一半。所以这两个数必须跟着均值走。
+            "iv_used": iv_used,
+            "iv_total": iv_total,
             "mean_basis_abs": mean_basis_abs,
             "max_abs_idx": max_abs_idx,
             "under_idx": under_idx,
@@ -443,7 +450,8 @@ class BacktestMixin:
             ctk.CTkLabel(cell, text=value, text_color=TEXT,
                          font=(FONT_MONO, 12, "bold")).pack(anchor="w", padx=8, pady=(0, 5))
 
-    def _update_backtest_stats(self, mean_dev, rmse, max_abs, hit_rate, corr, iv_hv_pp):
+    def _update_backtest_stats(self, mean_dev, rmse, max_abs, hit_rate, corr, iv_hv_pp,
+                               iv_used=None, iv_total=None):
         stats = getattr(self, "_bt_stat_vars", None)
         if not stats:
             return
@@ -460,7 +468,14 @@ class BacktestMixin:
         stats["max_abs"].set(_fmt_pct(max_abs))
         stats["hit_rate"].set(f"{hit_rate*100:.1f}%" if np.isfinite(hit_rate) else "—")
         stats["corr"].set(f"{corr:.3f}" if np.isfinite(corr) else "—")
-        stats["iv_hv"].set(f"{iv_hv_pp:+.2f}pp" if iv_hv_pp is not None and np.isfinite(iv_hv_pp) else "—")
+        if iv_hv_pp is not None and np.isfinite(iv_hv_pp):
+            iv_text = f"{iv_hv_pp:+.2f}pp"
+            # 只在真的丢了天数时才加尾巴 —— 全用上时那句话是噪声。
+            if iv_total and iv_used is not None and iv_used < iv_total:
+                iv_text += f" ({iv_used}/{iv_total} 天)"
+        else:
+            iv_text = "—"
+        stats["iv_hv"].set(iv_text)
         color_rules = {
             "mean_dev": green if np.isfinite(mean_dev) and mean_dev > 0 else red,
             "rmse": green if np.isfinite(rmse) and rmse <= 0.05 else red,

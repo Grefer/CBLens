@@ -224,6 +224,49 @@ def _atomic_write(path: Path, payload: dict) -> Path:
 
 # ── 写 ──────────────────────────────────────────────────────────────
 
+#: 市价那条腿的字段。整行 upsert 时它们要单独判 —— 见 :func:`_keep_better_market_fields`。
+_MARKET_LEG_FIELDS = (
+    "market_price", "market_price_as_of", "market_price_source",
+    "deviation", "undervaluation_rate", "relative_deviation",
+    "conversion_premium", "double_low",
+)
+
+
+def _has_dated_market_price(row: dict | None) -> bool:
+    """这一行有没有一个**带日期的真实**市价 (不是条款库兜底)。"""
+    if not row:
+        return False
+    value = row.get("market_price")
+    if value is None or value != value:          # None / NaN
+        return False
+    if row.get("market_price_source") == "terms_close":
+        return False
+    return row.get("market_price_as_of") is not None
+
+
+def _keep_better_market_fields(old: dict | None, new: dict) -> dict:
+    """整行 upsert 时不要用**更差**的市价盖掉更好的.
+
+    热缓存是整行 upsert (`merged.update(fresh)`), 而"取到市价"是**逐只**成败的:
+    转债行情抖一下, 这一只回落到 `terms_close` 兜底 (没有 as-of, 可以任意旧 ——
+    日升转债库里那个 99.994 是 2021 年撤销发行前的值), 而正股链路正常, 于是
+    `status` 照样是 "ok"、理论价照样算得出来。整行写进去就把昨天那个真实的
+    158.40 / as_of 2026-09-01 / deviation +0.42 换成 99.994 / None / NaN。
+
+    「全失败守卫」拦不住这一档 —— 它是**全或无**的 (`expect_price and not with_price`),
+    而部分失败 (1 只真价 + 1 只兜底) 从它底下整只穿过去。
+
+    只护市价那条腿; 理论价/希腊值/标签这些是本轮真算出来的, 照旧覆盖。
+    """
+    if not old or _has_dated_market_price(new) or not _has_dated_market_price(old):
+        return new
+    kept = dict(new)
+    for field in _MARKET_LEG_FIELDS:
+        if field in old:
+            kept[field] = old[field]
+    return kept
+
+
 def save_watchlist_pricing(
     rows: Sequence[dict],
     *,
@@ -272,7 +315,8 @@ def save_watchlist_pricing(
         except Exception:
             logger.debug("读旧热缓存失败, 按整体重写处理", exc_info=True)
             merged = {}
-    merged.update(fresh)
+    for code, row in fresh.items():
+        merged[code] = _keep_better_market_fields(merged.get(code), row)
 
     meta = {
         "schema": CACHE_SCHEMA,
