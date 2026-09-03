@@ -6,6 +6,8 @@ Catppuccin 风格配色 (Latte/Mocha), 字体定义, 共享常量.
 import sys
 import customtkinter as ctk
 
+from ..model_defaults import RATING_SPREAD_FLOORS
+
 # Catppuccin 风格高级配色: (浅色 Latte, 深色 Mocha)
 BG_APP    = ("#dce0e8", "#11111b")     # Crust
 BG_CARD   = ("#eff1f5", "#1e1e2e")     # Base
@@ -56,15 +58,13 @@ else:
 VOL_WINDOW_MAP = {"1M": 21, "2M": 42, "3M": 63, "6M": 126, "1Y": 252}
 VOL_WINDOW_DEFAULT = "1M"
 
-# 同评级信用利差底线 (%), 与定价模型的评级底线保持一致。
+# 同评级信用利差底线 (%) —— **由定价侧那张表算出来, 不再逐条抄**。
+# 它此前是 `pricing_api._RATING_SPREAD_FLOORS` 的 19 行小数→百分号手抄副本, 而抄一份
+# 的失败形态不是"抄错", 是"改的时候只改了一份": 定价按新利差走, 而定价页那句
+# 「AA- → 3.5%」的提示还在报旧值, 两边都不报错。取值方 (`wind_sync`) 用的是精确
+# `in` / `[]`, 所以键集也必须逐字一致。
 CREDIT_SPREAD_TABLE = {
-    "AAA": 1.2, "AA+": 1.8, "AA": 2.5,
-    "AA-": 3.5, "A+": 4.5, "A": 6.0,
-    "A-": 8.0, "BBB+": 10.0, "BBB": 12.0,
-    "BBB-": 15.0, "BB+": 18.0, "BB": 22.0,
-    "BB-": 26.0, "B+": 30.0, "B": 36.0,
-    "B-": 42.0, "CCC": 50.0, "CC": 65.0,
-    "C": 80.0,
+    rating: round(floor * 100.0, 6) for rating, floor in RATING_SPREAD_FLOORS.items()
 }
 
 

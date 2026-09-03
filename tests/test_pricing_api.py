@@ -1151,3 +1151,28 @@ def test_background_p_down_default_has_exactly_one_value():
 
     args = build_parser().parse_args(["--start", "2025-01-01", "--end", "2025-06-01"])
     assert args.p_down == DEFAULT_BACKGROUND_P_DOWN
+
+
+def test_credit_spread_table_is_a_view_of_the_pricing_floors():
+    """GUI 的评级利差表必须由定价侧那张表算出来, 不许是第二份字面量。
+
+    它此前是 ``_RATING_SPREAD_FLOORS`` 的 19 行小数→百分号手抄副本。抄一份的失败
+    形态不是"抄错", 是**改的时候只改了一份**: 定价按新利差走, 而定价页那句
+    「AA- → 3.5%」的提示还在报旧值, 两边都不报错 —— 与"事件短标签 GUI 自带一份"、
+    "视图归属两边各写一份"是同一个形状。
+
+    ``wind_sync`` 用的是精确 ``in`` / ``[]`` 成员判断, 所以**键集也必须逐字一致**,
+    不只是值对得上。
+    """
+    from convertible_bond.gui.theme import CREDIT_SPREAD_TABLE
+    from convertible_bond.model_defaults import RATING_SPREAD_FLOORS
+    from convertible_bond.pricing_api import _RATING_SPREAD_FLOORS
+
+    assert _RATING_SPREAD_FLOORS is RATING_SPREAD_FLOORS
+    assert list(CREDIT_SPREAD_TABLE) == list(RATING_SPREAD_FLOORS), "键集或顺序分叉了"
+    for rating, floor in RATING_SPREAD_FLOORS.items():
+        assert CREDIT_SPREAD_TABLE[rating] == pytest.approx(floor * 100.0), rating
+
+    # 锚一个具体值, 免得两边一起漂而守护还是绿的
+    assert RATING_SPREAD_FLOORS["AA-"] == 0.035
+    assert CREDIT_SPREAD_TABLE["AA-"] == pytest.approx(3.5)

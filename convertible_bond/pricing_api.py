@@ -27,34 +27,18 @@ from .data_providers import (
     BondTerms, DataProvider, WindDataProvider, auto_data_provider, finite_float)
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
-from .model_defaults import DEFAULT_BACKGROUND_P_DOWN
+from .model_defaults import DEFAULT_BACKGROUND_P_DOWN, RATING_SPREAD_FLOORS
 from .cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
 from .market_time import market_today
 
 
-_RATING_SPREAD_FLOORS = {
-    "AAA": 0.012,
-    "AA+": 0.018,
-    "AA": 0.025,
-    "AA-": 0.035,
-    "A+": 0.045,
-    "A": 0.060,
-    "A-": 0.080,
-    "BBB+": 0.100,
-    "BBB": 0.120,
-    "BBB-": 0.150,
-    "BB+": 0.180,
-    "BB": 0.220,
-    "BB-": 0.260,
-    "B+": 0.300,
-    "B": 0.360,
-    "B-": 0.420,
-    "CCC": 0.500,
-    "CC": 0.650,
-    "C": 0.800,
-}
+#: 评级 → 信用利差下限。表在 ``model_defaults`` —— GUI 的 ``theme.CREDIT_SPREAD_TABLE``
+#: 是同一张表的百分号版本, 而它此前是**逐条抄**的 19 行字面量。抄一份的失败形态不是
+#: "抄错", 是"改的时候只改了一份": 这里调一档利差, 定价照新值走而定价页那句
+#: 「AA- → 3.5%」的提示还在报旧值, 两边都不报错。
+_RATING_SPREAD_FLOORS = RATING_SPREAD_FLOORS
 
 def _latest_price_with_date(history, on_date: date) -> tuple[float | None, date | None]:
     """不晚于 *on_date* 的最近一笔收盘价, **连同它自己的日期**.

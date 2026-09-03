@@ -786,15 +786,20 @@ class PricingMixin:
             return "转债停牌", RED
         if self._contains_any(getattr(terms, "underlying_trade_status", None), ("停牌", "暂停")):
             return "正股停牌", RED
-        if self._contains_any(getattr(terms, "underlying_status", None), ("ST", "退市", "风险警示")):
-            # ORANGE 不是 RED: 上面两档 (转债停牌 / 正股停牌) 是**现在下不了单**,
-            # 而 ST 只是风险更大, 转债照常挂牌撮合。同色会把两件事读成一件。
-            return "正股风险", ORANGE
+        # **「临近摘牌」必须排在「正股风险」之前**。这是个单槽首命中的徽章, 而一只债
+        # 完全可以既是 ST 正股、又在 30 天内摘牌 —— 那正是最该看见红色的一只。
+        # 按旧顺序它显示的是 ORANGE 的「正股风险」: 一个**需要在 30 天内卖掉**的事实
+        # 被一个"风险更大, 慢慢看"的提示盖住了。
+        # 与行色 `_resolve_row_tag` 的优先级同向: 可交易性压过标的风险。
         delisting = getattr(terms, "delisting_date", None)
         last_trading = getattr(terms, "last_trading_date", None)
         near_date = last_trading or delisting
         if near_date and near_date <= val_date + timedelta(days=30):
             return f"临近摘牌\n{near_date.isoformat()}", RED
+        if self._contains_any(getattr(terms, "underlying_status", None), ("ST", "退市", "风险警示")):
+            # ORANGE 不是 RED: 上面几档 (转债停牌 / 正股停牌 / 临近摘牌) 是**现在下不了单
+            # 或必须马上动手**, 而 ST 只是风险更大, 转债照常挂牌撮合。同色会把两件事读成一件。
+            return "正股风险", ORANGE
         rating = str(getattr(terms, "credit_rating", None) or "").upper()
         outlook = str((impact or {}).get("credit_rating_outlook") or getattr(
             terms, "credit_rating_outlook", None) or "")

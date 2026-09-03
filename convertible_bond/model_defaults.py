@@ -10,3 +10,28 @@ DEFAULT_DOWN_RESET_TRIGGER_RATIO = DEFAULT_DOWN_RESET_TRIGGER_PCT / 100.0
 #: 那条路 (0.15 → 0.25), 方向是向生产口径靠拢。
 DEFAULT_BACKGROUND_P_DOWN = 0.25
 DEFAULT_BACKGROUND_P_DOWN_PCT = DEFAULT_BACKGROUND_P_DOWN * 100.0
+
+#: 评级 → 信用利差**下限** (小数)。`pricing_api._rating_spread_floor` 把它当
+#: 定价的 base_spread 下界, GUI 的 `theme.CREDIT_SPREAD_TABLE` 是它的百分号视图。
+#: 两处曾各写一份 19 行的字面量。
+RATING_SPREAD_FLOORS = {
+    "AAA": 0.012,
+    "AA+": 0.018,
+    "AA": 0.025,
+    "AA-": 0.035,
+    "A+": 0.045,
+    "A": 0.060,
+    "A-": 0.080,
+    "BBB+": 0.100,
+    "BBB": 0.120,
+    "BBB-": 0.150,
+    "BB+": 0.180,
+    "BB": 0.220,
+    "BB-": 0.260,
+    "B+": 0.300,
+    "B": 0.360,
+    "B-": 0.420,
+    "CCC": 0.500,
+    "CC": 0.650,
+    "C": 0.800,
+}
