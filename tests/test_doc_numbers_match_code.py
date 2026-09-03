@@ -154,3 +154,23 @@ def test_usage_data_state_table_shows_strings_the_code_can_emit(entry, expected)
     doc = _read("docs/USAGE.md")
     token = expected.split(" · ")[0] if " · " in expected else expected
     assert f"`{token}" in doc, f"USAGE 的数据状态表里没有「{token}」这一档"
+
+
+def test_every_deferral_marker_is_listed_in_the_backlog_table():
+    """散在各处的「单独立项 / 尚未处理 / 已知边界」必须在汇总表里数得清.
+
+    这些账**没有**任何 issue、任务或测试在跟 —— 唯一的记录就是 AGENTS.md 本身。
+    上一轮复核就是靠外部 sweep 才发现它们从没被汇总过。加一处标记却不进表,
+    等于又多了一条只有写的人知道的账。
+    """
+    text = _read("AGENTS.md")
+    head = "### 刻意留着的账 (deferred)"
+    assert head in text, "汇总表不见了"
+    table = text[text.index(head):text.index("### 五层架构")]
+    rows = [ln for ln in table.splitlines() if ln.startswith("| ") and "---" not in ln]
+    entries = len(rows) - 1                      # 减掉表头
+    markers = sum(text.count(m) for m in
+                  ("单独立项", "⚠ 尚未处理", "已知代价, 未处理", "⚠ 已知边界"))
+    assert entries >= 7, f"汇总表只有 {entries} 条"
+    assert markers <= entries + 3, (
+        f"正文里有 {markers} 处延期标记, 而汇总表只有 {entries} 条 —— 有账没进表")
