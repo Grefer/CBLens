@@ -299,6 +299,9 @@ def resolve_down_reset(
         down_events = []
     if announce_date is None:
         try:
+            # 就近 import: 下面那个 `except` 会吞掉 NameError, 从第一个 try 里借名字
+            # 等于给自己留一条静默失效的路。
+            from .cb_events import plausible_commitment_end
             rejected = [
                 e for e in down_events
                 if e.event_type == "down_reset_rejected"
@@ -306,7 +309,9 @@ def resolve_down_reset(
             if rejected:
                 latest = max(rejected, key=lambda e: e.event_date)
                 announce_date = latest.event_date
-                event_block_until = latest.effective_end
+                # 早于公告日的 end 一律当没有 —— 解析侧的闸拦不住存量/重导入的行,
+                # 而这里读到一个已过期的窗口就等于把还在生效的冻结当成失效。
+                event_block_until = plausible_commitment_end(latest)
                 event_cooldown = latest.commitment_months
                 event_note = latest.raw_title
         except Exception:

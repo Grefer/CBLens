@@ -1276,6 +1276,31 @@ def _commitment_window_is_plausible(commitment: dict, event_date: date) -> bool:
     return end is None or end >= event_date
 
 
+def plausible_commitment_end(event: CBEvent) -> date | None:
+    """事件上可信的承诺期结束日; 早于公告日的一律当没有.
+
+    与 :func:`_commitment_window_is_plausible` 是**同一条**方向性不变量, 只是作用在
+    消费侧。两侧都要有: 解析侧的闸只作用于**新解析**的事件, 而库里存量、手改、从旧
+    快照重新导入的行照样会带着 ``end < event_date`` 进来 —— 实测 `cb_events.json`
+    里 70 行是这个形状, 28 行属承诺期类型, 其中 6 行是本类型最新一条 (会真的被消费),
+    3 只债今天因此把一个**还在生效**的冻结窗口读成已过期:
+
+    ==============  ==========  ==========  ============
+    债              公告日      脏 end      按承诺月数
+    ==============  ==========  ==========  ============
+    113650.SH       2026-05-27  2026-05-26  2026-11-27
+    113700.SH       2026-07-18  2026-06-26  2026-10-18
+    123071.SZ       2026-08-14  2024-07-19  2027-02-14
+    ==============  ==========  ==========  ============
+
+    返回 None 表示"这条 end 不可信", 由调用方回落到 ``公告日 + 承诺月数``。
+    """
+    end = getattr(event, "effective_end", None)
+    if end is None:
+        return None
+    return end if end >= event.event_date else None
+
+
 def _drop_implausible_suspension_start(
     suspension: dict | None, event_date: date,
 ) -> dict | None:
@@ -1334,8 +1359,9 @@ def _latest_event(events: Sequence[CBEvent], event_type: str) -> CBEvent | None:
 
 
 def _down_reset_block_until_from_event(event: CBEvent, *, cooldown_months: int) -> date:
-    if event.effective_end:
-        return event.effective_end
+    end = plausible_commitment_end(event)
+    if end:
+        return end
     return _add_months(event.event_date, int(cooldown_months))
 
 

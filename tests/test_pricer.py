@@ -2926,6 +2926,41 @@ class TestBacktestSharesTheProductionCaliber:
         # A- 的下限 0.08 必须压过传入的 0.03
         assert all(s == pytest.approx(0.08) for s in seen), seen
 
+    def test_down_reset_floor_reaches_the_pricer_in_the_backtest_too(self, monkeypatch):
+        """下修价下限也要逐点估, 与批量页同口径.
+
+        这是 `test_rating_spread_floor_applies_to_the_backtest_too` 的姊妹条 ——
+        两个口径步骤原本只守住了一个: 实测删掉 `backtest.py` 里估下限的那四行,
+        整套 1111 条照常全绿, 而同一只债同一天回测页与批量页的理论价从 0.0
+        重新分叉到 +0.181 元。
+        """
+        import convertible_bond.backtest as bt
+
+        seen = []
+
+        class SpyPricer:
+            def __init__(self, **kwargs):
+                seen.append(kwargs.get("down_reset_floor"))
+                self.ratio = 100.0 / float(kwargs["K"])
+
+            def price(self, **_kw):
+                return 100.0
+
+            def bond_floor_value(self, *_a, **_k):
+                return 95.0
+
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+        provider = self._provider(self._terms(),
+                                  date(2025, 6, 2), date(2025, 9, 30))
+        bt.backtest_theoretical_price(
+            "123001.SZ", start_date=date(2025, 6, 2), end_date=date(2025, 9, 30),
+            freq="M", provider=provider, point_in_time=False, M=60, N=120)
+        assert seen, "一个采样点都没定价, 这条守护测不到东西"
+        assert all(f is not None for f in seen), (
+            f"有采样点没拿到下修价下限: {seen}")
+        # 下限来自正股近 20 个交易日均价 vs 前收, 必须是个真实数而不是常数占位
+        assert len(set(seen)) > 1 or seen[0] > 0
+
     def test_backtest_wraps_the_provider_in_the_point_in_time_layer(self, monkeypatch):
         """默认必须叠历史条款投影层 —— 否则每个历史采样日都用今天的转股价。
 

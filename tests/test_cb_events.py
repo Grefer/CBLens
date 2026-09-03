@@ -1366,6 +1366,60 @@ def test_add_many_upgrades_a_degraded_event_in_place(tmp_path):
     assert other.add_many([strictly_more]) == 0 and other.last_upgraded == 1
 
 
+def test_a_stale_commitment_end_does_not_expire_a_live_freeze():
+    """同一条方向性不变量必须在**消费侧**也成立, 不只在解析侧.
+
+    解析侧的闸只作用于新解析的事件; 库里存量、手改、从旧快照重新导入的行照样带着
+    ``end < event_date`` 进来。实测 `cb_events.json` 里 70 行是这个形状 (28 行属承诺期
+    类型), 其中 6 行是本类型最新一条 —— 3 只债今天因此把还在生效的冻结读成已过期
+    (113650.SH / 113700.SH / 123071.SZ), 价差最大 0.76 元。
+
+    两条消费路径都要覆盖: `apply_events_to_terms` 与 `resolve_down_reset`。
+    """
+    from dataclasses import replace
+
+    from convertible_bond.cb_events import CBEvent, apply_events_to_terms
+    from convertible_bond.down_reset_overrides import resolve_down_reset
+
+    stale = CBEvent(
+        bond_code="123071.SZ",
+        event_type="down_reset_rejected",
+        event_date=date(2026, 8, 14),
+        effective_start=date(2026, 8, 14),
+        effective_end=date(2024, 7, 19),   # 早于公告日两年 —— 正文引述的上一期
+        commitment_months=6,
+        raw_title="关于不向下修正转股价格的公告",
+    )
+    expected = date(2027, 2, 14)           # 公告日 + 6 个月
+
+    merged = apply_events_to_terms(
+        "123071.SZ", BondTerms(), [stale],
+        valuation_date=date(2026, 9, 3), down_reset_cooldown_months=6)
+    assert merged.down_reset_block_until == expected, (
+        f"apply_events_to_terms 用了脏 end: {merged.down_reset_block_until}")
+
+    class _Store:
+        def list_events(self, bond_code, **_kw):
+            return [stale]
+
+    resolved = resolve_down_reset(
+        "123071.SZ",
+        BondTerms(down_reset_cooldown_months=6),
+        valuation_date=date(2026, 9, 3),
+        event_store=_Store(),
+    )
+    assert resolved.block_until == expected, (
+        f"resolve_down_reset 用了脏 end: {resolved.block_until}")
+
+    # 边界: end == 公告日是**可信**的 (与解析侧的 `end >= event_date` 同一条线)。
+    # 没有这一档, 判据从 >= 收紧成 > 察觉不到 —— 而那会把一批合法的当日窗口丢掉。
+    same_day = replace(stale, effective_end=stale.event_date)
+    merged_same = apply_events_to_terms(
+        "123071.SZ", BondTerms(), [same_day],
+        valuation_date=date(2026, 9, 3), down_reset_cooldown_months=6)
+    assert merged_same.down_reset_block_until == stale.event_date
+
+
 def test_commitment_window_cannot_end_before_it_was_announced():
     """承诺期不可能在公告发布之前就结束。
 
@@ -1391,6 +1445,31 @@ def test_commitment_window_cannot_end_before_it_was_announced():
         {"end": announced - timedelta(days=1)}, announced)
     # 没有 end 的不拦 (那一档由别处兜底)
     assert _commitment_window_is_plausible({"end": None}, announced)
+
+
+def test_recital_polluted_suspension_start_is_dropped_end_to_end():
+    """接线也要守 —— 只测私有 helper 等于没守住那一行调用.
+
+    实测: 把 `cb_events.py` 里那行还原成裸的
+    ``suspension = parse_conversion_suspension_terms(body)``, 原缺陷当场回来
+    (128136.SZ 的 effective_start 变回 2020-11-03), 而整套 1100+ 用例照常全绿 ——
+    唯一的守护 `test_suspension_start_far_before_the_announcement_is_dropped`
+    直接调 `_drop_implausible_suspension_start`, 碰不到调用点; 而唯一走接线的
+    暂停转股用例用的是干净正文 (start 比公告晚 2 天), 两种实现都通过。
+
+    正文取自真实公告形状: 先成段引述转股期区间, 再说这次暂停。
+    """
+    body = (
+        "本公司可转换公司债券转股期自2020年11月03日至2026年11月02日。"
+        "因实施权益分派, 立讯转债将于2026年7月10日暂停转股。"
+    )
+    event = parse_event_from_announcement(
+        "128136.SZ", "关于暂停可转换公司债券转股的公告", date(2026, 7, 7), body=body)
+
+    assert event.effective_start != date(2020, 11, 3), "引述的转股期起始日被当成了本次暂停"
+    assert event.effective_start == date(2026, 7, 7), "丢掉 start 后应回落到公告日"
+    # end 走另一套锚点, 不因为 start 脏就一起丢
+    assert event.effective_end == date(2026, 11, 2)
 
 
 def test_suspension_start_far_before_the_announcement_is_dropped():
