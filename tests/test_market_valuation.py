@@ -103,11 +103,27 @@ def test_percentile_rank():
     assert percentile_rank(0.30, hist) == pytest.approx(100.0)
 
 
-def test_classify_cheap_neutral_rich():
+def test_classify_bands_sit_at_10_25_75_90():
+    """四条分位线的**位置**要逐条钉住, 不能只断言"三个区都存在"。
+
+    这条用例原先写的是 ``label in ("极便宜", "便宜")`` 这类析取断言, 实测把
+    ``_CHEAP_PCT`` 25→40、``_RICH_PCT`` 75→60、``_EXTREME_HI`` 90→97 **三种改法
+    整套都全绿** —— 而 90% 那条正是横幅上「极贵」的判据 (AGENTS 里那句"分位
+    95.0% → 94.1%, 标签仍是「极贵」, 阈值 90%"依赖的就是它)。
+
+    fixture 用 21 个等距点, 于是每个取值的分位是算得出来的整数比 (n/21), 边界两侧
+    各取一个: 括号里的百分数是 ``percentile_rank`` 的实际输出, 不是从常量反推的。
+    """
     hist = [i / 100 for i in range(0, 21)]  # 0%..20%, 21 points
-    assert classify(0.005, hist).label in ("极便宜", "便宜")
-    assert classify(0.10, hist).label == "中性"
-    assert classify(0.195, hist).label in ("偏贵", "极贵")
+
+    assert classify(0.01, hist).label == "极便宜"    # 9.52% ≤ 10
+    assert classify(0.02, hist).label == "便宜"      # 14.29% > 10
+    assert classify(0.04, hist).label == "便宜"      # 23.81% ≤ 25
+    assert classify(0.05, hist).label == "中性"      # 28.57% > 25
+    assert classify(0.14, hist).label == "中性"      # 71.43% < 75
+    assert classify(0.15, hist).label == "偏贵"      # 76.19% ≥ 75
+    assert classify(0.17, hist).label == "偏贵"      # 85.71% < 90
+    assert classify(0.18, hist).label == "极贵"      # 90.48% ≥ 90
 
 
 def test_classify_extremes():
@@ -117,9 +133,21 @@ def test_classify_extremes():
 
 
 def test_classify_insufficient_history():
-    sig = classify(0.15, [0.1, 0.2, 0.3])  # <8
+    """"够不够"的门槛是 **8**, 两侧各钉一条 —— 只测 3 个点时门槛降到 4 也全绿。
+
+    这个数按**季度**算 (``baseline_medians`` 每季度只留一条): 8 个季度 = 两年,
+    少于两年的基线给不出可信的周期分位。
+    """
+    sig = classify(0.15, [i / 100 for i in range(7)])       # 7 期 → 不够
     assert sig.label == "历史不足"
     assert math.isnan(sig.percentile)
+    # 钉**状态**而不是消息文本: 期数是 ValuationSignal 的字段, 而 note 里那句
+    # "仅 7 个 (<8)" 的 8 是 f-string 里另写的一份字面量, 改门槛时它未必跟着动。
+    assert sig.n_history == 7
+    assert "7" in sig.note
+
+    enough = classify(0.15, [i / 100 for i in range(8)])    # 8 期 → 够了
+    assert enough.label != "历史不足" and math.isfinite(enough.percentile)
 
 
 # ---------------- history IO ----------------
@@ -483,8 +511,28 @@ def test_snapshot_coverage_counts_the_same_rows_compute_snapshot_does():
     with pytest.raises(ValueError):
         compute_snapshot([ok_no_market] * 5)
 
-    assert 0 < MIN_BASELINE_COVERAGE <= 1
 
+def test_coverage_threshold_is_pinned_to_the_measurement_that_produced_it():
+    """0.90 是**量出来的**, 所以要用字面量钉住, 并配一条卡在边界上的行为用例。
+
+    这条用例存在的理由是一次真实的空守护: 此处原本只有 ``0 < MIN_BASELINE_COVERAGE
+    <= 1`` 一条范围断言, 而实测把常量改成 **0.80 整套仍然全绿** —— 那个值恰恰是
+    AGENTS 里被测量判出局的那一档 (最坏偏离 3.11pp, 已超过季度桶自身 2.84pp 的抖动)。
+
+    改这个数要重做的测量: 按上市日掐掉一段的最坏中位偏差偏离,
+    80% → 3.11pp / **90% → 2.05pp** / 95% → 1.31pp, 而"当季代表取哪天"本身抖 2.84pp。
+    闸要把部分失败的误差压到这个已接受的噪声**以下**, 所以取 90%。
+    """
+    assert MIN_BASELINE_COVERAGE == 0.90
+
+    # 行为侧: 边界值全部写死字面量, 不从常量算 —— 从常量算出来的边界恒真。
+    # 分子刻意都在 MIN_BASELINE_POOL 之上, 触发的确定是覆盖率那道闸。
+    refused = _rows([0.1] * 178) + _rows([float("nan")] * 22)     # 178/200 = 89%
+    reason = baseline_refusal_reason(refused)
+    assert reason is not None and "178/200" in reason, "89% 覆盖率被放行了"
+
+    accepted = _rows([0.1] * 182) + _rows([float("nan")] * 18)    # 182/200 = 91%
+    assert baseline_refusal_reason(accepted) is None, "91% 覆盖率被拒了"
 
 
 def test_record_snapshot_is_the_single_gate_both_writers_share(tmp_path):
@@ -633,9 +681,14 @@ def test_a_collapsed_pool_cannot_slip_past_the_coverage_ratio():
     from convertible_bond.market_valuation import (
         MIN_BASELINE_POOL, baseline_refusal_reason, is_coverage_refusal)
 
-    # 盘上 22 期历史基线的池规模是 193 ~ 522, 所以下限必须**远低于**真实历史
-    # (否则正常季度也记不进去), 又要**远高于**退化 (否则拦不住塌掉的池)。
-    assert 30 < MIN_BASELINE_POOL < 193
+    # 100 这个数是按盘上 22 期历史基线的池规模 (193 ~ 522, 中位 424) 定的: 对任何一期
+    # 真实历史都不触发 (离最小的那期还有 1.93 倍余量), 而全库 1000+ 只债只剩不到 100 只
+    # 可投是结构性故障不是行情。改它要重新量那个区间。
+    #
+    # 写字面量而不是范围: 这里原本是 ``30 < MIN_BASELINE_POOL < 193``, 实测把常量
+    # 改成 **50 整套仍然全绿** —— 范围断言放行了一半的取值, 而下面的边界用例又是从
+    # 常量自己算出来的 (``MIN_BASELINE_POOL - 1``), 恒真。
+    assert MIN_BASELINE_POOL == 100
 
     full = _rows([0.10, 0.15, 0.20], repeat=40)          # 120 只, 覆盖率 100%
     assert baseline_refusal_reason(full) is None
@@ -647,6 +700,7 @@ def test_a_collapsed_pool_cannot_slip_past_the_coverage_ratio():
     # 与覆盖率拒记同一类: 用户明知故犯时 ``--force`` 仍是出口, 而不是"基础设施坏了"。
     assert is_coverage_refusal(reason)
 
-    edge = _rows([0.10] * (MIN_BASELINE_POOL - 1))
-    assert baseline_refusal_reason(edge) is not None
-    assert baseline_refusal_reason(_rows([0.10] * MIN_BASELINE_POOL)) is None
+    # 边界写字面量 —— 从 MIN_BASELINE_POOL 算出来的 99/100 对**任何**取值都成立。
+    # 两条覆盖率都是 100%, 所以触发的确定是绝对下限那道闸。
+    assert baseline_refusal_reason(_rows([0.10] * 99)) is not None, "99 只的池子通过了"
+    assert baseline_refusal_reason(_rows([0.10] * 100)) is None, "100 只的池子被拒了"

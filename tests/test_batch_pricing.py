@@ -22,6 +22,7 @@ from convertible_bond.batch_pricing import (
     filter_batch_results_by_view,
     sort_batch_results_for_review,
     sort_batch_results_for_view,
+    DEFAULT_DOUBLE_LOW_PERCENTILE,
     DEFAULT_UNDERVALUED_PERCENTILE,
     MIN_RELATIVE_CHEAPNESS,
     MIN_VIEW_ROWS,
@@ -1166,6 +1167,33 @@ def test_deviation_outlier_tags_split_by_direction():
     assert any("待检验" in n or "低于模型" in n for n in cheap["review_notes"])
 
 
+def test_deviation_anomaly_threshold_sits_at_20pp():
+    """离群线的**位置**也要钉住: 偏离中位 19pp 不算离群, 20pp 算。
+
+    上面那条用例取的是 ±25pp, 离边界太远 —— 实测把 ``DEVIATION_ANOMALY_THRESHOLD``
+    从 0.20 收到 **0.10 整套仍然全绿**, 而收紧这个数会让「模型高估离群」重新泛滥
+    (那正是它当初的毛病: 用绝对阈值时命中 45% = 126/280, 早已丧失识别离群的能力;
+    锚到中位 + 20pp 之后命中 12%)。
+
+    边界写字面量: 从 ``DEVIATION_ANOMALY_THRESHOLD`` 算出来的 gap 对任何取值都成立。
+    """
+    med = 0.19
+
+    def tags(gap):
+        dev = med + gap
+        return annotate_batch_result(
+            dict(status="ok", S0=12.0, K=13.5, theoretical_price=100.0,
+                 market_price=100.0 * (1 + dev), deviation=dev, sigma=0.3, T=3.0,
+                 credit_rating="AA", outstanding_balance=5.0,
+                 valuation_date="2026-08-23"),
+            market_median_deviation=med)["risk_tags"]
+
+    assert "模型高估离群" not in tags(0.19)
+    assert "模型高估离群" in tags(0.20)
+    assert "深度低估待核" not in tags(-0.19)
+    assert "深度低估待核" in tags(-0.20)
+
+
 def test_review_bucket_is_a_real_partition():
     """四个分桶互斥且覆盖全部 —— 而不是 79% 挤在需复核里。"""
     rows = [
@@ -1209,6 +1237,65 @@ def _pool(n, *, level, spread=0.30, **overrides):
     return rows
 
 
+def _pool_with_devs(devs):
+    """按给定的 deviation 逐只造行 —— 用于把边界卡在**已知**的相对偏差上。
+
+    与 ``_pool`` 共用同一套 S0/K/theo (那组取值的窄窗口见 ``_pool`` 的 docstring),
+    只是 deviation 由调用方给死, 这样"市场中位"可以算得出来而不是估出来。
+    """
+    return [dict(status="ok", bond_code=f"{100000 + i}.SZ", S0=12.0, K=13.5,
+                 theoretical_price=110.0, market_price=110.0 * (1 + dev),
+                 deviation=dev, sigma=0.30, T=3.0, credit_rating="AA",
+                 outstanding_balance=4.25, valuation_date="2026-08-22")
+            for i, dev in enumerate(devs)]
+
+
+def test_selection_knobs_are_pinned_to_their_literal_values():
+    """四个选债旋钮都是**校准出来的**, 要用字面量钉住 —— 范围断言等于没钉。
+
+    实测的空守护: 这几个数此前只被"从常量自己算出来的期望值"覆盖
+    (``_selection_cutoff(120, DEFAULT_UNDERVALUED_PERCENTILE)`` 这类, 恒真),
+    于是把 ``MIN_RELATIVE_CHEAPNESS`` 从 0.05 松到 **0.04 / 0.02 / 0.01 整套全绿**。
+
+    改这些数各要重做哪个测量:
+    · ``MIN_RELATIVE_CHEAPNESS`` = 5pp —— cb_valuation_history 20 期季度基线里
+      "p25 − 中位"从未浅于 −5.4pp, 即该线在任何 regime 下都不松于"最便宜的四分之一"。
+    · ``DEFAULT_UNDERVALUED_PERCENTILE`` / ``DEFAULT_DOUBLE_LOW_PERCENTILE`` = 15%
+      —— 人工复核一次看得完的量 (主池 311 只 → 上限 47 行)。
+    · ``MIN_VIEW_ROWS`` = 10 —— 小批量 (关注池/新债, 个位数行) 下 15% 会削到只剩一行。
+
+    两个 15% 是**两个**旋钮: 今天同值, 但「低估候选」与「双低」是两条独立的筛子,
+    分别钉住才不会在某一天同值的巧合下互相冒充 (双低那条用例此前就写着
+    ``DEFAULT_UNDERVALUED_PERCENTILE``)。
+    """
+    assert MIN_RELATIVE_CHEAPNESS == 0.05
+    assert DEFAULT_UNDERVALUED_PERCENTILE == 0.15
+    assert DEFAULT_DOUBLE_LOW_PERCENTILE == 0.15
+    assert MIN_VIEW_ROWS == 10
+
+
+def test_relative_cheapness_floor_sits_where_it_was_calibrated():
+    """闸① 的**位置**要有行为守护: −4pp 不算便宜, −6pp 算。
+
+    边界值写死字面量 —— 从 ``MIN_RELATIVE_CHEAPNESS`` 算出来的边界对任何取值都成立,
+    那正是这个常量一路松到 0.01 都没人发现的原因。
+
+    fixture: 118 只贴在 +10%、一只 +6%、一只 +4% → 中位精确等于 +10%, 于是这两只的
+    相对偏差恰好是 −4pp 与 −6pp。名单长度上限不参与 (它们的名次是 0 和 1,
+    远在 ``MIN_VIEW_ROWS`` 之内), 所以出局的原因只可能是闸①。
+    """
+    rows = annotate_batch_results(_pool_with_devs([0.04, 0.06] + [0.10] * 118))
+    assert rows[0]["market_median_deviation"] == pytest.approx(0.10)
+    assert rows[0]["relative_deviation"] == pytest.approx(-0.06)
+    assert rows[1]["relative_deviation"] == pytest.approx(-0.04)
+
+    kept = {r["bond_code"] for r in filter_batch_results_by_view(rows, "低估候选")}
+    assert rows[0]["bond_code"] in kept, "比中位便宜 6pp 的那只没进候选"
+    assert rows[1]["bond_code"] not in kept, "只便宜 4pp 就被当成低估候选了"
+    # 出局原因确实是闸①, 不是名次或标签
+    assert "未便宜过" in view_exclusion_reason(rows[1], "低估候选")
+
+
 @pytest.mark.parametrize("level", [0.004, 0.13, 0.216])
 def test_undervalued_view_survives_the_market_level_cycle(level):
     """同一批相对结构的债, 整体估值水平从熊市谷底搬到牛市高位, 候选数不变。
@@ -1218,9 +1305,12 @@ def test_undervalued_view_survives_the_market_level_cycle(level):
     三个 level 取自 cb_valuation_history 的实际极值与中枢。
     """
     rows = filter_batch_results_by_view(_pool(120, level=level), "低估候选")
-    assert len(rows) == _selection_cutoff(120, DEFAULT_UNDERVALUED_PERCENTILE)
-    # 入选的必须是这批里最便宜的那一头, 而不是碰巧评级高的
-    assert rows[0]["relative_deviation"] < rows[-1]["relative_deviation"] <= -MIN_RELATIVE_CHEAPNESS
+    # 18 = ceil(15% × 120), 写字面量而不是 _selection_cutoff(120, 那个常量) ——
+    # 后者是拿被测常量算期望值, 常量怎么变都恒真 (实测 0.15 → 0.25 照样绿)。
+    assert len(rows) == 18
+    # 入选的必须是这批里最便宜的那一头, 而不是碰巧评级高的; −0.05 是闸① 的位置,
+    # 单独由 test_relative_cheapness_floor_sits_where_it_was_calibrated 守着。
+    assert rows[0]["relative_deviation"] < rows[-1]["relative_deviation"] <= -0.05
 
 
 def test_undervalued_view_goes_empty_when_dispersion_collapses():
@@ -1237,19 +1327,27 @@ def test_undervalued_view_caps_list_length_when_many_are_cheap():
     """反过来: 便宜的一大片时闸② 挡住"几百只候选", 保持名单可人工复核。"""
     wide = _pool(200, level=0.10)
     kept = filter_batch_results_by_view(wide, "低估候选")
-    assert len(kept) == _selection_cutoff(200, DEFAULT_UNDERVALUED_PERCENTILE) == 30
+    assert len(kept) == 30                      # 30 = 15% × 200
     # 闸① 单独会放行两倍以上 —— 证明上面那个数确实是闸② 定的, 不是闸① 恰好卡在 30
     passing_floor = [r for r in annotate_batch_results(wide)
-                     if r["relative_deviation"] <= -MIN_RELATIVE_CHEAPNESS]
+                     if r["relative_deviation"] <= -0.05]
     assert len(passing_floor) > 2 * len(kept)
 
 
 def test_selection_cutoff_keeps_small_batches_usable():
-    """小批量 (关注池/新债) 下 15% 会把名单削没, MIN_VIEW_ROWS 兜底。"""
-    assert _selection_cutoff(6, DEFAULT_UNDERVALUED_PERCENTILE) == 6
-    assert _selection_cutoff(40, DEFAULT_UNDERVALUED_PERCENTILE) == MIN_VIEW_ROWS
+    """小批量 (关注池/新债) 下 15% 会把名单削没, MIN_VIEW_ROWS 兜底。
+
+    分位与下限都传**字面量**: 传 ``DEFAULT_UNDERVALUED_PERCENTILE`` 并拿
+    ``MIN_VIEW_ROWS`` 当期望值时, 两个常量一起变仍然全绿 —— 这里要钉的恰恰是
+    "取哪个数", 不是 ``_selection_cutoff`` 的算术。
+    """
+    assert _selection_cutoff(6, 0.15) == 6       # 比下限还小 → 全留
+    assert _selection_cutoff(40, 0.15) == 10     # ceil(6) 被 MIN_VIEW_ROWS 抬到 10
+    assert _selection_cutoff(200, 0.15) == 30
+    assert _selection_cutoff(0, 0.15) == 0
+    # 生产真的用的是这两个数 (上面那四条只验算术)
     assert _selection_cutoff(200, DEFAULT_UNDERVALUED_PERCENTILE) == 30
-    assert _selection_cutoff(0, DEFAULT_UNDERVALUED_PERCENTILE) == 0
+    assert _selection_cutoff(40, DEFAULT_UNDERVALUED_PERCENTILE) == 10
 
 
 def test_review_bucket_and_undervalued_view_stay_in_sync():
@@ -1283,7 +1381,11 @@ def test_double_low_view_takes_the_lowest_and_ignores_model_confidence():
     """双低是纯市场量 (价格+溢价), 不该被模型置信度筛掉。"""
     rows = _pool(120, level=0.13, sigma=1.5)       # 全部高 HV → 模型置信度低
     kept = filter_batch_results_by_view(rows, "双低")
-    assert len(kept) == _selection_cutoff(120, DEFAULT_UNDERVALUED_PERCENTILE)
+    # 18 = ceil(15% × 120)。**字面量而不是 DEFAULT_UNDERVALUED_PERCENTILE** ——
+    # 双低走的是 DEFAULT_DOUBLE_LOW_PERCENTILE, 这条用例原先引的是另一个视图的旋钮,
+    # 只因两者今天同值才没露馅; 那两个数各自的字面量锚在
+    # test_selection_knobs_are_pinned_to_their_literal_values。
+    assert len(kept) == 18
     ordered = sort_batch_results_for_view(kept, "双低")
     values = [r["double_low"] for r in ordered]
     assert values == sorted(values)
@@ -1478,6 +1580,23 @@ def test_cross_section_anchor_none_when_sample_too_small():
     """样本不足又没有行内锚时返回 None —— 让调用方看见"没有锚", 而不是拿到一个假的."""
     assert batch_pricing.cross_section_anchor_from([_anchor_row("A", 0.1)]) is None
     assert batch_pricing.cross_section_anchor_from([]) is None
+
+
+def test_self_computed_anchor_needs_exactly_thirty_rows():
+    """"样本够不够"的门槛是 **30**, 两侧各钉一条。
+
+    只用 1 行与 40 行测时门槛怎么改都全绿 (实测 30 → 5 与 30 → 39 都不变红), 而这是
+    **一道悬崖**: 29 只时锚回落 0.0, ``relative_deviation`` 悄悄变回绝对偏差 ——
+    同一批债在 29 与 30 只之间会从全落选跳到全入选, 而两边都不报错。
+
+    29 / 30 写死字面量 —— 从 ``_DEVIATION_MEDIAN_MIN_SAMPLE`` 算出来的边界恒真。
+    """
+    assert batch_pricing.median_deviation_of(_anchor_pool(29)) is None
+    assert batch_pricing.median_deviation_of(_anchor_pool(30)) is not None
+    assert batch_pricing.cross_section_anchor_from(
+        batch_pricing.annotate_batch_results(_anchor_pool(29))) is None
+    assert batch_pricing.cross_section_anchor_from(
+        batch_pricing.annotate_batch_results(_anchor_pool(30))) is not None
 
 
 def test_off_pool_subset_relative_deviation_matches_full_pool():
