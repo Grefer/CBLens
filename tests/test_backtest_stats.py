@@ -87,3 +87,39 @@ def test_rolling_sharpe_and_summary():
     # 样本不足窗口
     assert rolling_sharpe([0.01] * 5, window=12, periods_per_year=12) == []
     assert summarize_stability([]) is None
+
+
+def test_block_bootstrap_pairs_by_period_not_by_compacted_index():
+    """配对块自助必须**按期**配对 —— 各自剔 NaN 再按下标配对会静默错位。
+
+    docstring 承诺的是"保留策略/基准同期对齐", 而实现曾是各自过一遍
+    ``_finite_array`` (它把缺失项**压缩掉**, 不是留空), 再 ``[:n]`` 截齐: 策略在
+    第 3 期缺一个值, 从第 4 期起两条序列就整体错位一格, 后面每一次配对比较照常算得出
+    一个数, 没有任何东西会报错。
+
+    缺失不是假想: 某一期基准取不到可成交成分时 ``benchmark_return`` 就是 None,
+    而策略那一期有值。
+
+    判据取**极端反相**的两条序列: 正确配对时每一期超额都是 +0.20, 而错位一格之后
+    策略的正收益会去对上基准的正收益, 超额塌向 0。
+    """
+    from convertible_bond.backtest_stats import block_bootstrap_excess
+
+    strat = [0.30, -0.10, 0.30, -0.10, 0.30, -0.10, 0.30, -0.10]
+    bench = [0.10, -0.30, 0.10, -0.30, 0.10, -0.30, 0.10, -0.30]
+    clean = block_bootstrap_excess(strat, bench, n_boot=200, seed=7)
+    assert clean is not None
+
+    # 策略第 3 期缺值 —— 正确处置是**把这一对整个丢掉**, 而不是把策略后面的值提前一格。
+    holed = list(strat)
+    holed[2] = None
+    got = block_bootstrap_excess(holed, bench, n_boot=200, seed=7)
+    assert got is not None
+    assert got["n_obs"] == 7, f"配对后应剩 7 期, 实际 {got['n_obs']}"
+
+    expected = block_bootstrap_excess(
+        [x for i, x in enumerate(strat) if i != 2],
+        [x for i, x in enumerate(bench) if i != 2],
+        n_boot=200, seed=7)
+    assert got["point_excess"] == pytest.approx(expected["point_excess"]), (
+        "缺一期之后的配对结果与'把那一对整个删掉'不一致 —— 说明剔除是各自独立发生的")

@@ -21,6 +21,30 @@ def _finite_array(returns) -> np.ndarray:
     return arr[np.isfinite(arr)]
 
 
+def _finite_pairs(a_returns, b_returns) -> tuple[np.ndarray, np.ndarray]:
+    """按**下标配对**后再剔除, 保证两条序列说的是同一批期。
+
+    不能各自过一遍 ``_finite_array`` 再 ``[:n]`` 截齐: 那样剔除是**独立**发生的,
+    策略在第 3 期缺一个值, 从第 4 期起两条序列就整体错位一格, 而后面的配对比较
+    (`strat_tot - bench_tot`) 照常算得出一个数。缺失不是假想 —— 某一期基准取不到
+    可成交成分时 ``benchmark_return`` 就是 None, 而策略那一期有值。
+    """
+    a_raw = list(a_returns or [])
+    b_raw = list(b_returns or [])
+    pairs = []
+    for x, y in zip(a_raw, b_raw):
+        if x is None or y is None:
+            continue
+        fx, fy = float(x), float(y)
+        if not (np.isfinite(fx) and np.isfinite(fy)):
+            continue
+        pairs.append((fx, fy))
+    if not pairs:
+        return np.empty(0), np.empty(0)
+    arr = np.asarray(pairs, dtype=float)
+    return arr[:, 0], arr[:, 1]
+
+
 _STD_EPS = 1e-12   # 收益序列标准差视为零的阈值: 防恒定/近恒定序列浮点残差炸出天文 Sharpe
 
 
@@ -98,12 +122,10 @@ def block_bootstrap_excess(
     按期配对重采样 (保留策略/基准同期对齐), 每次比较两条复利总收益。回答
     "这点超额是不是噪声"。两序列取等长前缀; 有效期 < 4 返回 None。
     """
-    a = _finite_array(strategy_returns)
-    b = _finite_array(benchmark_returns)
-    n = min(a.size, b.size)
+    a, b = _finite_pairs(strategy_returns, benchmark_returns)
+    n = a.size
     if n < 4:
         return None
-    a, b = a[:n], b[:n]
     block = block or _default_block(n)
     rng = np.random.default_rng(seed)
     diffs = np.empty(n_boot)
@@ -123,6 +145,9 @@ def block_bootstrap_excess(
         "ci_level": ci_level,
         "block": block,
         "n_boot": n_boot,
+        # 配对之后真正参与比较的期数 —— 与传进来的长度可以不同 (任一侧缺值的那一对
+        # 整对丢弃), 而"丢了几期"是读这个 CI 时必须知道的。
+        "n_obs": n,
     }
 
 
