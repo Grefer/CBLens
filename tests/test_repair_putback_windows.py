@@ -8,6 +8,7 @@
 ``parse_putback_terms`` —— 两边各写一份正是本仓库反复踩过的坑。
 """
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -337,3 +338,41 @@ def test_a_late_supporting_document_cannot_bury_the_real_window():
                                     valuation_date=date(2026, 8, 20))
     assert patched.putback_start_date == date(2026, 8, 1)
     assert patched.putback_end_date == date(2026, 8, 7)
+
+
+def test_body_cache_write_is_atomic(tmp_path, monkeypatch):
+    """公告正文缓存是 `data/` 下唯一一处裸 write_text, 必须补上原子写。
+
+    它偏偏是**可续跑**的长任务 (几百次网络往返), 中断是常态不是意外。留下半截正文
+    的代价不是"少一份缓存": 空文件是这里表达"扫描件/图片版公告"的方式 (下次不再
+    重下), 而截断的**非空**正文会被下游解析成一个错的值或 None ——
+    ``cb-repair-rating-patches`` 对"解析不出"的处置正是**删掉该字段**, 于是一次
+    Ctrl-C 可以把正确的存量评级洗掉, 而重跑还会命中这份坏缓存。
+
+    判据: 写盘中途抛异常之后, 目标文件**不许存在** (半截内容只许留在 .tmp 上)。
+    """
+    from convertible_bond.cli import repair_putback_windows as mod
+
+    url = "http://example.com/a.pdf"
+    cache_dir = tmp_path / "bodies"
+    target = mod._cache_file(cache_dir, url)
+
+    monkeypatch.setattr(mod, "_try_download_body", lambda _s, _u: "完整正文" * 100,
+                        raising=False)
+    import convertible_bond.cb_event_sync as sync_mod
+    monkeypatch.setattr(sync_mod, "_try_download_body", lambda _s, _u: "完整正文" * 100)
+
+    real_replace = Path.replace
+
+    def boom(self, other):
+        raise KeyboardInterrupt("中断在 rename 之前")
+
+    monkeypatch.setattr(Path, "replace", boom)
+    with pytest.raises(KeyboardInterrupt):
+        mod.fetch_body(url, cache_dir, download=True)
+    assert not target.exists(), "中断之后目标文件仍存在 —— 下次重跑会命中这份半截缓存"
+
+    monkeypatch.setattr(Path, "replace", real_replace)
+    body = mod.fetch_body(url, cache_dir, download=True)
+    assert body and target.exists()
+    assert target.read_text(encoding="utf-8") == body

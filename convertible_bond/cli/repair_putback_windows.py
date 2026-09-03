@@ -89,7 +89,15 @@ def fetch_body(url: str, cache_dir: Path | None, *, download: bool) -> str | Non
     body = _try_download_body(None, url)
     if cached is not None:
         cached.parent.mkdir(parents=True, exist_ok=True)
-        cached.write_text(body or "", encoding="utf-8")
+        # **原子写**: 先写同目录的 .tmp 再 rename。这是 `data/` 下唯一一处裸
+        # `write_text` —— 而它偏偏是**可续跑**的长任务 (几百次网络往返), 中断是常态
+        # 不是意外。留下半截正文的代价不是"少一份缓存": 空文件是这里表达"扫描件/
+        # 图片版公告"的方式 (下次不再重下), 而截断的非空正文会被下游解析成一个**错的**
+        # 值或 None —— `cb-repair-rating-patches` 对"解析不出"的处置正是**删掉该字段**,
+        # 于是一次 Ctrl-C 可以把正确的存量评级洗掉, 而重跑还会命中这份坏缓存。
+        tmp = cached.with_suffix(cached.suffix + ".tmp")
+        tmp.write_text(body or "", encoding="utf-8")
+        tmp.replace(cached)
     return body
 
 
