@@ -42,6 +42,24 @@ python -m pip install -U pip
 pip install -e ".[dev]"
 ```
 
+> [!IMPORTANT]
+> **`-e` 不是可选的**：本项目只支持两种装法——**源码 checkout（editable）** 与
+> **桌面包**。wheel 里**不含数据**：`data/` 与 `assets/` 都在包目录之外，而打包只按
+> `packages.find` 收 `convertible_bond*`，实测 `pip wheel --no-deps .` 产出的 92 个条目里
+> `data/` 与 `assets/` **各 0 个文件**（86 个 `.py` + 6 个 dist-info 元数据）。所以 `pip install .`（非 `-e`）装出来的环境没有任何条款/事件数据，
+> `cb-screen-pool` 会报「总数: 0」。
+>
+> 这种装法下数据目录**不会**落在 site-packages（那里写进去的东西会随下一次 pip
+> 升级/卸载消失），而是回落到桌面包用的用户级目录，并打印一条警告：
+>
+> | 平台 | 数据目录 |
+> | --- | --- |
+> | macOS | `~/Library/Application Support/CBLens/data` |
+> | Windows | `%APPDATA%\CBLens\data` |
+> | Linux | `${XDG_DATA_HOME:-~/.local/share}/CBLens/data` |
+>
+> 任何形态都可以用 `CBLENS_DATA_DIR` 显式指定数据目录，例如指向一份已有的仓库 `data/`。
+
 ### 依赖清单
 
 | 依赖 | 用途 | 备注 |
@@ -540,6 +558,27 @@ cb-repair-balance-patches --apply          # 确认后回洗 (自动备份 .bak-
 
 解析侧已按**措辞**而非数值修复，真实披露的「未转股余额为 3,000 万元」仍会正常解析；
 本命令只清洗历史存量，日常同步不需要重复跑。
+
+### 补历史：两个一次性回填工具
+
+它们都写进**生产存储**（`cb_data.json` / `cb_terms_patches.json`），跑完日常流程不需要
+再碰；列在这里是因为一个敲得出来却没写过怎么用的命令，和一个坏掉的命令区分不开。
+
+```bash
+cb-backfill-delisted-cbs --dry-run          # 先看会补哪些债
+cb-backfill-delisted-cbs                    # 回填已退市/已强赎的债 (需 Wind)
+
+cb-backfill-down-reset-patches --dry-run    # 先看会生成哪些 patch
+cb-backfill-down-reset-patches --fetch-pdf  # 下载公告正文重解析, 覆盖率最高但最慢
+```
+
+- `cb-backfill-delisted-cbs`：`cb-sync-tradable` 只拉**今日存续**的转债，于是
+  cb_data 长期带幸存者偏差——已强赎/已到期的债退出样本，回测早年窗口会偷偷剔掉那些
+  「涨到强赎」的好券。本命令按季度末扫 Wind 历史成分取并集，显式 `drop_terminal=False`
+  把差集补进同一个 `cb_data.json`。
+- `cb-backfill-down-reset-patches`：早期入库的下修事件解析不全，`cb_terms_patches.json`
+  里下修后的转股价覆盖偏稀。本命令按 `event_price` → 标题重解析 → PDF 正文的优先级
+  回填 `conversion_price` patch（同 key 不重复写）。
 
 ---
 

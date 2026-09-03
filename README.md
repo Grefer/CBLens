@@ -116,6 +116,9 @@ python -m pip install -U pip
 pip install -e ".[dev]"
 ```
 
+> [!IMPORTANT]
+> **`-e` 不是可选的**：只支持 **源码 checkout（editable）** 与 **桌面包** 两种装法。`data/` 与 `assets/` 都在包目录之外，wheel 不会带上它们（实测 `pip wheel --no-deps .` 产出的 92 个条目里 `data/` 与 `assets/` 各 0 个文件，86 个 `.py` 加 6 个 dist-info 元数据），所以 `pip install .` 装出来的环境没有任何条款数据，`cb-screen-pool` 会报「总数: 0」。这种装法下数据目录不会写进 site-packages，而是回落到桌面包用的用户级目录（macOS `~/Library/Application Support/CBLens/data`）并打印警告；也可以用 `CBLENS_DATA_DIR` 显式指向一份已有的 `data/`。详见 [使用文档 · 安装](docs/USAGE.md#1-安装)。
+
 > [!NOTE]
 > **WindPy** 不通过 pip 发布。如需同步全市场条款或使用 Wind 行情，需在 Wind 终端的插件管理中把 Python 接口安装到当前虚拟环境。仅使用离线 PDE 模型、已有 `data/cb_data.json` 或 akshare 动态行情时，无需连接 Wind。
 

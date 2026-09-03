@@ -47,7 +47,6 @@ cb-sync-admission-status = "convertible_bond.cli.sync_admission_status:main"
 cb-sync-events = "convertible_bond.cli.sync_events:main"
 cb-sync-new-issues = "convertible_bond.cli.sync_new_issues:main"
 cb-sync-tradable = "convertible_bond.cli.sync_tradable:main"
-cb-sync-terms = "convertible_bond.cli.sync_terms:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

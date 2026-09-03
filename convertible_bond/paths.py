@@ -32,6 +32,51 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def is_source_checkout() -> bool:
+    """True 表示 ``project_root()`` 真的是仓库根 (源码 checkout 或 editable 安装)。
+
+    判据是根目录里有没有 ``pyproject.toml``。这一条存在的唯一理由是: **wheel 里不含
+    数据**。实测 2026-09-03 ``pip wheel --no-deps .`` 产出的 92 个条目里 86 个是 ``.py``,
+    其余 6 个全是 ``dist-info`` 元数据 —— ``data/`` 与 ``assets/`` **各 0 个文件**
+    (两者都在包目录之外, 而 ``[tool.setuptools.packages.find]`` 只 include
+    ``convertible_bond*``)。那种装法下 ``project_root()`` 就是 site-packages, 于是
+    ``data_path()`` 会在 ``site-packages/data/`` 底下**建目录并往里写** —— 实测
+    ``cb-screen-pool`` 报「总数: 0」却不说为什么, 而写进去的数据会随下一次 pip
+    升级/卸载一起消失, 系统级安装还可能根本没有写权限。
+    editable 安装实测 ``__file__`` 仍指向源码树 (pyproject 在), 所以归为源码 checkout。
+    """
+    return (project_root() / "pyproject.toml").is_file()
+
+
+def _user_data_dir() -> Path:
+    """平台级的用户可写数据目录 (桌面包与 wheel 安装共用)。"""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME / "data"
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Roaming"
+        return root / APP_NAME / "data"
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / APP_NAME / "data"
+
+
+_warned_installed_layout = False
+
+
+def _warn_installed_layout_once(target: Path) -> None:
+    """非源码安装只提示一次 —— 空数据目录不能和「程序坏了」长得一样。"""
+    global _warned_installed_layout
+    if _warned_installed_layout:
+        return
+    _warned_installed_layout = True
+    logger.warning(
+        "检测到非源码安装 (wheel 不携带 data/): 数据目录回落到 %s, 首次使用多半是空的。"
+        "要用仓库里的数据请用 pip install -e 的源码 checkout, 或把 CBLENS_DATA_DIR 指向它。",
+        target,
+    )
+
+
 def _frozen_resource_roots() -> list[Path]:
     """Candidate roots that may contain bundled resources in PyInstaller builds."""
     roots: list[Path] = []
@@ -78,23 +123,21 @@ def bundled_data_path(filename: str) -> Path | None:
 def app_data_dir() -> Path:
     """Writable data directory used by packaged desktop apps.
 
-    Source checkouts keep the historical ``<repo>/data`` behavior unless
-    ``CBLENS_DATA_DIR`` is set. Frozen apps use a per-user writable location.
+    源码 checkout (含 editable 安装) 保持历史行为 ``<repo>/data``, 除非设了
+    ``CBLENS_DATA_DIR``。frozen 桌面包与 **pip 装的 wheel** 都用平台级用户目录 ——
+    后者此前落回 ``project_root() / "data"``, 而那时的 ``project_root()`` 是
+    site-packages (见 ``is_source_checkout`` 的实测)。
     """
     override = os.environ.get("CBLENS_DATA_DIR")
     if override:
         return Path(override).expanduser()
     if not is_frozen_app():
-        return project_root() / "data"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / APP_NAME / "data"
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA")
-        root = Path(base) if base else Path.home() / "AppData" / "Roaming"
-        return root / APP_NAME / "data"
-    base = os.environ.get("XDG_DATA_HOME")
-    root = Path(base) if base else Path.home() / ".local" / "share"
-    return root / APP_NAME / "data"
+        if is_source_checkout():
+            return project_root() / "data"
+        target = _user_data_dir()
+        _warn_installed_layout_once(target)
+        return target
+    return _user_data_dir()
 
 
 def _needs_seed(target: Path, filename: str | None = None) -> bool:
