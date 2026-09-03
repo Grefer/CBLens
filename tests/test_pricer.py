@@ -845,7 +845,14 @@ class TestGreeks:
         assert result["gamma"] > 0, f"Γ={result['gamma']:.8f} 不应退化为 0"
 
     def test_gamma_stable_across_grid_refinement(self):
-        """Γ 应随网格加密收敛, 而不是随网格步长跳变 (旧实现相邻久期可差 4 倍)."""
+        """Γ 应随网格加密收敛, 而不是随网格步长跳变 (旧实现相邻久期可差 4 倍).
+
+        **这条只覆盖 `p_down` 影响不大的那一段。** 全池实测 (Γ ≥ 1e-3 的 242 只,
+        M ∈ {500,1000,2000}): 中位漂移 0.21%, 但 11 只 >10%, 最大 111020.SH **77.3%**
+        (Γ = 0.484 / 1.021 / 2.129)。四只最差的逐条消融, `p_down=0` 让漂移**全部归零** ——
+        那是下修那张面的伪影, 与 `_down_reset_value` 的折点同源 (见 AGENTS
+        「已知边界」)。这条守护不去断言那一段, 因为把它变红等于要求一个尚未做的口径变更。
+        """
         pricer = UniversalCBPricer(
             S0=97.66, K=104.85,
             current_date=date(2026, 8, 24),
@@ -856,12 +863,30 @@ class TestGreeks:
             # (见 test_frozen_down_reset_floor_puts_a_kink_right_at_s0)。
             down_reset_floor=97.66,
         )
+        import convertible_bond.pricer as pricer_mod
+
+        # ① 自适应加密**确实起作用** —— 这才是这条守护真正护住的东西。
+        #    这个 fixture 上 S_max 由 σ√T 撑到 5242 (被 _S_MAX_CAP 夹住), 于是
+        #    M=500 只在 S0 以下留 9.3 个格点。加密之后必须够 _MIN_NODES_BELOW_S0。
+        S_grid, _ = pricer._price_grid(0.65, 0.015, 0.002, 0.035, 0.25, 0.05, 500, 1000)
+        nodes_below = pricer.S0 / float(S_grid[1] - S_grid[0])
+        # 期望值写**字面量**: 拿 `_MIN_NODES_BELOW_S0 - 1` 当期望等于让被测常数
+        # 自己批改自己 —— 实测那样写时把它改成 0 或 20 这条用例照样绿。
+        assert nodes_below >= 59, (
+            f"S0 以下只有 {nodes_below:.1f} 个格点, 自适应加密没生效")
+        assert pricer_mod._MIN_NODES_BELOW_S0 == 60, "改这个下限是模型行为变更"
+
+        # ② 收敛性要在**加密夹不到的那一段**上测。M=500/1000/2000 在这个 fixture 上
+        #    全被夹成有效 M=3221 —— 三个 Γ 逐位相同, 相对极差恒等于 0.0, 那条断言
+        #    什么也观测不到 (实测: gammas 三个值完全相等)。取夹点以上的 M。
         gammas = [
             pricer.price(sigma=0.65, r=0.015, q=0.002, base_spread=0.035,
                          p_down=0.25, M=M, N=1000, return_greeks=True)["gamma"]
-            for M in (500, 1000, 2000)
+            for M in (3221, 4000, 8000)
         ]
         assert all(g > 0 for g in gammas), f"Γ 出现非正值: {gammas}"
+        assert len(set(gammas)) == len(gammas), (
+            f"三个 M 给出重复值, 说明它们又落进同一个有效网格, 测不到收敛: {gammas}")
         drift = (max(gammas) - min(gammas)) / max(gammas)
         assert drift < 0.10, f"Γ 随网格步长漂移过大: {gammas} (相对极差 {drift:.1%})"
 
@@ -2543,7 +2568,7 @@ class TestGridResolutionAtS0:
         S_grid, _ = p._price_grid(args["sigma"], args["r"], 0.0, args["base_spread"],
                                   args["p_down"], args["distress_k"], 500, 2000)
         nodes_below = p.S0 / float(S_grid[1] - S_grid[0])
-        assert nodes_below >= pricer_mod._MIN_NODES_BELOW_S0 - 1, (
+        assert nodes_below >= 59, (          # 字面量: 期望值不许从被测常数算出来
             f"S0 以下只有 {nodes_below:.1f} 个格点")
 
         # 前提: 不加密的话确实是饿着的 —— 否则这条用例什么也没测
@@ -2567,7 +2592,8 @@ class TestGridResolutionAtS0:
         # 上限要生效, 免得 S0/S_max 极小时把 M 撑到天文数字
         tiny = UniversalCBPricer(**dict(self._high_sigma_otm(), S0=0.02))
         g, _ = tiny._price_grid(self.SIGMA, 0.0148, 0.0, 0.03, 0.0, 0.05, 500, 200)
-        assert len(g) - 1 <= pricer_mod._MAX_ADAPTIVE_M
+        assert len(g) - 1 <= 4000            # 同上, 不写 pricer_mod._MAX_ADAPTIVE_M
+        assert pricer_mod._MAX_ADAPTIVE_M == 4000, "改这个上限是模型行为变更"
 
     def test_vega_uses_the_same_s_grid_as_the_base_solve(self):
         """vega 的两次解必须跑在同一张 S 网格上。
