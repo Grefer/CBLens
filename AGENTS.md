@@ -965,7 +965,15 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   和"取了一半"混成同一件事。
 - **半开区间票息**: `(start, end]` 避免边界双计
 - **年化强度**: p_down 解释为年化事件强度，每步 `1-exp(-p·dt)`
-- **原子写**: JSON 先写 `.tmp` 再 `rename`，防半截文件
+- **原子写走 `atomic_io.atomic_write_json` / `atomic_write_text`, 不要自己写一遍**。
+  「先写 .tmp 再 rename」此前在 10 个模块里各写一份, 每一份都用**固定**临时名 ——
+  那让原子性只对崩溃成立、对**并发**不成立: 两个进程写同一个文件时它们写的是同一个
+  盘上对象, 内容交错之后各自 rename 一次, 发布出去的是坏 JSON。而 GUI 批量 worker 与
+  终端里的 `cb-sync-events --apply` 同时跑正是 README 写着的日常流。helper 用 `mkstemp`
+  在同目录内取唯一名 (rename 只在同一文件系统内原子), 失败清理残骸, 并 `fsync` ——
+  少了它 rename 之后掉电会留下一份长度正确、内容全零的文件, 比半截文件更难查。
+  **序列化参数按被替换的那处原样传** (`sort_keys` / `indent` 各处不同), 否则版本库里的
+  JSON 会整体重排出几万行假 diff; 转换时逐字节比对过四份真实数据。
 - **鸭子类型缓存**: TermsBundle/TermsCache 共用接口 `has/get/set/list_bonds/fetched_at/is_stale/delete`
 - **市场口径的"今天"**: 一律用 `market_time.market_today()` (Asia/Shanghai), 不要用
   `date.today()` — 后者跟着运行机器时区走, 非东八区 (如美西) 会让估值日、公告同步窗口、
