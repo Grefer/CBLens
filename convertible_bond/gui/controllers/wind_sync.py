@@ -56,6 +56,30 @@ _POOL_SYNC_TARGETS = (
 )
 
 
+def _widget_alive(widget) -> bool:
+    """控件的 Tcl 命令还在不在。
+
+    ``winfo_exists`` 传的是**路径名字符串**, 对已销毁的路径返回 0 而不报错 (实测
+    Tk 8.6.15: 已 destroy 的 Text 上 ``winfo_exists() -> 0``, 而 ``insert`` 抛
+    ``TclError: invalid command name ".!toplevel.!text"``) —— 所以它可以安全地当闸。
+    """
+    try:
+        return bool(widget.winfo_exists())
+    except Exception:
+        return False
+
+
+def _configure_if_alive(widget, **kwargs) -> bool:
+    """控件还活着才 configure; 已销毁则静默跳过, 返回是否真的配置了。"""
+    if not _widget_alive(widget):
+        return False
+    try:
+        widget.configure(**kwargs)
+    except Exception:
+        return False
+    return True
+
+
 def pool_sync_command(module: str, extra_args) -> list[str]:
     """起同步子进程的命令行。
 
@@ -348,6 +372,11 @@ class WindSyncMixin:
         win.protocol("WM_DELETE_WINDOW", lambda: (_kill(), win.destroy()))
 
         def append(line: str):
+            # 用户可以中途关窗 (上面的 WM_DELETE_WINDOW), 而 `self.after` 排在**主窗口**
+            # 上 —— 窗口销毁不会撤销已排队的回调, 于是每一行输出都往一个不存在的 Tcl
+            # 命令里写, 抛 TclError。一次全量同步几千行 = 几千条 traceback。
+            if not _widget_alive(text_box):
+                return
             text_box.insert("end", line)
             text_box.see("end")
 
@@ -375,8 +404,9 @@ class WindSyncMixin:
             except Exception as exc:
                 self.after(0, lambda exc=exc: status_var.set(f"❌ 启动失败: {exc}"))
             finally:
-                self.after(0, lambda: cancel_btn.configure(state="disabled"))
-                self.after(0, lambda: close_btn.configure(state="normal"))
+                # 关窗之后这两个按钮已经不存在了; 顺序不能反过来 (先 configure 再判)
+                self.after(0, lambda: _configure_if_alive(cancel_btn, state="disabled"))
+                self.after(0, lambda: _configure_if_alive(close_btn, state="normal"))
                 if hasattr(self, "_update_data_freshness"):
                     self.after(0, self._update_data_freshness)
 

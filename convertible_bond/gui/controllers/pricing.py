@@ -36,6 +36,52 @@ from ..theme import (
 from ...market_time import market_today
 
 
+#: ``_collect_params`` 会读到的全部输入框。顺序无所谓, 但**必须齐全** ——
+#: 漏一个就等于那一格仍然在 worker 线程里现读, 而那正是要修的形状。
+_PRICING_INPUT_VARS = (
+    "v_bond_code",
+    "v_coupons", "v_cur_date", "v_S0", "v_K", "v_face", "v_redemp",
+    "v_mat_date", "v_iss_date", "v_conv_date",
+    "v_call_ratio", "v_put_ratio", "v_put_years", "v_call_notice",
+    "v_down_reset_trigger_ratio",
+    "v_p_down", "v_spread", "v_sigma", "v_r", "v_q", "v_dk", "v_M", "v_N",
+)
+
+
+class _FrozenVar:
+    """快照里的一格 —— 只有 ``get()``, 与 Tk 变量在 ``_collect_params`` 里的用法同形。"""
+
+    __slots__ = ("_text",)
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def get(self) -> str:
+        return self._text
+
+
+class _FrozenPricingInputs:
+    """定价参数的输入面, 冻结在主线程读到的那一瞬。
+
+    ``__getattr__`` **刻意不回落到活的 Tk 变量**: 漏登记一个名字要当场
+    AttributeError, 否则它会静默退回"在 worker 里现读输入框", 而那是一个测试全绿、
+    界面也不报错的失效 —— 与本仓库其它几处"绿着的空守护"同形。
+    """
+
+    __slots__ = ("_vars",)
+
+    def __init__(self, raw: dict[str, str]) -> None:
+        self._vars = {name: _FrozenVar(text) for name, text in raw.items()}
+
+    def __getattr__(self, name: str) -> _FrozenVar:
+        try:
+            return self._vars[name]
+        except KeyError:
+            raise AttributeError(
+                f"定价输入快照里没有 {name} —— 新增输入框要同时登记进 _PRICING_INPUT_VARS"
+            ) from None
+
+
 class PricingMixin:
     """⚡ 定价 tab 的业务逻辑."""
 
@@ -240,11 +286,13 @@ class PricingMixin:
         self.lbl_result.configure(text_color=TEXT_DIM)
         self.btn_calc.configure(state="disabled")
         self._start_progress("正在计算理论价格")
-        threading.Thread(target=self._pricing_worker, daemon=True).start()
+        # 输入快照在**主线程**取, 与 `tabs/batch.py` 的 `_run_batch` 同形
+        inputs = self._read_pricing_inputs()
+        threading.Thread(target=self._pricing_worker, args=(inputs,), daemon=True).start()
 
-    def _pricing_worker(self):
+    def _pricing_worker(self, inputs: dict[str, str]):
         try:
-            params = self._collect_params()
+            params = self._collect_params(inputs=inputs)
             pricer = UniversalCBPricer(**params["pricer"])
             result = pricer.price(**params["model"], return_greeks=True)
             sigma_used = params["model"]["sigma"]
@@ -256,15 +304,51 @@ class PricingMixin:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_calc.configure(state="normal"))
 
-    def _collect_params(self, *, s0_fallback: float | None = None):
+    def _read_pricing_inputs(self) -> dict[str, str]:
+        """在**主线程**把定价用到的输入框一次读全, 返回纯字符串快照。
+
+        与 ``tabs/batch.py`` 的 ``_run_batch`` 同一个形状 (那里也是主线程收好 params
+        再传字典进线程)。定价页此前是在 worker 里调 ``_collect_params``, 两个毛病:
+
+        · **读到的是改了一半的参数组合**。``_collect_params`` 中间隔着一次真正的取数
+          (``_estimate_down_reset_floor_for_gui`` → provider 拉正股日线, 实测 0.22s
+          走新浪 / 1.9s 走被封的东财 / Wind 未连时最长 ``WIND_START_WAIT_SEC`` 20s),
+          而 23 个输入里有 **8 个** (σ / r / q / 信用利差 / 年化下修强度 / 低股价利差
+          扩张 / M / N) 是在那次取数**之后**才读的。用户在这段里改一下 σ, 算出来的价
+          就来自一组屏幕上从没同时出现过的参数。
+        · **它不报错**。实测本机 Tcl 8.6.15 是 threaded 版, 跨线程 ``StringVar.get()``
+          被 marshal 回主线程正常返回, 拿到的是**改之后**的新值 —— 没有异常、没有日志,
+          结果面板照常显示一个数。
+
+        新增输入框要同时登记进 ``_PRICING_INPUT_VARS``, 否则 ``_FrozenPricingInputs``
+        会当场 AttributeError (刻意不回落到活变量, 见那里的说明)。
+
+        **还没冻住的四格**: ``_resolve_down_reset_for_pricing``
+        (``controllers/down_reset.py``) 自己现读 ``v_bond_code``, 它再往下的
+        ``_compute_down_reset_from_ui`` 现读 ``v_dr_announce_date`` /
+        ``v_dr_cooldown`` / ``v_dr_block_until``。四格都排在那次取数**之前**
+        (调用点 :449 vs 取数 :454, 中间只有本地条款缓存查表), 所以暴露窗口是微秒级
+        而不是秒级; 后三格还是"UI 字段只作兜底维护入口"的手工覆盖, 常规定价走事件表。
+        要一起冻住得改 ``down_reset.py`` 的签名, 属另一处改动。
+        """
+        return {name: getattr(self, name).get() for name in _PRICING_INPUT_VARS}
+
+    def _collect_params(self, *, s0_fallback: float | None = None,
+                        inputs: dict[str, str] | None = None):
         """收集定价参数。
+
+        ``inputs`` 是 ``_read_pricing_inputs()`` 的快照。**worker 线程里一律要传** ——
+        不传就退回边算边读 Tk 变量的老形状 (见 ``_read_pricing_inputs`` 的说明)。
+        主线程调用方 (敏感性页 / 现金流窗口) 不传, 行为与从前逐字一致。
 
         ``s0_fallback`` 只在 ``v_S0`` **为空**时顶上, 而且**不写回那个变量** ——
         敏感性页曾直接 ``self.v_S0.set(self.v_K.get())`` 来让这里通过, 但 ``v_S0`` 是
-        **两页共享**的 (``tabs/pricing.py:93` 的「正股价 S」输入框, 以及下面 287 行真正
+        **两页共享**的 (``tabs/pricing.py:93` 的「正股价 S」输入框, 以及下面真正
         拿去定价的那个值)。于是"行情还没到就点了一次敏感性"之后, 定价页会拿
         **正股价 = 转股价**这个捏造的数算理论价, 而且不留任何痕迹。
         """
+        _in = self if inputs is None else _FrozenPricingInputs(inputs)
+
         def pf(v, label):
             val = v.get().strip()
             try:
@@ -286,36 +370,37 @@ class PricingMixin:
             except ValueError:
                 raise ValueError(f"{label} 日期格式应为 YYYY-MM-DD, 当前值: '{val}'") from None
 
-        coupon_str = self.v_coupons.get().strip()
+        coupon_str = _in.v_coupons.get().strip()
         coupon_rates = tuple(float(x.strip()) / 100.0
                              for x in coupon_str.split(",") if x.strip())
 
-        current_date = pd(self.v_cur_date, "估值日期")
+        current_date = pd(_in.v_cur_date, "估值日期")
         def _s0():
-            if not self.v_S0.get().strip() and s0_fallback is not None:
+            if not _in.v_S0.get().strip() and s0_fallback is not None:
                 return float(s0_fallback)
-            return pf(self.v_S0, "正股价 S")
+            return pf(_in.v_S0, "正股价 S")
 
         pricer = dict(
             S0=_s0(),
-            K=pf(self.v_K, "转股价 K"),
-            face_value=pf(self.v_face, "面值"),
-            redemption_price=pf(self.v_redemp, "到期赎回价"),
+            K=pf(_in.v_K, "转股价 K"),
+            face_value=pf(_in.v_face, "面值"),
+            redemption_price=pf(_in.v_redemp, "到期赎回价"),
             current_date=current_date,
-            maturity_date=pd(self.v_mat_date, "到期日期"),
-            issue_date=pd(self.v_iss_date, "起息日"),
-            conversion_start_date=pd(self.v_conv_date, "转股起始日"),
+            maturity_date=pd(_in.v_mat_date, "到期日期"),
+            issue_date=pd(_in.v_iss_date, "起息日"),
+            conversion_start_date=pd(_in.v_conv_date, "转股起始日"),
             coupon_rates=coupon_rates,
-            call_trigger_ratio=pf(self.v_call_ratio, "强赎触发") / 100.0,
-            put_trigger_ratio=pf(self.v_put_ratio, "回售触发") / 100.0,
-            put_active_years=int(pf(self.v_put_years, "回售生效年数")),
-            call_notice_days=int(pf(self.v_call_notice, "强赎宽限天数")),
+            call_trigger_ratio=pf(_in.v_call_ratio, "强赎触发") / 100.0,
+            put_trigger_ratio=pf(_in.v_put_ratio, "回售触发") / 100.0,
+            put_active_years=int(pf(_in.v_put_years, "回售生效年数")),
+            call_notice_days=int(pf(_in.v_call_notice, "强赎宽限天数")),
         )
-        down_reset_trigger_pct = pfo(self.v_down_reset_trigger_ratio, "下修触发")
+        down_reset_trigger_pct = pfo(_in.v_down_reset_trigger_ratio, "下修触发")
         if down_reset_trigger_pct is not None:
             pricer["down_reset_trigger_ratio"] = down_reset_trigger_pct / 100.0
 
-        code, terms, projection = self._project_terms_for_pricing(current_date)
+        code, terms, projection = self._project_terms_for_pricing(
+            current_date, code=self._normalize_bond_code(_in.v_bond_code.get()))
         if (
             "down_reset_trigger_ratio" not in pricer
             and terms is not None
@@ -371,7 +456,7 @@ class PricingMixin:
         if down_reset_floor is not None:
             pricer["down_reset_floor"] = down_reset_floor
 
-        base_p_down = pf(self.v_p_down, "年化下修强度") / 100.0
+        base_p_down = pf(_in.v_p_down, "年化下修强度") / 100.0
 
         resolved_down_reset = None
         if code and terms is not None:
@@ -397,7 +482,7 @@ class PricingMixin:
             if down_intensity.scheduled_reset_target_k is not None:
                 pricer["scheduled_reset_target_k"] = down_intensity.scheduled_reset_target_k
 
-        base_spread_input = pf(self.v_spread, "信用利差") / 100.0
+        base_spread_input = pf(_in.v_spread, "信用利差") / 100.0
         rating_base_spread = _rating_spread_floor(
             getattr(terms, "credit_rating", None) if terms is not None else getattr(self, "_last_credit", None)
         )
@@ -406,14 +491,14 @@ class PricingMixin:
             effective_base_spread = max(effective_base_spread, float(rating_base_spread))
 
         model = dict(
-            sigma=pf(self.v_sigma, "波动率 σ") / 100.0,
-            r=pf(self.v_r, "无风险利率 r") / 100.0,
-            q=pf(self.v_q, "股息率 q") / 100.0,
+            sigma=pf(_in.v_sigma, "波动率 σ") / 100.0,
+            r=pf(_in.v_r, "无风险利率 r") / 100.0,
+            q=pf(_in.v_q, "股息率 q") / 100.0,
             base_spread=effective_base_spread,
             p_down=p_down,
-            distress_k=pf(self.v_dk, "低股价利差扩张") / 100.0,
-            M=int(pf(self.v_M, "空间节点 M")),
-            N=int(pf(self.v_N, "时间步数 N")),
+            distress_k=pf(_in.v_dk, "低股价利差扩张") / 100.0,
+            M=int(pf(_in.v_M, "空间节点 M")),
+            N=int(pf(_in.v_N, "时间步数 N")),
         )
         impact = self._make_pricing_impact(
             code=code,
@@ -438,9 +523,14 @@ class PricingMixin:
         )
         return {"pricer": pricer, "model": model, "impact": impact}
 
-    def _project_terms_for_pricing(self, val_date: date):
-        """取 GUI 当前债在估值日的公告投影视图."""
-        code = self._normalize_bond_code(self.v_bond_code.get())
+    def _project_terms_for_pricing(self, val_date: date, *, code: str | None = None):
+        """取 GUI 当前债在估值日的公告投影视图.
+
+        ``code`` 显式传入时不再读 ``v_bond_code`` —— worker 线程里的调用方已经在主线程
+        把它冻进快照了。
+        """
+        if code is None:
+            code = self._normalize_bond_code(self.v_bond_code.get())
         terms = None
         projection = None
         if code:
@@ -1575,10 +1665,14 @@ class PricingMixin:
 
         watchlist, added = add_to_watchlist([item])
         self._batch_watchlist = watchlist
-        # 延迟导入: 控制器 → tabs 的反向依赖只在这里用一次, 模块级导入会成环
+        # 延迟导入: 控制器 → tabs 的反向依赖只在这里用一次, 模块级导入会成环。
+        # 调 `refresh_home` 而**不是** `_render_watchlist_table` —— 后者只重画表,
+        # 而事件横幅的扫描集就是关注池, 刚加进来的这只债有没有在途事件正是横幅该说的话。
+        # (`refresh_home` 的 docstring 点名了这个形状: 横幅刷新从表渲染里提出来, 就是因为
+        # 任何"只画表"的路径都会顺手把横幅停掉, 而横幅失败是静默的。)
         try:
-            from ..tabs.batch_watchlist import _render_watchlist_table
-            _render_watchlist_table(self)
+            from ..tabs.batch_watchlist import refresh_home
+            refresh_home(self)
         except Exception:
             pass
 
@@ -1591,9 +1685,11 @@ class PricingMixin:
         else:
             msg = f"⭐ {name} 已在关注池中, 已刷新条款信息"
             self._flash_watchlist_button("✓ 已在关注池")
+        # 只写**定价页自己**的状态行。`v_batch_status` 是批量页的常驻视图摘要
+        # (「✅ 全池: 展示 311/311 只」), 往里塞一句定价页的瞬时消息, 用户切过去看到的
+        # 就是一句说着别的页的话, 而且要等下一次 `_render_table` 才被冲掉 ——
+        # 状态行按**用户触发时在哪一页**分, 定价页触发的就归 `v_status`。
         self.v_status.set(msg)
-        if hasattr(self, "v_batch_status"):
-            self.v_batch_status.set(msg)
 
     # ── 隐含波动率反解 ──────────────────────────────────────
     def _solve_iv(self):
@@ -1607,11 +1703,13 @@ class PricingMixin:
             return
         self.btn_iv.configure(state="disabled")
         self._start_progress(f"反解 IV (target={target:.2f})")
-        threading.Thread(target=self._solve_iv_worker, args=(target,), daemon=True).start()
+        inputs = self._read_pricing_inputs()
+        threading.Thread(target=self._solve_iv_worker, args=(target, inputs),
+                         daemon=True).start()
 
-    def _solve_iv_worker(self, target):
+    def _solve_iv_worker(self, target, inputs: dict[str, str]):
         try:
-            params = self._collect_params()
+            params = self._collect_params(inputs=inputs)
             pricer = UniversalCBPricer(**params["pricer"])
             m = params["model"]
             bracket: dict = {}
@@ -1677,10 +1775,11 @@ class PricingMixin:
             base_price = float("nan")
         var.set(f"{base_label} …")
         btn.configure(state="disabled")
+        inputs = self._read_pricing_inputs()
 
         def worker():
             try:
-                params = self._collect_params()
+                params = self._collect_params(inputs=inputs)
                 pricer_kwargs = dict(params["pricer"])
                 model_kwargs = dict(params["model"])
                 if kind == "sigma":
@@ -1818,11 +1917,13 @@ class PricingMixin:
         if btn is not None:
             btn.configure(state="disabled")
         self._start_progress("收敛诊断 (M, N → 2M, 2N)")
-        threading.Thread(target=self._convergence_worker, daemon=True).start()
+        inputs = self._read_pricing_inputs()
+        threading.Thread(target=self._convergence_worker, args=(inputs,),
+                         daemon=True).start()
 
-    def _convergence_worker(self):
+    def _convergence_worker(self, inputs: dict[str, str]):
         try:
-            params = self._collect_params()
+            params = self._collect_params(inputs=inputs)
             pricer = UniversalCBPricer(**params["pricer"])
             m = params["model"]
             theo_a = float(pricer.price(**m))
