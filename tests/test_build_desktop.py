@@ -82,3 +82,30 @@ def test_frozen_build_can_actually_launch_the_pool_sync_clis():
     gui_src = (root / "gui.py").read_text(encoding="utf-8")
     assert RUN_CLI_FLAG in gui_src
     assert "POOL_SYNC_MODULES" in gui_src, "冻结入口没有校验白名单"
+
+
+def test_the_three_desktop_data_file_lists_agree():
+    """"桌面包该带哪些数据文件"只许有一份判据。
+
+    它曾散成三处各写各的: ``paths._SEEDED_DATA_FILES`` (运行时会去 seed 的)、
+    ``scripts/build_desktop.STATIC_DATA_FILES`` (构建真正打进包的)、
+    ``desktop_diagnostics._DATA_FILES`` (诊断会报告的)。实测最后一份漏了
+    ``cb_valuation_history.json`` —— 那正好是**唯一**一个进版本库、只追加、丢了就
+    永久丢的数据文件, 而诊断页恰恰是用户唯一能看出"包里到底有没有它"的地方。
+    漏报的表现不是报错, 是那一行压根不出现。
+
+    构建那份带着 ``desktop_`` 前缀的别名源文件 (种子与运行态缓存不同名), 所以判据是
+    **别名归一之后**每个要 seed 的文件都真的被打进包。
+    """
+    build_desktop = importlib.import_module("scripts.build_desktop")
+    from convertible_bond.desktop_diagnostics import _DATA_FILES
+    from convertible_bond.paths import _BUNDLED_DATA_ALIASES, _SEEDED_DATA_FILES
+
+    assert set(_DATA_FILES) == set(_SEEDED_DATA_FILES), "诊断报告的清单与运行时 seed 的清单分叉了"
+
+    shipped = set(build_desktop.STATIC_DATA_FILES)
+    for filename in _SEEDED_DATA_FILES:
+        candidates = set(_BUNDLED_DATA_ALIASES.get(filename, (filename,)))
+        assert candidates & shipped, (
+            f"{filename} 会在运行时被 seed, 但构建脚本一个候选源都不打进包 —— "
+            f"seed 时静默找不到文件")

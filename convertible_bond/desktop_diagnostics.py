@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .paths import (
+    _SEEDED_DATA_FILES,
     app_data_dir,
     bundled_data_path,
     is_frozen_app,
@@ -17,12 +18,17 @@ from .paths import (
 from .data_providers.wind import prepare_windpy_import_path
 
 
-_DATA_FILES = (
-    "cb_data.json",
-    "cb_events.json",
-    "down_reset_overrides.json",
-    "batch_pricing_cache.json",
-)
+#: 诊断要报告的种子文件 —— **由 ``paths`` 那份算出来, 不再另抄一份清单**。
+#:
+#: 三处清单曾各写各的: ``paths._SEEDED_DATA_FILES`` (运行时会去 seed 的)、
+#: ``scripts/build_desktop.STATIC_DATA_FILES`` (构建真正打进包的)、和这里 (诊断会
+#: 报告的)。实测这一份漏了 ``cb_valuation_history.json`` —— 那正好是**唯一**一个
+#: 进版本库、只追加、丢了就永久丢的数据文件, 而诊断页恰恰是用户唯一能看出"桌面包
+#: 里到底有没有它"的地方。漏报的表现不是报错, 是那一行压根不出现。
+#:
+#: 这里锚 ``paths`` 那份而不是构建脚本那份: 决定"装好之后能不能用"的是运行时
+#: 去 seed 哪些文件, 而构建脚本是另一侧 (它还带着 ``desktop_`` 前缀的别名源文件)。
+_DATA_FILES = tuple(sorted(_SEEDED_DATA_FILES))
 
 
 def _json_summary(path: Path) -> str:
