@@ -1241,13 +1241,26 @@ def _extract_dates(text: str) -> list[date]:
     return sorted(set(out))
 
 
+#: CBEvent 上由正文解析填充的可选字段 —— `_parsed_field_count` 与 `_is_strict_upgrade`
+#: 必须用同一份, 两处各写一份正是"检了 3 个漏了 2 个"的由来。
+_OPTIONAL_PARSED_FIELDS = (
+    "effective_start", "effective_end", "event_price",
+    "commitment_months", "parsed_status",
+)
+
+
 def _is_strict_upgrade(current: CBEvent, incoming: CBEvent) -> bool:
     """*incoming* 是不是 *current* 的**严格**更优版本。
 
     严格 = 解析出的字段更多, **且**原有的非空值一个都不被抹成 None。后半条是防线:
     重跑一个更差的解析器 (或没带正文的那一次) 不许把已经解析好的数据擦掉。
+
+    **五个可选解析字段一个都不能漏**: ``add_many`` 替换的是整条 CBEvent, 所以没进
+    这个元组的字段照样会被抹掉。此前只检 3 个 —— 而漏掉的 ``commitment_months``
+    有 878 条存量事件带着它 (540 down_reset_rejected + 338 call_no_redemption),
+    且它正是 ``resolve_down_reset`` 算冻结窗口的兜底输入。
     """
-    fields = ("effective_start", "effective_end", "event_price")
+    fields = _OPTIONAL_PARSED_FIELDS
     for name in fields:
         if getattr(current, name) is not None and getattr(incoming, name) is None:
             return False
@@ -1324,16 +1337,19 @@ def _parsed_field_count(event: CBEvent) -> int:
 
     ``effective_start`` 只在**严格晚于公告日**时才算 —— 解析不到时的通用回落值就是
     公告日本身, 它不携带信息 (AGENTS 记过: "最后交易日/申报期从公告当天开始"几乎恒为
-    解析失败的信号)。
+    解析失败的信号)。其余四个字段直接数非空。
+
+    字段清单与 :func:`_is_strict_upgrade` 共用 :data:`_OPTIONAL_PARSED_FIELDS` ——
+    两处各写一份正是"这边检 5 个、那边只数 3 个"的由来。把 ``commitment_months`` /
+    ``parsed_status`` 计入实测**代表选择 0 处变化** (全库 1586 个「债 × 类型」组)。
     """
-    fields = (
+    values = [
         event.effective_start if (
             event.effective_start is not None
             and event.effective_start > event.event_date) else None,
-        event.effective_end,
-        event.event_price,
-    )
-    return sum(1 for f in fields if f is not None)
+    ]
+    values += [getattr(event, name) for name in _OPTIONAL_PARSED_FIELDS[1:]]
+    return sum(1 for v in values if v is not None)
 
 
 def _event_selection_key(event: CBEvent) -> tuple:

@@ -2730,8 +2730,12 @@ def test_frozen_down_reset_floor_puts_a_kink_right_at_s0():
         redemption_price=terms.redemption_price or 108.0, call_notice_days=30,
         down_reset_floor=float(row["down_reset_floor"]),
     )
-    kink = p.down_reset_premium * float(row["down_reset_floor"])
-    assert 0.99 < kink / p.S0 < 1.05, (
+    # premium 写**字面量**: 184/311 只 floor == S0, 于是 kink/S0 恒等于
+    # `down_reset_premium` —— 拿它当期望再检查"落在含它的区间里", 等于把常数递给
+    # 自己。实测那样写时把 premium 从 1.02 改成 1.0449 这条与整套 1118 条全绿。
+    assert p.down_reset_premium == pytest.approx(1.02), "改这个溢价是模型口径变更"
+    kink = 1.02 * float(row["down_reset_floor"])
+    assert kink / p.S0 == pytest.approx(1.02, abs=0.03), (
         f"折点在 {kink / p.S0:.3f}·S0 —— 不再落在读数点上, 这条记录要重新量")
 
 

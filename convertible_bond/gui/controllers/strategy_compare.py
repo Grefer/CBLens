@@ -53,10 +53,6 @@ class StrategyCompareMixin:
               # 旧快照里存的是**冻结名** ("综合机会"), 展示要过 batch_view_label ——
               # 否则比较表上出现的是一个批量页已经不再显示的词。
               f"旧策略·{batch_view_label(config.get('selection_view') or '—')}")
-        # 下修两档只出现在**旧快照**里 (信号已删); 保留映射, 否则它们会掉进「旧机会分」。
-        rank_label = {
-            "deviation": "估值偏差",
-        }.get(config.get("rank_signal"), "旧机会分")
         label = strategy_compare_label(strategy_name, config)
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         key = (

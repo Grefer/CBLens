@@ -306,15 +306,20 @@ def test_daily_field_coverage_is_measured_on_the_pool_not_the_whole_library():
 
 
 def test_limit_down_tag_is_covered_by_the_sensitivity_grouping():
-    """「正股跌停」是 DIM_TRADABILITY 里唯一漏在 ``_sensitivity_status`` 之外的标签。"""
-    import inspect
+    """每个可交易性标签都要真的映射到「条款/流动性敏感」—— 逐个**跑**, 不扫源码.
 
+    上一版扫的是 ``inspect.getsource(_sensitivity_status)`` 里有没有那个字面量,
+    而 ``getsource`` **连注释一起返回**: 把「转债停牌」从活的集合里删掉、在后面留一行
+    ``# "转债停牌"``, 这条用例和整套 1118 条全绿 —— 而一只停牌的转债 (最强的
+    可交易性信号) 会静默掉进按置信度分档的兜底路径。
+    """
     from convertible_bond.batch_pricing import TRADABILITY_RISK_TAGS, _sensitivity_status
 
-    src = inspect.getsource(_sensitivity_status)
-    missing = [t for t in TRADABILITY_RISK_TAGS if f'"{t}"' not in src]
-    assert not missing, f"可交易性标签没进条款/流动性敏感这一档: {missing}"
-    assert _sensitivity_status(["正股跌停"], "高") == "条款/流动性敏感"
+    wrong = {t: _sensitivity_status([t], "高") for t in TRADABILITY_RISK_TAGS
+             if _sensitivity_status([t], "高") != "条款/流动性敏感"}
+    assert not wrong, f"可交易性标签没进条款/流动性敏感这一档: {wrong}"
+    # 置信度不该把它翻掉 —— 这一档是标的事实, 不是模型信心
+    assert _sensitivity_status(["正股跌停"], "低") == "条款/流动性敏感"
 
 
 def test_rebuild_dry_run_previews_the_same_population_it_will_delete(tmp_path):

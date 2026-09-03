@@ -1167,8 +1167,11 @@ def test_conversion_suspension_without_an_end_expires(tmp_path):
     out2 = apply_events_to_terms("113042.SH", terms, [fresh], valuation_date=val)
     assert out2.conversion_suspension_status == "暂停转股"
 
-    # TTL 恰好到期那天仍算有效, 次日失效 (边界两侧都钉)
-    edge = val - timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS)
+    # TTL 恰好到期那天仍算有效, 次日失效 (边界两侧都钉)。
+    # **天数写字面量** —— 写 `timedelta(days=_CONVERSION_SUSPENSION_TTL_DAYS)` 等于
+    # 让被测常数自己批改自己: 实测那样写时把 TTL 从 10 改成 60, 这条与整套 1118 条全绿。
+    assert _CONVERSION_SUSPENSION_TTL_DAYS == 10, "改这个 TTL 是模型行为变更"
+    edge = val - timedelta(days=10)
     on_edge = CBEvent(bond_code="X.SZ", event_date=edge, event_type="conversion_suspension",
                       raw_title="t", effective_start=edge, effective_end=None)
     assert apply_events_to_terms("X.SZ", terms, [on_edge],
@@ -1189,7 +1192,7 @@ def test_conversion_suspension_without_an_end_expires(tmp_path):
     # **锚必须是 effective_start, 不是 event_date**。公告总是提前发 (实测提前量中位 5 天、
     # 最长 13 天), 提前量超过 TTL 时锚 event_date 会算出一个**早于停牌开始**的截止日 ——
     # 一次还没开始的停牌被判成已过期。这条构造的正是那种形状。
-    lead = _CONVERSION_SUSPENSION_TTL_DAYS + 3
+    lead = 13          # = TTL 10 + 3, 同样写死
     begins_today = CBEvent(bond_code="Z.SZ", event_date=val - timedelta(days=lead),
                            event_type="conversion_suspension", raw_title="t",
                            effective_start=val, effective_end=None)
@@ -1366,6 +1369,62 @@ def test_add_many_upgrades_a_degraded_event_in_place(tmp_path):
     assert other.add_many([strictly_more]) == 0 and other.last_upgraded == 1
 
 
+def test_partial_and_upgraded_actually_reach_a_consumer():
+    """`partial` / `upgraded` 要有人读 —— 生产出来没人消费等于没做.
+
+    两个键各自的理由都是"要出声": `partial` 分开"取了一半"与"一条都没取到"
+    (水位只对前者不推进), `upgraded` 消掉「新增 0 条」的歧义。实测加进去之后
+    CLI 与 GUI 三处**没有任何一处读它们**, 于是两件事在界面上仍然不可见。
+    """
+    from convertible_bond.gui.controllers.events import _sync_caveats
+
+    assert _sync_caveats({"partial": [("128000.SZ", "翻页中断")]}) == (
+        "  ⚠ 1 只公告未取全(水位不推进)")
+    assert _sync_caveats({"upgraded": 3}) == "  ↑升级 3 条"
+    assert _sync_caveats({"partial": [("a", "x"), ("b", "y")], "upgraded": 1}) == (
+        "  ⚠ 2 只公告未取全(水位不推进) · ↑升级 1 条")
+    # 都没有时不加尾巴 —— 常年挂着的提示等于没有提示
+    assert _sync_caveats({"partial": [], "upgraded": 0}) == ""
+    assert _sync_caveats(None) == ""
+
+    # CLI 也要读 (两个键各出现在一条 print 里)
+    import inspect
+
+    from convertible_bond.cli import sync_events
+
+    src = inspect.getsource(sync_events.main)
+    assert 'result.get("partial")' in src and 'result.get("upgraded")' in src
+
+
+def test_strict_upgrade_protects_every_optional_parsed_field():
+    """"不许抹掉已解析的值"必须覆盖**全部五个**可选字段, 不是三个.
+
+    ``add_many`` 替换的是整条 CBEvent, 所以没进检查名单的字段照样会被抹掉。此前
+    只检 effective_start / effective_end / event_price —— 漏掉的
+    ``commitment_months`` 有 878 条存量事件带着它 (540 down_reset_rejected +
+    338 call_no_redemption), 而它正是 ``resolve_down_reset`` 算冻结窗口的兜底输入:
+    抹成 None 之后那只债的下修冻结就只能靠一个默认月数。
+    """
+    from convertible_bond.cb_events import _OPTIONAL_PARSED_FIELDS, _is_strict_upgrade
+
+    assert set(_OPTIONAL_PARSED_FIELDS) == {
+        "effective_start", "effective_end", "event_price",
+        "commitment_months", "parsed_status",
+    }
+
+    base = dict(bond_code="123071.SZ", event_type="down_reset_rejected",
+                event_date=date(2026, 8, 14), raw_title="t")
+    for name, value in (("effective_end", date(2027, 2, 14)),
+                        ("event_price", 12.7),
+                        ("commitment_months", 6),
+                        ("parsed_status", "不下修")):
+        current = CBEvent(**base, **{name: value})
+        # incoming 多解析出一个 effective_start, 却把 name 这个字段抹成 None
+        incoming = CBEvent(**base, effective_start=date(2026, 8, 20))
+        assert not _is_strict_upgrade(current, incoming), (
+            f"{name} 被抹成 None 却算作严格更优")
+
+
 def test_a_stale_commitment_end_does_not_expire_a_live_freeze():
     """同一条方向性不变量必须在**消费侧**也成立, 不只在解析侧.
 
@@ -1500,8 +1559,10 @@ def test_suspension_start_far_before_the_announcement_is_dropped():
     normal = {"start": announced + timedelta(days=5), "end": None}
     assert _drop_implausible_suspension_start(dict(normal), announced)["start"] is not None
 
-    # 边界两侧
-    edge = announced - timedelta(days=_MAX_WINDOW_BACKDATE_DAYS)
+    # 边界两侧。同上, 天数写字面量 —— 实测用常数算期望时把它改成 300 或 3
+    # (十倍与三分之一) 这条用例都照常绿, 而那是解析口径的实质变更。
+    assert _MAX_WINDOW_BACKDATE_DAYS == 30, "改这个容差是解析口径变更"
+    edge = announced - timedelta(days=30)
     assert _drop_implausible_suspension_start({"start": edge}, announced)["start"] == edge
     past = edge - timedelta(days=1)
     assert _drop_implausible_suspension_start({"start": past}, announced)["start"] is None

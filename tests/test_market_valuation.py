@@ -591,6 +591,10 @@ def test_pool_widening_registered_as_caliber_v3():
     摆幅是 21.2pp (+0.4% ~ +21.6%), 所以 0.75pp 属小量 —— 仍**合并算分位**、只标断点,
     与 v2 同处置 (分段会让新序列在积满 8 个季度前完全失去分位信号)。
     """
+    # 两边都解同一个符号时它的**值**完全不受约束 —— 实测把 CALIBER_V3 改成
+    # "v7-typo" 这条与整套全绿, 而这个串是**落进 cb_valuation_history.json 的**,
+    # 改了会让新旧记录分成两组、`caliber_note` 认不出。所以值要写死。
+    assert CALIBER_V3 == "v3"
     assert CURRENT_CALIBER == CALIBER_V3
     assert CALIBER_CHANGES[CALIBER_V3]["since"] == "2026-08-31"
 

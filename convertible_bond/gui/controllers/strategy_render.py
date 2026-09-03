@@ -928,7 +928,6 @@ class StrategyRenderMixin:
         return f"{f*100:+.2f}%" if sign else f"{f*100:.2f}%"
 
     @staticmethod
-    @staticmethod
     def _fmt_strategy_date(value) -> str:
         """日期格子。``pos.get("exit_date", "—")`` 挡不住**键存在但值是 None** ——
         而"跳过"行恰恰全是这一档, 于是表里渲染出字面的 ``None``。"""

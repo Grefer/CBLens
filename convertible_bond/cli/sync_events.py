@@ -101,6 +101,18 @@ def main() -> int:
         f"条款影响新增 {result.get('patches_added', 0)} 条, "
         f"失败 {len(result['failed'])} 只  ({elapsed:.1f}s)"
     )
+    # `partial` 与 `failed` 是**两件事**: 前者取到了一部分公告 (翻页中途断了),
+    # 后者一条都没取到。水位只对 partial 的债不推进 —— 不报出来的话, "取了一半"
+    # 与"全取到了"在输出里长得一模一样, 而这正是加这个键的理由。
+    partial = result.get("partial") or []
+    if partial:
+        preview = ", ".join(code for code, _ in partial[:5])
+        more = f" 等 {len(partial)} 只" if len(partial) > 5 else ""
+        print(f"   ⚠ 公告未取全 (水位不推进): {preview}{more}")
+    # `added: 0` 本身有歧义 —— 可能是没有新公告, 也可能是新解析的事件把旧的**就地升级**了。
+    upgraded = result.get("upgraded") or 0
+    if upgraded:
+        print(f"   ↑ 就地升级已有事件 {upgraded} 条 (解析出了更多字段)")
     if download_pdf:
         print(
             f"   PDF 下载: 成功 {result.get('pdf_downloaded', 0)}, "

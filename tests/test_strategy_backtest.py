@@ -2932,11 +2932,17 @@ def test_config_summary_echoes_every_field_the_selector_reads():
     exclude_underlying_st / exclude_underlying_limit_down) 一条都没进去 —— 快照因此
     复现不出那次运行, 而它上面回显的恰恰是重构**之前**那批已经不当主口径的字段。
 
-    判据不是"这七个名字在不在", 而是**结构性**的: ``_candidate_filter_reason`` 里
-    读到的每个 ``cfg.X`` 都要出现在快照里。将来再加阈值, 忘了同步就会红。
+    判据不是"这七个名字在不在", 而是**行为性**的: 逐字段扰动配置, 凡是能让
+    ``_candidate_filter_reason`` 改口的都必须出现在快照里。将来再加阈值, 忘了同步就会红。
+
+    **不再扫 `cfg.X` 源码文本**: 那种写法认的是字面量, 一个别名读取
+    (``_floor = getattr(cfg, "min_credit_rating")``) 就能让字段从"被消费"的名单里
+    消失, 于是把它从快照里删掉也全绿 —— 实测那样改过之后这条与整套 1118 条都是绿的。
+
+    基线取**全放行**配置: `_candidate_filter_reason` 返回**第一条**理由, 用默认配置
+    做基线时 min_confidence 会把后面每一条都遮住 (实测只认得出 1 个字段)。
     """
     import dataclasses
-    import inspect
 
     from convertible_bond.strategy_backtest import (
         ScoreStrategyConfig,
@@ -2944,10 +2950,45 @@ def test_config_summary_echoes_every_field_the_selector_reads():
         _strategy_config_summary,
     )
 
-    src = inspect.getsource(_candidate_filter_reason)
-    consumed = {f.name for f in dataclasses.fields(ScoreStrategyConfig)
-                if f"cfg.{f.name}" in src}
-    assert len(consumed) >= 15, f"只认出 {len(consumed)} 个字段, 扫描方式可能失效了"
+    row = dict(
+        bond_code="128000.SZ", stock_code="000001.SZ", status="ok",
+        confidence="高", risk_tags=["模型高估离群"],
+        market_price=120.0, theoretical_price=114.0, parity=100.0,
+        conversion_premium=0.25, deviation=0.05, relative_deviation=-0.06,
+        sigma=0.35, model_premium_to_parity=0.10, T=3.0,
+        credit_rating="AA", outstanding_balance=8.0,
+        underlying_status="ST/退市风险", underlying_pct_change=-19.9,
+    )
+    permissive = {}
+    for f in dataclasses.fields(ScoreStrategyConfig):
+        kind = str(f.type)
+        if f.name == "exclude_risk_tags":
+            permissive[f.name] = ()
+        elif f.name.startswith("exclude_") and kind.startswith("bool"):
+            permissive[f.name] = False
+        elif f.name == "min_confidence" or "| None" in kind:
+            permissive[f.name] = None
+    base = dataclasses.replace(ScoreStrategyConfig(), **permissive)
+    assert _candidate_filter_reason(row, base) is None, (
+        f"全放行基线仍被剔除 ({_candidate_filter_reason(row, base)}), "
+        "后面每个字段的扰动都会被这条理由遮住, 测不到东西")
+
+    probes = [0.0, 1.0, -1.0, 1e9, -1e9, True, False, "AAA", "C",
+              (), ("高",), ("模型高估离群",), 0, 10 ** 6, None]
+    consumed = set()
+    for f in dataclasses.fields(base):
+        for value in probes:
+            if value == getattr(base, f.name):
+                continue
+            try:
+                cfg = dataclasses.replace(base, **{f.name: value})
+                if _candidate_filter_reason(row, cfg) is not None:
+                    consumed.add(f.name)
+                    break
+            except Exception:
+                continue
+    assert len(consumed) >= 17, (
+        f"只认出 {len(consumed)} 个字段 ({sorted(consumed)}), 探测方式可能失效了")
 
     summary = _strategy_config_summary(ScoreStrategyConfig())
     missing = sorted(consumed - set(summary))

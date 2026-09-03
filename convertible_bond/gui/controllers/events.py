@@ -44,6 +44,28 @@ from ...market_time import market_today
 logger = logging.getLogger(__name__)
 
 
+
+def _sync_caveats(result) -> str:
+    """公告同步结果里两件**必须说出来**的事, 拼成一段尾巴.
+
+    `partial`: 翻页中途断了, 只取回一部分 —— 水位对这些债不推进, 但不报出来的话
+    "取了一半"与"全取到了"在界面上长得一模一样, 而那正是这个键存在的理由。
+    `upgraded`: `新增 0 条` 有歧义 —— 可能没有新公告, 也可能是旧事件被就地升级了。
+
+    两个键此前**没有任何消费者** (CLI 与 GUI 三处都只读 scanned/added/patches/pdf)。
+    """
+    if not result:
+        return ""
+    parts = []
+    partial = result.get("partial") or []
+    if partial:
+        parts.append(f"⚠ {len(partial)} 只公告未取全(水位不推进)")
+    upgraded = result.get("upgraded") or 0
+    if upgraded:
+        parts.append(f"↑升级 {upgraded} 条")
+    return ("  " + " · ".join(parts)) if parts else ""
+
+
 class EventsMixin:
     """公告事件面板 / 同步 / 应用回 cb_data."""
 
@@ -460,6 +482,7 @@ class EventsMixin:
             msg += f", 条款影响 {patches_added} 条"
         if pdf_ok or pdf_fail:
             msg += f" (PDF ✓{pdf_ok} ✗{pdf_fail})"
+        msg += _sync_caveats(result)
         self.v_event_summary.set(msg)
         self._maybe_reprice_after_event_refresh(code)
 
@@ -510,6 +533,7 @@ class EventsMixin:
                 msg += f", 条款影响 {patches_added} 条"
             if pdf_ok or pdf_fail:
                 msg += f" (PDF ✓{pdf_ok} ✗{pdf_fail})"
+            msg += _sync_caveats(result)
             self.after(0, lambda: self._on_sync_events_done(code, msg))
         except Exception as exc:
             logger.warning("事件同步失败 (%s): %s", code, exc)
