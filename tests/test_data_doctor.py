@@ -615,3 +615,45 @@ def test_partial_fetch_does_not_advance_the_sync_watermark():
     assert "code not in incomplete_codes" in src, "部分取到的债仍在推水位"
     # 部分与彻底失败要分开报, 否则日志把两种状况混在一起
     assert '"partial": partial' in src
+
+
+def test_impossible_clause_ratio_check_fires_only_when_one_reaches_the_pool():
+    """>100% 的下修触发线: 全被准入挡住时是 ✅, 一旦有一只进池必须 ❌.
+
+    今天 14/14 都被挡在池外 (12 只已退市 + 2 只定向), 所以是零影响 —— 但挡住它们的是
+    退市与定向判据, **与条款值本身无关**, 那是巧合不是保证。这条检查就是那个保证:
+    它必须在"仍是 14 只但其中一只变得可交易"时红。
+    """
+    from datetime import date
+
+    from convertible_bond.cli.data_doctor import FAIL, OK, check_impossible_clause_ratios
+    from convertible_bond.data_providers import BondTerms
+
+    base = dict(underlying_code="000001.SZ", conversion_price=10.0,
+                issue_date=date(2020, 1, 1), maturity_date=date(2030, 1, 1),
+                face_value=100.0, credit_rating="AA", is_tradable=True,
+                trading_status="tradable", listing_date=date(2020, 2, 1),
+                outstanding_balance=5.0)
+
+    class _Bundle:
+        def __init__(self, rows): self._rows = rows
+        def list_bonds(self): return list(self._rows)
+        def get(self, code): return self._rows[code]
+
+    today = date(2026, 9, 3)
+    # 值不可能, 但已退市 → 挡住了, 只报数不报错
+    dead = _Bundle({"110801.SH": BondTerms(down_reset_trigger_pct=150.0,
+                                           delisting_date=date(2025, 11, 18), **base)})
+    got = check_impossible_clause_ratios({"bundle": dead, "today": today})
+    assert got.status == OK, got.detail
+    assert "14" not in got.detail and "1 只" in got.detail
+
+    # 同样的值, 但这一只是可交易的 → 必须红
+    live = _Bundle({"128000.SZ": BondTerms(down_reset_trigger_pct=150.0, **base)})
+    got = check_impossible_clause_ratios({"bundle": live, "today": today})
+    assert got.status == FAIL, got.detail
+    assert "128000.SZ" in got.detail
+
+    # 合法值不报
+    ok = _Bundle({"128001.SZ": BondTerms(down_reset_trigger_pct=85.0, **base)})
+    assert check_impossible_clause_ratios({"bundle": ok, "today": today}).status == OK

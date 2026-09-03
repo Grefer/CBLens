@@ -33,7 +33,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from ..batch_pricing import is_unlisted_new_bond, screen_batch_pool_from_cache
+from ..batch_pricing import (
+    batch_pricing_exclusion_reason, is_unlisted_new_bond,
+    screen_batch_pool_from_cache)
 from ..cache import (
     TERMS_SYNC_SOURCE,
     TermsBundle,
@@ -372,6 +374,40 @@ def check_statutory_line_clustering(ctx: dict) -> Check:
         f"值恰为 {_STATUTORY_BALANCE_LINE} 亿 (法定线) 的占 {_pct(at_line, len(values))}",
         "曾 528/546 条余额 patch 恰为 0.3 —— 全部来自赎回条款正文而非真实披露",
         "patch")
+
+
+def check_impossible_clause_ratios(ctx: dict) -> Check:
+    """条款比例落在不可能的区间 = 数据噪声, 而它会直接变成 pricer 的触发线.
+
+    `down_reset_trigger_pct > 100` 说的是"正股价高于转股价 1.5 倍时触发下修" ——
+    下修是往下修, 这个方向不可能。它经 `pricer_kwargs["down_reset_trigger_ratio"]`
+    直接进 PDE: ratio=1.5 时触发线在 1.5·K, 几乎全网格都在触发区, 下修价值被整只放大。
+
+    实测 2026-09-03 全库 14 只是这个形状 (150×7 / 200×5 / 180×1 / 175×1, 对照
+    合法的 85×623 / 80×184 / 90×176 / 70×8 / 75×1 / 65×1)。**14/14 今天都被准入挡在
+    池外** (12 只已退市 + 2 只定向转债) —— 所以是零影响, 但那是**巧合而不是保证**:
+    挡住它们的是退市与定向判据, 与条款值本身无关。这条检查就是那个保证。
+    """
+    bundle = ctx["bundle"]
+    offenders = []
+    for code in bundle.list_bonds():
+        terms = bundle.get(code)
+        value = getattr(terms, "down_reset_trigger_pct", None)
+        if value is None:
+            continue
+        if float(value) > 100.0:
+            reason = batch_pricing_exclusion_reason(code, terms, on_date=ctx["today"])
+            offenders.append((code, float(value), reason))
+    leaked = [o for o in offenders if o[2] is None]
+    if not offenders:
+        return Check("条款比例可能性", OK, "无 >100% 的下修触发线", "—", "不变量")
+    detail = f"{len(offenders)} 只 down_reset_trigger_pct >100%, 其中 {len(leaked)} 只进了主池"
+    if leaked:
+        detail += " → " + ", ".join(f"{c}({v:.0f}%)" for c, v, _ in leaked[:4])
+    return Check(
+        "条款比例可能性", OK if not leaked else FAIL, detail,
+        "下修是往下修, 触发线不可能在转股价之上; 该值直接变成 PDE 的触发线",
+        "不变量")
 
 
 # ─────────────────────────── 交叉校验 ───────────────────────────
@@ -752,6 +788,7 @@ CHECKS: list[Callable[[dict], Any]] = [
     check_frozen_value_signature,
     check_cross_bond_patches,
     check_statutory_line_clustering,
+    check_impossible_clause_ratios,
     check_rating_divergence,
     check_pool_terms_projection,
     check_events_predate_listing,
