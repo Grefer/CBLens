@@ -1847,3 +1847,52 @@ def test_terms_as_of_anchors_the_terms_sync_bucket_not_the_global_stamp(tmp_path
     # 从发行日回放上来, 拿陈旧/解析错的值盖掉正确的 cb_data (实测海顺转债 K 11.63 会被
     # 盖成 17.74)。这不是假想的边界: 实测全库 739/1059 只还没有条款桶。
     assert terms_fetched_at(bundle, code, source="从来没有过的桶") == date(2026, 8, 30)
+
+
+def test_every_admission_config_field_actually_changes_the_verdict():
+    """``AdmissionFilterConfig`` 上不许有惰性字段。
+
+    ``delist_window_days`` 曾经是这样一个: 声明在 config 上、由两个 CLI 的
+    ``--delist-window`` 和两个 Tk 变量喂进来、跟着写进策略快照的 ``admission_filter``
+    段, 而 ``batch_pricing_exclusion_reason`` 的函数体**一次都没读过它** ——
+    连 ``admission_config`` 的透传那几行都只搬了另外三个字段。默认值恰好是 0, 所以
+    "设了没生效"和"设成默认"长得一模一样, 谁也不会发现。
+
+    判据是**行为**: 每个字段都要存在某个取值, 能让某一行的剔除结论翻面。用 config
+    对象整体传入 (而不是逐个关键字参数), 因为惰性正是发生在透传那一层。
+    """
+    import dataclasses
+
+    from convertible_bond.batch_pricing import (
+        AdmissionFilterConfig, batch_pricing_exclusion_reason)
+
+    on = date(2026, 3, 2)
+    row = dict(
+        bond_code="128000.SZ", bond_name="测试转债",
+        listing_date=date(2023, 1, 5), issue_date=date(2023, 1, 5),
+        maturity_date=date(2029, 1, 5), is_tradable=True,
+        credit_rating="AA", outstanding_balance=8.0,
+        bond_turnover_amount=5000.0,
+    )
+    base = AdmissionFilterConfig(
+        min_outstanding_balance=None, min_credit_rating=None, min_turnover_amount=None)
+    assert batch_pricing_exclusion_reason(
+        "128000.SZ", row, on_date=on, admission_config=base) is None, "基线就被剔了, 测不到东西"
+
+    probes = [0, 1, 3650, 0.0, 1e9, "AAA", "C", True, False, None]
+    for f in dataclasses.fields(AdmissionFilterConfig):
+        flipped = False
+        for value in probes:
+            if value == getattr(base, f.name):
+                continue
+            try:
+                cfg = dataclasses.replace(base, **{f.name: value})
+                if batch_pricing_exclusion_reason(
+                        "128000.SZ", row, on_date=on, admission_config=cfg) is not None:
+                    flipped = True
+                    break
+            except Exception:
+                continue
+        assert flipped, (
+            f"AdmissionFilterConfig.{f.name} 的任何取值都改不了剔除结论 —— "
+            "它要么没被透传, 要么没被读, 是个惰性旋钮")

@@ -16,7 +16,6 @@ from ..theme import *
 from ...batch_pricing import (
     AdmissionFilterConfig,
     BATCH_REVIEW_VIEWS,
-    DEFAULT_DELIST_WINDOW_DAYS,
     DEFAULT_MIN_CREDIT_RATING,
     DEFAULT_MIN_OUTSTANDING_BALANCE,
     annotate_batch_results,
@@ -419,7 +418,6 @@ def build(app, tab):
         value="" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
     )
     app.v_batch_min_turnover = ctk.StringVar(value="")
-    app.v_batch_delist_window = ctk.StringVar(value="0")
 
     codes, excluded = split_batch_codes_from_cache(
         getattr(app, "terms_cache", None),
@@ -662,7 +660,6 @@ def _batch_int(var, default):
 def _batch_admission_config(app):
     """构造公开交易硬过滤配置."""
     return AdmissionFilterConfig(
-        delist_window_days=_batch_int(app.v_batch_delist_window, DEFAULT_DELIST_WINDOW_DAYS),
         min_outstanding_balance=_batch_optional_pos_float(app.v_batch_min_balance),
         min_credit_rating=(app.v_batch_min_rating.get().strip() or None),
         min_turnover_amount=_batch_optional_pos_float(app.v_batch_min_turnover),

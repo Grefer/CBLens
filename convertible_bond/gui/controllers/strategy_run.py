@@ -131,7 +131,6 @@ class StrategyRunMixin:
                 pool_mode=engine_pool_mode,
             )
             admission_config = AdmissionFilterConfig(
-                delist_window_days=max(0, int(float(self.v_st_delist_window.get() or 0))),
                 min_outstanding_balance=self._optional_float(self.v_st_min_balance),
                 min_credit_rating=self.v_st_min_rating.get().strip() or None,
                 min_turnover_amount=self._optional_float(self.v_st_min_turnover),
@@ -495,7 +494,6 @@ class StrategyRunMixin:
                 "compute_benchmark": config.compute_benchmark,
             },
             "admission_filter": {
-                "delist_window_days": admission_config.delist_window_days,
                 "min_outstanding_balance": admission_config.min_outstanding_balance,
                 "min_credit_rating": admission_config.min_credit_rating,
                 "min_turnover_amount": admission_config.min_turnover_amount,

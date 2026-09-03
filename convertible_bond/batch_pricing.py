@@ -355,7 +355,6 @@ DELISTING_WARNING_DAYS = 30
 DEVIATION_ANOMALY_THRESHOLD = 0.20
 # 样本太少时中位数本身不稳 (关注池/新债往往只有个位数行), 退回绝对阈值。
 _DEVIATION_MEDIAN_MIN_SAMPLE = 30
-DEFAULT_DELIST_WINDOW_DAYS = 0
 # 默认不再按余额硬剔除。全库回填摘牌元数据后实测: 关掉该门槛主池 270 → 270,
 # 独立贡献为 0 —— 它此前 99% 的作用是替缺失的 delisting_date 兜底 (被它剔除的 225 只
 # 里 223 只余额恰为 0 的已退市券), 而那个职责现在由 delisting_date / last_trading_date
@@ -412,7 +411,6 @@ class AdmissionFilterConfig:
     需要恢复余额硬过滤时给 ``min_outstanding_balance`` 填个数值即可。
     """
 
-    delist_window_days: int = DEFAULT_DELIST_WINDOW_DAYS
     min_outstanding_balance: float | None = DEFAULT_MIN_OUTSTANDING_BALANCE
     min_credit_rating: str | None = DEFAULT_MIN_CREDIT_RATING
     min_turnover_amount: float | None = None
@@ -576,7 +574,6 @@ def batch_pricing_exclusion_reason(
     terms: Any = None,
     *,
     on_date: date | None = None,
-    delist_window_days: int = DEFAULT_DELIST_WINDOW_DAYS,
     min_outstanding_balance: float | None = DEFAULT_MIN_OUTSTANDING_BALANCE,
     min_credit_rating: str | None = DEFAULT_MIN_CREDIT_RATING,
     min_turnover_amount: float | None = None,

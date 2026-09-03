@@ -156,7 +156,7 @@ _STRATEGY_TEMPLATE_BASE = {
     "v_st_min_balance": (
         "" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
     ),
-    "v_st_min_turnover": "", "v_st_delist_window": "0", "v_st_cost": "20",
+    "v_st_min_turnover": "", "v_st_cost": "20",
     # 模板 = 完整可复现配置: 选券权重/现金收益/仓位择时也随模板归位, 不残留上次手动值
     "v_st_weighting": "Top N 排序", "v_st_cash_yield": "2.2",
     "v_st_rank_signal": "估值偏差",

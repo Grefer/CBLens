@@ -310,7 +310,6 @@ class CBPricerApp(
         )
         self.v_st_min_rating = ctk.StringVar(value=DEFAULT_MIN_CREDIT_RATING or "")
         self.v_st_min_turnover = ctk.StringVar(value="")
-        self.v_st_delist_window = ctk.StringVar(value="0")
         self.v_st_cost = ctk.StringVar(value="20")
         self.v_st_benchmark = ctk.BooleanVar(value=True)
         self.v_st_codes = ctk.StringVar(value="")
@@ -1065,7 +1064,7 @@ class CBPricerApp(
         "v_st_min_price", "v_st_max_price",
         "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",
         "v_st_min_sigma", "v_st_max_sigma", "v_st_min_rating", "v_st_min_balance",
-        "v_st_min_turnover", "v_st_delist_window", "v_st_cost", "v_st_benchmark",
+        "v_st_min_turnover", "v_st_cost", "v_st_benchmark",
     )
 
     def _save_preset(self):

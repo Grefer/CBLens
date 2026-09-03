@@ -2469,6 +2469,10 @@ def _portfolio_mark_to_market_curve(
         exit_price = finite_float(pos.get("end_price"))
         if not isinstance(entry_date, date) or not isinstance(exit_date, date):
             continue
+        # 建仓价还要 `> 0`: 它是下面 `exit_price / entry_price` 的除数, 而持仓行可以
+        # 是从快照读回来的 —— 取价那一侧的守卫管不到这条路。
+        if entry_price is not None and entry_price <= 0:
+            continue
         if entry_price is None or exit_price is None:
             continue
         start = min(entry_date, exit_date)
@@ -2652,7 +2656,13 @@ def _latest_bond_price_point(
         if d is None or d > on_date:
             continue
         px = finite_float(value)
-        if px is None:
+        # **``<= 0`` 与 ``None`` 同处置**。这个循环的两个兄弟 (`_bond_price_series`、
+        # `_first_bond_price_after`) 都写着 `px is None or px <= 0`, 只有这里漏了 ——
+        # 而它的返回值会当**除数**用 (`exit_point.price / entry_point.price`), 于是
+        # 一个 0 收盘价不是少一个成分, 是 ZeroDivisionError 掐断整轮回测。行情源给出
+        # 0 或负收盘价不是假想: 停牌/退市行附近的脏数据就是这个形状, 而它不该被读成
+        # "这只债今天值 0 元"。
+        if px is None or px <= 0:
             continue
         if latest_date is None or d >= latest_date:
             latest_date = d

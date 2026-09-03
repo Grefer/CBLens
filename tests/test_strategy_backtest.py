@@ -3193,3 +3193,41 @@ def test_excess_vs_index_is_withheld_when_the_index_starts_late():
                                  index_benchmark_curve=full)
     assert s_full["index_covers_full_window"] is True
     assert s_full["excess_vs_index"] == pytest.approx(0.10 - 0.05)
+
+
+def test_zero_close_never_becomes_a_divisor():
+    """0/负收盘价与缺价同处置 —— 它是除数, 不是"这只债值 0 元"。
+
+    ``_latest_bond_price_point`` 的两个兄弟循环 (``_bond_price_series`` /
+    ``_first_bond_price_after``) 都写着 ``px is None or px <= 0``, 只有它漏了 ``<= 0``。
+    而它的返回值会当除数用 (``exit_point.price / entry_point.price``), 所以行情源
+    给出一个 0 收盘价的后果不是"这期少一个成分", 是 ZeroDivisionError 掐断整轮回测
+    —— 前面每一期的取数代价都白付。
+    """
+    from datetime import date as _date
+
+    from convertible_bond.strategy_backtest import _latest_bond_price_point
+
+    class _Provider:
+        def __init__(self, series):
+            self.series = series
+
+        def get_bond_history(self, code, start, end):
+            return self.series
+
+    on = _date(2025, 3, 10)
+    good = _Provider([(_date(2025, 3, 7), 118.5)])
+    assert _latest_bond_price_point(
+        good, "128000.SZ", on, lookback_days=10, max_staleness_days=None).price == 118.5
+
+    for bad in (0.0, -1.0):
+        # 脏行是**最新**的那一天 —— 老实现会挑中它 (`d >= latest_date`), 于是不是回落到
+        # 前一天的好价, 而是把 0 交出去。
+        p = _Provider([(_date(2025, 3, 6), 118.5), (_date(2025, 3, 7), bad)])
+        point = _latest_bond_price_point(
+            p, "128000.SZ", on, lookback_days=10, max_staleness_days=None)
+        assert point is not None and point.price == 118.5, f"{bad} 被当成了有效收盘价"
+
+    only_bad = _Provider([(_date(2025, 3, 7), 0.0)])
+    assert _latest_bond_price_point(
+        only_bad, "128000.SZ", on, lookback_days=10, max_staleness_days=None) is None

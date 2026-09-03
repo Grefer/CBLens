@@ -32,8 +32,6 @@ def main() -> int:
     )
     parser.add_argument("--bundle", "-b", default="",
                         help="cb_data bundle 路径 (默认 <repo>/data/cb_data.json)")
-    parser.add_argument("--delist-window", type=int, default=0,
-                        help=argparse.SUPPRESS)
     parser.add_argument("--min-balance", type=float, default=default_min_balance,
                         help=argparse.SUPPRESS)
     parser.add_argument("--min-rating", default=DEFAULT_MIN_CREDIT_RATING or "",
@@ -47,7 +45,6 @@ def main() -> int:
     bundle_path = Path(args.bundle) if args.bundle else project_bundle_path()
     bundle = TermsBundle(bundle_path)
     config = AdmissionFilterConfig(
-        delist_window_days=max(0, args.delist_window),
         min_outstanding_balance=None if args.min_balance < 0 else args.min_balance,
         min_credit_rating=args.min_rating.strip() or None,
         min_turnover_amount=None if args.min_turnover < 0 else args.min_turnover,

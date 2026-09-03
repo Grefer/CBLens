@@ -222,8 +222,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--benchmark-index", default="",
                         help="真实指数第二基准代码 (如 000832.CSI 中证转债); "
                              "数据源取不到时优雅跳过")
-    parser.add_argument("--delist-window", type=int, default=0,
-                        help=argparse.SUPPRESS)
     parser.add_argument("--min-balance", type=float, default=default_min_balance,
                         help=argparse.SUPPRESS)
     parser.add_argument("--min-rating", default=DEFAULT_MIN_CREDIT_RATING or "",
@@ -324,7 +322,6 @@ def main() -> int:
         disk_cache = DiskCacheProvider(provider, args.cache_dir)
         provider = disk_cache
     admission_config = AdmissionFilterConfig(
-        delist_window_days=max(0, args.delist_window),
         min_outstanding_balance=None if args.min_balance < 0 else args.min_balance,
         min_credit_rating=args.min_rating.strip() or None,
         min_turnover_amount=None if args.min_turnover < 0 else args.min_turnover,
