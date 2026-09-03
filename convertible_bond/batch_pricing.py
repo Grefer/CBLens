@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from .atomic_io import atomic_write_json
 from .cache import TERMS_SYNC_SOURCE, CachedBondDataProvider, terms_fetched_at
 from .data_providers import (
     AkshareDataProvider,
@@ -1797,10 +1798,7 @@ def save_batch_results_cache(
         "results": [_json_safe(row) for row in results],
         "upcoming_results": [_json_safe(row) for row in upcoming],
     }
-    tmp = cache_path.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
-    tmp.replace(cache_path)
+    atomic_write_json(cache_path, payload)
     return cache_path
 
 

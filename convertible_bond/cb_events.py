@@ -15,6 +15,7 @@ from pathlib import Path
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from .atomic_io import atomic_write_json
 from .data_providers import BondTerms, _add_months, to_date
 from .paths import data_path
 from .market_time import market_today
@@ -128,10 +129,7 @@ class CBEventStore:
             "_meta": meta,
             "events": [_event_to_json(e) for e in sorted(self._events, key=_event_sort_key)],
         }
-        tmp = self.path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
-        tmp.replace(self.path)
+        atomic_write_json(self.path, payload)
 
     def list_events(
         self,

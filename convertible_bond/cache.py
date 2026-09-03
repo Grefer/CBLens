@@ -27,6 +27,7 @@ from typing import get_args, get_origin, get_type_hints
 
 # 注: 类型标注统一使用 X | None / list[X] (PEP 604, Python 3.10+).
 
+from .atomic_io import atomic_write_json
 from .data_providers import (
     BondTerms, CashflowSchedule, DataProvider, WindDataProvider,
     infer_cb_trading_metadata, to_date,
@@ -194,10 +195,7 @@ class TermsBundle:
         meta["n_bonds"] = n
         self._data[self.BUNDLE_META_KEY] = meta
         # 原子写
-        tmp = self.path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        tmp.replace(self.path)
+        atomic_write_json(self.path, self._data)
         self._disk_stamp = self._stat_stamp()
 
     def reload(self):
@@ -346,10 +344,7 @@ class TermsCache:
                       "fetched_at_by_source": {**prev, source: now}}
         p = self.path(bond_code)
         # 原子写: 先写 .tmp 再 rename, 防止中途崩溃留下半截 JSON
-        tmp = p.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
-        tmp.replace(p)
+        atomic_write_json(p, d, sort_keys=False)
         return p
 
     def fetched_at(self, bond_code: str, *, source: str | None = None) -> datetime | None:

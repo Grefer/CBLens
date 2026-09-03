@@ -7,6 +7,7 @@ from pathlib import Path
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from .atomic_io import atomic_write_json
 from .paths import data_path
 
 
@@ -72,10 +73,7 @@ def save_watchlist(items: Sequence[dict], *, dismissed: Iterable[str] | None = N
         "items": [_json_ready(dict(item)) for item in items],
         "dismissed": sorted(keep),
     }
-    tmp = path.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    atomic_write_json(path, payload, sort_keys=False)
     return path
 
 

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+from .atomic_io import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -522,10 +523,7 @@ def save_history(path: Path, snapshots: Sequence[ValuationSnapshot]) -> Path:
         "records": [s.to_record() for s in
                     sorted(snapshots, key=lambda s: (s.date is None, s.date))],
     }
-    tmp = path.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    atomic_write_json(path, payload, sort_keys=False)
     return path
 
 

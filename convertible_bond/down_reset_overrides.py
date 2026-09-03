@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from .atomic_io import atomic_write_json
 from .data_providers import BondTerms, _add_months, to_date
 from .paths import data_path
 from .market_time import market_today
@@ -202,11 +203,7 @@ class DownResetOverrides:
         meta = self._data.get("_meta", {})
         meta["updated_at"] = datetime.now().isoformat(timespec="seconds")
         self._data["_meta"] = meta
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        tmp.replace(self.path)
+        atomic_write_json(self.path, self._data)
 
     def set(self, bond_code: str, *,
             announce_date: date | None,

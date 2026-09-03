@@ -28,6 +28,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from .atomic_io import atomic_write_json
 from .cache import _json_dict_to_terms, _terms_to_json_dict
 from .data_providers import DataProvider, to_date
 from .market_time import market_today
@@ -287,7 +288,4 @@ def _load_json(path: Path) -> dict:
 
 
 def _atomic_write(path: Path, payload: dict) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False)
-    tmp.replace(path)
+    atomic_write_json(path, payload, indent=None, sort_keys=False)

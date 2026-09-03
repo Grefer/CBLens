@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Iterable, Sequence
 
+from .atomic_io import atomic_write_json
 from .paths import data_path
 
 logger = logging.getLogger(__name__)
@@ -214,12 +215,7 @@ def to_narrow(row: dict) -> dict:
 
 def _atomic_write(path: Path, payload: dict) -> Path:
     """先写 .tmp 再 rename —— 半截 JSON 比没有文件更难查."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
-    tmp.replace(path)
-    return path
+    return atomic_write_json(path, payload)
 
 
 # ── 写 ──────────────────────────────────────────────────────────────
