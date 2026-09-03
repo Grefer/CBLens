@@ -2512,8 +2512,13 @@ def test_theta_across_a_coupon_is_the_ex_coupon_drop():
 
     钉住它是为了**防止有人把它"修"掉** —— 剔掉票息会让 Θ 变成净价 Θ, 与 ``price`` 的
     脏价口径分叉, 那是比现状更糟的不一致。
-    同时钉住已知的局限: 归一化按时间比例摊薄了这个离散跳变 (截片落在 1.09 天时 −1.0
-    的跳被报成 −0.92), 所以这一档的 Θ 只说得清方向, 说不清速率。
+
+    **2026-09-03 更正**: 上一版这里写着"归一化按时间比例摊薄了跳变, 这一档的 Θ 只说得清
+    方向、说不清速率"。**方向恰恰是说不清的那一半** —— 票息落不落在截片窗口内由
+    ``t_slice`` 决定, 而它随 N 变 (N=1000 时 1.46 天, N=2000 时 0.73 天), 于是"明天付不
+    付息"这件事由网格步长而不是日历决定。实测同一只债在两套**生产**口径下六个久期里
+    **3 个符号相反**, 量级差 ~250 倍。现在票息按它真正支付的那一天计入 (窗口内的加回来、
+    次日的减掉), 脏价口径不变而 Θ 不再随 N 漂: 4y 那档 N ∈ {500…16000} 稳定在 −0.9949。
     """
     issue = date(2023, 9, 3)
 
@@ -2538,8 +2543,42 @@ def test_theta_across_a_coupon_is_the_ex_coupon_drop():
     assert -amount * 1.2 < theta_ex < -amount * 0.7, (
         f"Θ={theta_ex:.4f} 不像一个 {amount} 元的除息下跌")
 
+    # 摊薄没了: 现在报的就是那一整笔, 而不是按 t_slice 比例缩过的
+    assert theta_ex == pytest.approx(-amount, abs=0.02), (
+        f"Θ={theta_ex:.4f} 不是那一整笔除息 (−{amount})")
+
     quiet = _pricer(date(2026, 6, 2)).price(**args)["theta"]
     assert 0.0 < quiet < 0.05, f"无票息的常态 Θ 应是小的正数, 实测 {quiet:.6f}"
+
+
+def test_theta_does_not_flip_sign_between_the_two_production_calibers():
+    """Θ 在批量 (M=300/N=1000) 与单只 (M=500/N=2000) 之间不许改号.
+
+    票息落不落在截片窗口内曾由 ``t_slice`` 决定, 而它随 N 变 —— 于是"明天付不付息"
+    由网格步长而不是日历决定。实测改前六个久期里 **3 个符号相反**, 量级差 ~250 倍
+    (批量报 −0.68 / 单只报 +0.005), 而当时的注释把这写成"方向仍然可读"。
+
+    两套口径都是**生产**在跑的: 批量定价用 M=300/N=1000, 单只页默认 M=500/N=2000。
+    """
+    def theta(years, M, N):
+        p = UniversalCBPricer(
+            S0=100.0, K=100.0, current_date=date(2026, 9, 2),
+            maturity_date=date(2026 + years, 9, 3), issue_date=date(2023, 9, 3),
+            conversion_start_date=date(2024, 3, 3),
+            coupon_rates=tuple([0.01] * max(1, years + 1)), redemption_price=107.0)
+        return p.price(sigma=0.25, r=0.022, base_spread=0.03, distress_k=0.05,
+                       p_down=0.0, M=M, N=N, return_greeks=True)["theta"]
+
+    for years in range(1, 7):
+        batch, single = theta(years, 300, 1000), theta(years, 500, 2000)
+        assert (batch > 0) == (single > 0), (
+            f"剩余 {years}y: 批量 Θ={batch:.6f} 单只 Θ={single:.6f} 符号相反")
+        assert batch == pytest.approx(single, abs=0.01), (
+            f"剩余 {years}y: 两套口径 Θ 差得太远 ({batch:.6f} vs {single:.6f})")
+
+    # N 扫描: 除息那一档也要稳 —— 改前它在 −0.45 / −0.91 / +0.005 之间跳
+    swept = [theta(4, 500, N) for N in (500, 1000, 2000, 4000, 8000)]
+    assert max(swept) - min(swept) < 0.002, f"Θ 随 N 漂: {swept}"
 
 
 class TestGridResolutionAtS0:

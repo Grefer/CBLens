@@ -675,17 +675,30 @@ class UniversalCBPricer:
         # 误差同向抵消。网格步长 dt 未必正好等于 1 天 (N=1000, T=3.3 年时 dt≈1.2 天),
         # 所以按实际截到的 t 归一化到"每日历日"。
         #
-        # **票息落在截片窗口内时 Θ 是除息下跌, 不是时间价值衰减** —— 那是脏价的真实
-        # 行为, 不是 bug: 理论价含应计, 债券在除息日就会掉一个票息。旧的"重解明天"
-        # 写法给同一个结果 (实测票息 1.0 元时 旧法 −0.996 / 新法 −0.907, 而无票息的
-        # 常态是 +0.005), 所以这不是截片引入的。
-        # 已知局限: **归一化把这个离散跳变按时间比例摊薄了** (截片落在 1.09 天时 −1.0
-        # 的跳被报成 −0.92) —— 离散跳变不随时间缩放, 那一档的 Θ 只说得清方向, 说不清
-        # 速率。不在这里特判剔票息: 那会让 Θ 变成净价口径, 与 ``price`` 的脏价分叉。
-        # 行为由 test_theta_across_a_coupon_is_the_ex_coupon_drop 钉住。
+        # **票息要按它真正支付的那一天计入, 不能按"截片窗口有没有罩住它"**。
+        # 截片窗口是 (今天, 今天 + t_slice], 而 t_slice 随 N 变 (N=1000 时 dt≈1.2 天,
+        # N=2000 时 ≈0.6 天) —— 于是"明天付不付息"这件事由网格步长决定, 不由日历决定。
+        # 实测同一只债在两套**生产**口径下 Θ **符号相反**: 六个久期里 3 个反号,
+        # 量级差 ~250 倍 (批量 M=300/N=1000 报 −0.68, 单只 M=500/N=2000 报 +0.005)。
+        # 上一版把这个写成"已知局限, 方向仍然可读" —— 方向恰恰是不可读的那一半。
+        #
+        # 处置: 先把窗口里的票息**加回**扰动解, 得到与票息无关的纯衰减率; 再减去真正
+        # 在**次日**支付的那笔。脏价口径不变 (票息照样出现在 Θ 里, 与 ``price`` 同底),
+        # 变的是它出现在**正确的那一天**, 且不随 N 漂。
+        # 一天的折现差 <1e-5, 所以直接用名义金额。
         if theta_slice and theta_slice.get("t"):
             theo_ahead = float(np.interp(S0, S_grid, theta_slice["V"]))
-            theta = (theo_ahead - theo) / (theta_slice["t"] * _DAYS_PER_YEAR)
+            slice_days = theta_slice["t"] * _DAYS_PER_YEAR
+            # **天数取整必须与回溯里的 `step_date` 用同一把尺** (那里是
+            # `int(t_prev * _DAYS_PER_YEAR)` 截断)。用 round 会算出一个与解里
+            # 实际发生的除息**不一致**的窗口 —— 实测 N=2000 时截片落在 0.731 天,
+            # round 给出 1 天于是加回了一笔解里根本没掉过的票息, Θ 照样翻号。
+            window_end = self.current_date + timedelta(days=int(slice_days))
+            coupon_in_window = self.discrete_coupon_amount(self.current_date, window_end)
+            decay_per_day = (theo_ahead + coupon_in_window - theo) / slice_days
+            coupon_tomorrow = self.discrete_coupon_amount(
+                self.current_date, self.current_date + timedelta(days=1))
+            theta = decay_per_day - coupon_tomorrow
         else:
             # 截不到片 = 只剩 1 步 (T 极短), Θ 没有意义
             theta = float("nan")
