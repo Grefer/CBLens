@@ -3280,3 +3280,295 @@ def test_strategy_display_name_has_exactly_one_implementation():
         literals -= docstrings
         assert "旧策略(兼容)" not in literals, f"{mod.__name__} 还留着自己的兜底分支"
         assert "pde_down_reset" not in literals, f"{mod.__name__} 还留着自己的展示名表"
+
+
+# ── 条款来源诊断: 单债回测页与策略回测页共用一份口径 ─────────────────
+#
+# 这两页此前各写了一份**逐字相同**的 `_terms_source_diagnostic`。副本的典型失败形态
+# 不是"抄错", 是**修的时候只修了一份** —— 本会话刚因为
+# `backtest._build_backtest_pricer_kwargs` 手抄 `pricing_api` 的条款管线修过一轮,
+# 那一份抄漏了四处 (实测全库 322/1059 只至少一个采样日转股价用错, 最大偏离 115%)。
+
+
+class _NoDiagnosticProvider(DataProvider):
+    """连 ``get_terms_source_diagnostics`` 这个方法都没有 (裸 Wind/akshare provider)。"""
+
+    name = "no-diagnostic"
+
+    def __init__(self, terms):
+        self._terms = terms
+
+    def get_bond_terms(self, bond_code, valuation_date=None):
+        return self._terms
+
+    def get_bond_history(self, bond_code, start_date, end_date):
+        return []
+
+    def get_stock_history(self, stock_code, start_date, end_date):
+        return []
+
+    def get_stock_close(self, stock_code, on_date=None):
+        return None
+
+
+class _RaisingDiagnosticProvider(_NoDiagnosticProvider):
+    """有方法但会抛 —— 诊断是旁路信息, 它失败不该让整轮回测倒下。"""
+
+    name = "raising-diagnostic"
+
+    def get_terms_source_diagnostics(self, bond_code, valuation_date):
+        raise RuntimeError("patch store 读盘失败")
+
+
+class _RealDiagnosticProvider(_NoDiagnosticProvider):
+    """真投影层: 说得出快照日期与 patch 条数, 原样透出不许被兜底覆盖。"""
+
+    name = "real-diagnostic"
+
+    def get_terms_source_diagnostics(self, bond_code, valuation_date):
+        return {
+            "bond_code": bond_code,
+            "valuation_date": valuation_date,
+            "terms_source": "snapshot",
+            "snapshot_date": date(2025, 1, 6),
+            "patch_count": 3,
+            "event_count": 1,
+            "uses_current_fallback": False,
+        }
+
+
+def _diagnostic_probe_terms():
+    return BondTerms(
+        sec_name="甲转债",
+        underlying_code="600001.SH",
+        issue_date=date(2020, 1, 1),
+        listing_date=date(2020, 1, 20),
+        maturity_date=date(2030, 1, 1),
+        face_value=100.0,
+        conversion_price=100.0,
+        credit_rating="AA+",
+        outstanding_balance=10.0,
+    )
+
+
+@pytest.mark.parametrize("provider_cls,expected", [
+    (_NoDiagnosticProvider, {
+        "bond_code": "113001.SH",
+        "valuation_date": date(2025, 3, 3),
+        "terms_source": "provider",
+        "snapshot_date": None,
+        "patch_count": 0,
+        "event_count": 0,
+        "uses_current_fallback": False,
+    }),
+    (_RaisingDiagnosticProvider, {
+        "bond_code": "113001.SH",
+        "valuation_date": date(2025, 3, 3),
+        "terms_source": "provider",
+        "snapshot_date": None,
+        "patch_count": 0,
+        "event_count": 0,
+        "uses_current_fallback": False,
+    }),
+    (_RealDiagnosticProvider, {
+        "bond_code": "113001.SH",
+        "valuation_date": date(2025, 3, 3),
+        "terms_source": "snapshot",
+        "snapshot_date": date(2025, 1, 6),
+        "patch_count": 3,
+        "event_count": 1,
+        "uses_current_fallback": False,
+    }),
+])
+def test_eligible_codes_emits_the_seven_key_terms_diagnostic(provider_cls, expected):
+    """端到端: 策略回测选池那一步吐出来的诊断必须是这七个键。
+
+    键集是承重的 —— ``_period_data_quality`` 逐键读 ``terms_source`` /
+    ``uses_current_fallback`` / ``patch_count`` / ``event_count`` / ``snapshot_date``
+    去算数据质量摘要。少一个键那一栏就静默恒为默认值, 不报错。
+    期望值写字面量, 不从被测常量推导。
+    """
+    from convertible_bond.strategy_backtest import _eligible_codes_for_date
+
+    provider = provider_cls(_diagnostic_probe_terms())
+    _eligible, _excluded, diagnostics = _eligible_codes_for_date(
+        provider, ["113001.SH"], date(2025, 3, 3))
+    assert len(diagnostics) == 1
+    assert diagnostics[0] == expected
+
+
+def test_both_backtest_pages_share_one_terms_diagnostic_implementation():
+    """单债回测页与策略回测页必须调**同一个**诊断函数, 不许各留一份副本。
+
+    断言的是两个模块命名空间里那个可调用对象**是同一个**, 以及它们对同一批 provider
+    形态给出逐字相同的结果 —— 不是扫源码文本。
+    """
+    from convertible_bond import backtest as single_bond_backtest
+    from convertible_bond import strategy_backtest as strategy
+    from convertible_bond import terms_diagnostics
+
+    shared = terms_diagnostics.terms_source_diagnostic
+    assert single_bond_backtest.terms_source_diagnostic is shared
+    assert strategy.terms_source_diagnostic is shared
+
+    terms = _diagnostic_probe_terms()
+    on_date = date(2025, 3, 3)
+    for provider_cls in (_NoDiagnosticProvider, _RaisingDiagnosticProvider,
+                         _RealDiagnosticProvider):
+        provider = provider_cls(terms)
+        left = single_bond_backtest.terms_source_diagnostic(provider, "113001.SH", on_date)
+        right = strategy.terms_source_diagnostic(provider, "113001.SH", on_date)
+        assert left == right, f"{provider_cls.__name__} 上两页给出了不同诊断"
+        # 兜底一路给的必须是"没有投影层"那一档, 而不是"投影层没找到快照"。
+        # 这两句话在数据质量摘要里是相反的意思。
+        if provider_cls is not _RealDiagnosticProvider:
+            assert left["terms_source"] == "provider"
+            assert left["uses_current_fallback"] is False
+
+
+# ── "什么算一个可用的数" 全仓只许有一份判据 ──────────────────────────
+#
+# 这段判据曾有五份手写副本: ``data_providers.finite_float`` / ``signal_eval._finite`` /
+# ``market_valuation._finite`` / ``watchlist_cache._is_finite`` /
+# ``gui.tabs.batch_common._is_finite``。逐条实测过下面这批输入, **零分歧** —— 也就是说
+# 副本纯属重复, 没有一份是"这里需要特殊口径"。
+#
+# 它非合不可的理由是数据是**互通**的: 关注池与批量页会互相喂行 (关注池 worker 直接写
+# `_batch_all_results`), 而 `market_valuation` 的中位偏差取的就是 `batch_pricing` 用
+# `finite_float` 过滤出来的那一列。任一侧的判据被"顺手改好"一点点, 表现就是同一只债在
+# 一页有值、另一页是「—」, 或者当期中位少数了几只 —— 两种都不报错。
+#
+# 这条守护**不扫源码**: 它把同一批输入喂进五个真实入口比对结论, 所以就算将来有人重新
+# 手写一份实现, 只要行为一致就照样绿 (那是允许的), 一旦口径漂了立刻红。
+
+_FINITE_PROBE_CASES = [
+    None, 0, 1, -1, 1.5, "3.5", "  3.5 ", "", "--", "nan", "inf",
+    float("nan"), float("inf"), float("-inf"),
+    True, False, [], {}, b"3.5",
+    date(2026, 1, 1),
+]
+
+#: 上面每个输入"算不算一个可用的数"。**写字面量**, 不从被测函数推导 —— 从常量推导的
+#: 断言 (`assert f(x) == THE_CONSTANT`) 恒真, 是个绿着的空守护。
+_FINITE_PROBE_EXPECTED = [
+    False, True, True, True, True, True, True, False, False, False, False,
+    False, False, False,
+    True, True, False, False, True,
+    False,
+]
+
+
+def test_all_finite_predicates_agree_on_the_same_corpus():
+    """五个"这个值可不可用"的入口必须对同一批输入给出同一个结论。"""
+    import numpy as np
+
+    from convertible_bond.data_providers import finite_float
+    from convertible_bond.gui.tabs import batch_common
+    from convertible_bond import market_valuation, signal_eval, watchlist_cache
+
+    # 返回 float | None 的三个 (转成"可不可用")
+    value_style = {
+        "data_providers.finite_float": finite_float,
+        "signal_eval._finite": signal_eval._finite,
+        "market_valuation._finite": market_valuation._finite,
+    }
+    # 返回 bool 的两个
+    bool_style = {
+        "watchlist_cache._is_finite": watchlist_cache._is_finite,
+        "batch_common._is_finite": batch_common._is_finite,
+    }
+
+    assert len(_FINITE_PROBE_CASES) == len(_FINITE_PROBE_EXPECTED)
+    for case, expected in zip(_FINITE_PROBE_CASES, _FINITE_PROBE_EXPECTED):
+        for name, fn in value_style.items():
+            assert (fn(case) is not None) is expected, f"{name}({case!r})"
+        for name, fn in bool_style.items():
+            assert fn(case) is expected, f"{name}({case!r})"
+
+    # NaN 那一档单独点名: 它是这条约定的全部来由 —— `NaN is not None` 为**真**,
+    # 所以 `x is not None` 会放行 NaN 并渲染出字面的 "nan"。
+    for name, fn in bool_style.items():
+        assert fn(float("nan")) is False, f"{name} 放行了 NaN"
+        assert fn(np.float64("nan")) is False, f"{name} 放行了 numpy NaN"
+    for name, fn in value_style.items():
+        assert fn(float("nan")) is None, f"{name} 放行了 NaN"
+
+
+def test_finite_predicates_agree_on_pandas_missing_sentinels():
+    """``pandas.NaT`` 是 ``datetime`` **子类**且 ``bool(NaT)`` 为真 —— 单列一条。
+
+    项目在 ``safe_date`` 那条约定上已经被这个陷阱咬过一次 (``to_date`` 原样放行 NaT,
+    ``x or fallback`` 也不回落), 所以这五个入口对它的处置必须一致。
+    """
+    pd = pytest.importorskip("pandas")
+
+    from convertible_bond.data_providers import finite_float
+    from convertible_bond.gui.tabs import batch_common
+    from convertible_bond import market_valuation, signal_eval, watchlist_cache
+
+    for sentinel in (pd.NaT, pd.Timestamp("2026-01-01")):
+        assert finite_float(sentinel) is None
+        assert signal_eval._finite(sentinel) is None
+        assert market_valuation._finite(sentinel) is None
+        assert watchlist_cache._is_finite(sentinel) is False
+        assert batch_common._is_finite(sentinel) is False
+
+
+# ── CSV 导出搬家之后, 老导入路径一个都不能断 ──────────────────────────
+#
+# ``write_strategy_backtest_csv`` 已从 ``strategy_backtest`` 搬到
+# ``strategy_backtest_csv`` (纯搬运, 逻辑一个字节没改; 同一份 result 导出的 CSV 逐字节
+# 相同, 含 NaN / 日期 / 字段内逗号引号)。搬家唯一新增的风险是**再导出被顺手删掉** ——
+# 那时四个既有消费者一起 ImportError, 而 GUI 那一个要真的点到"导出 CSV"才炸。
+
+
+def test_csv_export_keeps_working_from_its_old_import_path():
+    """四个既有导入点必须拿到**同一个**函数对象。
+
+    ``convertible_bond/__init__``、CLI、GUI 快照控制器、本测试文件都写的是
+    ``from ...strategy_backtest import write_strategy_backtest_csv``。
+    """
+    import importlib
+
+    import convertible_bond
+    from convertible_bond import strategy_backtest, strategy_backtest_csv
+
+    canonical = strategy_backtest_csv.write_strategy_backtest_csv
+    assert strategy_backtest.write_strategy_backtest_csv is canonical
+    assert convertible_bond.write_strategy_backtest_csv is canonical
+
+    cli = importlib.import_module("convertible_bond.cli.strategy_backtest")
+    assert cli.write_strategy_backtest_csv is canonical
+
+    snapshots = importlib.import_module(
+        "convertible_bond.gui.controllers.strategy_snapshots")
+    assert snapshots.write_strategy_backtest_csv is canonical
+
+    # 搬走 = 引擎侧不再留副本。留一份就是分叉, 而分叉的失败形态是"改了导出格式,
+    # 但改的是没人调用的那一份"。
+    for name in ("_csv_value", "_PERIOD_CSV_COLUMNS", "_SUMMARY_CSV_KEYS",
+                 "_flatten_period_rows", "_write_csv_config", "_write_csv_summary"):
+        assert not hasattr(strategy_backtest, name), (
+            f"strategy_backtest 又长出了一份 CSV 私有名 {name}")
+
+
+def test_summary_stats_helpers_stay_importable_from_strategy_backtest():
+    """统计那一簇**留在原地**, 这条钉住让它留下的那个约束。
+
+    ``_summarize_strategy`` / ``_stability_stats`` 看着和 CSV 簇同类, 但它们不是零耦合:
+    要 ``_equity_curve_returns`` / ``_curve_periods_per_year`` / ``_periods_per_year`` /
+    ``_drawdown_stats`` 四个引擎侧私有名, 而其中两个是**跨模块被直接导入**的 ——
+    ``strategy_sweep`` 拿 ``_periods_per_year`` 算 rf, GUI 的
+    ``strategy_snapshots`` 拿 ``_drawdown_stats`` 重算旧快照的回撤。
+    把统计簇搬走就得同时动那两个文件, 或者再留一层再导出 —— 收益换不来这个代价。
+    """
+    import importlib
+
+    from convertible_bond import strategy_backtest
+
+    for name in ("_summarize_strategy", "_stability_stats", "_equity_curve_returns",
+                 "_curve_periods_per_year", "_periods_per_year", "_drawdown_stats"):
+        assert callable(getattr(strategy_backtest, name, None)), f"{name} 不见了"
+
+    sweep = importlib.import_module("convertible_bond.strategy_sweep")
+    assert sweep._periods_per_year is strategy_backtest._periods_per_year

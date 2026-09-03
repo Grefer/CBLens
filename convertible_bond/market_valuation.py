@@ -26,7 +26,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+
 from .atomic_io import atomic_write_json
+from .data_providers import finite_float
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +91,12 @@ class ValuationSnapshot:
         return asdict(self)
 
 
-def _finite(value: Any) -> float | None:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if np.isfinite(f) else None
+#: 转 float, 非有限 (None/NaN/inf) 返回 None —— 与 ``batch_pricing`` 共用**同一个**实现。
+#:
+#: 中位偏差取的就是批量结果里的 ``deviation``, 而那一列由 ``batch_pricing`` 用
+#: ``finite_float`` 过滤。两头各写一份判据, 意味着"哪些债算进当期中位"可以在两个地方
+#: 分叉 —— 而基线一旦记进版本库就当上该季度的代表 (见 ``MIN_BASELINE_COVERAGE``)。
+_finite = finite_float
 
 
 def _coerce_date(value: Any) -> str | None:

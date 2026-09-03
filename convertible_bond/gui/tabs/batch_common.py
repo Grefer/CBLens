@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import math
 import tkinter as tk
 from datetime import date, datetime
 from tkinter import ttk
@@ -24,7 +23,7 @@ from ...batch_pricing import (
     DATA_QUALITY_RISK_TAGS, TRADABILITY_RISK_TAGS,
     is_unlisted_new_bond, risk_tag_label,
 )
-from ...data_providers.base import CREDIT_RATING_RANK
+from ...data_providers.base import CREDIT_RATING_RANK, finite_float
 from ..widgets import Tooltip
 
 
@@ -92,14 +91,16 @@ _ITALIC_TAGS = frozenset({"nodata"})
 _TREE_ATTRS: set[str] = set()
 
 
+#: 判空一律走这一个 —— **NaN 不是 None**。落盘时 NaN 写成 ``null``, 读回来还原成
+#: NaN (``_NAN_FIELDS``), 而 ``NaN is not None`` 为**真**, 于是 ``x is not None``
+#: 这种判据会放行 NaN 并把"今天没有市价"渲染成字面的 ``"nan"``。
+#:
+#: 实现委托给 ``data_providers.finite_float``: 这个仓库同一段判据曾有五份手写副本
+#: (base / signal_eval / market_valuation / watchlist_cache / batch_common), 而
+#: 关注池与批量页**会互相喂行** —— 两侧对同一字段判空口径不同, 表现是同一只债在
+#: 一页有值、另一页是「—」, 不报错。
 def _is_finite(value) -> bool:
-    if value is None:
-        return False
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return False
-    return math.isfinite(f)
+    return finite_float(value) is not None
 
 
 #: 「数据状态」列已经把这两档说清了 (而且更具体: 「未定价 · 已发行未上市」), 标签列

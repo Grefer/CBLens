@@ -46,6 +46,7 @@ from typing import Any
 from collections.abc import Iterable, Sequence
 
 from .atomic_io import atomic_write_json
+from .data_providers import finite_float
 from .paths import data_path
 
 logger = logging.getLogger(__name__)
@@ -475,13 +476,16 @@ def latest_daily_before(day: date | str, *,
 
 # ── 陈旧判据 ────────────────────────────────────────────────────────
 
+#: 判空一律走这一个 —— **NaN 不是 None**。落盘时 NaN 写成 ``null``, 读回来还原成
+#: NaN (``_NAN_FIELDS``), 而 ``NaN is not None`` 为**真**, 于是 ``x is not None``
+#: 这种判据会放行 NaN 并把"今天没有市价"渲染成字面的 ``"nan"``。
+#:
+#: 实现委托给 ``data_providers.finite_float``: 这个仓库同一段判据曾有五份手写副本
+#: (base / signal_eval / market_valuation / watchlist_cache / batch_common), 而
+#: 关注池与批量页**会互相喂行** —— 两侧对同一字段判空口径不同, 表现是同一只债在
+#: 一页有值、另一页是「—」, 不报错。
 def _is_finite(value: Any) -> bool:
-    if value is None:
-        return False
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError):
-        return False
+    return finite_float(value) is not None
 
 
 def row_is_stale(row: dict | None, today: date) -> bool:

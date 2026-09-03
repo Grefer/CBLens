@@ -37,21 +37,23 @@ from typing import Any, Hashable, Sequence
 import numpy as np
 from scipy.stats import spearmanr
 
+from .data_providers import finite_float
+
 Observation = dict[str, Any]
 
 DEFAULT_RETURN_KEY = "forward_return"
 DEFAULT_DATE_KEY = "date"
 
 
-def _finite(value: Any) -> float | None:
-    """转 float, 非有限 (None/NaN/inf) 返回 None。"""
-    if value is None:
-        return None
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
+#: 转 float, 非有限 (None/NaN/inf) 返回 None —— 与全仓共用**同一个**实现。
+#:
+#: 这段判据曾有五份手写副本 (逐条实测过 28 种输入, 包括 ``pandas.NaT`` / ``Decimal('NaN')``
+#: / numpy 标量 / 超大 int, 结果零分歧 —— 也就是说副本纯属重复, 没有一份是"这里需要
+#: 特殊口径"), 而观测面板里的 ``deviation`` 正是 ``batch_pricing`` 用 ``finite_float``
+#: 过滤出来的那一批。判据两头不一致时, Rank-IC 的分母会和批量页对不上。
+#:
+#: 只是导入一个纯函数, 模块本身**仍然不触发任何取数** (见模块 docstring)。
+_finite = finite_float
 
 
 def _group_by(

@@ -15,6 +15,7 @@ from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensi
 from .historical_terms import (
     HistoricalBondDataProvider, TermsPatchStore, project_terms_patches_path)
 from .cb_events import CBEventStore, project_events_path
+from .terms_diagnostics import terms_source_diagnostic
 from .pricing_api import (
     build_pricer_kwargs, _estimate_down_reset_floor, _rating_spread_floor)
 
@@ -268,7 +269,7 @@ def backtest_theoretical_price(
         par_out.append(parity)
         iv_out.append(iv_val)
         k_out.append(float(point_kwargs["K"]))
-        diag_out.append(_terms_source_diagnostic(provider, bond_code, val_date))
+        diag_out.append(terms_source_diagnostic(provider, bond_code, val_date))
         if progress_cb:
             last_progress = i + 1
             progress_cb(last_progress, total)
@@ -322,24 +323,3 @@ def _build_backtest_pricer_kwargs(
     kwargs.pop("S0", None)
     kwargs.pop("current_date", None)
     return kwargs, meta["issue_date"], meta["maturity_date"]
-
-
-def _terms_source_diagnostic(provider: DataProvider, bond_code: str, valuation_date: date) -> dict:
-    describe = getattr(provider, "get_terms_source_diagnostics", None)
-    if callable(describe):
-        try:
-            diag = describe(bond_code, valuation_date)
-            if isinstance(diag, dict):
-                return diag
-        except Exception:
-            logger.debug("get_terms_source_diagnostics(%s) 失败, 回落默认诊断",
-                         bond_code, exc_info=True)
-    return {
-        "bond_code": bond_code,
-        "valuation_date": valuation_date,
-        "terms_source": "provider",
-        "snapshot_date": None,
-        "patch_count": 0,
-        "event_count": 0,
-        "uses_current_fallback": False,
-    }
