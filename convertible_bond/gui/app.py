@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import sys
+import threading
 from datetime import timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -124,6 +125,11 @@ class CBPricerApp(
 
         self._build_vars()
         self._animating = False
+        # 进度条是**共用**的一件, 而后台任务不止一个 —— 见 _start_progress
+        self._progress_tasks = []
+        # 后台定价互斥道 —— 见 _acquire_pricing_slot
+        self._pricing_slot = None
+        self._pricing_slot_lock = threading.Lock()
         self._responsive_profile_name = None
         self._responsive_after_id = None
         self._responsive_last_size = None
@@ -1012,10 +1018,33 @@ class CBPricerApp(
             self._render_sensitivity_chart(*self._last_sens_args)
 
     # ── 进度动画 ────────────────────────────────────────
+    #
+    # 进度条与 v_status 全 app 只有一件, 而能起后台任务的入口有九个 (定价 / IV 反解 /
+    # 收敛诊断 / Wind 同步 / 波动率重算 / 无风险利率 / 敏感性 / 全池重算 / 关注池重算)。
+    # 原实现只有一个布尔 `_animating`: **谁先结束谁就把条关掉**, 于是"点了 ⚡ 关注池重算,
+    # 期间又去定价页点了一下"这种再普通不过的操作, 会让还在跑的那个任务的进度条提前归零 ——
+    # 而任务本身还要跑几十秒, 用户看到的是"卡住了"。所以这里改成按**未结束任务数**计数。
+    #
+    # 计数而不是按 token 配对, 是因为 `_stop_progress` 的 12 个调用点全是无参调用 (多数
+    # 还是 `self.after(0, self._stop_progress)` 这种裸引用), 加参数要改一批不相干的文件。
+    # 不配对的代价只是"文案可能显示成另一个还在跑的任务", 条本身的开关仍是对的; 而落到
+    # 空栈上的那次 stop 照常关条, 所以少数没有 start 的路径也不会把条挂住。
+    #
+    # **前提是 start 与 stop 一比一**。原先不是: 六个 worker 的 except 里都有一句
+    # `after(0, self._on_error, ...)`, 而 `_on_error` 自己也停一次进度 —— 一次 start
+    # 对两次 stop。只有一个任务时看不出来 (两次都落在空栈上), 两个任务时那多出来的一次
+    # 会把**另一个**任务的计数吃掉。所以 `_on_error` 不再停进度: 它不是一次任务结束,
+    # 而六个调用点后面紧跟的 `finally` 全都已经 `after(0, self._stop_progress)` 了,
+    # 两个回调同在一轮 idle 里跑完, 用户看不出差别。
     def _start_progress(self, base_msg):
-        self._animating = True
+        self._progress_tasks = getattr(self, "_progress_tasks", [])
+        self._progress_tasks.append(base_msg)
         self._anim_base = base_msg
         self._anim_step = 0
+        if self._animating:
+            # 已经在转了: 只换文案。重新 tick 一次会让 after(400) 链翻倍, 越叠越快
+            return
+        self._animating = True
         if hasattr(self, 'progress_bar'):
             self.progress_bar.start()
         self._tick_progress()
@@ -1029,21 +1058,60 @@ class CBPricerApp(
         self.after(400, self._tick_progress)
 
     def _stop_progress(self):
+        tasks = getattr(self, "_progress_tasks", None)
+        if tasks:
+            tasks.pop()
+        if tasks:
+            # 还有别的任务没结束 —— 只把文案换回剩下那个, 条不许关
+            self._anim_base = tasks[-1]
+            return
         self._animating = False
         if hasattr(self, 'progress_bar'):
             self.progress_bar.stop()
             self.progress_bar.set(0)
 
+    # ── 后台定价互斥 ────────────────────────────────────
+    #
+    # 批量页的「🔄 刷新重算」与关注池主页的「⚡ 关注池重算」各起一条后台线程,
+    # 而两条**都**对 `_batch_all_results` 做读-改-写: 关注池 worker 是
+    # `merge_watchlist_pricing(app._batch_all_results, ...)` → 回写, 全池 worker 是整份赋值。
+    # 两者并发时, 关注池那一轮基于**几分钟前**读到的旧列表算出 new_main 再整份盖回去,
+    # 于是刚跑完的全市场结果被静默丢掉 —— 而两边的状态栏都报成功, 表里也看不出哪一份赢了。
+    #
+    # 不用锁包住 worker: 那会把网络取数整个串行化并阻塞几分钟。这里用的是与关注池
+    # 三入口单飞同一个形状的**准入互斥** —— 同一时刻只许有一条定价线程, 被挡住的那次
+    # 由调用方写状态栏说明 (静默 return 会让"点了没反应"与"点了但坏了"长得一模一样)。
+    def _acquire_pricing_slot(self, label: str) -> str | None:
+        """占用后台定价互斥道; 成功返回 ``None``, 失败返回**当前占用者**的名字。
+
+        返回占用者而不是 False, 是为了让状态栏说得出"在等谁"。
+        """
+        with self._pricing_slot_lock:
+            if self._pricing_slot is not None:
+                return self._pricing_slot
+            self._pricing_slot = label
+            return None
+
+    def _release_pricing_slot(self, label: str) -> None:
+        """释放互斥道; 只有占用者本人放得掉 (迟到的 finally 不会误放别人的锁)。"""
+        with self._pricing_slot_lock:
+            if self._pricing_slot == label:
+                self._pricing_slot = None
+
     # ── 错误处理 ───────────────────────────────────────────
     def _on_error(self, msg, show_dialog=True):
-        self._stop_progress()
-        self.v_status.set(E(f"❌ {msg}"))
+        # 这里**不停进度** —— 见上面 `_stop_progress` 那段: 它会吃掉另一个还在跑的
+        # 任务的计数。停条的活由调用方的 finally 干, 六个调用点全都已经有了。
         if show_dialog:
             self.v_ref_info.set("❌ 获取失败")
             self.v_bond_title.set("未加载转债")
             self.v_result.set("—")
             self.lbl_result.configure(text_color=RED)
             messagebox.showerror("错误", str(msg))
+        # 状态行写在**弹框之后**。showerror 是模态, 它在自己的事件循环里让那条 400ms
+        # 的动画 tick 继续跑; 而这里已经不停进度了, 先写就会被 tick 盖掉 —— 用户关掉
+        # 弹框, 看到的是一句"正在计算…"而不是错误原因。
+        self.v_status.set(E(f"❌ {msg}"))
 
     # ── 参数预设保存/加载 ──────────────────────────────────
     _PRESET_VARS = (

@@ -61,10 +61,15 @@ from .batch_common import (
     refresh_theme as _refresh_theme_impl,
 )
 from .batch_watchlist import (
+    BATCH_RERUN_LABEL,
+    PRICING_SLOT_BATCH,
     _add_selection_to_watchlist,
     _auto_add_upcoming_to_watchlist,
+    _set_watch_button_state,
+    acquire_pricing_slot,
     refresh_stale_watchlist,
     refresh_home,
+    release_pricing_slot,
     run_new_issue_sync_async,
 )
 from ...market_time import market_today
@@ -388,7 +393,7 @@ def build(app, tab):
     ).pack(side="left", padx=(0, 12))
 
     app.btn_batch_run = ctk.CTkButton(
-        cc, text="🔄 刷新重算", command=lambda: _run_batch(app),
+        cc, text=BATCH_RERUN_LABEL, command=lambda: _run_batch(app),
         fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=("#ffffff", "#11111b"),
         font=(FONT_FAMILY, 13, "bold"), width=110, height=32, corner_radius=6)
     app.btn_batch_run.pack(side="left")
@@ -455,7 +460,13 @@ def _run_batch(app):
     一下, 昨天挂牌的新债今天照样被判成"已发行未上市"而进不了主池。窄同步只碰那几只新债,
     相对分钟级的全池取数可忽略。失败不阻断: 退回按现有条款库跑。
     """
-    run_new_issue_sync_async(app, then=lambda synced: _run_batch_now(app, reload_terms=synced))
+    # 返回 False = 已经有一轮窄同步在跑, 这一下被丢掉了。**必须说一句**: 被丢掉的是
+    # 整轮全池定价, 而按钮没 disable、状态栏不动, 用户会一直等一个永远不会来的结果。
+    # 状态写在批量页 (v_batch_status) —— 用户是在这一页按的按钮。
+    started = run_new_issue_sync_async(
+        app, then=lambda synced: _run_batch_now(app, reload_terms=synced))
+    if not started:
+        app.v_batch_status.set("⏳ 新债上市日正在刷新中 — 这一下没有排队, 请等它结束再点")
 
 
 def _run_batch_now(app, *, reload_terms: bool = False):
@@ -500,17 +511,49 @@ def _run_batch_now(app, *, reload_terms: bool = False):
     _auto_add_upcoming_to_watchlist(app, silent=True)
     watchlist_codes = [e.get("bond_code") for e in app._batch_watchlist if e.get("bond_code")]
 
-    app.btn_batch_run.configure(state="disabled")
-    skipped = _excluded_status_suffix(excluded)
-    watch = f", 关注池 {len(watchlist_codes)} 只" if watchlist_codes else ""
-    app.v_batch_status.set(f"正在定价 {len(codes)} 只普通转债 (自动并发{skipped}{watch}) ...")
-    app._start_progress(f"全量定价 {len(codes)} 只")
+    # 与「⚡ 关注池重算」互斥。两条线程都对 ``_batch_all_results`` 做读-改-写: 关注池
+    # worker 读一份、merge、整份写回, 而这一轮跑完也是整份赋值 —— 并发时后写的那份把
+    # 先写的静默丢掉, 且两边的状态栏都报成功。btn_batch_run 的 disable 挡不住这个:
+    # 它只挡住"再点一次批量重算", 关注池那个按钮长在另一页上, 一直是可点的。
+    busy = acquire_pricing_slot(app, PRICING_SLOT_BATCH)
+    if busy is not None:
+        app.v_batch_status.set(f"⏳ {busy}正在进行, 请等它结束再重算全池")
+        return
 
-    threading.Thread(
-        target=_batch_worker,
-        args=(app, codes, watchlist_codes, source, csv_root, params, len(excluded)),
-        daemon=True,
-    ).start()
+    # 占了却没起成 = 互斥道被永久占住, 此后**两页**的定价入口全部静默失效。所以从这里
+    # 到 `.start()` 之间的每一条出路都要还锁 —— 不只是起线程那一句抛。AGENTS 记过同一个
+    # 形状: `_watchlist_pricing_running` 原先置位在 `btn.configure` 之后, 而那次裸属性
+    # 访问一旦抛 (按钮被搬走/改名), finally 就永远不执行。下面这几行里
+    # `app.btn_batch_run` 正是这样一次裸访问。姊妹函数 `_start_watchlist_pricing`
+    # 已经是 started 标志 + finally 的写法, 这里补齐。
+    started = False
+    try:
+        app.btn_batch_run.configure(state="disabled")
+        # 关注池那个按钮也要一起灰掉 —— 只靠状态栏拒绝的话, 用户点了才知道点不动,
+        # 而"能点的按钮点了没用"正是这一组缺陷的共同形状。
+        _set_watch_button_state(app, "disabled")
+        skipped = _excluded_status_suffix(excluded)
+        watch = f", 关注池 {len(watchlist_codes)} 只" if watchlist_codes else ""
+        app.v_batch_status.set(f"正在定价 {len(codes)} 只普通转债 (自动并发{skipped}{watch}) ...")
+        app._start_progress(f"全量定价 {len(codes)} 只")
+        try:
+            threading.Thread(
+                target=_batch_worker,
+                args=(app, codes, watchlist_codes, source, csv_root, params, len(excluded)),
+                daemon=True,
+            ).start()
+        except Exception:
+            # 这一档已经 _start_progress 过了, 所以要配一次 _stop_progress ——
+            # 进度条现在是引用计数的, 多停一次会吃掉**别的**任务的计数 (定价页那条
+            # 不受互斥道管), 所以只在真的 start 过之后才停。
+            app._stop_progress()
+            app.btn_batch_run.configure(state="normal")
+            _set_watch_button_state(app, "normal")
+            raise
+        started = True
+    finally:
+        if not started:
+            release_pricing_slot(app, PRICING_SLOT_BATCH)
 
 
 def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, excluded_count=0):
@@ -557,7 +600,7 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
                 app.after(0, lambda: _render_cached_after_failed_batch(
                     app, provider.name, cached))
                 return
-            app._batch_results = results
+            app._batch_all_results = results
             app._batch_upcoming_results = watchlist_pricing
             app.after(0, lambda: _render_batch_views(
                 app, results, excluded_count=excluded_count))
@@ -575,7 +618,13 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
         # 仅主池重算触发; 缓存加载/关注池局部重算不记, 避免污染基线。
         # 覆盖率不够时它拒记并返回原因 —— 那句话要让用户看见, 见下面的 after 顺序。
         baseline_note = _record_valuation_history(results)
-        app._batch_results = results
+        # **全池写 _batch_all_results, 不是 _batch_results**。后者是视图子集, 唯一的
+        # 预期写入方是 _render_batch_views (它写 filter_batch_results_by_view 的结果),
+        # 而主表的 iid 就是它的整数下标。这里塞一份全池进去, 从这一刻到 after(0) 的渲染
+        # 真正跑完之间, 表上画的还是上一次那个窄视图 (「低估候选」实测只有几十行), 而
+        # 「⭐ 加入关注池」/「导出 CSV」按下标取到的已经是全池里的另一只债了 ——
+        # 不报错, 加进关注池的就是错的那只。
+        app._batch_all_results = results
         app._batch_upcoming_results = watchlist_pricing
         app._last_batch_source = provider.name
         app._last_batch_params = dict(params)
@@ -593,6 +642,10 @@ def _batch_worker(app, codes, watchlist_codes, source, csv_root, params, exclude
     finally:
         app.after(0, app._stop_progress)
         app.after(0, lambda: app.btn_batch_run.configure(state="normal"))
+        app.after(0, lambda: _set_watch_button_state(app, "normal"))
+        # 放锁排在最后, 而且走 after 不在这条线程上直接放 —— 放掉的下一刻关注池那一轮
+        # 就能起, 而上面那句 _stop_progress 还排在队里, 会落到新任务头上把它的条关掉。
+        app.after(0, lambda: release_pricing_slot(app, PRICING_SLOT_BATCH))
 
 
 def _load_successful_result_cache(app):

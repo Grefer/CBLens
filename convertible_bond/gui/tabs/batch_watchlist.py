@@ -226,8 +226,12 @@ def _auto_add_upcoming_to_watchlist(app, *, silent=False, source: str = "auto"):
             app.v_watchlist_status.set("暂无已发行未上市或即将上市的新债")
 
 
-def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False):
+def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False) -> bool:
     """后台跑一次新债窄同步, 完成 (无论成败) 后在主线程回调 ``then(synced: bool)``.
+
+    返回**这一轮有没有真的起来**。已经有一轮在跑时返回 ``False`` 且不回调 ``then``
+    —— 调用方必须自己写一句状态栏: 这条路上有两个按钮 (「🆕 扫新债」在关注池页,
+    批量页的「🔄 刷新重算」), 状态行按**用户触发时在哪一页**分, 这里写就一定写错一个。
 
     只碰"在盯新债"那几只 (实测每天 4 只上下), 一次 akshare 调用秒级完成, 不需要 Wind ——
     所以这里**不再问"要不要先同步"**: 原本那道闸读的是 ``bundle_meta()['updated_at']``,
@@ -236,9 +240,14 @@ def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False):
     详见 :mod:`convertible_bond.new_issue_sync`。
     """
     # 「扫新债」和「批量重算」共用这条路径, 两个按钮在同步的这两秒里都还是可点的 —
-    # 不挡住就会并发写同一个 bundle, 并且把后续流程跑两遍
+    # 不挡住就会并发写同一个 bundle, 并且把后续流程跑两遍。
+    #
+    # 但**挡住不等于可以不吭声**: 原先这里是裸的 return, 不写状态、不排队、按钮也没
+    # disable, 于是第二下点击的全部表现就是"什么也没发生" —— 而"点了没反应"与"点了但
+    # 坏了"长得一模一样。尤其是从批量页「🔄 刷新重算」进来的那一次, 被丢掉的是整轮全池定价,
+    # 用户会一直等一个永远不会来的结果。改成返回 False, 由调用方在自己那一页说明。
     if getattr(app, "_new_issue_sync_running", False):
-        return
+        return False
     app._new_issue_sync_running = True
 
     def worker():
@@ -252,6 +261,7 @@ def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False):
 
     app.v_watchlist_status.set("正在刷新新债上市日 ...")
     threading.Thread(target=worker, daemon=True).start()
+    return True
 
 
 def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
@@ -282,6 +292,36 @@ def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
 #: 「⚡ 关注池重算」按钮的文案。**只在这里写一次** —— 状态栏那句"点「…」再试"曾经
 #: 把它硬编码了一遍, 于是按钮改名后消息还指着旧名字, 用户在页面上找不到那个按钮。
 WATCH_REFRESH_LABEL = "⚡ 关注池重算"
+
+#: 批量页那个全池重算按钮的文案。与 ``WATCH_REFRESH_LABEL`` 同一个道理: 状态栏要
+#: 指得出按钮, 名字只许写一次。放在这里 (而不是 batch.py) 是因为 batch.py 单向导入
+#: 本模块 —— 反过来会成环。
+BATCH_RERUN_LABEL = "🔄 刷新重算"
+
+#: 后台定价互斥道的占用者名字。被挡住的那一次要靠它写出「⏳ … 正在进行」, 所以它必须
+#: 同时说清**哪一页**和**哪个按钮** —— 两个按钮长在不同页上, 只报按钮名的话用户在当前
+#: 这一页上找不到它。见 ``app._acquire_pricing_slot``。
+PRICING_SLOT_WATCHLIST = f"关注池主页的「{WATCH_REFRESH_LABEL}」"
+PRICING_SLOT_BATCH = f"批量页的「{BATCH_RERUN_LABEL}」"
+
+
+def acquire_pricing_slot(app, label: str) -> str | None:
+    """占用「同一时刻只许一条定价线程」那条互斥道; 被占用时返回占用者的名字。
+
+    走 ``getattr`` 而不是直接 ``app._acquire_pricing_slot(...)``: 这两个 tab 模块
+    的函数在测试里是拿轻量替身 app 调的 (真 ``CBPricerApp`` 起不来), 裸访问会让一批
+    与并发无关的用例连带炸掉。互斥道**真的存在**由
+    ``test_gui_batch_concurrency`` 直接对 ``CBPricerApp`` 断言, 不靠这里。
+    """
+    fn = getattr(app, "_acquire_pricing_slot", None)
+    return fn(label) if fn is not None else None
+
+
+def release_pricing_slot(app, label: str) -> None:
+    fn = getattr(app, "_release_pricing_slot", None)
+    if fn is not None:
+        fn(label)
+
 
 #: 「陈旧即刷」的防抖窗口。启动、切页、扫新债都可能触发这一轮, 没有窗口的话
 #: 用户在页签之间来回点就会不停起后台定价。
@@ -377,11 +417,13 @@ def _refresh_watchlist_with_upcoming(app):
     只扫本地 cb_data 的话, 新债得等用户想起来手动同步基础信息才看得见; 这里把
     "同步 → 扫描 → 定价"串成一步, 让按钮自己就能拿到当天新发的债和它的理论价。
     """
-    run_new_issue_sync_async(
+    started = run_new_issue_sync_async(
         app,
         then=lambda synced: _scan_upcoming_and_price(app, reload_terms=True),
         prompt_on_error=True,
     )
+    if not started:
+        app.v_watchlist_status.set("⏳ 新债上市日正在刷新中 — 这一下没有排队, 请等它结束再点")
 
 
 def _scan_upcoming_and_price(app, *, reload_terms: bool = False):
@@ -432,66 +474,91 @@ def _start_watchlist_pricing(app, codes, *, note: str | None = None,
     # 现在有三个入口能起这一轮 (⚡ 关注池重算 / 扫新债 / 缓存加载后的自动补价), 并发跑会
     # 让两个 worker 各自基于同一份旧列表算出 new_upcoming 再互相覆盖。
     if getattr(app, "_watchlist_pricing_running", False):
-        return False
-
-    source = app.v_batch_source.get()
-    if quiet and not _source_ready_without_connecting(source):
-        # 非用户发起的那一轮 (启动自愈) **绝不允许**去建立一条新连接。
-        # WindPy 装了但终端没开时 w.start() 会等满 waitTime, 于是"打开 GUI"
-        # 变成"打开后转圈几十秒" —— 而这一轮本来就只是锦上添花: 用户没要求它,
-        # 表里该有的盘上数据 (watchlist_cache) 已经画出来了。
-        app.v_watchlist_status.set(
-            f"ℹ {len(codes)} 只待定价 — {source} 当前不可用, 点「{WATCH_REFRESH_LABEL}」再试")
-        return False
-
-    csv_root = getattr(app, "_csv_root", None)
-    if source == "CSV" and not csv_root:
-        csv_root = filedialog.askdirectory(title="选择 CSV 数据根目录 (含 bonds/ stocks/ terms/ 子目录)")
-        if not csv_root:
-            return False
-        app._csv_root = csv_root
-
-    try:
-        params = dict(
-            r=float(app.v_r.get()) / 100.0,
-            base_spread=float(app.v_spread.get()) / 100.0,
-            p_down=float(app.v_p_down.get()) / 100.0,
-            distress_k=float(app.v_dk.get()) / 100.0,
-            M=max(300, int(float(app.v_M.get()))),
-            N=max(1000, int(float(app.v_N.get()))),
-            vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
-        )
-    except ValueError as exc:
-        messagebox.showerror("参数错误", str(exc))
-        return False
-
-    label = note or f"关注池 {len(codes)} 只"
-    app.v_watchlist_status.set(f"⚡ 正在定价{label} ...")
-    if not quiet:
-        # quiet 那一轮 (启动自愈) 刻意不碰这两样共用件: _start_progress 没有引用计数,
-        # 且 _tick_progress 写的是**全局** v_status —— 一轮后台自愈会把定价页/回测页
-        # 正在跑的任务的状态文字顶掉, 而 finally 里的 _stop_progress 又不还原文案。
-        _set_watch_button_state(app, "disabled")
-        app._start_progress(f"定价{label}")
-
-    # 置位必须紧挨 start(): 它原先在 btn.configure 之前, 而那次裸属性访问一旦抛
-    # (按钮被搬走/改名), finally 就永远不执行 —— 三个入口全被单飞检查静默挡死,
-    # 且检查只 return False、不写状态、不排队, 症状是"点了没反应"。
-    app._watchlist_pricing_running = True
-    try:
-        threading.Thread(
-            target=_watchlist_pricing_worker,
-            args=(app, codes, source, csv_root, params),
-            kwargs={"quiet": quiet},
-            daemon=True,
-        ).start()
-    except Exception:
-        app._watchlist_pricing_running = False
         if not quiet:
-            _set_watch_button_state(app, "normal")
-            app._stop_progress()
-        raise
-    return True
+            # 用户自己点的那一下被挡掉时必须说一句 —— 静默 return 的表现就是"点了没反应",
+            # 而"点了没反应"与"点了但坏了"长得一模一样。quiet 那一轮 (启动自愈) 不写:
+            # 用户没要求过它, 报一句只会把别人的状态顶掉。
+            app.v_watchlist_status.set(f"⏳ 上一轮「{WATCH_REFRESH_LABEL}」还在跑, 请稍候")
+        return False
+
+    # 与批量页的「🔄 刷新重算」互斥。两条线程都对 ``_batch_all_results`` 做读-改-写,
+    # 并发时后写的那份整个盖掉先写的 —— 关注池 worker 的 merge 基于它**几分钟前**读到
+    # 的那份旧列表,
+    # 于是刚跑完的全市场结果被静默丢掉, 而两边状态栏都报成功。挡住不损失任何东西: 全池
+    # 那一轮本来就会把关注池的标的一起算掉 (``_batch_worker`` 的 extra_codes)。
+    busy = acquire_pricing_slot(app, PRICING_SLOT_WATCHLIST)
+    if busy is not None:
+        if not quiet:
+            app.v_watchlist_status.set(f"⏳ {busy}正在进行, 完成后会一并刷新关注池")
+        return False
+
+    started = False
+    try:
+        source = app.v_batch_source.get()
+        if quiet and not _source_ready_without_connecting(source):
+            # 非用户发起的那一轮 (启动自愈) **绝不允许**去建立一条新连接。
+            # WindPy 装了但终端没开时 w.start() 会等满 waitTime, 于是"打开 GUI"
+            # 变成"打开后转圈几十秒" —— 而这一轮本来就只是锦上添花: 用户没要求它,
+            # 表里该有的盘上数据 (watchlist_cache) 已经画出来了。
+            app.v_watchlist_status.set(
+                f"ℹ {len(codes)} 只待定价 — {source} 当前不可用, 点「{WATCH_REFRESH_LABEL}」再试")
+            return False
+
+        csv_root = getattr(app, "_csv_root", None)
+        if source == "CSV" and not csv_root:
+            csv_root = filedialog.askdirectory(title="选择 CSV 数据根目录 (含 bonds/ stocks/ terms/ 子目录)")
+            if not csv_root:
+                return False
+            app._csv_root = csv_root
+
+        try:
+            params = dict(
+                r=float(app.v_r.get()) / 100.0,
+                base_spread=float(app.v_spread.get()) / 100.0,
+                p_down=float(app.v_p_down.get()) / 100.0,
+                distress_k=float(app.v_dk.get()) / 100.0,
+                M=max(300, int(float(app.v_M.get()))),
+                N=max(1000, int(float(app.v_N.get()))),
+                vol_window_days=VOL_WINDOW_MAP.get(app.v_vol_window.get(), 21),
+            )
+        except ValueError as exc:
+            messagebox.showerror("参数错误", str(exc))
+            return False
+
+        label = note or f"关注池 {len(codes)} 只"
+        app.v_watchlist_status.set(f"⚡ 正在定价{label} ...")
+        if not quiet:
+            # quiet 那一轮 (启动自愈) 刻意不碰这两样共用件。``_start_progress`` 现在有
+            # 引用计数了 (见 app.py), 所以它不会再提前关掉别人的条; 但 ``_tick_progress``
+            # 写的仍是**全局** v_status —— 一轮没人要过的后台自愈照样会把定价页/回测页
+            # 正在跑的那个任务的状态文字顶掉, 而停下来时也不还原文案。
+            _set_watch_button_state(app, "disabled")
+            app._start_progress(f"定价{label}")
+
+        # 置位必须紧挨 start(): 它原先在 btn.configure 之前, 而那次裸属性访问一旦抛
+        # (按钮被搬走/改名), finally 就永远不执行 —— 三个入口全被单飞检查静默挡死,
+        # 且检查只 return False、不写状态、不排队, 症状是"点了没反应"。
+        app._watchlist_pricing_running = True
+        try:
+            threading.Thread(
+                target=_watchlist_pricing_worker,
+                args=(app, codes, source, csv_root, params),
+                kwargs={"quiet": quiet},
+                daemon=True,
+            ).start()
+        except Exception:
+            app._watchlist_pricing_running = False
+            if not quiet:
+                _set_watch_button_state(app, "normal")
+                app._stop_progress()
+            raise
+        started = True
+        return True
+    finally:
+        if not started:
+            # 起不来就还回去。源不可用 / CSV 取消 / 参数错 / 起线程抛 —— 漏掉任一条,
+            # 互斥道就被一次失败的点击**永久**占住, 而症状是此后所有定价入口静默失效。
+            release_pricing_slot(app, PRICING_SLOT_WATCHLIST)
 
 
 def market_price_coverage(ok_rows):
@@ -637,6 +704,10 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
         if not quiet:
             app.after(0, app._stop_progress)
             app.after(0, lambda: _set_watch_button_state(app, "normal"))
+        # 释放走 after 而不是在这条线程上直接放: 放掉的下一刻全池那一轮就能起,
+        # 而上面那句 _stop_progress 还排在队里 —— 先放锁的话它会落到新任务头上,
+        # 把刚开始的那一轮的进度条关掉 (引用计数只数得清顺序对的那些)。
+        app.after(0, lambda: release_pricing_slot(app, PRICING_SLOT_WATCHLIST))
 
 
 # ── 加入 / 移除 / 渲染 ───────────────────────────────────────
