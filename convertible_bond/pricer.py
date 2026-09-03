@@ -289,6 +289,21 @@ class UniversalCBPricer:
                 cash += period["coupon_amount"]
         return cash
 
+    def spread_at_s0(self, base_spread: float, distress_k: float) -> float:
+        """S0 处模型自用的信用利差 —— 债底折现必须用它, 不是裸 ``base_spread``.
+
+        利差是 S 的函数 (``s(S) = base_spread + distress_k·max(0, 1 − S/K)``), 而债底
+        是"不转股时这张债值多少", 那当然要按**这只债此刻的**信用状况折现。用裸利差
+        算出来的债底比模型自用的高 —— 实测生产口径 (distress_k=0.05) 下全池 311 只里
+        **151 只差 >1 元**, 最大 10.48 元 (123250.SZ 嘉益转债, S0/K=0.434)。
+
+        定价页 2026-09-01 修过一次, 但只修了自己那一处; 回测页
+        (`backtest.py` 的 `bond_floor_value(val_date, r + point_base_spread)`)
+        留在旧公式上, 于是同一只债同一天两个页面的债底不同 —— 与
+        `_build_backtest_pricer_kwargs` 那次手抄副本是同一个形状。收到这里一处。
+        """
+        return float(base_spread) + float(distress_k) * max(0.0, 1.0 - self.S0 / self.K)
+
     def bond_floor_value(self, valuation_date, discount_rate):
         value = self.redemption_price / np.exp(discount_rate * max(0.0, (self.maturity_date - valuation_date).days / _DAYS_PER_YEAR))
         for period in self.coupon_periods:
@@ -682,8 +697,8 @@ class UniversalCBPricer:
         # S0/K=0.09 时高 12.7 元; 而 option_premium = price − max(bond_floor, parity)
         # 直接吃这个差, 会渲染出**负的期权溢价** (−0.250) —— 一个债底比全价还高的组合,
         # 在模型自己的口径里根本不存在。
-        spread_at_s0 = base_spread + distress_k * max(0.0, 1.0 - S0 / self.K)
-        bond_floor = float(self.bond_floor_value(self.current_date, r + spread_at_s0))
+        bond_floor = float(self.bond_floor_value(
+            self.current_date, r + self.spread_at_s0(base_spread, distress_k)))
         parity = float(self.S0 * self.ratio)
         # 深度实值 + 已过强赎窗口时, PDE cap 至 parity·(1+σ√t_grace),
         # 期权溢价 ≈ 强赎宽限期内的 stock optionality. call_notice_days=0 时退化为 0.

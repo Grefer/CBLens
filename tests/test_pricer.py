@@ -1127,6 +1127,9 @@ class TestBacktest:
             def bond_floor_value(self, *_args, **_kwargs):
                 return 95.0
 
+            def spread_at_s0(self, base_spread, distress_k):
+                return float(base_spread)
+
         monkeypatch.setattr(provider, "get_bond_terms", get_terms)
         monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
 
@@ -1162,6 +1165,9 @@ class TestBacktest:
             def bond_floor_value(self, *_args, **_kwargs):
                 return 95.0
 
+            def spread_at_s0(self, base_spread, distress_k):
+                return float(base_spread)
+
         monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
 
         bt.backtest_theoretical_price(
@@ -1194,6 +1200,9 @@ class TestBacktest:
 
             def bond_floor_value(self, *_args, **_kwargs):
                 return 95.0
+
+            def spread_at_s0(self, base_spread, distress_k):
+                return float(base_spread)
 
         monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
 
@@ -1239,6 +1248,9 @@ class TestBacktest:
 
             def bond_floor_value(self, *_args, **_kwargs):
                 return 95.0
+
+            def spread_at_s0(self, base_spread, distress_k):
+                return float(base_spread)
 
         monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
 
@@ -2941,6 +2953,9 @@ class TestBacktestSharesTheProductionCaliber:
             def bond_floor_value(self, *_a, **_k):
                 return 95.0
 
+            def spread_at_s0(self, base_spread, distress_k):
+                return float(base_spread)
+
         monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
         provider = self._provider(self._terms(credit_rating="A-"),
                                   date(2025, 6, 2), date(2025, 9, 30))
@@ -2974,6 +2989,9 @@ class TestBacktestSharesTheProductionCaliber:
 
             def bond_floor_value(self, *_a, **_k):
                 return 95.0
+
+            def spread_at_s0(self, base_spread, distress_k):
+                return float(base_spread)
 
         monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
         provider = self._provider(self._terms(),
@@ -3010,6 +3028,47 @@ class TestBacktestSharesTheProductionCaliber:
             "123001.SZ", start_date=date(2025, 6, 2), end_date=date(2025, 9, 30),
             freq="M", provider=provider, point_in_time=False, M=60, N=120)
         assert ok["no_down_reset_floor_days"] == 0
+
+    def test_bond_floor_uses_the_models_own_spread_on_both_pages(self, monkeypatch):
+        """债底折现的利差两页必须一致 —— 定价页修过一次, 回测页留在旧公式上.
+
+        利差是 S 的函数 (`base_spread + distress_k·max(0, 1−S/K)`), 而债底是"不转股时
+        这张债值多少" —— 当然要按这只债此刻的信用状况折现。实测全池 311 只里
+        **151 只**两页差 >1 元, 最大 10.48 元 (123250.SZ, S0/K=0.434)。
+        """
+        import convertible_bond.backtest as bt
+
+        seen = []
+
+        class SpyPricer:
+            def __init__(self, **kwargs):
+                self.S0 = float(kwargs["S0"])
+                self.K = float(kwargs["K"])
+                self.ratio = 100.0 / self.K
+
+            def price(self, **_kw):
+                return 100.0
+
+            def spread_at_s0(self, base_spread, distress_k):
+                # 真类的公式, 桩照抄一遍是为了让"传进来的是不是它"可观测
+                return float(base_spread) + float(distress_k) * max(
+                    0.0, 1.0 - self.S0 / self.K)
+
+            def bond_floor_value(self, _date, discount_rate):
+                seen.append(float(discount_rate))
+                return 95.0
+
+        # S0/K ≈ 0.5 → distress 项 ≈ 0.05·0.5 = 0.025, 与裸利差差得开
+        terms = self._terms(conversion_price=20.0)
+        provider = self._provider(terms, date(2025, 6, 2), date(2025, 9, 30))
+        monkeypatch.setattr(bt, "UniversalCBPricer", SpyPricer)
+        bt.backtest_theoretical_price(
+            "123001.SZ", start_date=date(2025, 6, 2), end_date=date(2025, 9, 30),
+            freq="M", provider=provider, point_in_time=False,
+            r=0.022, base_spread=0.03, distress_k=0.05, M=60, N=120)
+        assert seen, "一个采样点都没算债底"
+        assert all(d > 0.022 + 0.03 + 1e-9 for d in seen), (
+            f"债底用的是裸利差 (r+base_spread), 没有 distress 扩张: {seen[:3]}")
 
     def test_backtest_wraps_the_provider_in_the_point_in_time_layer(self, monkeypatch):
         """默认必须叠历史条款投影层 —— 否则每个历史采样日都用今天的转股价。

@@ -235,7 +235,10 @@ def backtest_theoretical_price(
             logger.debug("回测采样日 %s 定价失败: %s", val_date, exc)
             continue
 
-        bond_floor = float(pricer.bond_floor_value(val_date, r + point_base_spread))
+        # 债底折现用**模型自用**的利差 (含 distress 扩张), 不是裸 base_spread ——
+        # 见 `UniversalCBPricer.spread_at_s0`。用裸利差实测全池 151/311 只差 >1 元。
+        bond_floor = float(pricer.bond_floor_value(
+            val_date, r + pricer.spread_at_s0(point_base_spread, distress_k)))
         parity = float(S0 * pricer.ratio)
 
         iv_val = float("nan")

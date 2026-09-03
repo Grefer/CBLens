@@ -2929,7 +2929,7 @@ def test_a_fallback_quote_does_not_overwrite_yesterdays_real_one():
 
     yesterday = {
         "market_price": 158.40, "market_price_as_of": "2026-09-01",
-        "market_price_source": "history", "deviation": 0.42,
+        "market_price_source": "history", "deviation": 158.40 / 111.5 - 1,
         "theoretical_price": 111.5,
     }
     today_fallback = {
@@ -2940,8 +2940,12 @@ def test_a_fallback_quote_does_not_overwrite_yesterdays_real_one():
     kept = _keep_better_market_fields(yesterday, today_fallback)
     assert kept["market_price"] == 158.40
     assert kept["market_price_as_of"] == "2026-09-01"
-    assert kept["deviation"] == 0.42
-    assert kept["theoretical_price"] == 112.7, "理论价是本轮真算的, 不该护"
+    assert kept["deviation"] == pytest.approx(158.40 / 111.5 - 1)
+    # 价格块要**整块**留 —— 只留市价那三个会让表上的恒等式当场断: 昨天的市价配今天的
+    # 理论价, `偏差 = 市价/理论价 − 1` 算出来对不上存着的那个 deviation。
+    assert kept["theoretical_price"] == 111.5
+    assert kept["market_price"] / kept["theoretical_price"] - 1 == pytest.approx(
+        kept["deviation"]), "价格块自相矛盾"
 
     # 今天拿到真价 → 照常覆盖
     today_real = dict(today_fallback, market_price=160.0,
@@ -2975,19 +2979,22 @@ def test_save_watchlist_pricing_wires_the_market_leg_guard(tmp_path):
     save_watchlist_pricing(
         [{"bond_code": "128000.SZ", "market_price": 158.40,
           "market_price_as_of": "2026-09-01", "market_price_source": "history",
-          "deviation": 0.42, "theoretical_price": 111.5, "status": "ok"}],
+          "deviation": 158.40 / 120.0 - 1, "theoretical_price": 120.0,
+          "status": "ok"}],
         valuation_date=date(2026, 9, 1), cache_path=cache, daily_dir=daily)
 
     save_watchlist_pricing(
         [{"bond_code": "128000.SZ", "market_price": 99.994,
           "market_price_as_of": None, "market_price_source": "terms_close",
-          "deviation": float("nan"), "theoretical_price": 112.7, "status": "ok"}],
+          "deviation": float("nan"), "theoretical_price": 130.0, "status": "ok"}],
         valuation_date=date(2026, 9, 2), cache_path=cache, daily_dir=daily)
 
     row = load_watchlist_pricing(cache)["rows"]["128000.SZ"]
     assert row["market_price"] == 158.40, "兜底价盖掉了昨天的真市价"
     assert row["market_price_as_of"] == date(2026, 9, 1)   # 读回来是 date 不是串
-    assert row["theoretical_price"] == 112.7, "理论价该被本轮覆盖"
+    assert row["theoretical_price"] == 120.0, "价格块要整块留, 不能半块"
+    assert row["market_price"] / row["theoretical_price"] - 1 == pytest.approx(
+        row["deviation"]), "落盘之后价格块自相矛盾"
 
 
 def test_market_price_coverage_does_not_count_the_terms_close_fallback():

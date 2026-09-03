@@ -224,9 +224,17 @@ def _atomic_write(path: Path, payload: dict) -> Path:
 
 # ── 写 ──────────────────────────────────────────────────────────────
 
-#: 市价那条腿的字段。整行 upsert 时它们要单独判 —— 见 :func:`_keep_better_market_fields`。
-_MARKET_LEG_FIELDS = (
+#: 价格块 —— 整行 upsert 时这几个字段要作为**一个单位**一起判, 见
+#: :func:`_keep_better_market_fields`。
+#:
+#: **不能只护市价那三个**: 关注池表就是围着两条恒等式排的
+#: (`偏差 = 市价/理论价 − 1`、`双低 = 市价 + 转股溢价×100`), 保住昨天的市价却让
+#: 理论价换成今天的, 表上那一行当场自相矛盾 —— 实测 市价 158.40 / 理论价 130.00 /
+#: 偏差 0.3200, 而 158.40/130.00−1 = 0.2185。读者按恒等式一算就发现对不上,
+#: 而页面上没有任何线索说这两个数来自不同的天。
+_PRICE_BLOCK_FIELDS = (
     "market_price", "market_price_as_of", "market_price_source",
+    "theoretical_price", "parity",
     "deviation", "undervaluation_rate", "relative_deviation",
     "conversion_premium", "double_low",
 )
@@ -256,12 +264,14 @@ def _keep_better_market_fields(old: dict | None, new: dict) -> dict:
     「全失败守卫」拦不住这一档 —— 它是**全或无**的 (`expect_price and not with_price`),
     而部分失败 (1 只真价 + 1 只兜底) 从它底下整只穿过去。
 
-    只护市价那条腿; 理论价/希腊值/标签这些是本轮真算出来的, 照旧覆盖。
+    保留的是**整个价格块** (见 :data:`_PRICE_BLOCK_FIELDS`), 不是只有市价那三个 ——
+    半块保留会让表上的恒等式当场断掉。风险标签/置信度/σ/正股价这些不在块里,
+    照旧取本轮的值。
     """
     if not old or _has_dated_market_price(new) or not _has_dated_market_price(old):
         return new
     kept = dict(new)
-    for field in _MARKET_LEG_FIELDS:
+    for field in _PRICE_BLOCK_FIELDS:
         if field in old:
             kept[field] = old[field]
     return kept
