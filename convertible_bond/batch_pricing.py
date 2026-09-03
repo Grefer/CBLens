@@ -404,7 +404,9 @@ class AdmissionFilterConfig:
     """批量定价主池公开交易过滤参数.
 
     当前硬剔除优先保证转债本身能公开交易 (退市/摘牌/停牌/到期/未上市/定向),
-    并默认剔除正股 ST/停牌与低评级。**余额默认不再硬剔除** (见
+    并默认剔除正股停牌与低评级。**正股 ST 与余额默认不再硬剔除**: 前者见
+    ``batch_pricing_exclusion_reason`` 里那段注释 (2026-08-31 改由「正股风险」标签
+    承载), 后者见
     ``DEFAULT_MIN_OUTSTANDING_BALANCE``), 改由「余额清零 / 触及摘牌线 /
     临近摘牌线 / 小余额」风险标签表达; 高 HV 同理只有定价后才能识别。
     需要恢复余额硬过滤时给 ``min_outstanding_balance`` 填个数值即可。
@@ -584,7 +586,8 @@ def batch_pricing_exclusion_reason(
 
     这里只做进入主批量候选前的硬条件判断: 代码段/交易所、定向标识、
     是否已进入可交易窗口、转债自身停牌、最后交易/摘牌/到期日, 以及
-    默认不适合直接作为买入信号的正股 ST/停牌与低评级标的 (余额默认不硬剔除)。
+    默认不适合直接作为买入信号的正股停牌与低评级标的
+    (正股 ST 与余额默认不硬剔除, 各由风险标签承载)。
     """
     if admission_config is not None:
         min_outstanding_balance = admission_config.min_outstanding_balance
@@ -653,9 +656,11 @@ def batch_pricing_exclusion_reason(
     # 而准入层的契约是「字段明确才剔除」+「只剔真的买不到的」。
     #
     # 改由「正股风险」标签承载 (标的风险维): 表上看得见、可排序、可导出, 且
-    # ``HARD_REVIEW_TAGS`` 让它的 ``model_signal_status`` 落到"不适合作为买入信号"、
-    # ``LEGACY_STRATEGY_EXCLUDE_TAGS`` 让策略层照旧排除它 —— 净效果是"人看得到, 自动选债
-    # 仍然不碰"。``_underlying_limit_down_threshold`` 的注释早就写着"ST 风险进入复核标签,
+    # ``HARD_REVIEW_TAGS`` 让它的 ``model_signal_status`` 落到"不适合作为买入信号",
+    # 而策略层照旧排除它 —— 但那道闸**不是标签**: 选债口径 2026-08-31 已从标签集换成
+    # ``ScoreStrategyConfig.exclude_underlying_st`` (默认 True), ``exclude_risk_tags``
+    # 的默认值现在是空元组。净效果不变 ("人看得到, 自动选债仍然不碰"), 但要改这条行为
+    # 得动那个开关, 不是动标签集。``_underlying_limit_down_threshold`` 的注释早就写着"ST 风险进入复核标签,
     # 不作为主池硬剔除", 这里此前与那句话是分叉的。
     if _underlying_suspended(terms):
         return "正股停牌"

@@ -21,6 +21,7 @@ from ..batch_pricing import (
 from ..backtest_disk_cache import DiskCacheProvider
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_events import CBEventStore, project_events_path
+from ..model_defaults import DEFAULT_BACKGROUND_P_DOWN
 from ..historical_terms import (
     HistoricalBondDataProvider,
     TermsHistoryStore,
@@ -101,7 +102,13 @@ def _risk_threshold_kwargs(args) -> dict:
     )
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """构造命令行 parser.
+
+    从 ``main`` 里拆出来, 是为了让守护测试能读到各选项的默认值 —— ``--p-down``
+    的默认值必须与 ``DEFAULT_BACKGROUND_P_DOWN`` 是同一个数, 而在 parser 建在
+    ``main`` 内部时那条断言只能去扫源码文本。
+    """
     default_min_balance = (
         DEFAULT_MIN_OUTSTANDING_BALANCE
         if DEFAULT_MIN_OUTSTANDING_BALANCE is not None
@@ -229,7 +236,7 @@ def main() -> int:
                         help="基础信用利差小数 (默认 0.03)")
     parser.add_argument("--distress-k", type=float, default=0.05,
                         help="困境信用利差斜率 (默认 0.05)")
-    parser.add_argument("--p-down", type=float, default=0.25,
+    parser.add_argument("--p-down", type=float, default=DEFAULT_BACKGROUND_P_DOWN,
                         help="年化下修事件强度 (默认 0.25)")
     # 正股股息率 q。**回测里这是最贵的一次取数, 而且口径可疑**: akshare 走
     # stock_a_indicator_lg 逐只股票拉, 失败再回落 stock_zh_a_spot_em (整张全市场
@@ -257,6 +264,11 @@ def main() -> int:
                         help="导出逐期摘要 CSV")
     parser.add_argument("--show-holdings", action="store_true",
                         help="打印每期选中持仓")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
     # `--pde-sigma-band` / `--pde-spread-band` 随「下修优势」一起从 parser 删掉了
     # (见 AGENTS 的删除清单), 但这里的校验和下面那行摘要打印**没跟着删** —— 于是

@@ -1117,3 +1117,37 @@ def test_conversion_pause_warning_expires_without_an_end_date():
     assert warns(val - timedelta(days=90), end=val + timedelta(days=5))
     # 状态字段独立成立: 即使日期过期, 显式的「暂停转股」状态照报
     assert warns(val - timedelta(days=90), status="暂停转股")
+
+
+def test_background_p_down_default_has_exactly_one_value():
+    """背景态下修强度的默认值只许有一份。
+
+    此前它分叉成两份: 库层 API 默认 **0.15**, 而 GUI 的 ``DEFAULT_P_DOWN_PCT`` 与
+    ``cb-strategy-backtest --p-down`` 都是 **0.25**。UI 一律显式传参, 所以分叉不会
+    让任何一屏出错 —— 它只在**直接调库**那条路上生效, 而 README 的
+    ``price_from_auto("128009.SZ")`` 示例走的正是那条路: 同一只债, 文档里的价与
+    用户在 GUI 里看到的不是一个数, 两边都不报错。
+
+    断言读的是**签名的默认值**而不是源码文本: 后者认的是字面量, 把 0.25 换成一个
+    算出来的别名就能让守护失明。
+    """
+    import inspect
+
+    from convertible_bond.cli.strategy_backtest import build_parser
+    from convertible_bond.gui.constants import DEFAULT_P_DOWN_PCT
+    from convertible_bond.model_defaults import DEFAULT_BACKGROUND_P_DOWN
+    from convertible_bond.pricing_api import (
+        batch_price_from_provider, batch_price_from_provider_threaded)
+    from convertible_bond.strategy_backtest import backtest_score_strategy
+
+    assert DEFAULT_BACKGROUND_P_DOWN == 0.25
+
+    for fn in (batch_price_from_provider_threaded, batch_price_from_provider,
+               backtest_score_strategy):
+        got = inspect.signature(fn).parameters["p_down"].default
+        assert got == DEFAULT_BACKGROUND_P_DOWN, f"{fn.__name__} 的 p_down 默认值分叉了: {got}"
+
+    assert DEFAULT_P_DOWN_PCT == DEFAULT_BACKGROUND_P_DOWN * 100.0
+
+    args = build_parser().parse_args(["--start", "2025-01-01", "--end", "2025-06-01"])
+    assert args.p_down == DEFAULT_BACKGROUND_P_DOWN

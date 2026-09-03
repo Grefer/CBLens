@@ -23,6 +23,7 @@ from typing import Any
 
 import numpy as np
 from .market_time import market_today
+from .model_defaults import DEFAULT_BACKGROUND_P_DOWN
 
 logger = logging.getLogger(__name__)
 
@@ -868,7 +869,7 @@ def backtest_score_strategy(
     r: float = 0.022,
     base_spread: float = 0.03,
     distress_k: float = 0.05,
-    p_down: float = 0.15,
+    p_down: float = DEFAULT_BACKGROUND_P_DOWN,
     vol_window_days: int = 21,
     sigma: float | None = None,
     q: float | None = None,

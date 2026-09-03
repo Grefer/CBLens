@@ -2994,6 +2994,14 @@ def test_config_summary_echoes_every_field_the_selector_reads():
     missing = sorted(consumed - set(summary))
     assert not missing, f"选债读了但快照没回显: {missing}"
 
+    # 同一批字段还必须**扫得到**。sweep 的白名单是刻意的子集 (会击穿定价缓存的
+    # 字段不许扫), 但选债层字段一条都不击穿 —— 它们只改"从已定价的行里挑谁",
+    # 送去定价的代码集不变。漏掉的表现是静默的: 变体照跑, 只是那一维恒定,
+    # 每个变体得到同一个结果而没有任何东西报错。
+    from convertible_bond.strategy_sweep import PORTFOLIO_SWEEP_FIELDS
+    unsweepable = sorted(consumed - PORTFOLIO_SWEEP_FIELDS)
+    assert not unsweepable, f"选债读了但 sweep 扫不到: {unsweepable}"
+
 
 def test_period_sharpe_is_the_non_annualized_ratio():
     """参数扫描的逐期夏普必须能算出来。

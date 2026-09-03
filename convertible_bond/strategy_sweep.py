@@ -49,6 +49,13 @@ PORTFOLIO_SWEEP_FIELDS = frozenset({
     "min_market_price", "max_market_price",
     "min_conversion_premium", "max_conversion_premium",
     "min_deviation", "max_deviation", "min_sigma", "max_sigma",
+    # 2026-08-31 标签→阈值重构后的**主口径**七条: `_candidate_filter_reason` 真正
+    # 读的就是它们, 而 sweep 的用途正是扫选债口径。少了它们, 能扫的只剩重构**之前**
+    # 那批字段, 其中 `exclude_risk_tags` 的默认值已是空元组 —— 扫一个空集的邻域,
+    # 每个变体都得到同一个结果, 而没有任何东西会报错。
+    "max_model_premium", "max_relative_deviation", "min_years_to_maturity",
+    "min_credit_rating", "min_outstanding_balance",
+    "exclude_underlying_st", "exclude_underlying_limit_down",
 })
 
 PDE_PORTFOLIO_SWEEP_FIELDS = frozenset({
@@ -59,6 +66,13 @@ PDE_PORTFOLIO_SWEEP_FIELDS = frozenset({
     "min_market_price", "max_market_price",
     "min_conversion_premium", "max_conversion_premium",
     "min_deviation", "max_deviation", "min_sigma", "max_sigma",
+    # 2026-08-31 标签→阈值重构后的**主口径**七条: `_candidate_filter_reason` 真正
+    # 读的就是它们, 而 sweep 的用途正是扫选债口径。少了它们, 能扫的只剩重构**之前**
+    # 那批字段, 其中 `exclude_risk_tags` 的默认值已是空元组 —— 扫一个空集的邻域,
+    # 每个变体都得到同一个结果, 而没有任何东西会报错。
+    "max_model_premium", "max_relative_deviation", "min_years_to_maturity",
+    "min_credit_rating", "min_outstanding_balance",
+    "exclude_underlying_st", "exclude_underlying_limit_down",
 })
 
 

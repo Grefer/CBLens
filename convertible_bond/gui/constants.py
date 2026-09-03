@@ -5,12 +5,13 @@
 import re
 
 # 显式 re-export: app.py / controllers.wind_sync 经本模块导入模型默认值
+from ..model_defaults import DEFAULT_BACKGROUND_P_DOWN_PCT
 from ..model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT as DEFAULT_DOWN_RESET_TRIGGER_PCT
 
 
 BOND_CODE_RE = re.compile(r"^\d{6}\.[A-Z]{2}$")
 LOW_P_DOWN_PCT = 15.0
-DEFAULT_P_DOWN_PCT = 25.0
+DEFAULT_P_DOWN_PCT = DEFAULT_BACKGROUND_P_DOWN_PCT
 TRIGGER_NOTICE_P_DOWN_PCT = 65.0
 P_DOWN_AUTO_SOURCE_LABELS = frozenset({
     "模型",

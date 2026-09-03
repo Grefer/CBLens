@@ -27,6 +27,7 @@ from .data_providers import (
     BondTerms, DataProvider, WindDataProvider, auto_data_provider, finite_float)
 from .cache import CachedBondDataProvider, TermsBundle, project_bundle_path
 from .down_reset_overrides import resolve_down_reset, resolve_down_reset_intensity
+from .model_defaults import DEFAULT_BACKGROUND_P_DOWN
 from .cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
@@ -428,7 +429,7 @@ def build_pricer_kwargs(
 
 def price_from_provider(provider: DataProvider, bond_code,
                         r=0.022, base_spread=0.03,
-                        distress_k=0.05, p_down=0.15,
+                        distress_k=0.05, p_down=DEFAULT_BACKGROUND_P_DOWN,
                         valuation_date=None, vol_window_days=21,
                         sigma=None, q=None,
                         M=500, N=2000,
@@ -1004,7 +1005,7 @@ def batch_price_from_provider_threaded(
     r: float = 0.022,
     base_spread: float = 0.03,
     distress_k: float = 0.05,
-    p_down: float = 0.15,
+    p_down: float = DEFAULT_BACKGROUND_P_DOWN,
     valuation_date: date | None = None,
     vol_window_days: int = 21,
     sigma: float | None = None,
@@ -1073,7 +1074,7 @@ def batch_price_from_provider(
     r: float = 0.022,
     base_spread: float = 0.03,
     distress_k: float = 0.05,
-    p_down: float = 0.15,
+    p_down: float = DEFAULT_BACKGROUND_P_DOWN,
     valuation_date: date | None = None,
     vol_window_days: int = 21,
     sigma: float | None = None,
