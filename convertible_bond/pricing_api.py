@@ -826,7 +826,7 @@ class _BatchStockCache(DataProvider):
     def hist_vol(self, stock_code, end_date, window_days):
         cache_key = (stock_code, end_date, window_days)
         inflight_key = ("vol", *cache_key)
-        for attempt in range(self._MAX_INFLIGHT_RETRIES + 1):
+        for _ in range(self._MAX_INFLIGHT_RETRIES + 1):
             is_owner, hit, value_or_ev = self._inflight_try_acquire(
                 inflight_key, self._vol_cache, cache_key)
             if hit:
@@ -838,7 +838,16 @@ class _BatchStockCache(DataProvider):
                     if cache_key in self._vol_cache:
                         return self._vol_cache[cache_key]
                 continue  # owner 失败, 下次循环重新尝试获取 ownership
-            # 本线程是 owner, 执行计算
+            # 本线程是 owner, 执行计算。
+            # **这个 for 循环是给上面那个 waiter 分支用的** (等的人发现 owner 失败了,
+            # 自己接手重来一次), 不是给 owner 重试网络失败用的 —— owner 这一支只 finally
+            # 释放 inflight, 失败原样抛出, 与另外五个方法同形。
+            # 曾经这里多一层 ``except Exception: if attempt == _MAX_INFLIGHT_RETRIES: raise``,
+            # 于是一次**确定性**失败会把底层 provider 敲 3 次 (实测 stub: hist_vol 3 次,
+            # 而 get_stock_close/get_stock_history/get_stock_dividend_yield/get_bond_history
+            # 都是 1 次)。akshare 侧的 ``_retry`` 已经把"东财按出口 IP 限流"这类拒绝判成
+            # 不可重试并加了熔断, 在它之上再 ×3 正是那条约定要防的事: 批量定价是 8 线程 ×
+            # 300 只债, 三倍力度继续敲同一个限流器等于自己给自己续封。
             try:
                 lookback = max(window_days * 2, window_days + 15)
                 history = self.get_stock_history(
@@ -869,12 +878,9 @@ class _BatchStockCache(DataProvider):
                     if latest_close is not None and latest_date == end_date:
                         self._close_cache.setdefault((stock_code, end_date), latest_close)
                 return value
-            except Exception:
-                if attempt == self._MAX_INFLIGHT_RETRIES:
-                    raise
             finally:
                 self._inflight_release(inflight_key)
-        raise RuntimeError("hist_vol: unreachable")
+        raise RuntimeError(f"{stock_code} {end_date} 波动率缓存填充失败")
 
     # ── 直接透传的接口 ────────────────────────────────────
     def terms_as_of(self, bond_code, valuation_date):

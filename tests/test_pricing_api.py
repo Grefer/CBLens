@@ -607,6 +607,100 @@ def test_batch_stock_cache_waiter_retries_after_owner_failure():
     assert inner.calls == 2
 
 
+def test_batch_stock_cache_never_amplifies_a_deterministic_fetch_failure():
+    """确定性失败只许敲底层一次 —— 六个缓存方法一视同仁。
+
+    ``hist_vol`` 的 owner 分支曾多一层 ``except Exception: if attempt == MAX: raise``,
+    于是一个恒抛的 provider 被调 **3 次** 才最终抛出 (另外五个方法都是 1 次)。
+    akshare 侧的 ``_retry`` 已经把"东财按出口 IP 限流"这类拒绝判成不可重试并加了熔断,
+    在它之上再 ×3 会让 8 线程 × 300 只债的批量定价以三倍力度继续敲同一个限流器。
+    这里逐个方法钉住调用次数, 而不是只钉 hist_vol —— 复制粘贴出下一个 ×3 是同一个形状。
+    """
+
+    class AlwaysRejects:
+        name = "rejects"
+
+        def __init__(self):
+            self.calls: dict[str, int] = {}
+
+        def _boom(self, what):
+            self.calls[what] = self.calls.get(what, 0) + 1
+            raise RuntimeError("Connection aborted / RemoteDisconnected")
+
+        def get_stock_history(self, stock_code, start, end):
+            self._boom("get_stock_history")
+
+        def get_stock_close(self, stock_code, on_date):
+            self._boom("get_stock_close")
+
+        def get_stock_dividend_yield(self, stock_code, on_date):
+            self._boom("get_stock_dividend_yield")
+
+        def get_bond_history(self, bond_code, start, end):
+            self._boom("get_bond_history")
+
+    end = date(2026, 4, 28)
+    cases = [
+        ("get_stock_history", lambda c: c.hist_vol("000001.SZ", end, 60)),
+        ("get_stock_history", lambda c: c.get_stock_history("000001.SZ", end, end)),
+        ("get_stock_close", lambda c: c.get_stock_close("000001.SZ", end)),
+        ("get_stock_dividend_yield", lambda c: c.get_stock_dividend_yield("000001.SZ", end)),
+        ("get_bond_history", lambda c: c.get_bond_history("113001.SH", end, end)),
+    ]
+    for underlying, call in cases:
+        inner = AlwaysRejects()
+        cached = pricing_api._BatchStockCache(inner)
+        with pytest.raises(RuntimeError, match="Connection aborted"):
+            call(cached)
+        assert inner.calls == {underlying: 1}
+
+
+def test_batch_stock_cache_hist_vol_waiter_still_retries_after_owner_failure():
+    """去掉 owner 重试之后, *等待方* 的接手重来必须还在。
+
+    那个 ``for _ in range(_MAX_INFLIGHT_RETRIES + 1)`` 循环存在的理由是竞态而不是网络:
+    owner 失败并释放 inflight 后, 等在门口的线程要能自己接手再跑一次, 否则它拿不到值
+    也说不出原因。这条与上一条一起构成夹逼 —— 只删循环会让这条红, 只加回 owner 重试
+    会让上一条红。
+    """
+
+    class FlakyHistoryProvider:
+        name = "flaky_history"
+
+        def __init__(self):
+            self.calls = 0
+            self.lock = threading.Lock()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def get_stock_history(self, stock_code, start, end):
+            with self.lock:
+                self.calls += 1
+                call_no = self.calls
+            if call_no == 1:
+                self.started.set()
+                self.release.wait(timeout=1.0)
+                raise RuntimeError("first fetch failed")
+            return [(start + timedelta(days=i), 10.0 + i)
+                    for i in range((end - start).days + 1)]
+
+    inner = FlakyHistoryProvider()
+    cached = pricing_api._BatchStockCache(inner)
+    end = date(2026, 4, 28)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(cached.hist_vol, "000001.SZ", end, 21)
+        assert inner.started.wait(timeout=1.0)
+        waiter = pool.submit(cached.hist_vol, "000001.SZ", end, 21)
+        inner.release.set()
+
+        with pytest.raises(RuntimeError, match="first fetch failed"):
+            owner.result(timeout=2.0)
+        assert waiter.result(timeout=2.0) > 0
+
+    assert inner.calls == 2
+
+
 def test_batch_stock_cache_waiter_timeout_is_explicit():
     class SlowCloseProvider:
         name = "slow"
