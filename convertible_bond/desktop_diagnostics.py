@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from .paths import (
@@ -31,6 +32,23 @@ from .data_providers.wind import prepare_windpy_import_path
 _DATA_FILES = tuple(sorted(_SEEDED_DATA_FILES))
 
 
+def _saved_at_note(payload: dict) -> str:
+    """``, saved 2026-05-09 (117 days ago)`` —— 没有戳就返回空串。
+
+    用本机挂钟 (``datetime.now()``) 而不是 ``market_today()``: 这里量的是"这份文件在
+    盘上放了多久", 是运维问题不是市场口径问题 —— 与落盘 ``saved_at`` 同一类。
+    ``test_package_has_no_bare_date_today`` 点名的正是这个出口。
+    """
+    saved_at = (payload.get("_meta") or {}).get("saved_at")
+    if not isinstance(saved_at, str) or not saved_at:
+        return ", saved ?"
+    try:
+        stamped = datetime.fromisoformat(saved_at).date()
+    except ValueError:
+        return f", saved {saved_at} (unparseable)"
+    return f", saved {stamped.isoformat()} ({(datetime.now().date() - stamped).days} days ago)"
+
+
 def _json_summary(path: Path) -> str:
     if not path.exists():
         return "missing"
@@ -42,14 +60,23 @@ def _json_summary(path: Path) -> str:
     if path.name == "cb_data.json" and isinstance(payload, dict):
         n_bonds = sum(1 for key in payload if not str(key).startswith("_"))
         return f"{path.stat().st_size} bytes, {n_bonds} bonds"
-    if path.name == "batch_pricing_cache.json" and isinstance(payload, dict):
+    # 两个名字都要认: 种子文件叫 ``desktop_batch_pricing_cache.json``
+    # (``paths._BUNDLED_DATA_ALIASES`` 里的别名源), 而这个分支此前只认运行态那个名字
+    # —— 于是**恰恰是打进包里的那一份**掉进最后的通用分支, 只报个 "dict keys=3"。
+    if path.name.endswith("batch_pricing_cache.json") and isinstance(payload, dict):
         results = payload.get("results")
         if isinstance(results, list):
             ok_count = sum(
                 1 for row in results
                 if isinstance(row, dict) and row.get("status") == "ok"
             )
-            return f"{path.stat().st_size} bytes, {len(results)} rows, {ok_count} ok"
+            # **年龄要报出来**。种子缓存与运行态缓存都走这一行, 而两道闸
+            # (`build_desktop._is_usable_batch_cache` / `paths._needs_seed`) 判的都只是
+            # "有没有一行 status==ok" —— 一份 117 天前的截面照样满足。首启看到的是几个月
+            # 前的理论价与偏差, 而唯一的线索是摘要条那个「估值日」。诊断页是用户能看出
+            # "这批数到底多旧"的地方, 不报年龄就等于这里也帮着藏。
+            return (f"{path.stat().st_size} bytes, {len(results)} rows, {ok_count} ok"
+                    f"{_saved_at_note(payload)}")
     if isinstance(payload, dict):
         return f"{path.stat().st_size} bytes, dict keys={len(payload)}"
     if isinstance(payload, list):

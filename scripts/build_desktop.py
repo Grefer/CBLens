@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import platform
 import json
+from datetime import date, datetime
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,26 @@ STATIC_DATA_FILES = (
     "desktop_batch_pricing_cache.json",
 )
 BATCH_PRICING_CACHE_FILE = "batch_pricing_cache.json"
+
+
+#: 种子缓存超过这么多天就在构建时**出声**。
+#:
+#: 不改判据 (仍然照打, 见下), 因为"首启空表 vs 首启是旧数"这个取舍已经做过, 结论是
+#: 宁可旧也别空。改的是它**悄无声息**: 两道闸 (`_is_usable_batch_cache` 与
+#: `paths._needs_seed`) 判的都只是"有没有一行 status==ok", 一份 117 天前的截面照样
+#: 满足, 而发版时没有任何东西提醒该刷一次种子。90 天 = 一个季度, 与估值基线的季度桶
+#: 同一个量级。
+SEED_STALE_WARN_DAYS = 90
+
+
+def _seed_age_days(path: Path) -> int | None:
+    """种子缓存的落盘年龄 (天); 没有戳或解析不了返回 None。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved_at = (json.load(f).get("_meta") or {}).get("saved_at")
+        return (date.today() - datetime.fromisoformat(str(saved_at)).date()).days
+    except Exception:
+        return None
 
 
 def _is_usable_batch_cache(path: Path) -> bool:
@@ -129,9 +150,15 @@ def _generate_spec(root: Path) -> str:
     for filename in STATIC_DATA_FILES:
         src = root / "data" / filename
         if src.exists():
-            if filename == "desktop_batch_pricing_cache.json" and not _is_usable_batch_cache(src):
-                print(f"[build] Skip unusable desktop cache seed: {src}")
-                continue
+            if filename == "desktop_batch_pricing_cache.json":
+                if not _is_usable_batch_cache(src):
+                    print(f"[build] Skip unusable desktop cache seed: {src}")
+                    continue
+                age = _seed_age_days(src)
+                if age is not None and age > SEED_STALE_WARN_DAYS:
+                    print(f"[build] WARNING: desktop cache seed is {age} days old "
+                          f"(> {SEED_STALE_WARN_DAYS}); first launch will show a stale "
+                          f"cross-section. Refresh it with a batch rerun before release.")
             data_entries.append(f"({_rp(src)}, 'data')")
 
     runtime_cache = root / "data" / BATCH_PRICING_CACHE_FILE
