@@ -26,8 +26,7 @@ from ..theme import (
     FONT_FAMILY,
     get_color,
 )
-from ...batch_pricing import batch_view_label
-from .strategy_common import strategy_compare_label
+from .strategy_common import strategy_compare_label, strategy_display_name
 from ..widgets import Tooltip
 
 from .strategy_common import STRATEGY_MEDIUM_TABLE_HEIGHT, STRATEGY_SECONDARY_CHART_HEIGHT
@@ -39,20 +38,7 @@ class StrategyCompareMixin:
     def _record_strategy_comparison_result(self, result):
         summary = result.get("summary") or {}
         config = result.get("config") or {}
-        strategy_type = str(config.get("strategy_type") or "")
-        if not strategy_type:
-            strategy_type = {
-                "deviation": "pde_valuation",
-                "down_reset_edge": "pde_down_reset",
-                "down_reset_robust_edge": "pde_down_reset",
-            }.get(config.get("rank_signal"), "legacy")
-        strategy_name = {
-            "pde_down_reset": "下修机会",
-            "pde_valuation": "估值偏差",
-        }.get(strategy_type,
-              # 旧快照里存的是**冻结名** ("综合机会"), 展示要过 batch_view_label ——
-              # 否则比较表上出现的是一个批量页已经不再显示的词。
-              f"旧策略·{batch_view_label(config.get('selection_view') or '—')}")
+        strategy_name = strategy_display_name(config)
         label = strategy_compare_label(strategy_name, config)
         records = list(getattr(self, "_strategy_compare_results", []) or [])
         key = (

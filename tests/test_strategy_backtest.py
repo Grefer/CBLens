@@ -3231,3 +3231,52 @@ def test_zero_close_never_becomes_a_divisor():
     only_bad = _Provider([(_date(2025, 3, 7), 0.0)])
     assert _latest_bond_price_point(
         only_bad, "128000.SZ", on, lookback_days=10, max_staleness_days=None) is None
+
+
+def test_strategy_display_name_has_exactly_one_implementation():
+    """策略展示名只许有一份 —— 两处的**兜底分支**曾经不一样。
+
+    比较表与数据面板各写一份同样的 dict, 而 fallback 分叉了: 前者
+    ``f"旧策略·{batch_view_label(selection_view)}"``, 后者 ``"旧策略(兼容)"``。
+    同一份旧快照在两个面板上叫两个名字, 而用户没有任何线索判断这是不是同一次运行
+    —— 与「持仓方式的展示片段曾各拼一份」是同一个形状 (那次 ``holding_mode="pool"``
+    的运行在数据面板上是「等权全池」、在比较表里是「Top10」)。
+
+    旧快照里的 ``selection_view`` 是**冻结名**, 展示必须过 ``batch_view_label``,
+    否则面板上出现一个批量页已经不再显示的词。
+    """
+    from convertible_bond.batch_pricing import batch_view_label
+    from convertible_bond.gui.controllers.strategy_common import (
+        strategy_display_name, strategy_type_of)
+
+    assert strategy_type_of({"strategy_type": "pde_valuation"}) == "pde_valuation"
+    # 缺 strategy_type 时由 rank_signal 反推; 下修两档只出现在旧快照里 (信号已删)
+    assert strategy_type_of({"rank_signal": "deviation"}) == "pde_valuation"
+    assert strategy_type_of({"rank_signal": "down_reset_edge"}) == "pde_down_reset"
+    assert strategy_type_of({}) == "legacy"
+
+    assert strategy_display_name({"strategy_type": "pde_valuation"}) == "估值偏差"
+    assert strategy_display_name({"strategy_type": "pde_down_reset"}) == "下修机会"
+
+    legacy = {"selection_view": "综合机会"}
+    assert strategy_display_name(legacy) == f"旧策略·{batch_view_label('综合机会')}"
+    assert "综合机会" not in strategy_display_name(legacy), "冻结名漏到展示层了"
+
+    # 两个消费者都必须走这个函数, 不许再各留一份 dict。
+    #
+    # 扫的是 **AST 里的字符串字面量**, 不是源码文本 —— 后者会把解释"这里为什么不再
+    # 写死"的注释本身判红, 逼人为了守护测试删注释 (这个仓库在 tooltip 那条规则上
+    # 已经来回摆过两次)。
+    import ast
+    import inspect
+
+    from convertible_bond.gui.controllers import strategy_compare, strategy_render_analysis
+    for mod in (strategy_compare, strategy_render_analysis):
+        tree = ast.parse(inspect.getsource(mod))
+        literals = {node.value for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+        docstrings = {ast.get_docstring(n) for n in ast.walk(tree)
+                      if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef))}
+        literals -= docstrings
+        assert "旧策略(兼容)" not in literals, f"{mod.__name__} 还留着自己的兜底分支"
+        assert "pde_down_reset" not in literals, f"{mod.__name__} 还留着自己的展示名表"

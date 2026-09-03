@@ -27,6 +27,7 @@ from ..theme import (
 )
 
 from .strategy_common import (
+    strategy_display_name,
     STRATEGY_COMPACT_TABLE_HEIGHT,
     STRATEGY_DATA_TABLE_HEIGHT,
     STRATEGY_DETAIL_TABLE_HEIGHT,
@@ -785,17 +786,10 @@ class StrategyAnalysisRenderMixin:
         if not funding_mode:   # 兼容旧快照: 由 top_n_shortfall_policy 推断
             legacy = str(config.get("top_n_shortfall_policy") or "cash")
             funding_mode = "full_invest" if legacy in ("renormalize", "full_invest") else "reserve_cash"
-        strategy_type = str(config.get("strategy_type") or "")
-        if not strategy_type:
-            strategy_type = {
-                "deviation": "pde_valuation",
-                "down_reset_edge": "pde_down_reset",
-                "down_reset_robust_edge": "pde_down_reset",
-            }.get(config.get("rank_signal"), "legacy")
-        strategy_name = {
-            "pde_down_reset": "下修机会",
-            "pde_valuation": "估值偏差",
-        }.get(strategy_type, "旧策略(兼容)")
+        # 展示名与比较表共用一份 (strategy_common) —— 此前两处各写一份同样的 dict,
+        # 而**兜底分支不一样**: 这里是 "旧策略(兼容)", 比较表是
+        # f"旧策略·{batch_view_label(...)}"。同一份旧快照在两个面板上叫两个名字。
+        strategy_name = strategy_display_name(config)
         strategy_text = f"{strategy_name} · {freq_text}"
         # 缺 rank_signal 的旧快照按「估值偏差」读 —— 与 _normalize_rank_signal 同口径
         rank_signal = str(config.get("rank_signal") or "deviation")

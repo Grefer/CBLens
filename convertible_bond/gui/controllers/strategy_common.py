@@ -12,6 +12,7 @@ import numpy as np
 from ...batch_pricing import (
     DEFAULT_MIN_CREDIT_RATING,
     DEFAULT_MIN_OUTSTANDING_BALANCE,
+    batch_view_label,
 )
 from ..constants import DEFAULT_P_DOWN_PCT
 
@@ -37,6 +38,46 @@ STRATEGY_RANK_SIGNAL_LABEL = {
     "down_reset_edge": "下修优势",
     "down_reset_robust_edge": "稳健下修优势",
 }
+
+
+#: 旧快照缺 ``strategy_type`` 时由 ``rank_signal`` 反推。下修两档只出现在旧快照里
+#: (信号已删), 保留映射否则它们会掉进 "legacy"。
+_STRATEGY_TYPE_FROM_RANK_SIGNAL = {
+    "deviation": "pde_valuation",
+    "down_reset_edge": "pde_down_reset",
+    "down_reset_robust_edge": "pde_down_reset",
+}
+
+_STRATEGY_TYPE_LABEL = {
+    "pde_down_reset": "下修机会",
+    "pde_valuation": "估值偏差",
+}
+
+
+def strategy_type_of(config: dict) -> str:
+    """快照的策略类型; 缺失时由 ``rank_signal`` 反推, 都没有则 ``"legacy"``。"""
+    explicit = str((config or {}).get("strategy_type") or "")
+    if explicit:
+        return explicit
+    return _STRATEGY_TYPE_FROM_RANK_SIGNAL.get((config or {}).get("rank_signal"), "legacy")
+
+
+def strategy_display_name(config: dict) -> str:
+    """策略的展示名。**必须只有一份**。
+
+    比较表与数据面板此前各写一份同样的 dict, 而两边的**兜底分支不一样**:
+    比较表回落 ``f"旧策略·{batch_view_label(selection_view)}"``, 数据面板回落
+    ``"旧策略(兼容)"`` —— 同一份旧快照在两个面板上叫两个名字, 而用户没有任何线索
+    判断这是不是同一次运行。与「持仓方式的展示片段曾各拼一份」是同一个形状。
+
+    统一取信息更多的那一支: 旧快照里存的 ``selection_view`` 是**冻结名** (如
+    "综合机会"), 展示必须过 ``batch_view_label``, 否则面板上出现的是一个批量页
+    已经不再显示的词。
+    """
+    config = config or {}
+    strategy_type = strategy_type_of(config)
+    fallback = f"旧策略·{batch_view_label(config.get('selection_view') or '—')}"
+    return _STRATEGY_TYPE_LABEL.get(strategy_type, fallback)
 
 
 def strategy_rank_label(rank_signal) -> str:
