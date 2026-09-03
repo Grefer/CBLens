@@ -133,6 +133,7 @@ def backtest_theoretical_price(
 
     last_terms_value_error: ValueError | None = None
     iv_failures: Counter = Counter()
+    no_floor_days = 0
     for i, (val_date, market_px) in enumerate(sample_points):
         try:
             terms = provider.get_bond_terms(bond_code, val_date)
@@ -191,12 +192,15 @@ def backtest_theoretical_price(
             if resolved_down_reset.block_until is not None:
                 point_kwargs["down_reset_block_until"] = resolved_down_reset.block_until
             # 下修价下限: 与 `price_from_provider` 同口径 (近 20 交易日均价 vs 前收)。
-            # 估不出来时 pricer 走无下限分支, 下修价值偏高 —— 与批量页一致地静默回落,
-            # 但这里连"估不出来"都不该悄悄发生在**只有回测页缺这一步**的情况下。
+            # 估不出来时 pricer 走**无下限**分支, 下修价值偏高 —— 批量页对这一档是
+            # 出声的 (`risk_warnings` 里那条「下修价下限无法估算」), 回测页也要记账,
+            # 否则同一件事在一个页面看得见、在另一个页面看不见。
             if "down_reset_floor" not in pricer_overrides:
                 dr_floor = _estimate_down_reset_floor(provider, stock_code, val_date)
                 if dr_floor is not None:
                     point_kwargs["down_reset_floor"] = dr_floor
+                else:
+                    no_floor_days += 1
             point_kwargs.update(pricer_overrides)
             down_intensity = resolve_down_reset_intensity(
                 p_down, resolved_down_reset,
@@ -287,6 +291,9 @@ def backtest_theoretical_price(
         # IV 反解失败的天数, 按原因分档 (above_ceiling / below_floor / pricing_failed /
         # solver_failed)。空 dict = 一天都没丢。消费方要把它显示出来 —— 丢样本是单向的。
         "iv_failures": dict(iv_failures),
+        # 下修价下限估不出来的采样日数 (正股近 60 日不足 20 个收盘价 —— 长期停牌或次新)。
+        # 那些天 pricer 走无下限分支, 下修价值偏高。批量页把同一件事写进 risk_warnings。
+        "no_down_reset_floor_days": no_floor_days,
         "bond_code": bond_code,
         "stock_code": stock_code,
     }

@@ -269,6 +269,11 @@ class BacktestMixin:
             f"✅ {len(dates)} 个采样点",
             f"平均基差(市价−理论)={metrics['mean_basis_abs']:+.2f}",
         ]
+        # 有多少天的下修价下限估不出来 —— 那些天下修价值偏高。批量页把同一件事
+        # 写进 risk_warnings, 这一页此前完全不说。
+        no_floor = int(result.get("no_down_reset_floor_days") or 0)
+        if no_floor:
+            status_parts.append(f"⚠ {no_floor} 天无下修价下限(下修价值偏高)")
         self.v_bt_status.set("  ·  ".join(status_parts))
         self.btn_bt_png.configure(state="normal")
         self.btn_bt_csv.configure(state="normal")

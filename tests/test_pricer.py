@@ -2987,6 +2987,30 @@ class TestBacktestSharesTheProductionCaliber:
         # 下限来自正股近 20 个交易日均价 vs 前收, 必须是个真实数而不是常数占位
         assert len(set(seen)) > 1 or seen[0] > 0
 
+    def test_backtest_counts_the_days_it_could_not_estimate_a_floor(self, monkeypatch):
+        """估不出下限的天数要记账 —— 批量页对这一档是出声的, 回测页不能哑着.
+
+        那些天 pricer 走无下限分支, 下修价值偏高; 批量页把同一件事写进
+        `risk_warnings`, 回测页此前完全不说。
+        """
+        import convertible_bond.backtest as bt
+
+        monkeypatch.setattr(bt, "_estimate_down_reset_floor",
+                            lambda *_a, **_k: None)
+        provider = self._provider(self._terms(),
+                                  date(2025, 6, 2), date(2025, 9, 30))
+        result = bt.backtest_theoretical_price(
+            "123001.SZ", start_date=date(2025, 6, 2), end_date=date(2025, 9, 30),
+            freq="M", provider=provider, point_in_time=False, M=60, N=120)
+        assert result["no_down_reset_floor_days"] == len(result["dates"]) > 0
+
+        # 正常估得出来时计数必须是 0 —— 否则这个提示会常年挂着
+        monkeypatch.undo()
+        ok = bt.backtest_theoretical_price(
+            "123001.SZ", start_date=date(2025, 6, 2), end_date=date(2025, 9, 30),
+            freq="M", provider=provider, point_in_time=False, M=60, N=120)
+        assert ok["no_down_reset_floor_days"] == 0
+
     def test_backtest_wraps_the_provider_in_the_point_in_time_layer(self, monkeypatch):
         """默认必须叠历史条款投影层 —— 否则每个历史采样日都用今天的转股价。
 
