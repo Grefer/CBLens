@@ -225,8 +225,10 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   先钉「每列都要有说明」(= 为了写 tooltip 而写 tooltip: 给「评级」凑一句"债项信用评级",
   读者什么也没多知道, 真正要解释的那几条反被淹掉), 又反过来钉「这 11 列不许有」——
   同样是把一次取舍固化成规则, 人改主意就红。现在守护测试只钉**结构性**的三件:
-  无孤儿键 / 够短 / 名字里不留方向注释。覆盖面由人逐列过一遍定 (当前 19/23 列,
-  平均 17 字全部单行; 转股价值 / 剩余(年) / 定价状态 / 数据 四列刻意不写)。
+  无孤儿键 / 够短 / 名字里不留方向注释。覆盖面由人逐列过一遍定 (2026-09-03 实测
+  19/22 列, 平均 17.8 字全部单行; 剩余(年) / 定价状态 / 数据状态 三列刻意不写)。
+  分母是「完整」20 列与关注池 16 列的**并集**去重, 「涨跌%」删掉之后是 22 不是 23;
+  「转股价值」现在是写了的。
   写法: 一句话说清**怎么读**, 带符号的量只说"越正/越负各是什么", 不抄公式,
   不写实现细节。**按钮不给 tooltip** —— 「⚡ 关注池重算」「🆕 扫新债」的提示只是把
   按钮名字换个说法再说一遍。
@@ -438,8 +440,11 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   「转股溢价(%)」甩到「评级」后面、与它要对照的「市价」隔开十列, 而「可信度」的对象
   (理论价) 本来就是**由列序承载**的。这套组装依赖两条不变量 —— **简洁 ⊆ 完整**,
   且**简洁的列序等于它在完整里的相对序**; 破了任一条会静默丢列或重排, 有守护测试先钉
-  不变量再钉行为。宽度: 13 列 1195px → 转股折价 14 列 1295px / 需复核 15 列 1325px
-  (完整 20 列 1735px), 横向滚动条兜底。
+  不变量再钉行为。宽度 (2026-09-03 实测): 简洁 13 列 1245px → 全池 14 列 1335px /
+  转股折价 14 列 1345px / 需复核 15 列 1375px (完整 20 列 1775px), 横向滚动条兜底。
+  **这几个数是列宽的纯函数, 不随数据漂** —— 上一版写的 1195/1295/1325/1735 在
+  「标签」列从 180 加宽到 220 之后就全部低了 50px, 而没有任何东西会因此变红,
+  所以「关于本文里的「实测」数字」那条豁免不适用于它们。
   **登记表叫 `_VIEW_KEY_COLUMNS` 不叫 CRITERION**: 「全池」没有判据, 它需要的是
   **排序量**「上市日」—— 按判据命名会让那一条看上去像登记错了。
 - **「全池」按上市日倒序 (最新在前), 不再按相对偏差**。它是**分母不是筛子**, 便宜度
@@ -815,8 +820,11 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   因为 deviation 更负而排在干净行前面, 见 `test_sort_batch_results_for_review_is_pure_deviation_now`)。
   没有顺手补一个新的沉底规则: 那等于用未经检验的新机制替换刚被证伪的旧机制, 而这个顺序
   会喂给 `filter_batch_results_by_view`, 属默认选债行为。影响面有限 ——
-  `sort_batch_results_for_view` 对 6 个视图里的 5 个都重排, 只有「需复核」(实测 5 行)
-  沿用它, 而那个视图里的行本来就全是高风险行。
+  `sort_batch_results_for_view` 对 **5 个视图里的 4 个**走重排分支, 只有「需复核」
+  (2026-09-03 实测 11 行) 沿用它, 而那个视图里的行本来就全是高风险行。
+  (「下修优势」删除后视图从 6 个变成 5 个, 这句话在三处留了旧数。另外**走重排分支**
+  ≠ **顺序真变了**: 实测「低估候选」按 relative_deviation 排出来与复核序逐只相同,
+  「转股折价」当前是空的, 真正改变顺序的只有「全池」与「双低」。)
   **旧缓存/旧快照里残留的 `opportunity_score` / `"score"` 键无害**: 读回来无人消费,
   策略页渲染侧保留了 `row.get("score")` 兼容分支 (新快照没有这个键 → 渲染成「—」)。
 
@@ -1084,10 +1092,14 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   那 15 只全是刚被"评级过低"正确剔除的 (中装转2 CC→AA、宏图转债 CC→A)。
   `cb_data_sync.locally_authoritative_fields(provider)` 让本地非空值胜出, 空值仍由 Wind 兜底
   (Wind 侧实测护住 26 个字段; 早期是一个只含 `credit_rating` 的常量)。
-  **另一个副作用是良性的**: `get_bond_terms` 不取 `delisting_date` (只有
-  `get_admission_status` 取), 所以全量同步会把它清成 None —— 但存续券的 `delist_date`
-  恒等于 `maturity_date` (零信息量, 且是未来日期不触发剔除), 跑一次每日状态刷新即恢复。
-  实测丢失的 314 只里**过去日期 0 只**, 死券混不进池。
+  **曾经的一个副作用现在已经不存在了**: `get_bond_terms` 不取 `delisting_date` (只有
+  `get_admission_status` 取), 所以全量同步**曾经**会把它清成 None (当时实测丢失 314 只,
+  其中过去日期 0 只, 死券混不进池)。`delisting_date` 如今在那 26 个受保护字段里,
+  默认 `preserve_local=True` 下**一个字节都不动** —— 2026-09-03 实测跑一遍
+  `sync_cb_terms`, `delisting_date` / `underlying_name` / `underlying_status` 原样保留,
+  而 `conversion_price` 正常更新。只有 `cb-sync-tradable --reset-status`
+  (`preserve_local=False`) 才会清。**不要**再照着上一版去跑一次 30 分钟的每日状态
+  刷新来恢复一个从没丢过的字段。
 - **判断评级对错不能用库内自洽**。评级没有任何库内裁判: Wind 冻结、公告解析无自校验。
   曾按"末条 patch 必须等于 cb_data"判 patch 脏, 据此删了 18 条又剥掉 330 条 —— 方向是反的
   (灵康转债第三方 `A-`、cb_data `AA-`、patch `A-`, patch 才对)。实测对第三方的精确命中率:

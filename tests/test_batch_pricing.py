@@ -780,8 +780,9 @@ def test_sort_batch_results_for_review_is_pure_deviation_now():
     机制, 而 ``sort_batch_results_for_review`` 的顺序会喂给 `filter_batch_results_by_view`
     —— 属于默认选债行为, 要改得单独立项。
 
-    影响面有限: ``sort_batch_results_for_view`` 对 6 个视图里的 5 个都重排, 只有
-    「需复核」(实测 5 行) 直接沿用本函数的顺序; 而那个视图里的行本来就全是高风险行。
+    影响面有限: ``sort_batch_results_for_view`` 对 **5 个视图里的 4 个**走重排分支,
+    只有「需复核」(2026-09-03 实测 11 行) 直接沿用本函数的顺序; 而那个视图里的行
+    本来就全是高风险行。
     """
     rows = sort_batch_results_for_review([
         {
