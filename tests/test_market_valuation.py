@@ -27,7 +27,14 @@ from convertible_bond.market_valuation import (
 )
 
 
-def _rows(devs, status="ok", vd="2026-05-26"):
+def _rows(devs, status="ok", vd="2026-05-26", repeat=1):
+    """构造一批已定价行。
+
+    ``repeat`` 把整个 devs 模式原样重复若干遍 —— 中位与分位完全不变, 只是池子够大。
+    走 ``record_snapshot`` / ``baseline_refusal_reason`` 的用例需要它: 那条路上有
+    ``MIN_BASELINE_POOL`` 绝对下限, 而三只债的"全市场中位偏差"本来就不该记进基线。
+    """
+    devs = list(devs) * repeat
     return [{"bond_code": f"c{i}", "deviation": d, "status": status,
              "valuation_date": vd} for i, d in enumerate(devs)]
 
@@ -152,12 +159,12 @@ def test_gui_auto_record_helper_idempotent(tmp_path):
     """
     from convertible_bond.gui.tabs.batch import _record_valuation_history
     path = tmp_path / "hist.json"
-    assert _record_valuation_history(_rows([0.10, 0.15, 0.20]), history_path=path) is None
+    assert _record_valuation_history(_rows([0.10, 0.15, 0.20], repeat=40), history_path=path) is None
     loaded = load_history(path)
     assert len(loaded) == 1
     assert loaded[0].median_deviation == pytest.approx(0.15)
     # 同日重算 → 覆盖而非追加
-    assert _record_valuation_history(_rows([0.30, 0.30, 0.30]), history_path=path) is None
+    assert _record_valuation_history(_rows([0.30, 0.30, 0.30], repeat=40), history_path=path) is None
     loaded = load_history(path)
     assert len(loaded) == 1
     assert loaded[0].median_deviation == pytest.approx(0.30)
@@ -184,7 +191,7 @@ def test_partial_batch_does_not_pollute_the_versioned_baseline(tmp_path):
 
     path = tmp_path / "hist.json"
     # 先放一条好记录, 用来验证坏记录既不覆盖也不追加
-    assert _record_valuation_history(_rows([0.10, 0.15, 0.20]), history_path=path) is None
+    assert _record_valuation_history(_rows([0.10, 0.15, 0.20], repeat=40), history_path=path) is None
     before = load_history(path)
 
     # 284 行全部 status=ok, 但只有 28 行拿到市价 → 覆盖 9.9%
@@ -488,17 +495,18 @@ def test_record_snapshot_is_the_single_gate_both_writers_share(tmp_path):
     ``append_history`` —— 两个写入方对同一个版本库文件用了两套判据。
     """
     path = tmp_path / "hist.json"
-    ok_rows = _rows([0.1, 0.15, 0.2])
+    ok_rows = _rows([0.1, 0.15, 0.2], repeat=40)
     bad_rows = ok_rows + [{"deviation": float("nan"), "status": "ok",
-                           "valuation_date": "2026-05-26"}] * 27
+                           "valuation_date": "2026-05-26"}] * 1080
 
     # 覆盖率够 → 记, 返回 None
     assert record_snapshot(path, ok_rows) is None
     assert len(load_history(path)) == 1
 
-    # 覆盖率不够 → 不记, 返回**原因** (不是静默跳过 —— 那和"记了"长得一模一样)
+    # 覆盖率不够 → 不记, 返回**原因** (不是静默跳过 —— 那和"记了"长得一模一样)。
+    # 分子刻意仍在 MIN_BASELINE_POOL 之上, 这样触发的确定是覆盖率那道闸。
     reason = record_snapshot(path, bad_rows)
-    assert reason is not None and "3/30" in reason and "10%" in reason
+    assert reason is not None and "120/1200" in reason and "10%" in reason
     assert len(load_history(path)) == 1, "被拒的快照仍然写进去了"
 
     # force 是显式出口
@@ -543,25 +551,27 @@ def test_unlisted_new_bonds_leave_the_coverage_denominator():
     关注池的 ``market_price_coverage`` 早就这么处理了, 判据共用
     ``batch_pricing.is_unlisted_new_bond``。
     """
+    # 池子取 120 只 (> ``MIN_BASELINE_POOL``): 这条用例钉的是**分母**怎么数,
+    # 不是池子大不大, 所以不能让绝对下限那道闸抢先拒记。
     priced = [{"bond_code": f"c{i}", "status": "ok", "deviation": 0.1,
                "listing_date": "2020-01-01", "valuation_date": "2026-08-31"}
-              for i in range(9)]
+              for i in range(120)]
     new_bond = {"bond_code": "new", "status": "ok", "deviation": float("nan"),
                 "listing_date": None, "trading_status": "pending",
                 "valuation_date": "2026-08-31"}
 
-    # 9 只在市 + 1 只在途 → 覆盖率是 9/9 而不是 9/10
-    assert snapshot_coverage(priced + [new_bond]) == (9, 9)
+    # 120 只在市 + 1 只在途 → 覆盖率是 120/120 而不是 120/121
+    assert snapshot_coverage(priced + [new_bond]) == (120, 120)
     assert baseline_refusal_reason(priced + [new_bond]) is None
 
     # 加到 5 只在途也一样 —— 分母不随发行节奏漂移
-    assert snapshot_coverage(priced + [new_bond] * 5) == (9, 9)
+    assert snapshot_coverage(priced + [new_bond] * 5) == (120, 120)
 
     # 而**在市**债缺市价仍然照常拉低覆盖率 (那才是取数失败)
     stale = {"bond_code": "stale", "status": "ok", "deviation": float("nan"),
              "listing_date": "2020-01-01", "valuation_date": "2026-08-31"}
-    assert snapshot_coverage(priced + [stale] * 3) == (9, 12)
-    assert baseline_refusal_reason(priced + [stale] * 3) is not None
+    assert snapshot_coverage(priced + [stale] * 40) == (120, 160)
+    assert baseline_refusal_reason(priced + [stale] * 40) is not None
 
 
 def test_current_caliber_is_registered_with_its_breakpoint():
@@ -607,3 +617,36 @@ def test_pool_widening_registered_as_caliber_v3():
     hist = _quarterly([0.10, 0.12, 0.14]) + [snap]
     note = caliber_note(hist, verbose=False)
     assert "2026-08-31" in note and "不严格可比" in note
+
+
+def test_a_collapsed_pool_cannot_slip_past_the_coverage_ratio():
+    """覆盖率是比值, 池子塌掉时分子分母一起塌 —— 必须另有一道绝对下限。
+
+    ``baseline_refusal_reason`` 此前只有 ``usable < total * MIN_BASELINE_COVERAGE``
+    一道闸。极端情形: 主池只剩 1 只债、那一只定价成功 → 1/1 = 100%, 干净通过, 而
+    写进版本库的"全市场中位偏差"是**一只债**的偏差, 还会当上该季度的代表
+    (``baseline_medians`` 取桶内最晚一条)。
+
+    池子塌掉不是假想 —— 一次全量同步把 ``underlying_name`` 清掉 311 只、一次解析
+    bug 让 103 只大盘券被判"余额过小", 库内每一项自洽性检查当时都是绿的。
+    """
+    from convertible_bond.market_valuation import (
+        MIN_BASELINE_POOL, baseline_refusal_reason, is_coverage_refusal)
+
+    # 盘上 22 期历史基线的池规模是 193 ~ 522, 所以下限必须**远低于**真实历史
+    # (否则正常季度也记不进去), 又要**远高于**退化 (否则拦不住塌掉的池)。
+    assert 30 < MIN_BASELINE_POOL < 193
+
+    full = _rows([0.10, 0.15, 0.20], repeat=40)          # 120 只, 覆盖率 100%
+    assert baseline_refusal_reason(full) is None
+
+    collapsed = _rows([0.10])                             # 1 只, 覆盖率同样是 100%
+    reason = baseline_refusal_reason(collapsed)
+    assert reason is not None, "只剩一只债的池子以 100% 覆盖率通过了闸"
+    assert "1" in reason
+    # 与覆盖率拒记同一类: 用户明知故犯时 ``--force`` 仍是出口, 而不是"基础设施坏了"。
+    assert is_coverage_refusal(reason)
+
+    edge = _rows([0.10] * (MIN_BASELINE_POOL - 1))
+    assert baseline_refusal_reason(edge) is not None
+    assert baseline_refusal_reason(_rows([0.10] * MIN_BASELINE_POOL)) is None

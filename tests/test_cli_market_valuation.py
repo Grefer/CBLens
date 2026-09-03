@@ -102,7 +102,9 @@ def test_record_is_refused_when_pricing_coverage_is_too_low(tmp_path, capsys):
 def test_record_is_allowed_when_coverage_is_fine(tmp_path):
     cache = tmp_path / "c.json"
     hist = tmp_path / "hist.json"
-    _write_cache(cache, [_row(0.1), _row(0.15), _row(0.2)], [])
+    # 池子取 120 只: `--record` 那条路上还有 ``MIN_BASELINE_POOL`` 绝对下限,
+    # 而三只债的"全市场中位偏差"本来就不该记进版本库的基线。
+    _write_cache(cache, [_row(0.1), _row(0.15), _row(0.2)] * 40, [])
 
     rc = main(["--cache", str(cache), "--history", str(hist), "--record"])
 

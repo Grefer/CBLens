@@ -124,6 +124,23 @@ def _coerce_date(value: Any) -> str | None:
 #: 一次进的是**版本库**、还会当上该季度的代表 —— 要改就得手工动 JSON。
 MIN_BASELINE_COVERAGE = 0.90
 
+#: 记入基线所需的**绝对**样本下限。
+#:
+#: 覆盖率是一个"这批行里成功了几成"的比值 —— 它衡量**取数**, 衡量不了**池子本身**。
+#: 池子塌掉时分子分母一起塌: 极端情形 1 只债、那一只成功, 覆盖率 100% 干净通过,
+#: 而算出来的"全市场中位偏差"是一只债的偏差, 还会当上该季度的代表进版本库。
+#: 池子塌掉不是假想 —— 一次全量同步把 ``underlying_name`` 清掉 311 只、一次解析 bug
+#: 让 103 只大盘券被判"余额过小", 库内每一项自洽性检查当时都是绿的。
+#:
+#: 100 这个数按盘上的历史基线定: 22 期记录的池规模区间是 **193 ~ 522** (中位 424),
+#: 所以它对任何一期真实历史都不会触发 (离最小的那期还有 1.93 倍余量), 而全库
+#: 1000+ 只债里只剩不到 100 只可投, 那是结构性故障不是行情。参照物是
+#: ``batch_pricing._DEVIATION_MEDIAN_MIN_SAMPLE = 30`` (中位数本身还稳不稳的下限) ——
+#: 这里要严得多, 因为写进的是版本库而不是一次展示。
+#:
+#: 真遇上"市场就是这么小"的那天, 出口是 ``--force`` (与覆盖率闸同一类拒记)。
+MIN_BASELINE_POOL = 100
+
 
 def _usable_deviations(
     rows: Sequence[dict[str, Any]],
@@ -527,10 +544,14 @@ def baseline_refusal_reason(
     rows: Sequence[dict[str, Any]],
     *,
     min_coverage: float = MIN_BASELINE_COVERAGE,
+    min_pool: int = MIN_BASELINE_POOL,
 ) -> str | None:
     """这批结果能不能记进历史基线: 能则 ``None``, 不能则返回**不记的原因**。
 
     判据走 :func:`snapshot_coverage`, 与 :func:`compute_snapshot` 逐条同口径。
+
+    **两道闸方向不同, 缺一不可**: 覆盖率管"这批行里成功了几成", 绝对下限管"这批行
+    本身还剩几只"。只有比值时池子塌掉会静默通过 —— 分子分母一起塌, 1/1 就是 100%。
     """
     usable, total = snapshot_coverage(rows or [])
     if not usable:
@@ -540,6 +561,9 @@ def baseline_refusal_reason(
     if total and usable < total * min_coverage:
         return (f"定价覆盖 {usable}/{total} ({usable / total:.0%} < "
                 f"{min_coverage:.0%}), 未记入估值基线")
+    if min_pool and usable < min_pool:
+        return (f"样本只有 {usable} 只 (< {min_pool}), 主池可能塌了而不是行情变了, "
+                "未记入估值基线")
     return None
 
 
