@@ -2337,12 +2337,11 @@
   },
   "110073.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -2355,7 +2354,7 @@
     "conversion_price": 9.42,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-07-10",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -2398,12 +2397,11 @@
   },
   "110074.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -2416,7 +2414,7 @@
     "conversion_price": 3.26,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-04-29",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -2521,13 +2519,13 @@
   },
   "110076.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 29921572.0,
     "call_announce_date": null,
@@ -2540,7 +2538,7 @@
     "conversion_price": 16.5,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-11",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -2761,14 +2759,14 @@
   },
   "110081.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 106153273.0,
     "call_announce_date": null,
@@ -2819,8 +2817,8 @@
     "underlying_code": "600745.SH",
     "underlying_name": "*ST闻泰",
     "underlying_pct_change": -3.518123667377403,
-    "underlying_status": "ST/退市风险",
-    "underlying_trade_status": null
+    "underlying_status": "是",
+    "underlying_trade_status": "交易"
   },
   "110082.SH": {
     "_meta": {
@@ -2940,13 +2938,13 @@
   },
   "110084.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 185192855.0,
     "call_announce_date": null,
@@ -2959,7 +2957,7 @@
     "conversion_price": 6.42,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-08",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -3421,14 +3419,14 @@
   },
   "110092.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 24040580.0,
     "call_announce_date": null,
@@ -3454,7 +3452,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2029-01-06",
-    "down_reset_block_until": "2026-10-23",
+    "down_reset_block_until": "2026-07-02",
     "down_reset_cooldown_months": null,
     "down_reset_note": "江苏三房巷聚材股份有限公司关于不向下修正“三房转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -3479,7 +3477,7 @@
     "underlying_code": "600370.SH",
     "underlying_name": "*ST三房",
     "underlying_pct_change": -1.92307692307692,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "是",
     "underlying_trade_status": "交易"
   },
   "110093.SH": {
@@ -3784,13 +3782,13 @@
   },
   "110098.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 55631999.0,
     "call_announce_date": null,
@@ -3803,7 +3801,7 @@
     "conversion_price": 4.95,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-23",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -3846,13 +3844,13 @@
   },
   "110099.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 70314645.0,
     "call_announce_date": null,
@@ -3865,7 +3863,7 @@
     "conversion_price": 9.49,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-07-09",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -3908,13 +3906,13 @@
   },
   "110100.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 42605463.0,
     "call_announce_date": null,
@@ -3940,7 +3938,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2032-01-22",
-    "down_reset_block_until": "2026-12-01",
+    "down_reset_block_until": "2026-08-11",
     "down_reset_cooldown_months": null,
     "down_reset_note": "龙建股份关于不向下修正“龙建转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -5239,13 +5237,13 @@
   },
   "111000.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 69827419.0,
     "call_announce_date": null,
@@ -5290,7 +5288,7 @@
     "putback_start_date": null,
     "redemption_price": 115.0,
     "sec_name": "起帆转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2021-06-17",
     "trading_status": "tradable",
     "underlying_code": "605222.SH",
@@ -5423,13 +5421,13 @@
   },
   "111003.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 23857560.0,
     "call_announce_date": null,
@@ -5442,7 +5440,7 @@
     "conversion_price": 8.85,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-16",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -5485,13 +5483,13 @@
   },
   "111004.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 256953887.0,
     "call_announce_date": null,
@@ -5504,7 +5502,7 @@
     "conversion_price": 24.37,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-29",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -5547,17 +5545,17 @@
   },
   "111005.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-05-28",
+    "call_redemption_date": "2026-05-29",
     "call_redemption_price": 101.3973,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
@@ -5565,7 +5563,7 @@
     "conversion_price": 11.98,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-06-18",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -5575,7 +5573,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-05-28",
+    "delisting_date": "2026-05-29",
     "down_reset_block_until": "2025-07-18",
     "down_reset_cooldown_months": null,
     "down_reset_note": "富春染织关于不向下修正“富春转债”转股价格的公告",
@@ -5952,13 +5950,13 @@
   },
   "111012.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 307484334.0,
     "call_announce_date": null,
@@ -5971,7 +5969,7 @@
     "conversion_price": 11.11,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-05",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -6014,17 +6012,17 @@
   },
   "111013.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-06-01",
+    "call_redemption_date": "2026-06-02",
     "call_redemption_price": 100.3534,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
@@ -6032,7 +6030,7 @@
     "conversion_price": 8.67,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-06-05",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -6042,7 +6040,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-06-01",
+    "delisting_date": "2026-06-02",
     "down_reset_block_until": "2025-03-24",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正“新港转债”转股价格的公告",
@@ -6073,13 +6071,13 @@
   },
   "111014.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 11806938.0,
     "call_announce_date": null,
@@ -6092,7 +6090,7 @@
     "conversion_price": 18.21,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-06-09",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -6120,7 +6118,7 @@
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
     "putback_end_date": "2026-06-01",
-    "putback_price": 100.93,
+    "putback_price": null,
     "putback_start_date": "2026-05-26",
     "redemption_price": 112.0,
     "sec_name": "李子转债",
@@ -6435,13 +6433,13 @@
   },
   "111020.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 15875672.0,
     "call_announce_date": null,
@@ -6454,7 +6452,7 @@
     "conversion_price": 10.53,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-16",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -6675,13 +6673,13 @@
   },
   "111024.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 17795300.0,
     "call_announce_date": null,
@@ -6694,7 +6692,7 @@
     "conversion_price": 33.54,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-24",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -8481,11 +8479,8 @@
   },
   "113037.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
-      "fetched_at_by_source": {
-        "cb_events": "2026-09-03T20:10:28"
-      },
-      "source": "cb_events"
+      "fetched_at": "2026-08-25T02:26:06",
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -8498,7 +8493,7 @@
     "conversion_price": 3.55,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-01",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.006,
@@ -8766,13 +8761,13 @@
   },
   "113042.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 288449539.0,
     "call_announce_date": null,
@@ -8785,7 +8780,7 @@
     "conversion_price": 8.35,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-01",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.008,
@@ -8828,13 +8823,13 @@
   },
   "113043.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 101794535.0,
     "call_announce_date": null,
@@ -8847,7 +8842,7 @@
     "conversion_price": 7.98,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-26",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -9008,13 +9003,13 @@
   },
   "113046.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 212900152.0,
     "call_announce_date": null,
@@ -9027,7 +9022,7 @@
     "conversion_price": 10.18,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-28",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -9129,17 +9124,17 @@
   },
   "113048.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 46318198.0,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-08-06",
+    "call_no_redemption_until": null,
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
@@ -9180,7 +9175,7 @@
     "putback_start_date": "2025-06-17",
     "redemption_price": 112.0,
     "sec_name": "晶科转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2021-05-31",
     "trading_status": "tradable",
     "underlying_code": "601778.SH",
@@ -9191,13 +9186,13 @@
   },
   "113049.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 56016691.0,
     "call_announce_date": null,
@@ -9242,7 +9237,7 @@
     "putback_start_date": "2026-07-30",
     "redemption_price": 107.0,
     "sec_name": "长汽转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2021-07-08",
     "trading_status": "tradable",
     "underlying_code": "601633.SH",
@@ -9312,14 +9307,14 @@
   },
   "113051.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 52786851.0,
     "call_announce_date": null,
@@ -9331,8 +9326,8 @@
     "close": 122.6629,
     "conversion_price": 3.33,
     "conversion_suspension_end_date": "2025-12-31",
-    "conversion_suspension_start_date": "2026-09-04",
-    "conversion_suspension_status": "暂停转股",
+    "conversion_suspension_start_date": "2026-06-05",
+    "conversion_suspension_status": null,
     "coupon_rates": [
       0.002,
       0.004,
@@ -9375,13 +9370,13 @@
   },
   "113052.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 269818767.0,
     "call_announce_date": null,
@@ -9394,7 +9389,7 @@
     "conversion_price": 20.13,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-02",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -9499,13 +9494,13 @@
   },
   "113054.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 46704102.0,
     "call_announce_date": null,
@@ -9518,7 +9513,7 @@
     "conversion_price": 8.67,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-30",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -9618,13 +9613,13 @@
   },
   "113056.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 204800782.0,
     "call_announce_date": null,
@@ -9637,7 +9632,7 @@
     "conversion_price": 9.22,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-30",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -9736,13 +9731,13 @@
   },
   "113058.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 44483173.0,
     "call_announce_date": null,
@@ -9787,7 +9782,7 @@
     "putback_start_date": null,
     "redemption_price": 112.0,
     "sec_name": "友发转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2022-04-26",
     "trading_status": "tradable",
     "underlying_code": "601686.SH",
@@ -9798,13 +9793,13 @@
   },
   "113059.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 65067164.0,
     "call_announce_date": null,
@@ -9849,7 +9844,7 @@
     "putback_start_date": "2026-07-09",
     "redemption_price": 112.0,
     "sec_name": "福莱转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2022-06-13",
     "trading_status": "tradable",
     "underlying_code": "601865.SH",
@@ -9974,14 +9969,14 @@
   },
   "113062.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 83800988.0,
     "call_announce_date": null,
@@ -9994,7 +9989,7 @@
     "conversion_price": 5.25,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-02",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -10269,13 +10264,13 @@
   },
   "113067.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 41993733.0,
     "call_announce_date": null,
@@ -10320,7 +10315,7 @@
     "putback_start_date": null,
     "redemption_price": 107.0,
     "sec_name": "燃23转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2023-08-18",
     "trading_status": "tradable",
     "underlying_code": "601139.SH",
@@ -14635,12 +14630,12 @@
   },
   "113575.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 0.0,
     "call_announce_date": null,
@@ -14691,7 +14686,7 @@
     "underlying_code": "603377.SH",
     "underlying_name": "ST东时",
     "underlying_pct_change": -0.6557377049180364,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "是",
     "underlying_trade_status": "交易"
   },
   "113576.SH": {
@@ -15158,12 +15153,11 @@
   },
   "113584.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -15176,7 +15170,7 @@
     "conversion_price": 12.45,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-10-13",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -15446,12 +15440,12 @@
   },
   "113589.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -15502,7 +15496,7 @@
     "underlying_code": "603608.SH",
     "underlying_name": "天创时尚",
     "underlying_pct_change": 1.2464046021093051,
-    "underlying_status": null,
+    "underlying_status": "否",
     "underlying_trade_status": "交易"
   },
   "113590.SH": {
@@ -15910,12 +15904,11 @@
   },
   "113597.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -15928,7 +15921,7 @@
     "conversion_price": 8.68,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-05-29",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.005,
       0.006999999999999999,
@@ -16377,13 +16370,13 @@
   },
   "113605.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 37039584.0,
     "call_announce_date": null,
@@ -16396,7 +16389,7 @@
     "conversion_price": 16.86,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-17",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.006,
@@ -16900,13 +16893,13 @@
   },
   "113615.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 483996006.0,
     "call_announce_date": null,
@@ -16919,7 +16912,7 @@
     "conversion_price": 11.12,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-07-01",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -16962,13 +16955,13 @@
   },
   "113616.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 62966503.0,
     "call_announce_date": null,
@@ -16981,7 +16974,7 @@
     "conversion_price": 159.02,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-28",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -17372,12 +17365,11 @@
   },
   "113624.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -17390,7 +17382,7 @@
     "conversion_price": 19.78,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-21",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.005,
       0.006999999999999999,
@@ -17433,14 +17425,14 @@
   },
   "113625.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 16049873.0,
     "call_announce_date": null,
@@ -17480,9 +17472,9 @@
     "outstanding_balance": 5.82531,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-09-15",
-    "putback_price": 100.74,
-    "putback_start_date": "2026-09-09",
+    "putback_end_date": "2026-05-20",
+    "putback_price": 102.31,
+    "putback_start_date": "2026-05-14",
     "redemption_price": 118.0,
     "sec_name": "江山转债",
     "suspension_status": "交易",
@@ -17553,13 +17545,13 @@
   },
   "113627.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 26132306.0,
     "call_announce_date": null,
@@ -17572,7 +17564,7 @@
     "conversion_price": 20.61,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-29",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -17599,9 +17591,9 @@
     "outstanding_balance": 7.99645,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-09-08",
-    "putback_price": 100.27,
-    "putback_start_date": "2026-09-02",
+    "putback_end_date": "2025-10-29",
+    "putback_price": 100.49,
+    "putback_start_date": "2025-10-23",
     "redemption_price": 110.0,
     "sec_name": "太平转债",
     "suspension_status": "交易",
@@ -17848,12 +17840,11 @@
   },
   "113632.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -17866,7 +17857,7 @@
     "conversion_price": 18.99,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-07-03",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -17971,13 +17962,13 @@
   },
   "113634.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 24845259.0,
     "call_announce_date": null,
@@ -17990,7 +17981,7 @@
     "conversion_price": 94.27,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-07-15",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -18017,9 +18008,9 @@
     "outstanding_balance": 7.50717288,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-09-15",
-    "putback_price": 101.36,
-    "putback_start_date": "2026-09-09",
+    "putback_end_date": null,
+    "putback_price": null,
+    "putback_start_date": null,
     "redemption_price": 115.0,
     "sec_name": "珀莱转债",
     "suspension_status": "交易",
@@ -18088,13 +18079,13 @@
   },
   "113636.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 26400682.0,
     "call_announce_date": null,
@@ -18107,7 +18098,7 @@
     "conversion_price": 26.22,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-29",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -18208,13 +18199,13 @@
   },
   "113638.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 31509231.0,
     "call_announce_date": null,
@@ -18227,7 +18218,7 @@
     "conversion_price": 16.01,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-27",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -18812,13 +18803,13 @@
   },
   "113649.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 23612582.0,
     "call_announce_date": null,
@@ -18831,7 +18822,7 @@
     "conversion_price": 13.61,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-03",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.006,
@@ -18874,13 +18865,13 @@
   },
   "113650.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 19180843.0,
     "call_announce_date": null,
@@ -18893,7 +18884,7 @@
     "conversion_price": 23.27,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-26",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -18906,7 +18897,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2028-07-01",
-    "down_reset_block_until": "2026-11-27",
+    "down_reset_block_until": "2026-05-26",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正“博22转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -18994,13 +18985,13 @@
   },
   "113652.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 62781471.0,
     "call_announce_date": null,
@@ -19013,7 +19004,7 @@
     "conversion_price": 19.02,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-19",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -19172,13 +19163,13 @@
   },
   "113655.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 29914352.0,
     "call_announce_date": null,
@@ -19191,7 +19182,7 @@
     "conversion_price": 51.29,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-16",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -19414,13 +19405,13 @@
   },
   "113659.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 84088960.0,
     "call_announce_date": null,
@@ -19433,7 +19424,7 @@
     "conversion_price": 31.72,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2024-11-01",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -19476,13 +19467,13 @@
   },
   "113660.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 5802960.0,
     "call_announce_date": null,
@@ -19495,7 +19486,7 @@
     "conversion_price": 36.84,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-05-28",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.005,
       0.008,
@@ -19772,14 +19763,14 @@
   },
   "113665.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 19848560.0,
     "call_announce_date": null,
@@ -19792,7 +19783,7 @@
     "conversion_price": 6.28,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-05",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -19835,13 +19826,13 @@
   },
   "113666.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 80291424.0,
     "call_announce_date": null,
@@ -19854,7 +19845,7 @@
     "conversion_price": 37.06,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-21",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -19897,18 +19888,18 @@
   },
   "113667.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-08-25",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-08-28",
+    "call_redemption_date": "2026-08-31",
     "call_redemption_price": 100.686,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
@@ -19916,7 +19907,7 @@
     "conversion_price": 9.95,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-09",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -19926,7 +19917,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-08-28",
+    "delisting_date": "2026-08-31",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -20071,13 +20062,13 @@
   },
   "113670.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 11512890.0,
     "call_announce_date": null,
@@ -20090,7 +20081,7 @@
     "conversion_price": 37.54,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-17",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -20252,13 +20243,13 @@
   },
   "113673.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 198991743.0,
     "call_announce_date": null,
@@ -20271,7 +20262,7 @@
     "conversion_price": 7.12,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-01",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -20614,13 +20605,13 @@
   },
   "113679.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 20228354.0,
     "call_announce_date": null,
@@ -20633,7 +20624,7 @@
     "conversion_price": 12.55,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-25",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -20676,13 +20667,13 @@
   },
   "113680.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 16695043.000000002,
     "call_announce_date": null,
@@ -20695,7 +20686,7 @@
     "conversion_price": 12.91,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2024-06-12",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -20800,13 +20791,13 @@
   },
   "113682.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 102310073.0,
     "call_announce_date": null,
@@ -20819,7 +20810,7 @@
     "conversion_price": 31.44,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-15",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -21030,13 +21021,13 @@
   },
   "113686.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 32143874.0,
     "call_announce_date": null,
@@ -21049,7 +21040,7 @@
     "conversion_price": 8.0,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-27",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -21321,17 +21312,17 @@
   },
   "113691.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 91197800.0,
     "call_announce_date": null,
-    "call_no_redemption_until": "2027-03-10",
+    "call_no_redemption_until": null,
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
@@ -21445,13 +21436,13 @@
   },
   "113693.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 33122534.0,
     "call_announce_date": null,
@@ -21464,7 +21455,7 @@
     "conversion_price": 11.13,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-15",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -21569,13 +21560,13 @@
   },
   "113695.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 31416364.0,
     "call_announce_date": null,
@@ -21588,7 +21579,7 @@
     "conversion_price": 16.68,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-26",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -21693,18 +21684,18 @@
   },
   "113697.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-25T19:28:14",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-08-21",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-08-27",
+    "call_redemption_date": "2026-08-28",
     "call_redemption_price": 100.094,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
@@ -21719,7 +21710,7 @@
     "credit_rating": "AA+",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-08-27",
+    "delisting_date": "2026-08-28",
     "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
     "down_reset_note": null,
@@ -21750,13 +21741,13 @@
   },
   "113698.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 21830337.0,
     "call_announce_date": null,
@@ -21769,7 +21760,7 @@
     "conversion_price": 12.55,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-05",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -21812,13 +21803,13 @@
   },
   "113699.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 123793839.0,
     "call_announce_date": null,
@@ -21831,7 +21822,7 @@
     "conversion_price": 62.8,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-07-01",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.001,
       0.003,
@@ -21874,13 +21865,13 @@
   },
   "113700.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:31:16",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:31:16"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 12969736.0,
     "call_announce_date": null,
@@ -21906,7 +21897,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2032-02-05",
-    "down_reset_block_until": "2026-10-18",
+    "down_reset_block_until": "2026-06-26",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正“海天转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -23499,13 +23490,13 @@
   },
   "118015.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 10906948.0,
     "call_announce_date": null,
@@ -23545,9 +23536,9 @@
     "outstanding_balance": 4.09951,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-09-14",
-    "putback_price": 100.32,
-    "putback_start_date": "2026-09-08",
+    "putback_end_date": null,
+    "putback_price": null,
+    "putback_start_date": null,
     "redemption_price": 115.0,
     "sec_name": "芯海转债",
     "suspension_status": "交易",
@@ -23561,17 +23552,17 @@
   },
   "118016.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 59461240.0,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-08-29",
+    "call_no_redemption_until": "2026-05-10",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
@@ -23580,7 +23571,7 @@
     "conversion_price": 6.91,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-07-08",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.005,
       0.006999999999999999,
@@ -24212,14 +24203,14 @@
   },
   "118027.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 239292885.0,
     "call_announce_date": null,
@@ -24245,7 +24236,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2028-11-28",
-    "down_reset_block_until": "2026-08-12",
+    "down_reset_block_until": "2026-05-13",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正“宏图转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -24270,7 +24261,7 @@
     "underlying_code": "688066.SH",
     "underlying_name": "*ST航图",
     "underlying_pct_change": -3.6630036630036686,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "是",
     "underlying_trade_status": "交易"
   },
   "118028.SH": {
@@ -24452,13 +24443,13 @@
   },
   "118031.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 78899246.0,
     "call_announce_date": null,
@@ -24484,7 +24475,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2029-02-13",
-    "down_reset_block_until": "2027-02-27",
+    "down_reset_block_until": "2027-01-25",
     "down_reset_cooldown_months": null,
     "down_reset_note": "天合光能股份有限公司关于不向下修正“天23转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -24514,13 +24505,13 @@
   },
   "118032.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 8246190.000000001,
     "call_announce_date": null,
@@ -24561,7 +24552,7 @@
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
     "putback_end_date": "2026-08-04",
-    "putback_price": 100.59,
+    "putback_price": null,
     "putback_start_date": "2026-07-29",
     "redemption_price": 115.0,
     "sec_name": "建龙转债",
@@ -24576,17 +24567,17 @@
   },
   "118033.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-06-09",
+    "call_redemption_date": "2026-06-10",
     "call_redemption_price": 100.3329,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
@@ -24594,7 +24585,7 @@
     "conversion_price": 82.75,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-06-25",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -24606,7 +24597,7 @@
     "credit_rating": "AA-",
     "credit_rating_outlook": null,
     "credit_watch_status": null,
-    "delisting_date": "2026-06-09",
+    "delisting_date": "2026-06-10",
     "down_reset_block_until": "2026-05-17",
     "down_reset_cooldown_months": null,
     "down_reset_note": "广东华特气体股份有限公司关于不向下修正“华特转债”转股价格的公告",
@@ -24699,13 +24690,13 @@
   },
   "118035.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 79733232.0,
     "call_announce_date": null,
@@ -24718,7 +24709,7 @@
     "conversion_price": 62.31,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-25",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -24761,13 +24752,13 @@
   },
   "118036.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 41441562.0,
     "call_announce_date": null,
@@ -24780,7 +24771,7 @@
     "conversion_price": 18.5,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-03",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -24823,13 +24814,13 @@
   },
   "118037.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 9319109.0,
     "call_announce_date": null,
@@ -24840,7 +24831,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.0503,
     "conversion_price": 28.64,
-    "conversion_suspension_end_date": "2026-03-18",
+    "conversion_suspension_end_date": "2026-03-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -24874,7 +24865,7 @@
     "putback_start_date": null,
     "redemption_price": 111.0,
     "sec_name": "上声转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2023-08-01",
     "trading_status": "tradable",
     "underlying_code": "688533.SH",
@@ -24942,13 +24933,13 @@
   },
   "118039.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 45190774.0,
     "call_announce_date": null,
@@ -24961,7 +24952,7 @@
     "conversion_price": 7.3,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-06-16",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.005,
       0.006999999999999999,
@@ -24988,9 +24979,9 @@
     "outstanding_balance": 4.10404007,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-08-20",
-    "putback_price": 100.11,
-    "putback_start_date": "2026-08-14",
+    "putback_end_date": "2025-07-25",
+    "putback_price": 100.0,
+    "putback_start_date": "2025-07-21",
     "redemption_price": 113.0,
     "sec_name": "煜邦转债",
     "suspension_status": "交易",
@@ -25064,12 +25055,11 @@
   },
   "118041.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-20",
@@ -25082,7 +25072,7 @@
     "conversion_price": 23.14,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2025-07-08",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -25593,13 +25583,13 @@
   },
   "118051.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 398257473.0,
     "call_announce_date": null,
@@ -25639,9 +25629,9 @@
     "outstanding_balance": 8.21837,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-09-04",
-    "putback_price": 100.3,
-    "putback_start_date": "2026-08-31",
+    "putback_end_date": "2026-06-11",
+    "putback_price": 100.21,
+    "putback_start_date": "2026-06-05",
     "redemption_price": 113.0,
     "sec_name": "皓元转债",
     "suspension_status": "交易",
@@ -25655,13 +25645,13 @@
   },
   "118052.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 12561084.0,
     "call_announce_date": null,
@@ -25674,7 +25664,7 @@
     "conversion_price": 24.2,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-02",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -25717,12 +25707,11 @@
   },
   "118053.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -25735,7 +25724,7 @@
     "conversion_price": 38.35,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-05-19",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -25888,13 +25877,13 @@
   },
   "118056.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 417875550.0,
     "call_announce_date": null,
@@ -25907,7 +25896,7 @@
     "conversion_price": 35.29,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-03",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -26067,13 +26056,13 @@
   },
   "118059.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 466746783.0,
     "call_announce_date": null,
@@ -26118,7 +26107,7 @@
     "putback_start_date": null,
     "redemption_price": 108.0,
     "sec_name": "颀中转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2025-11-21",
     "trading_status": "tradable",
     "underlying_code": "688352.SH",
@@ -26129,13 +26118,13 @@
   },
   "118060.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 160833253.0,
     "call_announce_date": null,
@@ -26148,7 +26137,7 @@
     "conversion_price": 52.53,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-10",
-    "conversion_suspension_status": null,
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -26315,14 +26304,14 @@
   },
   "118063.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 83794342.0,
     "call_announce_date": null,
@@ -26348,7 +26337,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2031-12-25",
-    "down_reset_block_until": "2026-11-25",
+    "down_reset_block_until": "2027-02-01",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正“金05转债”转股价格的公告",
     "down_reset_p_scale": null,
@@ -26690,14 +26679,13 @@
   },
   "118069.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "akshare:ratings": "2026-08-25T08:59:19"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 36112687.0,
     "call_announce_date": null,
@@ -26723,9 +26711,9 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2032-06-11",
-    "down_reset_block_until": "2026-10-02",
+    "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
-    "down_reset_note": "杭州爱科科技股份有限公司关于不向下修正“爱科转债”转股价格的公告",
+    "down_reset_note": null,
     "down_reset_p_scale": null,
     "down_reset_trigger_pct": 85.0,
     "face_value": 100.0,
@@ -30925,12 +30913,11 @@
   },
   "123061.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -30941,7 +30928,7 @@
     "call_trigger_pct": 130.0,
     "close": 126.3288,
     "conversion_price": 14.82,
-    "conversion_suspension_end_date": "2025-10-27",
+    "conversion_suspension_end_date": "2025-11-04",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -31103,13 +31090,13 @@
   },
   "123064.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -31120,7 +31107,7 @@
     "call_trigger_pct": 130.0,
     "close": 107.9664,
     "conversion_price": 20.88,
-    "conversion_suspension_end_date": "2026-06-02",
+    "conversion_suspension_end_date": "2021-03-08",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -31508,13 +31495,13 @@
   },
   "123071.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 40351750.099999994,
     "call_announce_date": null,
@@ -31525,7 +31512,7 @@
     "call_trigger_pct": 130.0,
     "close": 112.1886,
     "conversion_price": 6.68,
-    "conversion_suspension_end_date": "2026-10-20",
+    "conversion_suspension_end_date": "2026-05-20",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -31540,7 +31527,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2026-10-21",
-    "down_reset_block_until": "2027-02-14",
+    "down_reset_block_until": "2024-07-19",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正天能转债转股价格的公告",
     "down_reset_p_scale": null,
@@ -31570,13 +31557,13 @@
   },
   "123072.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 16947835.7,
     "call_announce_date": null,
@@ -31587,7 +31574,7 @@
     "call_trigger_pct": 130.0,
     "close": 116.3108,
     "conversion_price": 32.61,
-    "conversion_suspension_end_date": "2026-10-20",
+    "conversion_suspension_end_date": "2025-10-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -32034,13 +32021,13 @@
   },
   "123080.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 19214146.1,
     "call_announce_date": null,
@@ -32051,7 +32038,7 @@
     "call_trigger_pct": 130.0,
     "close": 123.5728,
     "conversion_price": 11.28,
-    "conversion_suspension_end_date": "2026-05-29",
+    "conversion_suspension_end_date": "2026-05-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -32499,13 +32486,13 @@
   },
   "123088.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 19229004.799999997,
     "call_announce_date": null,
@@ -32516,7 +32503,7 @@
     "call_trigger_pct": 130.0,
     "close": 114.1085,
     "conversion_price": 14.97,
-    "conversion_suspension_end_date": "2026-06-03",
+    "conversion_suspension_end_date": "2026-05-27",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -32620,13 +32607,13 @@
   },
   "123090.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 25021085.1,
     "call_announce_date": null,
@@ -32637,7 +32624,7 @@
     "call_trigger_pct": 130.0,
     "close": 110.2117,
     "conversion_price": 34.52,
-    "conversion_suspension_end_date": "2026-02-24",
+    "conversion_suspension_end_date": "2021-06-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -32682,13 +32669,13 @@
   },
   "123091.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 127827824.1,
     "call_announce_date": null,
@@ -32699,9 +32686,9 @@
     "call_trigger_pct": 130.0,
     "close": 129.8356,
     "conversion_price": 14.99,
-    "conversion_suspension_end_date": "2026-12-22",
-    "conversion_suspension_start_date": "2026-09-01",
-    "conversion_suspension_status": "暂停转股",
+    "conversion_suspension_end_date": "2026-05-07",
+    "conversion_suspension_start_date": null,
+    "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
       0.003,
       0.006,
@@ -32744,13 +32731,13 @@
   },
   "123092.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 24905069.599999998,
     "call_announce_date": null,
@@ -32761,7 +32748,7 @@
     "call_trigger_pct": 130.0,
     "close": 117.2725,
     "conversion_price": 4.97,
-    "conversion_suspension_end_date": "2026-07-08",
+    "conversion_suspension_end_date": "2026-06-26",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -33443,13 +33430,13 @@
   },
   "123104.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 34345354.7,
     "call_announce_date": null,
@@ -33460,7 +33447,7 @@
     "call_trigger_pct": 130.0,
     "close": 126.9404,
     "conversion_price": 7.02,
-    "conversion_suspension_end_date": "2025-06-04",
+    "conversion_suspension_end_date": "2025-05-22",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -33740,13 +33727,13 @@
   },
   "123109.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 15682718.7,
     "call_announce_date": null,
@@ -33757,9 +33744,9 @@
     "call_trigger_pct": 130.0,
     "close": 122.4071,
     "conversion_price": 26.64,
-    "conversion_suspension_end_date": "2027-03-31",
-    "conversion_suspension_start_date": "2026-08-27",
-    "conversion_suspension_status": "暂停转股",
+    "conversion_suspension_end_date": "2021-10-08",
+    "conversion_suspension_start_date": null,
+    "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
       0.004,
       0.006,
@@ -33786,9 +33773,9 @@
     "outstanding_balance": 4.595034,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-09-17",
-    "putback_price": 101.34,
-    "putback_start_date": "2026-09-11",
+    "putback_end_date": "2025-06-09",
+    "putback_price": 100.432,
+    "putback_start_date": "2025-06-03",
     "redemption_price": 115.0,
     "sec_name": "昌红转债",
     "suspension_status": "交易",
@@ -33913,20 +33900,20 @@
   },
   "123112.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 405514964.8,
-    "call_announce_date": "2026-09-03",
+    "call_announce_date": null,
     "call_no_redemption_until": null,
     "call_redemption_date": "2026-09-17",
-    "call_redemption_price": 101.332,
-    "call_status": "已公告强赎",
+    "call_redemption_price": null,
+    "call_status": null,
     "call_trigger_pct": 130.0,
     "close": 159.1167,
     "conversion_price": 6.43,
@@ -33953,7 +33940,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2021-04-08",
-    "last_trading_date": "2026-09-14",
+    "last_trading_date": "2026-09-11",
     "listing_date": "2021-04-23",
     "maturity_date": "2027-04-08",
     "outstanding_balance": 1.617228,
@@ -33975,13 +33962,13 @@
   },
   "123113.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 17140874.400000002,
     "call_announce_date": null,
@@ -33992,7 +33979,7 @@
     "call_trigger_pct": 130.0,
     "close": 114.3051,
     "conversion_price": 31.69,
-    "conversion_suspension_end_date": "2026-07-31",
+    "conversion_suspension_end_date": "2021-10-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -34213,13 +34200,13 @@
   },
   "123117.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 48490362.0,
     "call_announce_date": null,
@@ -34230,7 +34217,7 @@
     "call_trigger_pct": 130.0,
     "close": 112.5429,
     "conversion_price": 38.15,
-    "conversion_suspension_end_date": "2026-08-14",
+    "conversion_suspension_end_date": "2021-06-29",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -34245,7 +34232,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2027-06-23",
-    "down_reset_block_until": "2026-11-27",
+    "down_reset_block_until": "2026-08-07",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正健帆转债转股价格的公告",
     "down_reset_p_scale": null,
@@ -34275,13 +34262,13 @@
   },
   "123118.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 734451636.1,
     "call_announce_date": null,
@@ -34292,7 +34279,7 @@
     "call_trigger_pct": 130.0,
     "close": 823.5644,
     "conversion_price": 10.33,
-    "conversion_suspension_end_date": "2027-07-06",
+    "conversion_suspension_end_date": "2026-06-03",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -34517,13 +34504,13 @@
   },
   "123122.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 46060877.1,
     "call_announce_date": null,
@@ -34534,7 +34521,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.3885,
     "conversion_price": 91.5,
-    "conversion_suspension_end_date": "2026-06-01",
+    "conversion_suspension_end_date": "2026-05-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -34635,13 +34622,13 @@
   },
   "123124.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 52202052.900000006,
     "call_announce_date": null,
@@ -34652,7 +34639,7 @@
     "call_trigger_pct": 130.0,
     "close": 140.8288,
     "conversion_price": 12.79,
-    "conversion_suspension_end_date": "2025-10-20",
+    "conversion_suspension_end_date": "2025-10-10",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -34753,23 +34740,23 @@
   },
   "123126.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-05-29",
+    "call_redemption_date": "2026-06-01",
     "call_redemption_price": 102.532,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
     "close": 176.5828,
     "conversion_price": 11.64,
-    "conversion_suspension_end_date": "2025-07-18",
+    "conversion_suspension_end_date": "2025-07-09",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -35167,13 +35154,13 @@
   },
   "123133.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 60133558.900000006,
     "call_announce_date": null,
@@ -35184,7 +35171,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.6171,
     "conversion_price": 15.0,
-    "conversion_suspension_end_date": "2026-06-02",
+    "conversion_suspension_end_date": "2022-06-28",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -35453,14 +35440,14 @@
   },
   "123138.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 7917051.6,
     "call_announce_date": null,
@@ -35471,7 +35458,7 @@
     "call_trigger_pct": 130.0,
     "close": 127.6361,
     "conversion_price": 26.53,
-    "conversion_suspension_end_date": "2028-03-01",
+    "conversion_suspension_end_date": "2022-09-08",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -35486,7 +35473,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2028-03-02",
-    "down_reset_block_until": "2027-02-28",
+    "down_reset_block_until": "2026-10-25",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正丝路转债转股价格的公告",
     "down_reset_p_scale": null,
@@ -35805,14 +35792,14 @@
   },
   "123144.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:31:16",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:31:16"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 27300233.0,
     "call_announce_date": null,
@@ -35823,7 +35810,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.1389,
     "conversion_price": 7.0,
-    "conversion_suspension_end_date": "2024-07-02",
+    "conversion_suspension_end_date": "2024-06-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -35838,7 +35825,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2028-04-11",
-    "down_reset_block_until": "2026-08-07",
+    "down_reset_block_until": "2026-04-13",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正裕兴转债转股价格的公告",
     "down_reset_p_scale": null,
@@ -36097,13 +36084,13 @@
   },
   "123149.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 64104853.8,
     "call_announce_date": null,
@@ -36114,7 +36101,7 @@
     "call_trigger_pct": 130.0,
     "close": 132.5438,
     "conversion_price": 2.71,
-    "conversion_suspension_end_date": "2026-06-22",
+    "conversion_suspension_end_date": "2026-06-11",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -36159,13 +36146,13 @@
   },
   "123150.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 29556270.2,
     "call_announce_date": null,
@@ -36176,7 +36163,7 @@
     "call_trigger_pct": 130.0,
     "close": 134.1329,
     "conversion_price": 11.6,
-    "conversion_suspension_end_date": "2026-09-03",
+    "conversion_suspension_end_date": "2026-05-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -36221,13 +36208,13 @@
   },
   "123151.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 14419092.7,
     "call_announce_date": null,
@@ -36238,7 +36225,7 @@
     "call_trigger_pct": 130.0,
     "close": 120.0459,
     "conversion_price": 27.55,
-    "conversion_suspension_end_date": "2026-08-20",
+    "conversion_suspension_end_date": "2026-07-01",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -36396,14 +36383,14 @@
   },
   "123154.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 27536503.2,
     "call_announce_date": null,
@@ -36414,7 +36401,7 @@
     "call_trigger_pct": 130.0,
     "close": 128.5765,
     "conversion_price": 16.0,
-    "conversion_suspension_end_date": "2026-07-27",
+    "conversion_suspension_end_date": "2023-02-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -36642,13 +36629,13 @@
   },
   "123158.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 290262305.1,
     "call_announce_date": null,
@@ -36659,7 +36646,7 @@
     "call_trigger_pct": 130.0,
     "close": 234.3151,
     "conversion_price": 40.49,
-    "conversion_suspension_end_date": "2026-04-27",
+    "conversion_suspension_end_date": "2023-03-30",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -36762,13 +36749,13 @@
   },
   "123160.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 48999946.1,
     "call_announce_date": null,
@@ -36779,7 +36766,7 @@
     "call_trigger_pct": 130.0,
     "close": 159.8479,
     "conversion_price": 19.7,
-    "conversion_suspension_end_date": "2025-06-27",
+    "conversion_suspension_end_date": "2025-06-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37051,13 +37038,13 @@
   },
   "123165.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 32409941.0,
     "call_announce_date": null,
@@ -37068,7 +37055,7 @@
     "call_trigger_pct": 130.0,
     "close": 134.2315,
     "conversion_price": 15.05,
-    "conversion_suspension_end_date": "2026-06-29",
+    "conversion_suspension_end_date": "2026-06-22",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37226,13 +37213,13 @@
   },
   "123168.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 24055797.299999997,
     "call_announce_date": null,
@@ -37243,7 +37230,7 @@
     "call_trigger_pct": 130.0,
     "close": 128.6504,
     "conversion_price": 10.74,
-    "conversion_suspension_end_date": "2028-11-22",
+    "conversion_suspension_end_date": "2025-05-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37401,14 +37388,14 @@
   },
   "123171.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 15036010.399999999,
     "call_announce_date": null,
@@ -37419,7 +37406,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.4778,
     "conversion_price": 27.08,
-    "conversion_suspension_end_date": "2026-07-16",
+    "conversion_suspension_end_date": "2026-07-07",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37464,13 +37451,13 @@
   },
   "123172.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:31:16",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:31:16"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 29020292.700000003,
     "call_announce_date": null,
@@ -37481,7 +37468,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.0978,
     "conversion_price": 14.91,
-    "conversion_suspension_end_date": "2026-06-03",
+    "conversion_suspension_end_date": "2026-05-27",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37496,7 +37483,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2028-12-15",
-    "down_reset_block_until": "2025-12-30",
+    "down_reset_block_until": "2024-08-15",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正漱玉转债转股价格的公告",
     "down_reset_p_scale": null,
@@ -37646,14 +37633,14 @@
   },
   "123175.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 16532373.4,
     "call_announce_date": null,
@@ -37664,7 +37651,7 @@
     "call_trigger_pct": 130.0,
     "close": 118.9329,
     "conversion_price": 20.4,
-    "conversion_suspension_end_date": "2025-12-10",
+    "conversion_suspension_end_date": "2025-12-03",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37709,13 +37696,13 @@
   },
   "123176.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1321687702.4,
     "call_announce_date": null,
@@ -37726,7 +37713,7 @@
     "call_trigger_pct": 130.0,
     "close": 466.2603,
     "conversion_price": 64.51,
-    "conversion_suspension_end_date": "2026-07-15",
+    "conversion_suspension_end_date": "2026-07-09",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37828,13 +37815,13 @@
   },
   "123178.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 113223843.9,
     "call_announce_date": null,
@@ -37845,7 +37832,7 @@
     "call_trigger_pct": 130.0,
     "close": 141.7507,
     "conversion_price": 13.34,
-    "conversion_suspension_end_date": "2026-01-19",
+    "conversion_suspension_end_date": "2026-01-12",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -37890,13 +37877,13 @@
   },
   "123179.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 11535917.5,
     "call_announce_date": null,
@@ -37907,7 +37894,7 @@
     "call_trigger_pct": 130.0,
     "close": 122.9708,
     "conversion_price": 94.64,
-    "conversion_suspension_end_date": "2026-06-25",
+    "conversion_suspension_end_date": "2026-06-16",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38126,13 +38113,13 @@
   },
   "123183.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 41019120.1,
     "call_announce_date": null,
@@ -38143,7 +38130,7 @@
     "call_trigger_pct": 130.0,
     "close": 129.9466,
     "conversion_price": 11.63,
-    "conversion_suspension_end_date": "2026-04-27",
+    "conversion_suspension_end_date": "2026-04-20",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38359,24 +38346,24 @@
   },
   "123187.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 98758592.2,
     "call_announce_date": null,
-    "call_no_redemption_until": "2027-02-21",
+    "call_no_redemption_until": "2026-07-31",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 212.2959,
     "conversion_price": 21.77,
-    "conversion_suspension_end_date": "2029-04-03",
+    "conversion_suspension_end_date": "2025-02-24",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38481,14 +38468,14 @@
   },
   "123189.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 48852789.599999994,
     "call_announce_date": null,
@@ -38499,7 +38486,7 @@
     "call_trigger_pct": 130.0,
     "close": 141.7319,
     "conversion_price": 15.18,
-    "conversion_suspension_end_date": "2029-04-05",
+    "conversion_suspension_end_date": "2023-04-12",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38657,13 +38644,13 @@
   },
   "123192.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 17411112.700000003,
     "call_announce_date": null,
@@ -38674,7 +38661,7 @@
     "call_trigger_pct": 130.0,
     "close": 125.2089,
     "conversion_price": 17.32,
-    "conversion_suspension_end_date": "2026-06-18",
+    "conversion_suspension_end_date": "2026-06-10",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38781,13 +38768,13 @@
   },
   "123194.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 54415926.4,
     "call_announce_date": null,
@@ -38798,7 +38785,7 @@
     "call_trigger_pct": 130.0,
     "close": 138.423,
     "conversion_price": 24.79,
-    "conversion_suspension_end_date": "2029-04-13",
+    "conversion_suspension_end_date": "2026-05-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38843,13 +38830,13 @@
   },
   "123195.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 49994360.6,
     "call_announce_date": null,
@@ -38860,7 +38847,7 @@
     "call_trigger_pct": 130.0,
     "close": 174.3392,
     "conversion_price": 59.21,
-    "conversion_suspension_end_date": "2029-04-16",
+    "conversion_suspension_end_date": "2026-06-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38905,13 +38892,13 @@
   },
   "123196.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 17347831.0,
     "call_announce_date": null,
@@ -38922,7 +38909,7 @@
     "call_trigger_pct": 130.0,
     "close": 128.0034,
     "conversion_price": 21.91,
-    "conversion_suspension_end_date": "2029-04-17",
+    "conversion_suspension_end_date": "2026-05-22",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -38937,7 +38924,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2029-04-18",
-    "down_reset_block_until": "2026-12-01",
+    "down_reset_block_until": "2026-08-11",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正“正元转02”转股价格的公告",
     "down_reset_p_scale": null,
@@ -39024,12 +39011,11 @@
   },
   "123198.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -39040,7 +39026,7 @@
     "call_trigger_pct": 130.0,
     "close": 114.1836,
     "conversion_price": 7.55,
-    "conversion_suspension_end_date": "2029-06-07",
+    "conversion_suspension_end_date": "2025-08-22",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -39083,13 +39069,13 @@
   },
   "123199.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 15591353.5,
     "call_announce_date": null,
@@ -39100,7 +39086,7 @@
     "call_trigger_pct": 130.0,
     "close": 141.4215,
     "conversion_price": 13.0,
-    "conversion_suspension_end_date": "2026-06-09",
+    "conversion_suspension_end_date": "2026-06-02",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -39541,25 +39527,25 @@
   },
   "123207.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 112753546.2,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-09-16",
+    "call_no_redemption_until": "2026-05-26",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 223.2077,
     "conversion_price": 10.44,
-    "conversion_suspension_end_date": "2029-07-20",
+    "conversion_suspension_end_date": "2024-01-29",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -39588,9 +39574,9 @@
     "outstanding_balance": 1.454954,
     "put_obs_months": 48.0,
     "put_trigger_pct": 70.0,
-    "putback_end_date": "2026-07-15",
-    "putback_price": 101.064,
-    "putback_start_date": "2026-07-09",
+    "putback_end_date": "2025-09-26",
+    "putback_price": 100.19,
+    "putback_start_date": "2025-09-22",
     "redemption_price": 115.0,
     "sec_name": "冠中转债",
     "suspension_status": "交易",
@@ -39660,13 +39646,13 @@
   },
   "123209.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 25610679.9,
     "call_announce_date": null,
@@ -39677,7 +39663,7 @@
     "call_trigger_pct": 130.0,
     "close": 168.8333,
     "conversion_price": 17.52,
-    "conversion_suspension_end_date": "2025-07-18",
+    "conversion_suspension_end_date": "2024-02-01",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -39779,13 +39765,13 @@
   },
   "123211.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 25578778.2,
     "call_announce_date": null,
@@ -39796,7 +39782,7 @@
     "call_trigger_pct": 130.0,
     "close": 156.1344,
     "conversion_price": 9.2,
-    "conversion_suspension_end_date": "2026-05-18",
+    "conversion_suspension_end_date": "2026-05-08",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -39898,13 +39884,13 @@
   },
   "123213.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1038366234.8,
     "call_announce_date": null,
@@ -39915,7 +39901,7 @@
     "call_trigger_pct": 130.0,
     "close": 310.7485,
     "conversion_price": 7.1,
-    "conversion_suspension_end_date": "2029-07-27",
+    "conversion_suspension_end_date": "2024-02-05",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -39960,13 +39946,13 @@
   },
   "123214.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 12896208.2,
     "call_announce_date": null,
@@ -39977,7 +39963,7 @@
     "call_trigger_pct": 130.0,
     "close": 131.8398,
     "conversion_price": 6.62,
-    "conversion_suspension_end_date": "2026-05-26",
+    "conversion_suspension_end_date": "2026-05-18",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40085,14 +40071,14 @@
   },
   "123216.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 33004040.3,
     "call_announce_date": null,
@@ -40103,7 +40089,7 @@
     "call_trigger_pct": 130.0,
     "close": 124.3193,
     "conversion_price": 6.61,
-    "conversion_suspension_end_date": "2024-10-21",
+    "conversion_suspension_end_date": "2024-02-19",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40317,13 +40303,13 @@
   },
   "123220.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 14845991.9,
     "call_announce_date": null,
@@ -40334,7 +40320,7 @@
     "call_trigger_pct": 130.0,
     "close": 131.4448,
     "conversion_price": 8.85,
-    "conversion_suspension_end_date": "2029-08-17",
+    "conversion_suspension_end_date": "2026-05-22",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40436,13 +40422,13 @@
   },
   "123222.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 13884359.9,
     "call_announce_date": null,
@@ -40453,7 +40439,7 @@
     "call_trigger_pct": 130.0,
     "close": 149.6664,
     "conversion_price": 16.46,
-    "conversion_suspension_end_date": "2026-05-20",
+    "conversion_suspension_end_date": "2026-05-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40498,13 +40484,13 @@
   },
   "123223.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 6118948.8,
     "call_announce_date": null,
@@ -40515,7 +40501,7 @@
     "call_trigger_pct": 130.0,
     "close": 134.2446,
     "conversion_price": 14.55,
-    "conversion_suspension_end_date": "2026-05-28",
+    "conversion_suspension_end_date": "2024-03-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40560,13 +40546,13 @@
   },
   "123224.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 0.0,
     "call_announce_date": null,
@@ -40577,7 +40563,7 @@
     "call_trigger_pct": 130.0,
     "close": 138.9345,
     "conversion_price": 28.17,
-    "conversion_suspension_end_date": "2026-05-21",
+    "conversion_suspension_end_date": "2026-05-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40622,13 +40608,13 @@
   },
   "123225.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 46035822.099999994,
     "call_announce_date": null,
@@ -40639,7 +40625,7 @@
     "call_trigger_pct": 130.0,
     "close": 140.8411,
     "conversion_price": 27.34,
-    "conversion_suspension_end_date": "2026-06-10",
+    "conversion_suspension_end_date": "2026-06-03",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -40852,14 +40838,14 @@
   },
   "123229.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 10304755.7,
     "call_announce_date": null,
@@ -40870,7 +40856,7 @@
     "call_trigger_pct": 130.0,
     "close": 132.1667,
     "conversion_price": 9.95,
-    "conversion_suspension_end_date": "2026-06-18",
+    "conversion_suspension_end_date": "2026-06-05",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -41198,14 +41184,14 @@
   },
   "123235.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1972006430.0,
     "call_announce_date": null,
@@ -41216,7 +41202,7 @@
     "call_trigger_pct": 130.0,
     "close": 152.8723,
     "conversion_price": 21.31,
-    "conversion_suspension_end_date": "2025-08-14",
+    "conversion_suspension_end_date": "2025-08-07",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -41261,17 +41247,17 @@
   },
   "123236.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-26",
     "call_no_redemption_until": null,
-    "call_redemption_date": "2026-05-27",
+    "call_redemption_date": "2026-05-28",
     "call_redemption_price": 100.344,
     "call_status": "已公告强赎",
     "call_trigger_pct": 130.0,
@@ -41319,24 +41305,24 @@
   },
   "123237.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 20510415.0,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-02-17",
+    "call_no_redemption_until": "2025-06-18",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 136.9305,
     "conversion_price": 13.46,
-    "conversion_suspension_end_date": "2030-01-03",
+    "conversion_suspension_end_date": "2025-09-08",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -41550,24 +41536,24 @@
   },
   "123241.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1795879434.8,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-11-28",
+    "call_no_redemption_until": "2026-08-07",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 844.9096,
     "conversion_price": 30.8,
-    "conversion_suspension_end_date": "2026-05-28",
+    "conversion_suspension_end_date": "2026-05-19",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -41786,17 +41772,17 @@
   },
   "123245.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 869828342.7,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-09-23",
+    "call_no_redemption_until": "2026-06-01",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
@@ -41904,13 +41890,13 @@
   },
   "123247.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1039828562.2,
     "call_announce_date": null,
@@ -41921,7 +41907,7 @@
     "call_trigger_pct": 130.0,
     "close": 205.9644,
     "conversion_price": 11.15,
-    "conversion_suspension_end_date": "2030-08-15",
+    "conversion_suspension_end_date": "2026-07-03",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -42077,13 +42063,13 @@
   },
   "123250.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 10127558.5,
     "call_announce_date": null,
@@ -42094,7 +42080,7 @@
     "call_trigger_pct": 130.0,
     "close": 125.8257,
     "conversion_price": 79.66,
-    "conversion_suspension_end_date": "2030-11-06",
+    "conversion_suspension_end_date": "2025-10-10",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -42139,12 +42125,11 @@
   },
   "123251.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -42155,7 +42140,7 @@
     "call_trigger_pct": 130.0,
     "close": 349.8906,
     "conversion_price": 22.24,
-    "conversion_suspension_end_date": "2026-05-28",
+    "conversion_suspension_end_date": "2026-05-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -42380,13 +42365,13 @@
   },
   "123255.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1315534016.6,
     "call_announce_date": null,
@@ -42397,7 +42382,7 @@
     "call_trigger_pct": 130.0,
     "close": 396.8367,
     "conversion_price": 28.38,
-    "conversion_suspension_end_date": "2031-04-01",
+    "conversion_suspension_end_date": "2025-10-09",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -42558,13 +42543,13 @@
   },
   "123258.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 2661717111.8,
     "call_announce_date": null,
@@ -42575,7 +42560,7 @@
     "call_trigger_pct": 130.0,
     "close": 354.9179,
     "conversion_price": 54.36,
-    "conversion_suspension_end_date": "2031-08-27",
+    "conversion_suspension_end_date": "2026-05-21",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -42620,13 +42605,13 @@
   },
   "123259.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 44649250.099999994,
     "call_announce_date": null,
@@ -42637,7 +42622,7 @@
     "call_trigger_pct": 130.0,
     "close": 154.9818,
     "conversion_price": 72.41,
-    "conversion_suspension_end_date": "2026-05-28",
+    "conversion_suspension_end_date": "2026-05-20",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -43238,13 +43223,12 @@
   },
   "123269.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 216393168.4,
     "call_announce_date": null,
@@ -43270,9 +43254,9 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2032-04-20",
-    "down_reset_block_until": "2026-11-24",
+    "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
-    "down_reset_note": "关于不向下修正金杨转债转股价格的公告",
+    "down_reset_note": null,
     "down_reset_p_scale": null,
     "down_reset_trigger_pct": 85.0,
     "face_value": 100.0,
@@ -43485,13 +43469,13 @@
   },
   "123273.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 474433953.7,
     "call_announce_date": null,
@@ -43536,7 +43520,7 @@
     "putback_start_date": null,
     "redemption_price": 114.0,
     "sec_name": "三江转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2026-07-03",
     "trading_status": "tradable",
     "underlying_code": "301059.SZ",
@@ -46395,12 +46379,11 @@
   },
   "127017.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -46411,7 +46394,7 @@
     "call_trigger_pct": 130.0,
     "close": 110.6573,
     "conversion_price": 8.53,
-    "conversion_suspension_end_date": "2026-06-02",
+    "conversion_suspension_end_date": "2025-12-16",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -46808,12 +46791,11 @@
   },
   "127024.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -46824,7 +46806,7 @@
     "call_trigger_pct": 130.0,
     "close": 166.8541,
     "conversion_price": 7.67,
-    "conversion_suspension_end_date": "2025-07-28",
+    "conversion_suspension_end_date": "2025-07-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -46869,13 +46851,13 @@
   },
   "127025.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 40938660.300000004,
     "call_announce_date": null,
@@ -46886,7 +46868,7 @@
     "call_trigger_pct": 130.0,
     "close": 104.1076,
     "conversion_price": 12.92,
-    "conversion_suspension_end_date": "2025-12-26",
+    "conversion_suspension_end_date": "2025-11-05",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -46931,12 +46913,12 @@
   },
   "127026.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -46970,7 +46952,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2020-12-08",
-    "last_trading_date": "2026-06-10",
+    "last_trading_date": "2026-06-09",
     "listing_date": "2021-01-14",
     "maturity_date": "2026-12-08",
     "outstanding_balance": 0.0,
@@ -46992,14 +46974,14 @@
   },
   "127027.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 34357622.4,
     "call_announce_date": null,
@@ -47010,7 +46992,7 @@
     "call_trigger_pct": 130.0,
     "close": 110.1844,
     "conversion_price": 2.93,
-    "conversion_suspension_end_date": "2026-12-09",
+    "conversion_suspension_end_date": "2026-04-02",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -47044,7 +47026,7 @@
     "putback_start_date": null,
     "redemption_price": 110.0,
     "sec_name": "能化转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2021-01-22",
     "trading_status": "tradable",
     "underlying_code": "000552.SZ",
@@ -47234,13 +47216,13 @@
   },
   "127031.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 25677223.5,
     "call_announce_date": null,
@@ -47251,7 +47233,7 @@
     "call_trigger_pct": 130.0,
     "close": 122.1877,
     "conversion_price": 16.79,
-    "conversion_suspension_end_date": "2026-08-26",
+    "conversion_suspension_end_date": "2026-08-18",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -47354,14 +47336,14 @@
   },
   "127033.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 0.0,
     "call_announce_date": null,
@@ -47412,18 +47394,18 @@
     "underlying_code": "002822.SZ",
     "underlying_name": "ST中装",
     "underlying_pct_change": -1.2903225806451548,
-    "underlying_status": null,
-    "underlying_trade_status": null
+    "underlying_status": "是",
+    "underlying_trade_status": "交易"
   },
   "127034.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 48620673.1,
     "call_announce_date": null,
@@ -47434,7 +47416,7 @@
     "call_trigger_pct": 130.0,
     "close": 121.2055,
     "conversion_price": 11.21,
-    "conversion_suspension_end_date": "2026-06-04",
+    "conversion_suspension_end_date": "2026-05-28",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -47595,13 +47577,13 @@
   },
   "127037.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 314439077.1,
     "call_announce_date": null,
@@ -47612,7 +47594,7 @@
     "call_trigger_pct": 130.0,
     "close": 541.7892,
     "conversion_price": 10.27,
-    "conversion_suspension_end_date": "2026-05-22",
+    "conversion_suspension_end_date": "2026-05-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -47657,13 +47639,13 @@
   },
   "127038.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 55535398.4,
     "call_announce_date": null,
@@ -47674,7 +47656,7 @@
     "call_trigger_pct": 130.0,
     "close": 116.2936,
     "conversion_price": 97.01,
-    "conversion_suspension_end_date": "2027-06-09",
+    "conversion_suspension_end_date": "2021-12-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -47708,7 +47690,7 @@
     "putback_start_date": "2025-07-23",
     "redemption_price": 110.0,
     "sec_name": "国微转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2021-07-14",
     "trading_status": "tradable",
     "underlying_code": "002049.SZ",
@@ -47778,13 +47760,13 @@
   },
   "127040.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 41029437.2,
     "call_announce_date": null,
@@ -47795,7 +47777,7 @@
     "call_trigger_pct": 130.0,
     "close": 122.8296,
     "conversion_price": 7.35,
-    "conversion_suspension_end_date": "2026-06-08",
+    "conversion_suspension_end_date": "2022-01-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -47840,12 +47822,11 @@
   },
   "127041.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -47856,7 +47837,7 @@
     "call_trigger_pct": 130.0,
     "close": 113.7545,
     "conversion_price": 16.4,
-    "conversion_suspension_end_date": "2026-07-11",
+    "conversion_suspension_end_date": "2022-01-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48017,14 +47998,14 @@
   },
   "127044.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 31790158.5,
     "call_announce_date": null,
@@ -48035,7 +48016,7 @@
     "call_trigger_pct": 130.0,
     "close": 118.4288,
     "conversion_price": 19.76,
-    "conversion_suspension_end_date": "2026-06-18",
+    "conversion_suspension_end_date": "2026-06-10",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48080,14 +48061,14 @@
   },
   "127045.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 80213404.1,
     "call_announce_date": null,
@@ -48098,7 +48079,7 @@
     "call_trigger_pct": 130.0,
     "close": 120.2298,
     "conversion_price": 43.32,
-    "conversion_suspension_end_date": "2026-05-26",
+    "conversion_suspension_end_date": "2021-08-20",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48143,13 +48124,13 @@
   },
   "127046.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 30205098.0,
     "call_announce_date": null,
@@ -48160,7 +48141,7 @@
     "call_trigger_pct": 130.0,
     "close": 127.1809,
     "conversion_price": 20.33,
-    "conversion_suspension_end_date": "2027-09-28",
+    "conversion_suspension_end_date": "2026-05-22",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48205,14 +48186,14 @@
   },
   "127047.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 47787926.4,
     "call_announce_date": null,
@@ -48223,7 +48204,7 @@
     "call_trigger_pct": 130.0,
     "close": 137.1223,
     "conversion_price": 5.1,
-    "conversion_suspension_end_date": "2025-08-21",
+    "conversion_suspension_end_date": "2025-08-14",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48257,7 +48238,7 @@
     "putback_start_date": "2025-08-14",
     "redemption_price": 115.0,
     "sec_name": "帝欧转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2021-11-26",
     "trading_status": "tradable",
     "underlying_code": "002798.SZ",
@@ -48323,13 +48304,13 @@
   },
   "127049.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 468199181.8,
     "call_announce_date": null,
@@ -48342,7 +48323,7 @@
     "conversion_price": 10.59,
     "conversion_suspension_end_date": "2026-09-02",
     "conversion_suspension_start_date": "2021-11-08",
-    "conversion_suspension_status": "恢复转股",
+    "conversion_suspension_status": "暂停转股",
     "coupon_rates": [
       0.002,
       0.004,
@@ -48355,7 +48336,7 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2027-11-02",
-    "down_reset_block_until": "2027-01-02",
+    "down_reset_block_until": "2026-08-12",
     "down_reset_cooldown_months": null,
     "down_reset_note": "关于不向下修正希望转2转股价格的公告",
     "down_reset_p_scale": null,
@@ -48563,13 +48544,13 @@
   },
   "127053.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 615786729.1999999,
     "call_announce_date": null,
@@ -48580,7 +48561,7 @@
     "call_trigger_pct": 130.0,
     "close": 189.2217,
     "conversion_price": 17.23,
-    "conversion_suspension_end_date": "2028-01-23",
+    "conversion_suspension_end_date": "2022-07-28",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48687,13 +48668,13 @@
   },
   "127055.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 120881662.0,
     "call_announce_date": null,
@@ -48704,7 +48685,7 @@
     "call_trigger_pct": 130.0,
     "close": 184.9699,
     "conversion_price": 18.5,
-    "conversion_suspension_end_date": "2024-12-09",
+    "conversion_suspension_end_date": "2022-08-29",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48749,13 +48730,13 @@
   },
   "127056.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 54723523.699999996,
     "call_announce_date": null,
@@ -48766,7 +48747,7 @@
     "call_trigger_pct": 130.0,
     "close": 128.342,
     "conversion_price": 13.89,
-    "conversion_suspension_end_date": "2028-02-24",
+    "conversion_suspension_end_date": "2022-09-05",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48924,13 +48905,13 @@
   },
   "127059.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 23088961.5,
     "call_announce_date": null,
@@ -48941,7 +48922,7 @@
     "call_trigger_pct": 130.0,
     "close": 130.9464,
     "conversion_price": 8.11,
-    "conversion_suspension_end_date": "2026-06-05",
+    "conversion_suspension_end_date": "2022-04-06",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -48986,13 +48967,13 @@
   },
   "127060.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 20329195.0,
     "call_announce_date": null,
@@ -49003,7 +48984,7 @@
     "call_trigger_pct": 130.0,
     "close": 129.2624,
     "conversion_price": 13.8,
-    "conversion_suspension_end_date": "2026-06-22",
+    "conversion_suspension_end_date": "2022-04-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -49048,14 +49029,14 @@
   },
   "127061.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 113029404.5,
     "call_announce_date": null,
@@ -49066,7 +49047,7 @@
     "call_trigger_pct": 130.0,
     "close": 114.8907,
     "conversion_price": 3.47,
-    "conversion_suspension_end_date": "2028-04-19",
+    "conversion_suspension_end_date": "2022-10-26",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -49111,13 +49092,13 @@
   },
   "127062.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 16203893.700000001,
     "call_announce_date": null,
@@ -49128,7 +49109,7 @@
     "call_trigger_pct": 130.0,
     "close": 125.4877,
     "conversion_price": 7.56,
-    "conversion_suspension_end_date": "2026-06-18",
+    "conversion_suspension_end_date": "2022-04-27",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -49348,12 +49329,12 @@
   },
   "127066.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -49385,7 +49366,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2022-07-08",
-    "last_trading_date": "2026-06-10",
+    "last_trading_date": "2026-06-09",
     "listing_date": "2022-08-03",
     "maturity_date": "2028-07-08",
     "outstanding_balance": 0.0,
@@ -49407,13 +49388,13 @@
   },
   "127067.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 721378272.4,
     "call_announce_date": "2026-08-25",
@@ -49424,7 +49405,7 @@
     "call_trigger_pct": 130.0,
     "close": 188.8387,
     "conversion_price": 10.32,
-    "conversion_suspension_end_date": "2026-06-15",
+    "conversion_suspension_end_date": "2026-06-05",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -49468,13 +49449,13 @@
   },
   "127068.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 7367872.2,
     "call_announce_date": null,
@@ -49485,7 +49466,7 @@
     "call_trigger_pct": 130.0,
     "close": 125.1958,
     "conversion_price": 10.0,
-    "conversion_suspension_end_date": "2026-06-04",
+    "conversion_suspension_end_date": "2026-05-27",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -49530,13 +49511,13 @@
   },
   "127069.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 13582186.2,
     "call_announce_date": null,
@@ -49547,7 +49528,7 @@
     "call_trigger_pct": 130.0,
     "close": 129.8526,
     "conversion_price": 43.71,
-    "conversion_suspension_end_date": "2026-05-28",
+    "conversion_suspension_end_date": "2026-05-20",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -49592,13 +49573,13 @@
   },
   "127070.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 923540990.0,
     "call_announce_date": null,
@@ -49609,7 +49590,7 @@
     "call_trigger_pct": 130.0,
     "close": 331.9318,
     "conversion_price": 10.56,
-    "conversion_suspension_end_date": "2028-08-16",
+    "conversion_suspension_end_date": "2026-06-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50062,13 +50043,13 @@
   },
   "127078.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 63723963.1,
     "call_announce_date": null,
@@ -50079,7 +50060,7 @@
     "call_trigger_pct": 130.0,
     "close": 154.7277,
     "conversion_price": 6.11,
-    "conversion_suspension_end_date": "2026-07-31",
+    "conversion_suspension_end_date": "2026-07-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50124,12 +50105,11 @@
   },
   "127079.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -50140,7 +50120,7 @@
     "call_trigger_pct": 130.0,
     "close": 271.6222,
     "conversion_price": 30.48,
-    "conversion_suspension_end_date": "2025-06-12",
+    "conversion_suspension_end_date": "2025-05-30",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50185,14 +50165,14 @@
   },
   "127080.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 439786898.5,
     "call_announce_date": null,
@@ -50237,13 +50217,13 @@
     "putback_start_date": null,
     "redemption_price": 115.0,
     "sec_name": "声迅转债",
-    "suspension_status": null,
+    "suspension_status": "交易",
     "tradable_date": "2023-02-10",
     "trading_status": "tradable",
     "underlying_code": "003004.SZ",
     "underlying_name": "声迅股份",
     "underlying_pct_change": 0.9899628763921229,
-    "underlying_status": null,
+    "underlying_status": "否",
     "underlying_trade_status": "交易"
   },
   "127081.SZ": {
@@ -50305,13 +50285,13 @@
   },
   "127082.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 34711733.6,
     "call_announce_date": null,
@@ -50322,7 +50302,7 @@
     "call_trigger_pct": 130.0,
     "close": 135.649,
     "conversion_price": 5.22,
-    "conversion_suspension_end_date": "2029-03-08",
+    "conversion_suspension_end_date": "2026-06-24",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50367,14 +50347,14 @@
   },
   "127083.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 28881281.1,
     "call_announce_date": null,
@@ -50385,7 +50365,7 @@
     "call_trigger_pct": 130.0,
     "close": 118.9457,
     "conversion_price": 7.42,
-    "conversion_suspension_end_date": "2026-07-06",
+    "conversion_suspension_end_date": "2026-06-24",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50430,13 +50410,13 @@
   },
   "127084.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 68657235.0,
     "call_announce_date": null,
@@ -50447,7 +50427,7 @@
     "call_trigger_pct": 130.0,
     "close": 140.382,
     "conversion_price": 6.98,
-    "conversion_suspension_end_date": "2029-03-26",
+    "conversion_suspension_end_date": "2023-10-09",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50492,13 +50472,13 @@
   },
   "127085.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 56879678.9,
     "call_announce_date": null,
@@ -50509,7 +50489,7 @@
     "call_trigger_pct": 130.0,
     "close": 121.3497,
     "conversion_price": 11.53,
-    "conversion_suspension_end_date": "2029-04-10",
+    "conversion_suspension_end_date": "2023-10-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50667,13 +50647,13 @@
   },
   "127088.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 38545421.8,
     "call_announce_date": null,
@@ -50684,7 +50664,7 @@
     "call_trigger_pct": 130.0,
     "close": 179.7658,
     "conversion_price": 16.61,
-    "conversion_suspension_end_date": "2029-07-02",
+    "conversion_suspension_end_date": "2026-07-07",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50791,12 +50771,12 @@
   },
   "127090.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": "2026-05-27",
@@ -50807,7 +50787,7 @@
     "call_trigger_pct": 130.0,
     "close": 140.5521,
     "conversion_price": 25.3,
-    "conversion_suspension_end_date": "2026-05-26",
+    "conversion_suspension_end_date": "2026-05-18",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -50827,7 +50807,7 @@
     "face_value": 100.0,
     "is_tradable": true,
     "issue_date": "2023-07-24",
-    "last_trading_date": "2026-06-11",
+    "last_trading_date": "2026-06-10",
     "listing_date": "2023-08-15",
     "maturity_date": "2029-07-24",
     "outstanding_balance": 0.0,
@@ -50967,14 +50947,14 @@
   },
   "127093.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 4763711.2,
     "call_announce_date": null,
@@ -50985,7 +50965,7 @@
     "call_trigger_pct": 130.0,
     "close": 129.1708,
     "conversion_price": 8.3,
-    "conversion_suspension_end_date": "2026-04-08",
+    "conversion_suspension_end_date": "2024-04-23",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51000,9 +50980,9 @@
     "credit_rating_outlook": null,
     "credit_watch_status": null,
     "delisting_date": "2029-10-17",
-    "down_reset_block_until": "2027-01-01",
+    "down_reset_block_until": null,
     "down_reset_cooldown_months": null,
-    "down_reset_note": "关于不向下修正“章鼓转债”转股价格的公告",
+    "down_reset_note": null,
     "down_reset_p_scale": null,
     "down_reset_trigger_pct": 85.0,
     "face_value": 100.0,
@@ -51025,7 +51005,7 @@
     "underlying_code": "002598.SZ",
     "underlying_name": "ST章鼓",
     "underlying_pct_change": -0.709219858156025,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "是",
     "underlying_trade_status": "交易"
   },
   "127094.SZ": {
@@ -51087,13 +51067,13 @@
   },
   "127095.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 27362351.0,
     "call_announce_date": null,
@@ -51104,7 +51084,7 @@
     "call_trigger_pct": 130.0,
     "close": 147.1376,
     "conversion_price": 8.83,
-    "conversion_suspension_end_date": "2029-10-17",
+    "conversion_suspension_end_date": "2026-07-13",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51149,24 +51129,24 @@
   },
   "127096.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 1077987442.8999999,
     "call_announce_date": null,
-    "call_no_redemption_until": "2026-10-03",
+    "call_no_redemption_until": "2026-06-11",
     "call_redemption_date": null,
     "call_redemption_price": null,
     "call_status": "不强赎",
     "call_trigger_pct": 130.0,
     "close": 544.9562,
     "conversion_price": 13.2,
-    "conversion_suspension_end_date": "2025-07-07",
+    "conversion_suspension_end_date": "2025-07-01",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51267,14 +51247,14 @@
   },
   "127098.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 17454392.5,
     "call_announce_date": null,
@@ -51285,7 +51265,7 @@
     "call_trigger_pct": 130.0,
     "close": 125.1277,
     "conversion_price": 42.0,
-    "conversion_suspension_end_date": "2029-11-23",
+    "conversion_suspension_end_date": "2024-05-30",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51330,13 +51310,13 @@
   },
   "127099.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 48366735.699999996,
     "call_announce_date": null,
@@ -51347,7 +51327,7 @@
     "call_trigger_pct": 130.0,
     "close": 135.6722,
     "conversion_price": 15.33,
-    "conversion_suspension_end_date": "2026-05-26",
+    "conversion_suspension_end_date": "2026-05-14",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51504,13 +51484,13 @@
   },
   "127102.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 154031006.9,
     "call_announce_date": null,
@@ -51521,7 +51501,7 @@
     "call_trigger_pct": 130.0,
     "close": 122.415,
     "conversion_price": 10.17,
-    "conversion_suspension_end_date": "2029-12-24",
+    "conversion_suspension_end_date": "2025-05-27",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51566,13 +51546,13 @@
   },
   "127103.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 61613571.7,
     "call_announce_date": null,
@@ -51583,7 +51563,7 @@
     "call_trigger_pct": 130.0,
     "close": 140.5479,
     "conversion_price": 5.59,
-    "conversion_suspension_end_date": "2026-06-04",
+    "conversion_suspension_end_date": "2026-05-27",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51628,13 +51608,13 @@
   },
   "127104.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 20350965.400000002,
     "call_announce_date": null,
@@ -51645,9 +51625,9 @@
     "call_trigger_pct": 130.0,
     "close": 143.4182,
     "conversion_price": 19.58,
-    "conversion_suspension_end_date": "2030-01-24",
-    "conversion_suspension_start_date": "2026-09-04",
-    "conversion_suspension_status": "暂停转股",
+    "conversion_suspension_end_date": "2024-07-31",
+    "conversion_suspension_start_date": null,
+    "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
       0.003,
       0.005,
@@ -51690,13 +51670,13 @@
   },
   "127105.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 14422606.4,
     "call_announce_date": null,
@@ -51707,7 +51687,7 @@
     "call_trigger_pct": 130.0,
     "close": 133.2419,
     "conversion_price": 5.8,
-    "conversion_suspension_end_date": "2025-06-09",
+    "conversion_suspension_end_date": "2025-05-30",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51862,13 +51842,13 @@
   },
   "127108.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 51302926.3,
     "call_announce_date": null,
@@ -51879,7 +51859,7 @@
     "call_trigger_pct": 130.0,
     "close": 125.2752,
     "conversion_price": 5.54,
-    "conversion_suspension_end_date": "2026-07-08",
+    "conversion_suspension_end_date": "2026-06-25",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -51986,13 +51966,13 @@
   },
   "127110.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 119931014.80000001,
     "call_announce_date": null,
@@ -52003,7 +51983,7 @@
     "call_trigger_pct": 130.0,
     "close": 138.7741,
     "conversion_price": 3.58,
-    "conversion_suspension_end_date": "2026-07-10",
+    "conversion_suspension_end_date": "2026-06-30",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -52048,13 +52028,13 @@
   },
   "127111.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 71617109.0,
     "call_announce_date": null,
@@ -52065,7 +52045,7 @@
     "call_trigger_pct": 130.0,
     "close": 141.4016,
     "conversion_price": 19.19,
-    "conversion_suspension_end_date": "2026-06-10",
+    "conversion_suspension_end_date": "2026-06-01",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -54298,12 +54278,12 @@
   },
   "128044.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 0.0,
     "call_announce_date": null,
@@ -54353,7 +54333,7 @@
     "underlying_code": "002717.SZ",
     "underlying_name": "*ST岭南",
     "underlying_pct_change": 0.0,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "是",
     "underlying_trade_status": "交易"
   },
   "128045.SZ": {
@@ -58615,12 +58595,12 @@
   },
   "128119.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -58631,7 +58611,7 @@
     "call_trigger_pct": 130.0,
     "close": 69.8699,
     "conversion_price": 4.2,
-    "conversion_suspension_end_date": "2026-04-30",
+    "conversion_suspension_end_date": "2021-01-18",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -58671,7 +58651,7 @@
     "underlying_code": "002726.SZ",
     "underlying_name": "ST龙大",
     "underlying_pct_change": -0.7692307692307663,
-    "underlying_status": "ST/退市风险",
+    "underlying_status": "是",
     "underlying_trade_status": "交易"
   },
   "128120.SZ": {
@@ -58736,12 +58716,11 @@
   },
   "128121.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -58752,7 +58731,7 @@
     "call_trigger_pct": 130.0,
     "close": 106.1918,
     "conversion_price": 12.65,
-    "conversion_suspension_end_date": "2025-09-18",
+    "conversion_suspension_end_date": "2020-08-07",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -58914,12 +58893,11 @@
   },
   "128124.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -58930,7 +58908,7 @@
     "call_trigger_pct": 130.0,
     "close": 103.8921,
     "conversion_price": 20.64,
-    "conversion_suspension_end_date": "2026-07-27",
+    "conversion_suspension_end_date": "2021-02-03",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -58975,12 +58953,11 @@
   },
   "128125.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -58991,7 +58968,7 @@
     "call_trigger_pct": 130.0,
     "close": 110.5425,
     "conversion_price": 14.19,
-    "conversion_suspension_end_date": "2026-07-29",
+    "conversion_suspension_end_date": "2025-05-26",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -59151,12 +59128,11 @@
   },
   "128128.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -59167,7 +59143,7 @@
     "call_trigger_pct": 130.0,
     "close": 109.8431,
     "conversion_price": 5.37,
-    "conversion_suspension_end_date": "2025-06-13",
+    "conversion_suspension_end_date": "2025-06-04",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -59508,13 +59484,13 @@
   },
   "128134.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 73558659.4,
     "call_announce_date": null,
@@ -59525,7 +59501,7 @@
     "call_trigger_pct": 130.0,
     "close": 115.5147,
     "conversion_price": 17.49,
-    "conversion_suspension_end_date": "2026-07-07",
+    "conversion_suspension_end_date": "2021-04-15",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -59570,13 +59546,13 @@
   },
   "128135.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 7182931.899999999,
     "call_announce_date": null,
@@ -59587,7 +59563,7 @@
     "call_trigger_pct": 130.0,
     "close": 113.0329,
     "conversion_price": 54.95,
-    "conversion_suspension_end_date": "2026-06-12",
+    "conversion_suspension_end_date": "2021-04-26",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -59632,13 +59608,13 @@
   },
   "128136.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 93919887.0,
     "call_announce_date": null,
@@ -59649,7 +59625,7 @@
     "call_trigger_pct": 130.0,
     "close": 116.7106,
     "conversion_price": 55.67,
-    "conversion_suspension_end_date": "2026-07-20",
+    "conversion_suspension_end_date": "2026-07-17",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -59694,12 +59670,11 @@
   },
   "128137.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
-        "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "Wind:admission_status": "2026-09-03T06:20:54"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": null,
     "call_announce_date": null,
@@ -59710,7 +59685,7 @@
     "call_trigger_pct": 130.0,
     "close": 290.7945,
     "conversion_price": 26.34,
-    "conversion_suspension_end_date": "2026-05-28",
+    "conversion_suspension_end_date": "2026-05-18",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -59755,14 +59730,14 @@
   },
   "128138.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-03T06:20:54",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-08-30T22:55:52"
       },
-      "source": "cb_events"
+      "source": "Wind:admission_status"
     },
     "bond_turnover_amount": 50349576.4,
     "call_announce_date": null,
@@ -59773,7 +59748,7 @@
     "call_trigger_pct": 130.0,
     "close": 128.6575,
     "conversion_price": 10.6,
-    "conversion_suspension_end_date": "2025-01-15",
+    "conversion_suspension_end_date": "2021-05-24",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
     "coupon_rates": [
@@ -62015,7 +61990,7 @@
   },
   "_bundle_meta": {
     "n_bonds": 1060,
-    "updated_at": "2026-09-03T20:31:16"
+    "updated_at": "2026-09-03T09:59:12"
   },
   "q18082207.IME": {
     "_meta": {
