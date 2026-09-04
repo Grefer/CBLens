@@ -1567,3 +1567,54 @@ def test_suspension_start_far_before_the_announcement_is_dropped():
     past = edge - timedelta(days=1)
     assert _drop_implausible_suspension_start({"start": past}, announced)["start"] is None
     assert _drop_implausible_suspension_start(None, announced) is None
+
+
+def test_stock_driven_down_reset_events_survive_the_pre_listing_filter():
+    """起息与上市之间的下修事件不是脏数据 —— 触发条件看的是**正股**。
+
+    ``_event_postdates_listing`` 原本为同名先后两只债而设 (福能转债挂着上一只同名债的
+    摘牌公告)。但下修触发是"正股连续 N 日低于 K 的某比例", 而 K 在**起息日**就定死,
+    所以起息后正股跌下去、债还没挂牌照样触发。实测 118069.SH 爱科转债 2026-06-11 起息、
+    07-09 上市, 而 06-26 的触发提示与 07-03 的不下修公告都落在这中间 —— 后者是这只债
+    **唯一**的下修类事件, 且 ``events_for_down_reset`` 不走这道过滤, 今天真的在喂定价
+    (block_until=2026-10-02)。把它当成上市前脏数据删掉, 等于让模型给一只已公开承诺不
+    下修的债重新计入下修价值。
+    """
+    from convertible_bond.cb_events import _event_postdates_listing
+
+    terms = BondTerms(sec_name="爱科转债", listing_date=date(2026, 7, 9))
+    rejected = CBEvent(
+        bond_code="118069.SH",
+        event_date=date(2026, 7, 3),
+        event_type="down_reset_rejected",
+        raw_title="杭州爱科科技股份有限公司关于不向下修正“爱科转债”转股价格的公告",
+        effective_end=date(2026, 10, 2),
+        parsed_status="不下修",
+    )
+    assert _event_postdates_listing(rejected, terms), "上市前的不下修公告被当成脏数据了"
+
+    trigger = CBEvent(
+        bond_code="118069.SH",
+        event_date=date(2026, 6, 26),
+        event_type="down_reset_trigger_notice",
+        raw_title="杭州爱科科技股份有限公司关于“爱科转债”预计触发转股价格向下修正条件的提示性公告",
+    )
+    assert _event_postdates_listing(trigger, terms), "上市前的下修触发提示被当成脏数据了"
+
+    # 消费侧真的读得到它 —— 只断言 ``_event_postdates_listing`` 会漏掉
+    # ``apply_events_to_terms`` 自己那一层过滤。
+    patched = apply_events_to_terms(
+        "118069.SH", terms, [rejected], valuation_date=date(2026, 9, 4),
+    )
+    assert patched.down_reset_block_until == date(2026, 10, 2)
+
+    # 反面: 真正改 K 的那一步、以及摘牌/强赎这类生命周期事件, 仍然由上市日拦着 ——
+    # 这才是当初 110099.SH 福能转债挂上一只同名债摘牌公告的那一档。
+    for blocked in ("down_reset_approved", "call_redemption", "delisting", "putback"):
+        stale = CBEvent(
+            bond_code="118069.SH",
+            event_date=date(2026, 7, 3),
+            event_type=blocked,
+            raw_title="上一只同名债的公告",
+        )
+        assert not _event_postdates_listing(stale, terms), f"{blocked} 不该豁免上市日判据"

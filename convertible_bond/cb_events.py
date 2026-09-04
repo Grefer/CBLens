@@ -838,8 +838,20 @@ def _is_underlying_st_clear(text: str) -> bool:
 # 强赎、回售、转股价调整。这条不变量放在消费侧, 存量脏数据无需回洗即自愈。
 #
 # 例外: 评级报告 (初始评级本就早于上市) 与正股类事件 (ST/停牌讲的是股票, 与债无关)。
+#
+# **下修博弈的前三步也在例外里, 理由同上: 它们看的是正股**。下修触发条件是"正股连续
+# N 个交易日低于 K 的某个比例", 而 K 在**起息日**就定死了 —— 起息之后正股跌下去, 债还
+# 没挂牌照样触发, 公司照样要发提示性公告、照样要开董事会决定修不修。实测全库上市前事件
+# 里 ``down_reset_trigger_notice`` 7 条、``down_reset_rejected`` 2 条, 标题点的都是本债
+# (「迪威尔关于"迪威转债"预计触发…」), 而这几只全是 2026 年新债、根本没有同名前身可混。
+# ``down_reset_proposed`` 今天 0 条, 但它与 ``rejected`` 是同一场董事会的两个结果 ——
+# 只豁免"否决"会让"提议"在同样的日期上被当成脏数据删掉, 而删真数据比留假数据难收拾。
+#
+# ``down_reset_approved`` **不在**例外里: 它是这一族里唯一真正改 K 的一步, 正是上面
+# 那句"上市之前不可能发生它自己的转股价调整"说的东西。
 _PRE_LISTING_ALLOWED = frozenset({
     "rating_change", "underlying_st_risk", "underlying_st_clear", "underlying_suspension",
+    "down_reset_trigger_notice", "down_reset_rejected", "down_reset_proposed",
 })
 
 
@@ -1373,10 +1385,24 @@ def _latest_event(events: Sequence[CBEvent], event_type: str) -> CBEvent | None:
 
 
 def _down_reset_block_until_from_event(event: CBEvent, *, cooldown_months: int) -> date:
+    """不下修承诺的冻结截止日: 先信解析到的 end, 其次信**这份公告自己写的承诺月数**。
+
+    ``cooldown_months`` 只是最后的兜底。此前这里直接用它, 于是同一条口径有了两份实现:
+    ``apply_events_to_bundle`` 不传这个参数 → 恒取默认 6, 而 ``resolve_down_reset``
+    取的是 ``event.commitment_months`` —— 两边对同一只债给出不同的冻结期。实测三只债
+    正好差一个季度 (113700.SH 海天转债公告写"三个月": 存进 cb_data 的 2027-01-18 vs
+    定价时算出的 2026-10-18), 而 837 条不下修事件里 552 条带承诺月数、**284 条不是 6**。
+    今天没算错价 —— ``resolve_down_reset`` 的优先级把 ``terms.down_reset_block_until``
+    排在最后, 有事件时轮不到它 —— 但那是巧合, 不是防线。
+
+    ``is not None`` 不能写成真值判断: 库里有一条 ``commitment_months == 0``, 真值判断
+    会让它悄悄回落到 6, 而那正好又是两边分叉的形状。
+    """
     end = plausible_commitment_end(event)
     if end:
         return end
-    return _add_months(event.event_date, int(cooldown_months))
+    months = event.commitment_months if event.commitment_months is not None else cooldown_months
+    return _add_months(event.event_date, int(round(float(months))))
 
 
 def _event_sort_key(event: CBEvent) -> tuple:

@@ -125,3 +125,61 @@ def test_approved_down_reset_builds_a_node_at_the_lag_fallback(tmp_path):
     resolved2 = resolve_down_reset("123124.SZ", terms, event_store=store2,
                                    valuation_date=announced + timedelta(days=1))
     assert resolved2.approved_effective_date == date(2026, 9, 10)
+
+
+def test_both_block_until_implementations_agree_on_the_same_event(tmp_path):
+    """不下修冻结期只许有一份口径 —— 用同一条事件跑两边, 不靠读代码。
+
+    ``apply_events_to_terms`` (写进 cb_data) 与 ``resolve_down_reset`` (喂给 pricer)
+    各自算过一次 block_until: 前者恒用默认 6 个月, 后者用公告自己写的承诺月数。实测
+    113700.SH 海天转债那份写"三个月"的公告在两边差出整整一个季度 (2027-01-18 vs
+    2026-10-18), 而 837 条不下修事件里 284 条的承诺月数不是 6。
+
+    今天两边不一致也算不错价, 因为 ``resolve_down_reset`` 把 ``terms.down_reset_block_until``
+    排在优先级最后、有事件时轮不到它 —— 所以这条用例断言的是**两边相等**, 而不是
+    "定价结果对"。后者今天恒真, 拿它做守护等于没有守护。
+    """
+    from convertible_bond.cb_events import apply_events_to_terms
+    from convertible_bond.data_providers import BondTerms
+    from convertible_bond.down_reset_overrides import DownResetOverrides, resolve_down_reset
+
+    empty_overrides = DownResetOverrides(tmp_path / "no-overrides.json")
+    val_date = date(2026, 9, 4)
+
+    # 0 单列: 真值判断会让它回落到 6, 而那正是两边分叉的形状。
+    for months in (1, 3, 6, 12, 0, None):
+        store = CBEventStore(tmp_path / f"events-{months}.json")
+        event = CBEvent(
+            bond_code="113700.SH",
+            event_date=date(2026, 7, 18),
+            event_type="down_reset_rejected",
+            raw_title="关于不向下修正“海天转债”转股价格的公告",
+            # 早于公告日 → plausible_commitment_end 判它不可信, 两边都要回落到月数
+            effective_end=date(2026, 6, 26),
+            commitment_months=months,
+            parsed_status="不下修",
+        )
+        store.add_many([event])
+        terms = BondTerms(sec_name="海天转债", conversion_price=10.0)
+
+        applied = apply_events_to_terms(
+            "113700.SH", terms, [event], valuation_date=val_date,
+        ).down_reset_block_until
+        resolved = resolve_down_reset(
+            "113700.SH", terms, empty_overrides,
+            valuation_date=val_date, event_store=store,
+        ).block_until
+        assert applied == resolved, f"承诺 {months} 个月时两边算出不同的冻结期"
+
+    # 承诺月数确实被用上了 —— 免得两边一起退化成默认 6 个月也照样"相等"。
+    three = apply_events_to_terms(
+        "113700.SH",
+        BondTerms(sec_name="海天转债"),
+        [CBEvent(
+            bond_code="113700.SH", event_date=date(2026, 7, 18),
+            event_type="down_reset_rejected", raw_title="关于不向下修正的公告",
+            effective_end=date(2026, 6, 26), commitment_months=3,
+        )],
+        valuation_date=val_date,
+    ).down_reset_block_until
+    assert three == date(2026, 10, 18), "公告写三个月, 却按默认 6 个月冻结"
