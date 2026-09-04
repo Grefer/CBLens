@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+from ...batch_pricing import _underlying_has_st_risk
 from ...pricer import UniversalCBPricer
 from ...dateutil import add_years as _add_years
 from ...cb_events import is_down_reset_trigger_notice_title
@@ -886,7 +887,14 @@ class PricingMixin:
         near_date = last_trading or delisting
         if near_date and near_date <= val_date + timedelta(days=30):
             return f"临近摘牌\n{near_date.isoformat()}", RED
-        if self._contains_any(getattr(terms, "underlying_status", None), ("ST", "退市", "风险警示")):
+        # 判据走准入层那一个 ``_underlying_has_st_risk``, **不要**只看
+        # ``underlying_status``: 那个字段有两套词表, 每日 admission 同步按 Wind 写
+        # ``是/否``, 而 ``cb-sync-events --apply`` 按 ``underlying_st_risk`` 事件写
+        # ``ST/退市风险`` —— 只匹配关键词的话, 徽标亮不亮取决于**哪个同步后跑**。实测
+        # 2026-09-03 状态刷新之后主池 4 只 ST 债的徽标一起灭掉 (4/4 → 0/4), 事件同步
+        # 一跑又全亮回来; 而 ``是`` 这个值本身不含任何关键词。准入判据拼的是
+        # ``f"{underlying_name} {underlying_status}"``, 名字里的 ``*ST闻泰`` 兜得住。
+        if _underlying_has_st_risk(terms):
             # ORANGE 不是 RED: 上面几档 (转债停牌 / 正股停牌 / 临近摘牌) 是**现在下不了单
             # 或必须马上动手**, 而 ST 只是风险更大, 转债照常挂牌撮合。同色会把两件事读成一件。
             return "正股风险", ORANGE
@@ -1249,7 +1257,7 @@ class PricingMixin:
         risky = (
             self._contains_any(getattr(terms, "suspension_status", None), ("停牌", "暂停"))
             or self._contains_any(getattr(terms, "underlying_trade_status", None), ("停牌", "暂停"))
-            or self._contains_any(getattr(terms, "underlying_status", None), ("ST", "退市", "风险警示"))
+            or _underlying_has_st_risk(terms)  # 同上: 不看词表, 走准入层判据
             or self._conversion_suspension_active(terms, val_date, impact)
         )
         outlook = str(impact.get("credit_rating_outlook") or getattr(
