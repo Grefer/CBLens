@@ -266,6 +266,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # 中文帮助、进度和错误统一使用 UTF-8；Windows 重定向到文件/管道时默认
+    # 可能是 cp1252，不能等 argparse 打印帮助时才因编码失败退出。
+    # 只在命令入口调整真实文本流，导入模块和 StringIO 等调用方提供的流不受影响。
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = build_parser()
     args = parser.parse_args()
     # `--pde-sigma-band` / `--pde-spread-band` 随「下修优势」一起从 parser 删掉了

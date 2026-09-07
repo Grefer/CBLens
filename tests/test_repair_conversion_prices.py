@@ -56,10 +56,10 @@ def test_preserves_other_fields_and_sources_even_with_same_key(tmp_path, monkeyp
     path, events, patch = _seed(tmp_path, mixed=True)
     # 老数据可含同 key 的不同 source；key() 本身不含 source。
     import json
-    payload = json.loads(path.read_text())
+    payload = json.loads(path.read_text(encoding="utf-8"))
     for source in ("manual", "wind_asof"):
         payload["patches"].append({**payload["patches"][0], "source": source})
-    path.write_text(json.dumps(payload))
+    path.write_text(json.dumps(payload), encoding="utf-8")
     _body(monkeypatch)
     mod.repair(path, events, dry_run=False)
     rows = TermsPatchStore(path).list_patches(include_shadowed=True)

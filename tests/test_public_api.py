@@ -224,7 +224,7 @@ def test_desktop_bundle_still_reaches_the_modules_the_eager_import_used_to_carry
         assert cli_module in POOL_SYNC_MODULES, (
             f"{cli_module} 不在 POOL_SYNC_MODULES 里, 它不会进桌面包的 hiddenimports"
         )
-        src = (root / cli_module.replace(".", "/")).with_suffix(".py").read_text()
+        src = (root / cli_module.replace(".", "/")).with_suffix(".py").read_text(encoding="utf-8")
         imported = {
             node.module
             for node in ast.walk(ast.parse(src))

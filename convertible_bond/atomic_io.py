@@ -16,15 +16,37 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
+
+
+# Windows 的读者/竞争 writer 短暂持有目标句柄时, replace 可报 5/32/33。
+# 5 也可能是真实权限拒绝, 因此只给有限的重试窗口, 耗尽后原样抛出。
+# 最多 8 次尝试, 累计等待 0.95 秒; POSIX 的 EACCES 没有 winerror, 不重试。
+_WINDOWS_REPLACE_ERRORS = frozenset({5, 32, 33})
+_WINDOWS_REPLACE_DELAYS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.32)
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    """只重试最终的原子替换, 期间保留旧目标与已写好且关闭的临时文件。"""
+    for attempt in range(len(_WINDOWS_REPLACE_DELAYS) + 1):
+        try:
+            tmp.replace(path)
+            return
+        except OSError as exc:
+            if (getattr(exc, "winerror", None) not in _WINDOWS_REPLACE_ERRORS
+                    or attempt == len(_WINDOWS_REPLACE_DELAYS)):
+                raise
+            time.sleep(_WINDOWS_REPLACE_DELAYS[attempt])
 
 
 def atomic_write_text(path: Path | str, text: str, *, encoding: str = "utf-8") -> Path:
     """把 *text* 原子地写到 *path*.
 
     临时文件建在**同一个目录**里 (``rename`` 只在同一文件系统内是原子的), 名字由
-    ``mkstemp`` 保证唯一 —— 这是与旧写法唯一的实质区别, 也是并发安全的全部来源。
+    ``mkstemp`` 保证唯一, 避免并发写入互相覆盖。Windows 短暂占用时只重试最后的
+    ``replace``, 最多额外等待 0.95 秒。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,7 +58,7 @@ def atomic_write_text(path: Path | str, text: str, *, encoding: str = "utf-8") -
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        tmp.replace(path)
+        _replace_with_retry(tmp, path)
     except BaseException:
         # 失败时不留垃圾。``missing_ok`` 是因为 replace 可能已经成功而后续才炸。
         tmp.unlink(missing_ok=True)

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -30,12 +31,18 @@ def test_pde_strategy_defaults_use_deviation_signal_and_reserve_cash():
     assert config.cash_yield_rate == pytest.approx(0.022)
 
 
-def test_strategy_cli_help_exposes_only_pde_rank_signals():
+@pytest.mark.parametrize("io_encoding", [None, "cp1252"])
+def test_strategy_cli_help_exposes_only_pde_rank_signals(io_encoding):
+    env = os.environ.copy()
+    if io_encoding is not None:
+        env["PYTHONIOENCODING"] = io_encoding
     completed = subprocess.run(
         [sys.executable, "-m", "convertible_bond.cli.strategy_backtest", "--help"],
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env=env,
     )
     help_text = completed.stdout
     # 下修两档仍留在 choices 里 (旧脚本传入会退化为 deviation), 但已标注为已删除
@@ -45,6 +52,19 @@ def test_strategy_cli_help_exposes_only_pde_rank_signals():
     assert "--holding-mode" not in help_text
     assert "--selection-view" not in help_text
     assert "机会分" not in help_text and "双低" not in help_text
+
+
+def test_strategy_cli_chinese_error_survives_cp1252_pipe():
+    completed = subprocess.run(
+        [sys.executable, "-m", "convertible_bond.cli.strategy_backtest",
+         "--start", "2026-09-01", "--end", "2026-09-03", "--top-n", "0"],
+        capture_output=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "cp1252"},
+    )
+    assert completed.returncode == 2
+    assert "--top-n 必须为正整数" in completed.stderr
+    assert "UnicodeEncodeError" not in completed.stderr
 
 
 def test_backtest_pde_strategy_uses_pde_config_by_default(monkeypatch):

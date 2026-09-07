@@ -1,4 +1,5 @@
 """原子写: 并发安全来自**唯一**的临时名, 不只是"先写 tmp 再 rename"."""
+import errno
 import json
 import multiprocessing
 import os
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from convertible_bond import atomic_io
 from convertible_bond.atomic_io import atomic_write_json, atomic_write_text
 
 
@@ -49,6 +51,119 @@ def test_failed_write_leaves_no_debris_and_no_target(tmp_path, monkeypatch):
 
     assert json.loads(target.read_text(encoding="utf-8")) == {"good": 1}
     assert list(tmp_path.iterdir()) == [target], "留下了临时文件残骸"
+
+
+def _windows_error(code: int) -> OSError:
+    error = PermissionError(errno.EACCES, "Windows replace denied")
+    error.winerror = code
+    return error
+
+
+@pytest.mark.parametrize("winerror", [5, 32, 33])
+def test_windows_replace_contention_retries_without_unpublishing_old_value(
+    tmp_path, monkeypatch, winerror,
+):
+    """占用解除后仍发布同一份完整 tmp; 每次等待中读者都能读到旧值。"""
+    target = tmp_path / "shared.json"
+    atomic_write_json(target, {"old": True})
+    real_replace = Path.replace
+    attempts = []
+    delays = []
+
+    def contended_replace(tmp, other):
+        attempts.append(tmp)
+        assert other == target
+        assert json.loads(tmp.read_text(encoding="utf-8")) == {"new": "完整内容"}
+        assert json.loads(target.read_text(encoding="utf-8")) == {"old": True}
+        if len(attempts) < 3:
+            raise _windows_error(winerror)
+        return real_replace(tmp, other)
+
+    def wait(delay):
+        delays.append(delay)
+        assert json.loads(target.read_text(encoding="utf-8")) == {"old": True}
+
+    monkeypatch.setattr(Path, "replace", contended_replace)
+    monkeypatch.setattr(atomic_io.time, "sleep", wait)
+    assert atomic_write_json(target, {"new": "完整内容"}) == target
+
+    assert len(attempts) == 3 and len(set(attempts)) == 1
+    assert len(delays) == 2 and 0 < sum(delays) <= 1
+    assert json.loads(target.read_text(encoding="utf-8")) == {"new": "完整内容"}
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_persistent_windows_access_denied_is_bounded_and_preserves_old_target(tmp_path, monkeypatch):
+    """WinError 5 也可能是真实 ACL 拒绝, 重试耗尽后必须保留原异常和旧文件。"""
+    target = tmp_path / "shared.json"
+    atomic_write_json(target, {"old": True})
+    failure = _windows_error(5)
+    attempts = []
+    delays = []
+
+    def denied(tmp, other):
+        attempts.append(tmp)
+        raise failure
+
+    monkeypatch.setattr(Path, "replace", denied)
+    monkeypatch.setattr(atomic_io.time, "sleep", delays.append)
+    with pytest.raises(PermissionError) as caught:
+        atomic_write_json(target, {"new": True})
+
+    assert caught.value is failure
+    assert 1 < len(attempts) <= 8 and len(set(attempts)) == 1
+    assert len(delays) == len(attempts) - 1 and 0 < sum(delays) <= 1
+    assert json.loads(target.read_text(encoding="utf-8")) == {"old": True}
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("failure", [
+    PermissionError(errno.EACCES, "POSIX permission denied"),
+    OSError(errno.ENOSPC, "disk full"),
+    _windows_error(112),  # Windows ERROR_DISK_FULL 也不能当成短暂句柄占用
+])
+def test_other_replace_errors_fail_immediately(tmp_path, monkeypatch, failure):
+    target = tmp_path / "shared.json"
+    atomic_write_json(target, {"old": True})
+    attempts = []
+    delays = []
+
+    def fail(tmp, other):
+        attempts.append(tmp)
+        raise failure
+
+    monkeypatch.setattr(Path, "replace", fail)
+    monkeypatch.setattr(atomic_io.time, "sleep", delays.append)
+    with pytest.raises(OSError) as caught:
+        atomic_write_json(target, {"new": True})
+
+    assert caught.value is failure
+    assert len(attempts) == 1 and delays == []
+    assert json.loads(target.read_text(encoding="utf-8")) == {"old": True}
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_windows_write_failure_does_not_enter_replace_retry(tmp_path, monkeypatch):
+    """只允许重试发布阶段, fsync 失败时不能发布未确认完整写入的临时文件。"""
+    target = tmp_path / "shared.json"
+    atomic_write_json(target, {"old": True})
+    failure = _windows_error(5)
+    replaces = []
+    delays = []
+
+    def fail_fsync(fd):
+        raise failure
+
+    monkeypatch.setattr(atomic_io.os, "fsync", fail_fsync)
+    monkeypatch.setattr(Path, "replace", lambda *args: replaces.append(args))
+    monkeypatch.setattr(atomic_io.time, "sleep", delays.append)
+    with pytest.raises(PermissionError) as caught:
+        atomic_write_json(target, {"new": True})
+
+    assert caught.value is failure
+    assert replaces == [] and delays == []
+    assert json.loads(target.read_text(encoding="utf-8")) == {"old": True}
+    assert list(tmp_path.iterdir()) == [target]
 
 
 def test_serialisation_matches_the_repo_convention(tmp_path):
