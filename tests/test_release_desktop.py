@@ -155,17 +155,60 @@ def test_remote_annotated_tag_must_match_the_local_artifact_commit(monkeypatch):
         release._check_remote_tag("v2.0.0-rc.1", "moved-local-tag-commit")
 
 
-def test_strict_diagnostics_fail_for_missing_patches_without_connecting(monkeypatch, tmp_path, capsys):
+@pytest.fixture
+def diagnostic_environment(monkeypatch, tmp_path):
     from convertible_bond import desktop_diagnostics as diagnostics
     from convertible_bond._version import __version__
 
-    (tmp_path / "desktop_build.json").write_text(json.dumps({"version": __version__, "commit": "a" * 40}))
+    (tmp_path / "desktop_build.json").write_text(
+        json.dumps({"version": __version__, "commit": "a" * 40}), encoding="utf-8")
     monkeypatch.setattr(diagnostics, "prepare_windpy_import_path", lambda: [])
     monkeypatch.setattr(diagnostics, "project_root", lambda: tmp_path)
     monkeypatch.setattr(diagnostics, "app_data_dir", lambda: tmp_path)
     monkeypatch.setattr(diagnostics, "seed_data_files", lambda: [])
-    monkeypatch.setattr(diagnostics, "_DATA_FILES", ("cb_terms_patches.json",))
+    monkeypatch.setattr(diagnostics, "_DATA_FILES", ())
     monkeypatch.setattr(diagnostics, "bundled_data_path", lambda filename: None)
     monkeypatch.setattr(diagnostics, "_import_status", lambda name: "imported (fake)")
+    return diagnostics
+
+
+def test_strict_diagnostics_fail_for_missing_patches_without_connecting(monkeypatch, diagnostic_environment, capsys):
+    diagnostics = diagnostic_environment
+    monkeypatch.setattr(diagnostics, "_DATA_FILES", ("cb_terms_patches.json",))
     assert diagnostics.main(["--diagnose", "--check"]) == 1
     assert "包内种子缺失: cb_terms_patches.json" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["stdout", "stderr"])
+@pytest.mark.parametrize("failure", ["missing", "write", "flush"])
+def test_strict_diagnostics_reject_unusable_stream_without_replacing_it(monkeypatch, diagnostic_environment, name, failure):
+    diagnostics = diagnostic_environment
+
+    class BrokenStream:
+        def write(self, text):
+            if failure == "write":
+                raise OSError("输出失败")
+
+        def flush(self):
+            if failure == "flush":
+                raise OSError("刷新失败")
+
+    stream = None if failure == "missing" else BrokenStream()
+    with monkeypatch.context() as patch:
+        patch.setattr(diagnostics.sys, name, stream)
+        assert diagnostics.main(["--diagnose", "--check"]) == 1
+        assert getattr(diagnostics.sys, name) is stream
+
+
+def test_strict_diagnostics_accept_writable_streams_and_keep_them(monkeypatch, diagnostic_environment):
+    import io
+
+    diagnostics = diagnostic_environment
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with monkeypatch.context() as patch:
+        patch.setattr(diagnostics.sys, "stdout", stdout)
+        patch.setattr(diagnostics.sys, "stderr", stderr)
+        assert diagnostics.main(["--diagnose", "--check"]) == 0
+        assert diagnostics.sys.stdout is stdout and diagnostics.sys.stderr is stderr
+    assert "CBLens desktop diagnostics" in stdout.getvalue()
+    assert stderr.getvalue() == ""

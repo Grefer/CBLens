@@ -269,6 +269,8 @@ def _generate_spec(root: Path, *, identity_path: Path | None = None) -> str:
 
     windpy_module_mode = "{}"
     windpy_rth = "None"
+    stdio_rth_path = root / "pyi_rth_stdio.py"
+    stdio_rth = _rp(stdio_rth_path) if stdio_rth_path.exists() else "None"
     network_rth_path = root / "pyi_rth_network.py"
     network_rth = _rp(network_rth_path) if network_rth_path.exists() else "None"
 
@@ -383,6 +385,9 @@ for _pkg in (
 {spec_collect}
 
 _runtime_hooks = []
+_stdio_rth = {stdio_rth}
+if _stdio_rth and os.path.isfile(_stdio_rth):
+    _runtime_hooks.append(_stdio_rth)
 _net_rth = {network_rth}
 if _net_rth and os.path.isfile(_net_rth):
     _runtime_hooks.append(_net_rth)

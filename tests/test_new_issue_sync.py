@@ -6,9 +6,11 @@ GUI 的「扫新债」原本靠 ``bundle_meta()['updated_at']`` 判新鲜度 —
 新债 (实测 2026-08-25 的库: 跳过 4 只新债、真取 741 只无关的)。详见
 ``convertible_bond/new_issue_sync.py`` 的模块 docstring。
 """
+import builtins
 from datetime import date
 
 import pytest
+import requests
 
 from convertible_bond import new_issue_sync as mod
 from convertible_bond.cache import TermsBundle
@@ -198,3 +200,223 @@ def test_empty_third_party_table_refuses_to_change_anything(bundle_path):
 
     assert report["changes"] == []
     assert bundle_path.read_text(encoding="utf-8") == before
+
+
+# ── 实际取数入口: 不注入 listings, 验证 HTTP 超时与完整性 ───────────
+def _remote_row(code="118076", **overrides):
+    # RPT_BOND_CB_LIST 原始字段; optional 值可以是 null, 键名不依赖 JSON 列序。
+    return {
+        "SECURITY_CODE": code, "SECURITY_NAME_ABBR": "先锋转债",
+        "PUBLIC_START_DATE": "2026-08-06 00:00:00", "LISTING_DATE": "2026-08-26 00:00:00",
+        "CONVERT_STOCK_CODE": "688605", "SECURITY_SHORT_NAME": "先锋精科",
+        "TRANSFER_PRICE": "86.4", "RATING": "AA", **overrides,
+    }
+
+
+def _remote_page(rows, *, pages=1, count=None):
+    return {"success": True, "result": {
+        "pages": pages, "count": len(rows) if count is None else count, "data": rows,
+    }}
+
+
+class _Response:
+    def __init__(self, payload, *, error=None, redirect=False):
+        self.payload, self.error, self.is_redirect = payload, error, redirect
+        self.closed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.closed = True
+
+    def raise_for_status(self):
+        if self.error:
+            raise self.error
+
+    def json(self):
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+def _mock_http(monkeypatch, responses):
+    class Session:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.closed = True
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            item = responses[len(self.calls) - 1]
+            if isinstance(item, Exception):
+                raise item
+            return item() if callable(item) else item
+
+    session = Session()
+    monkeypatch.setattr(mod.requests, "Session", lambda: session)
+    return session
+
+
+def test_fetch_listings_uses_narrow_http_fields_without_akshare_or_tqdm(monkeypatch):
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        assert name.split(".")[0] not in {"akshare", "tqdm"}, "无控制台扫描不应导入重型取数/进度条"
+        return real_import(name, *args, **kwargs)
+
+    response = _Response(_remote_page([_remote_row()]))
+    session = _mock_http(monkeypatch, [response])
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert mod.fetch_new_issue_listings() == {"118076": {
+        "sec_name": "先锋转债", "issue_date": date(2026, 8, 6), "listing_date": date(2026, 8, 26),
+        "underlying_code": "688605", "underlying_name": "先锋精科",
+        "conversion_price": 86.4, "credit_rating": "AA",
+    }}
+    assert len(session.calls) == 1, "第一页不应先探页数再重复下载"
+    url, kwargs = session.calls[0]
+    assert url == "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    assert kwargs["params"]["reportName"] == "RPT_BOND_CB_LIST"
+    assert kwargs["params"]["columns"] != "ALL"
+    assert set(kwargs["params"]["columns"].split(",")) == {
+        "SECURITY_CODE", "SECURITY_NAME_ABBR", "PUBLIC_START_DATE", "LISTING_DATE",
+        "CONVERT_STOCK_CODE", "SECURITY_SHORT_NAME", "RATING",
+    }
+    assert kwargs["params"]["quoteColumns"] == "f235~10~SECURITY_CODE~TRANSFER_PRICE"
+    assert all(0 < timeout <= 8 for timeout in kwargs["timeout"])
+    assert kwargs["allow_redirects"] is False
+    assert session.closed and response.closed
+
+
+def test_fetch_listings_collects_each_page_once_and_preserves_null_listing(monkeypatch):
+    pages = [
+        _Response(_remote_page([_remote_row()], pages=2, count=2)),
+        _Response(_remote_page([_remote_row("123284", LISTING_DATE=None, TRANSFER_PRICE=None)],
+                              pages=2, count=2)),
+    ]
+    session = _mock_http(monkeypatch, pages)
+    result = mod.fetch_new_issue_listings()
+    assert set(result) == {"118076", "123284"}
+    assert result["123284"]["listing_date"] is None
+    assert result["123284"]["conversion_price"] is None
+    assert [kwargs["params"]["pageNumber"] for _, kwargs in session.calls] == ["1", "2"]
+    assert all(all(0 < t <= 8 for t in kwargs["timeout"]) for _, kwargs in session.calls)
+    assert session.closed and all(page.closed for page in pages)
+
+
+@pytest.mark.parametrize("error", [requests.ConnectTimeout(), requests.ReadTimeout()])
+def test_fetch_listings_retries_timeout_type_once_then_recovers(monkeypatch, error):
+    session = _mock_http(monkeypatch, [error, _Response(_remote_page([_remote_row()]))])
+    delays = []
+    monkeypatch.setattr(mod.time, "sleep", delays.append)
+    assert "118076" in mod.fetch_new_issue_listings()
+    assert len(session.calls) == 2 and len(delays) == 1
+    assert [kwargs["params"]["pageNumber"] for _, kwargs in session.calls] == ["1", "1"]
+    assert session.closed
+
+
+def test_fetch_listings_persistent_timeout_has_finite_attempts_and_no_final_sleep(monkeypatch):
+    error = requests.ReadTimeout()
+    session = _mock_http(monkeypatch, [error, error])
+    delays = []
+    monkeypatch.setattr(mod.time, "sleep", delays.append)
+    with pytest.raises(requests.ReadTimeout) as caught:
+        mod.fetch_new_issue_listings()
+    assert caught.value is error
+    assert len(session.calls) == 2 and len(delays) == 1 and session.closed
+
+
+@pytest.mark.parametrize("response,error_type", [
+    (requests.ConnectionError("Connection aborted. RemoteDisconnected"), requests.ConnectionError),
+    (_Response(None, error=requests.HTTPError("429 Too Many Requests")), requests.HTTPError),
+    (_Response(None, error=requests.HTTPError("503 Service Unavailable")), requests.HTTPError),
+    (_Response(None, redirect=True), RuntimeError),
+    (_Response(ValueError("not JSON")), ValueError),
+])
+def test_fetch_listings_rejection_http_and_invalid_json_do_not_retry(monkeypatch, response, error_type):
+    session = _mock_http(monkeypatch, [response])
+    delays = []
+    monkeypatch.setattr(mod.time, "sleep", delays.append)
+    with pytest.raises(error_type):
+        mod.fetch_new_issue_listings()
+    assert len(session.calls) == 1 and delays == [] and session.closed
+
+
+@pytest.mark.parametrize("payload", [
+    None, [], {"success": False}, _remote_page([]),
+    _remote_page([_remote_row()], pages=1000),
+    _remote_page([_remote_row()], pages="1"),
+    _remote_page([_remote_row()], count=2),
+    _remote_page([_remote_row(), _remote_row()]),
+    _remote_page([{"SECURITY_CODE": "118076"}]),
+])
+def test_fetch_listings_rejects_incomplete_or_unbounded_response(monkeypatch, payload):
+    session = _mock_http(monkeypatch, [_Response(payload)])
+    with pytest.raises(RuntimeError):
+        mod.fetch_new_issue_listings()
+    assert len(session.calls) == 1 and session.closed
+
+
+def test_fetch_listings_rejects_page_count_change(monkeypatch):
+    session = _mock_http(monkeypatch, [
+        _Response(_remote_page([_remote_row()], pages=2, count=2)),
+        _Response(_remote_page([_remote_row("123284")], pages=2, count=3)),
+    ])
+    with pytest.raises(RuntimeError, match="分页期间"):
+        mod.fetch_new_issue_listings()
+    assert len(session.calls) == 2 and session.closed
+
+
+@pytest.mark.parametrize("pages", [1, 2])
+def test_fetch_listings_drops_response_after_budget_without_fetching_next_page(monkeypatch, pages):
+    now = [0.0]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
+
+    def late_response():
+        now[0] = mod._LISTINGS_BUDGET_SECONDS + 1
+        return _Response(_remote_page([_remote_row()], pages=pages, count=pages))
+
+    session = _mock_http(monkeypatch, [late_response])
+    with pytest.raises(TimeoutError, match="时间预算"):
+        mod.fetch_new_issue_listings()
+    assert len(session.calls) == 1 and session.closed
+
+
+def test_fetch_listings_budget_is_shared_across_pages_and_timeout_retries(monkeypatch):
+    now = [0.0]
+    delays = []
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(mod.time, "sleep", delays.append)
+
+    def first_page():
+        now[0] = mod._LISTINGS_BUDGET_SECONDS - 0.5
+        return _Response(_remote_page([_remote_row()], pages=2, count=2))
+
+    def second_page_timeout():
+        now[0] += 1
+        raise requests.ReadTimeout()
+
+    session = _mock_http(monkeypatch, [first_page, second_page_timeout])
+    with pytest.raises(TimeoutError, match="时间预算"):
+        mod.fetch_new_issue_listings()
+    assert len(session.calls) == 2, "第二页耗尽整轮预算后不得重试"
+    assert session.calls[1][1]["timeout"] == (0.5, 0.5)
+    assert delays == [] and session.closed
+
+
+@pytest.mark.parametrize("failure", [requests.ReadTimeout(), requests.HTTPError("503")])
+def test_sync_fetch_failure_mid_pagination_never_writes_partial_list(bundle_path, monkeypatch, failure):
+    before = bundle_path.read_bytes()
+    first = _Response(_remote_page([_remote_row()], pages=2, count=2))
+    second = failure if isinstance(failure, requests.Timeout) else _Response(None, error=failure)
+    _mock_http(monkeypatch, [first, second, second])
+    monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+    with pytest.raises(type(failure)):
+        mod.sync_new_issues(bundle_path, dry_run=False, on_date=ON_DATE)
+    assert bundle_path.read_bytes() == before, "第一页的上市日和来源时间戳也不能提前写入"

@@ -21,6 +21,75 @@ from convertible_bond.gui.tabs import batch as batch_tab
 from convertible_bond.gui.tabs import batch_watchlist as watchlist_tab
 
 
+@pytest.mark.parametrize("operation", ["scan", "pricing"])
+def test_watchlist_error_callbacks_do_not_move_worker_cleanup_to_tk(monkeypatch, operation):
+    """异常 traceback 中的对象必须在原线程释放, 不能由 Tk 回调析构。
+
+    RC2 的 tqdm 曾在 worker 加锁后报错。回调捕获 exc 时, traceback 把进度条
+    带到主线程析构并永远等锁。用有线程归属的资源验证边界, 避免测试自己死锁。
+    """
+    from convertible_bond import new_issue_sync
+
+    finalized_on = []
+    callback_threads = []
+    main_thread = threading.get_ident()
+
+    class WorkerResource:
+        def __del__(self):
+            finalized_on.append(threading.get_ident())
+
+    def fail_in_worker(*args, **kwargs):
+        resource = WorkerResource()  # 仅由失败调用的 traceback 保活
+        raise RuntimeError("模拟取数失败")
+
+    app = _App()
+    dialogs = []
+    monkeypatch.setattr(watchlist_tab, "_terms_sync_available", lambda: False)
+    monkeypatch.setattr(watchlist_tab.messagebox, "showerror", lambda *args: dialogs.append(args))
+
+    if operation == "scan":
+        monkeypatch.setattr(new_issue_sync, "sync_new_issues", fail_in_worker)
+        real_thread = threading.Thread
+        threads = []
+
+        def make_thread(*args, **kwargs):
+            thread = real_thread(*args, **kwargs)
+            threads.append(thread)
+            return thread
+
+        monkeypatch.setattr(watchlist_tab.threading, "Thread", make_thread)
+
+        def then(synced):
+            assert synced is False
+            callback_threads.append(threading.get_ident())
+
+        assert watchlist_tab.run_new_issue_sync_async(app, then=then)
+        worker = threads[0]
+    else:
+        monkeypatch.setattr(watchlist_tab, "build_batch_provider", fail_in_worker)
+        worker = threading.Thread(
+            target=watchlist_tab._watchlist_pricing_worker,
+            args=(app, ["123999.SZ"], "akshare", None, {}), daemon=True,
+        )
+        worker.start()
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert finalized_on == [worker.ident], "异常对象被排进 GUI 队列, 清理会跑到主线程"
+    assert worker.ident != main_thread
+    assert app.after_calls
+    for _, callback in app.after_calls:
+        callback()
+    app.after_calls.clear()
+    assert "模拟取数失败" in app.v_watchlist_status.value
+    if operation == "scan":
+        assert callback_threads == [main_thread]
+        assert app._new_issue_sync_running is False
+    else:
+        assert dialogs == [("关注池定价失败", "模拟取数失败")]
+        assert app._watchlist_pricing_running is False
+
+
 # ── 替身 ────────────────────────────────────────────────────────
 
 class _Var:

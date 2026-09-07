@@ -128,6 +128,27 @@ def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     strict = "--check" in args
     errors: list[str] = []
+    if strict:
+        # 只验证，不兜底：否则漏打 stdio runtime hook 的包也会被诊断自己修好。
+        for name in ("stdout", "stderr"):
+            try:
+                stream = getattr(sys, name)
+                if stream is None:
+                    raise ValueError("输出流缺失")
+                stream.write("")
+                stream.flush()
+            except Exception as exc:
+                errors.append(f"{name} 不可用: {exc}")
+        if errors:
+            # 某条流可能仍可用；两条都坏时也要可靠返回失败，而不是为了打印再次抛错。
+            for stream in (sys.stderr, sys.stdout):
+                try:
+                    stream.write("\n".join(f"ERROR: {error}" for error in errors) + "\n")
+                    stream.flush()
+                    break
+                except Exception:
+                    continue
+            return 1
     windpy_paths = prepare_windpy_import_path()
     seeded = seed_data_files()
 

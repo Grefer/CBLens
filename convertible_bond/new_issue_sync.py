@@ -16,7 +16,9 @@
 
 而这件事的真实规模是**每天几只**: 实测 2026-08-25 全库 1058 只里, 已发行未上市 3 只 +
 已定上市日未挂牌 1 只 = 4 只; akshare ``bond_zh_cov`` 全表 1050 行里 ``上市时间`` 为空的
-总共也只有 4 行。一次 ``ak.bond_zh_cov()`` (~2s, 不需要 Wind) 同时覆盖发现与上市日两件事。
+总共也只有 4 行。同一东财可转债清单同时覆盖发现与上市日两件事, 不需要 Wind。
+现在直接按字段请求该接口: Akshare 的这条路径没有 HTTP 超时, 且分页进度条依赖 stderr,
+不适合 Windows 无控制台桌面包。每页限时取数, 整份清单齐全才交给同步层。
 
 **口径实测与 Wind 完全一致** (2026-08-25 全库交叉): ``申购日期`` == cb_data ``issue_date``
 974/974, ``上市时间`` == ``listing_date`` 968/968 (另 6 只有一侧为空, 无法比较)。所以这条窄
@@ -41,8 +43,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import replace
 from datetime import date
+
+import requests
 
 from .cache import TermsBundle, project_bundle_path
 from .data_providers.base import (
@@ -66,15 +71,15 @@ DISCOVERY_WINDOW_DAYS = 90
 # 刚挂牌的债继续跟几天: 上市首日的状态字段 (临停/成交额) 还在翻, 上市日本身也偶有更正。
 JUST_LISTED_DAYS = 5
 
-_COLUMNS = {
-    "sec_name": ("债券简称", "债券名称", "证券简称"),
-    "issue_date": ("申购日期",),
-    "listing_date": ("上市时间", "上市日期"),
-    "underlying_code": ("正股代码",),
-    "underlying_name": ("正股简称", "正股名称"),
-    "conversion_price": ("转股价",),
-    "credit_rating": ("信用评级",),
-}
+_LISTINGS_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+_LISTINGS_COLUMNS = (
+    "SECURITY_CODE", "SECURITY_NAME_ABBR", "PUBLIC_START_DATE", "LISTING_DATE",
+    "CONVERT_STOCK_CODE", "SECURITY_SHORT_NAME", "RATING",
+)
+_LISTINGS_PAGE_SIZE = 500
+_LISTINGS_MAX_PAGES = 10
+_LISTINGS_TIMEOUT = (3.05, 8.0)
+_LISTINGS_BUDGET_SECONDS = 20.0
 
 
 def _safe_text(value) -> str | None:
@@ -100,56 +105,95 @@ def _safe_float(value) -> float | None:
     return result if result == result else None
 
 
-def _pick(row, keys) -> object:
-    for key in keys:
-        try:
-            if key in row.index:
-                return row[key]
-        except AttributeError:
-            if isinstance(row, dict) and key in row:
-                return row[key]
-    return None
-
-
 def to_wind_code(plain_code: str) -> str:
     """6 位代码 → Wind 代码. 与 ``AkshareDataProvider.list_tradable_cbs`` 同一约定 (11xxxx = 沪)."""
     code = str(plain_code or "").strip().zfill(6)
     return f"{code}.SH" if code.startswith("11") else f"{code}.SZ"
 
 
-def fetch_new_issue_listings() -> dict[str, dict]:
-    """``ak.bond_zh_cov()`` → ``{6 位代码: {字段}}``.
+def _listing_budget_remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("新债清单取数超过时间预算, 本轮不更新条款")
+    return remaining
 
-    一次拿全市场 (实测 1050 行 / ~2s)。字段名按候选列表容错, 上游改名时报错而不是静默返回空。
-    """
-    import akshare as ak
 
-    frame = ak.bond_zh_cov()
-    if frame is None or len(frame) == 0:
-        raise RuntimeError("akshare bond_zh_cov 返回空表, 拒绝据此改库")
-    columns = set(frame.columns)
-    for field, candidates in (("sec_name", _COLUMNS["sec_name"]),
-                              ("issue_date", _COLUMNS["issue_date"]),
-                              ("listing_date", _COLUMNS["listing_date"])):
-        if not columns.intersection(candidates):
-            raise RuntimeError(f"akshare bond_zh_cov 没有 {field} 对应列 {candidates}, 上游字段可能改名了")
-
-    out: dict[str, dict] = {}
-    for _, row in frame.iterrows():
-        code = _safe_text(_pick(row, ("债券代码", "代码")))
-        if not code:
+def _fetch_listing_page(session: requests.Session, params: dict, deadline: float) -> dict:
+    """每页最多两次, 只重试明确超时; 拒绝/断连/HTTP 错误直接交给调用方。"""
+    for attempt in range(2):
+        remaining = _listing_budget_remaining(deadline)
+        timeout = tuple(min(limit, remaining) for limit in _LISTINGS_TIMEOUT)
+        try:
+            with session.get(_LISTINGS_URL, params=params, timeout=timeout,
+                             allow_redirects=False) as response:
+                response.raise_for_status()
+                if response.is_redirect:
+                    raise RuntimeError("新债清单接口意外跳转, 本轮不更新条款")
+                payload = response.json()
+        except requests.Timeout:
+            if attempt == 1:
+                raise
+            time.sleep(min(0.2, _listing_budget_remaining(deadline)))
             continue
-        out[code.zfill(6)] = {
-            "sec_name": _safe_text(_pick(row, _COLUMNS["sec_name"])),
-            "issue_date": safe_date(_pick(row, _COLUMNS["issue_date"])),
-            "listing_date": safe_date(_pick(row, _COLUMNS["listing_date"])),
-            "underlying_code": _safe_text(_pick(row, _COLUMNS["underlying_code"])),
-            "underlying_name": _safe_text(_pick(row, _COLUMNS["underlying_name"])),
-            "conversion_price": _safe_float(_pick(row, _COLUMNS["conversion_price"])),
-            "credit_rating": _safe_text(_pick(row, _COLUMNS["credit_rating"])),
-        }
-    if not out:
-        raise RuntimeError("akshare bond_zh_cov 一行都没解析出来, 拒绝据此改库")
+        # Requests 的连接/读取超时不是整次扫描的墙钟上限。超预算的响应即使成功,
+        # 也不再接着翻页或返回可写入的数据; 这不是强制中断在途请求的硬截止。
+        _listing_budget_remaining(deadline)
+        return payload
+
+
+def fetch_new_issue_listings() -> dict[str, dict]:
+    """限时读取东财清单 → ``{6 位代码: {字段}}``, 不导入 Akshare 或进度条.
+
+    静态字段名与 Akshare 1.18.94 使用的 RPT_BOND_CB_LIST 一致, K 沿用同一报价列。
+    任一页失败、缺字段、条数不齐或超过预算都抛错, 不返回可被误用的部分清单。
+    """
+    deadline = time.monotonic() + _LISTINGS_BUDGET_SECONDS
+    params = {
+        "sortColumns": "PUBLIC_START_DATE", "sortTypes": "-1",
+        "pageSize": str(_LISTINGS_PAGE_SIZE), "reportName": "RPT_BOND_CB_LIST",
+        "columns": ",".join(_LISTINGS_COLUMNS),
+        "quoteColumns": "f235~10~SECURITY_CODE~TRANSFER_PRICE",
+        "source": "WEB", "client": "WEB",
+    }
+    out: dict[str, dict] = {}
+    expected_pages = expected_count = None
+    with requests.Session() as session:
+        for page in range(1, _LISTINGS_MAX_PAGES + 1):
+            payload = _fetch_listing_page(session, {**params, "pageNumber": str(page)}, deadline)
+            result = payload.get("result") if isinstance(payload, dict) else None
+            if (not isinstance(payload, dict) or payload.get("success") is not True
+                    or not isinstance(result, dict)):
+                raise RuntimeError("东财新债清单返回异常, 本轮不更新条款")
+            pages, count, rows = result.get("pages"), result.get("count"), result.get("data")
+            if (type(pages) is not int or not 1 <= pages <= _LISTINGS_MAX_PAGES
+                    or type(count) is not int or count < 1
+                    or not isinstance(rows, list) or not rows):
+                raise RuntimeError("东财新债清单分页/条数无效或为空, 本轮不更新条款")
+            if expected_pages is None:
+                expected_pages, expected_count = pages, count
+            elif (pages, count) != (expected_pages, expected_count):
+                raise RuntimeError("东财新债清单分页期间条数变化, 请稍后重试")
+            for row in rows:
+                required = {"SECURITY_CODE", "SECURITY_NAME_ABBR", "PUBLIC_START_DATE", "LISTING_DATE"}
+                if not isinstance(row, dict) or not required.issubset(row):
+                    raise RuntimeError("东财新债清单缺少必要字段, 本轮不更新条款")
+                code = _safe_text(row["SECURITY_CODE"])
+                if not code or not code.isdigit() or len(code) != 6 or code in out:
+                    raise RuntimeError("东财新债清单代码无效或重复, 本轮不更新条款")
+                out[code] = {
+                    "sec_name": _safe_text(row["SECURITY_NAME_ABBR"]),
+                    "issue_date": safe_date(row["PUBLIC_START_DATE"]),
+                    "listing_date": safe_date(row["LISTING_DATE"]),
+                    "underlying_code": _safe_text(row.get("CONVERT_STOCK_CODE")),
+                    "underlying_name": _safe_text(row.get("SECURITY_SHORT_NAME")),
+                    "conversion_price": _safe_float(row.get("TRANSFER_PRICE")),
+                    "credit_rating": _safe_text(row.get("RATING")),
+                }
+            if page == expected_pages:
+                break
+    _listing_budget_remaining(deadline)
+    if len(out) != expected_count:
+        raise RuntimeError("东财新债清单条数不齐, 本轮不更新条款")
     return out
 
 

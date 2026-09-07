@@ -233,7 +233,7 @@ def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False) -> boo
     —— 调用方必须自己写一句状态栏: 这条路上有两个按钮 (「🆕 扫新债」在关注池页,
     批量页的「🔄 刷新重算」), 状态行按**用户触发时在哪一页**分, 这里写就一定写错一个。
 
-    只碰"在盯新债"那几只 (实测每天 4 只上下), 一次 akshare 调用秒级完成, 不需要 Wind ——
+    只碰"在盯新债"那几只 (实测每天 4 只上下), 通过带超时的公开接口取数, 不需要 Wind ——
     所以这里**不再问"要不要先同步"**: 原本那道闸读的是 ``bundle_meta()['updated_at']``,
     而任何一次写盘都会把它推到今天, 于是提示永不弹出; 即便弹出并点"是", 跑的
     ``cb-sync-tradable --incremental`` 又恰好按 7 天新鲜度跳过刚抓过的新债。
@@ -255,7 +255,10 @@ def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False) -> boo
             from ...new_issue_sync import sync_new_issues
             report = sync_new_issues(dry_run=False)
         except Exception as exc:
-            app.after(0, lambda exc=exc: _after_new_issue_sync(app, None, exc, then, prompt_on_error))
+            # 只传文字: traceback 会保活取数过程中的对象。Windows 无控制台时 tqdm
+            # 曾在加锁后报错, 随 exc 带到 Tk 主线程的进度条在析构时再次等锁, 整窗卡死。
+            error = str(exc)
+            app.after(0, lambda: _after_new_issue_sync(app, None, error, then, prompt_on_error))
             return
         app.after(0, lambda: _after_new_issue_sync(app, report, None, then, prompt_on_error))
 
@@ -264,13 +267,13 @@ def run_new_issue_sync_async(app, *, then, prompt_on_error: bool = False) -> boo
     return True
 
 
-def _after_new_issue_sync(app, report, exc, then, prompt_on_error: bool):
+def _after_new_issue_sync(app, report, error: str | None, then, prompt_on_error: bool):
     app._new_issue_sync_running = False
-    if exc is not None:
-        app.v_watchlist_status.set(f"⚠ 新债上市日刷新失败 ({exc}) — 按本地条款库继续")
+    if error is not None:
+        app.v_watchlist_status.set(f"⚠ 新债上市日刷新失败 ({error}) — 按本地条款库继续")
         if prompt_on_error and _terms_sync_available() and messagebox.askyesno(
             "改用全量条款同步?",
-            f"新债上市日刷新失败:\n{exc}\n\n"
+            f"新债上市日刷新失败:\n{error}\n\n"
             "「是」: 改跑 Wind 增量条款同步 (通常 1-3 分钟), 完成后继续扫描\n"
             "「否」: 直接扫描现有条款库",
         ):
@@ -696,9 +699,11 @@ def _watchlist_pricing_worker(app, codes, source, csv_root, params, *, quiet: bo
             msg += f" · {n_pending} 只未上市无市价"
         app.after(0, lambda: app.v_watchlist_status.set(msg))
     except Exception as exc:
-        app.after(0, lambda exc=exc: app.v_watchlist_status.set(f"❌ 关注池定价失败: {exc}"))
+        # 与窄同步相同: 异常及其 traceback 留在原线程清理, Tk 回调只持有文字。
+        error = str(exc)
+        app.after(0, lambda: app.v_watchlist_status.set(f"❌ 关注池定价失败: {error}"))
         if not quiet:
-            app.after(0, lambda exc=exc: messagebox.showerror("关注池定价失败", str(exc)))
+            app.after(0, lambda: messagebox.showerror("关注池定价失败", error))
     finally:
         app._watchlist_pricing_running = False
         if not quiet:
