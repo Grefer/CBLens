@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Build CBLens desktop app with PyInstaller.
+"""从明确且干净的源码 commit 构建 CBLens 桌面包，记录版本与产物身份。
 
 Run from the repository root:
 
-    python scripts/build_desktop.py
+    python scripts/build_desktop.py --ref HEAD
 
 Outputs:
   - macOS:   dist/CBLens.app
@@ -16,13 +16,18 @@ WindPy 处理策略 (借鉴 DeltaLab):
 """
 from __future__ import annotations
 
+import argparse
+import ast
+import hashlib
 import os
 import platform
 import json
+import re
 from datetime import date, datetime
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 
@@ -44,14 +49,109 @@ def _rp(path: Path) -> str:
 STATIC_DATA_FILES = (
     "cb_data.json",
     "cb_events.json",
+    # 历史 K / 评级等字段的投影依据；缺失会静默退回今天的条款。
+    "cb_terms_patches.json",
     "down_reset_overrides.json",
     # 转债大类估值/择时历史基线 (cb-valuation / 批量页估值横幅的历史分位来源)
     "cb_valuation_history.json",
-    # Tracked release seed. Runtime cache data/batch_pricing_cache.json is
-    # intentionally ignored, but local builds may still bundle it when usable.
+    # 只发布版本库中的种子；本机运行态缓存不属于被验证的 commit。
     "desktop_batch_pricing_cache.json",
 )
-BATCH_PRICING_CACHE_FILE = "batch_pricing_cache.json"
+
+
+def _read_version(root: Path) -> str:
+    """静态读取唯一版本源，不为构建导入行情或 GUI 依赖。"""
+    tree = ast.parse((root / "convertible_bond" / "_version.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets
+        ):
+            version = ast.literal_eval(node.value)
+            if isinstance(version, str):
+                return version
+    raise SystemExit("convertible_bond/_version.py 缺少字符串 __version__")
+
+
+def _version_parts(version: str) -> re.Match:
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:(a|b|rc)([1-9]\d*))?", version)
+    if match is None:
+        raise SystemExit(f"不支持的发布版本: {version!r}")
+    return match
+
+
+def release_tag_for_version(version: str) -> str:
+    """PEP 440 的 2.0.0rc1 对应发布 tag v2.0.0-rc.1。"""
+    base, stage, serial = _version_parts(version).groups()
+    return f"v{base}-{stage}.{serial}" if stage else f"v{base}"
+
+
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+    if result.returncode:
+        raise SystemExit(f"无法验证构建源码: git {' '.join(args)}\n{result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def build_identity(root: Path, source_ref: str, *, release_tag: str | None = None) -> dict:
+    """构建只接受当前干净 checkout 对应的 commit；发布额外绑定确切 tag。"""
+    if not source_ref.strip() or source_ref.startswith("-"):
+        raise SystemExit("--ref 必须是明确的 commit、tag 或 HEAD")
+    dirty = _git(root, "status", "--porcelain", "--untracked-files=normal")
+    if dirty:
+        raise SystemExit(f"构建要求干净工作区，请先提交或移走改动:\n{dirty}")
+    commit = _git(root, "rev-parse", "--verify", f"{source_ref}^{{commit}}")
+    if _git(root, "rev-parse", "HEAD") != commit:
+        raise SystemExit(f"当前 HEAD 与 {source_ref!r} 不一致；请先 checkout 目标 commit/tag")
+    version = _read_version(root)
+    tag = release_tag
+    if tag is None:
+        candidate = source_ref.removeprefix("refs/tags/")
+        tags = _git(root, "tag", "--points-at", commit).splitlines()
+        if candidate in tags:
+            tag = candidate
+    if tag is not None:
+        expected = release_tag_for_version(version)
+        if tag != expected:
+            raise SystemExit(f"版本 {version} 只能发布为 {expected}，收到 {tag!r}")
+        if _git(root, "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}") != commit:
+            raise SystemExit(f"发布 tag {tag} 与构建 commit 不一致")
+    return {
+        "schema_version": 1,
+        "version": version,
+        "commit": commit,
+        "source_ref": source_ref,
+        "release_tag": tag,
+        "platform": sys.platform,
+        "architecture": platform.machine(),
+    }
+
+
+def artifact_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _package_desktop(dist: Path, identity: dict) -> None:
+    """压缩本次刚构建的产物，并把 zip 摘要与源码身份一起交付。"""
+    if sys.platform == "darwin":
+        archive = dist / f"{APP_NAME}-macOS.zip"
+        subprocess.run([
+            "ditto", "-c", "-k", "--norsrc", "--keepParent",
+            str(dist / f"{APP_NAME}.app"), str(archive),
+        ], check=True)
+    elif sys.platform == "win32":
+        archive = dist / f"{APP_NAME}-Windows.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            bundle.write(dist / f"{APP_NAME}.exe", f"{APP_NAME}.exe")
+    else:
+        return
+    manifest = dict(identity, artifact=archive.name, artifact_sha256=artifact_sha256(archive))
+    manifest_path = archive.with_name(f"{archive.stem}-build.json")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"[build] {archive} sha256:{manifest['artifact_sha256']}")
 
 
 #: 种子缓存超过这么多天就在构建时**出声**。
@@ -140,13 +240,16 @@ def _detect_windpy() -> tuple[bool, str | None]:
         return False, None
 
 
-def _generate_spec(root: Path) -> str:
+def _generate_spec(root: Path, *, identity_path: Path | None = None) -> str:
     """生成 PyInstaller spec 文件内容, 包含 WindPy 条件打包逻辑."""
     icon = _icon_path(root)
     icon_str = _rp(icon) if icon else "None"
+    version = _read_version(root)
 
     # 收集 data 文件列表
     data_entries = [f"({_rp(root / 'assets')}, 'assets')"]
+    if identity_path is not None:
+        data_entries.append(f"({_rp(identity_path)}, '.')")
     for filename in STATIC_DATA_FILES:
         src = root / "data" / filename
         if src.exists():
@@ -160,13 +263,6 @@ def _generate_spec(root: Path) -> str:
                           f"(> {SEED_STALE_WARN_DAYS}); first launch will show a stale "
                           f"cross-section. Refresh it with a batch rerun before release.")
             data_entries.append(f"({_rp(src)}, 'data')")
-
-    runtime_cache = root / "data" / BATCH_PRICING_CACHE_FILE
-    if _is_usable_batch_cache(runtime_cache):
-        data_entries.append(f"({_rp(runtime_cache)}, 'data')")
-        print(f"[build] Runtime batch cache detected, will be bundled: {runtime_cache}")
-    elif runtime_cache.exists():
-        print(f"[build] Skip unusable runtime batch cache: {runtime_cache}")
 
     # 检测 WindPy
     has_windpy, windpy_file = _detect_windpy()
@@ -366,12 +462,20 @@ else:
     )
 """
     if sys.platform == "darwin":
+        base_version, stage, serial = _version_parts(version).groups()
+        bundle_version = base_version + (("fc" if stage == "rc" else stage) + serial if stage else "")
         spec += f"""
 app = BUNDLE(
     coll,
     name='{APP_NAME}.app',
     icon={icon_str},
     bundle_identifier='com.grefer.cblens',
+    version={version!r},
+    info_plist={{
+        'CFBundleShortVersionString': {base_version!r},
+        'CFBundleVersion': {bundle_version!r},
+        'CBLensVersion': {version!r},
+    }},
 )
 """
     return spec
@@ -386,13 +490,14 @@ def _postprocess_macos_app(dist: Path) -> None:
     subprocess.run(["xattr", "-cr", str(app)], check=False)
     subprocess.run(
         ["codesign", "--force", "--deep", "--sign", "-", str(app)],
-        check=False,
+        check=True,
     )
 
 
-def build() -> None:
-    _ensure_pyinstaller()
+def build(source_ref: str) -> None:
     root = _repo_root()
+    identity = build_identity(root, source_ref)
+    _ensure_pyinstaller()
     dist = root / "dist"
     build_dir = root / "build"
     shutil.rmtree(dist, ignore_errors=True)
@@ -400,7 +505,9 @@ def build() -> None:
     (build_dir / "pyinstaller-config").mkdir(parents=True, exist_ok=True)
     (build_dir / "mplconfig").mkdir(parents=True, exist_ok=True)
 
-    spec_content = _generate_spec(root)
+    identity_path = build_dir / "desktop_build.json"
+    identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+    spec_content = _generate_spec(root, identity_path=identity_path)
     spec_file = build_dir / f"{APP_NAME}.spec"
     spec_file.write_text(spec_content, encoding="utf-8")
     print(f"[build] spec generated: {spec_file}")
@@ -419,8 +526,14 @@ def build() -> None:
     env["MPLCONFIGDIR"] = str(build_dir / "mplconfig")
     subprocess.run(cmd, cwd=root, check=True, env=env)
     _postprocess_macos_app(dist)
+    # 构建期间切分支或改源码也必须拒绝，不能给新代码贴上旧 commit。
+    if build_identity(root, source_ref) != identity:
+        raise SystemExit("构建期间源码身份发生变化，拒绝打包")
+    _package_desktop(dist, identity)
     print(f"[build] Build complete: {dist}")
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ref", required=True, help="当前 checkout 的 commit/tag；本地验证可用 HEAD")
+    build(parser.parse_args().ref)

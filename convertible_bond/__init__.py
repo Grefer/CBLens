@@ -45,7 +45,7 @@ from __future__ import annotations
 import importlib
 import importlib.util  # ``import importlib`` 不保证 ``importlib.util`` 已绑定
 
-__version__ = "1.0.0"
+from ._version import __version__
 
 # 公开名 → 它所在的子模块。这是公开 API 的**单一事实源**: ``__all__`` 由它派生,
 # ``__getattr__`` 也查它, 两处各写一份就是又一张会分叉的表。

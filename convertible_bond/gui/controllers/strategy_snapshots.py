@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from tkinter import filedialog, messagebox
 
+from ...paths import data_dir, data_path
 from ...strategy_backtest import strategy_type_for_rank_signal, write_strategy_backtest_csv
 
 from .strategy_common import _strategy_snapshot_jsonable, _strategy_snapshot_object_hook
@@ -249,13 +250,11 @@ class StrategySnapshotMixin:
 
     @staticmethod
     def _strategy_snapshot_path():
-        from pathlib import Path
-        return Path(__file__).resolve().parents[3] / "data" / "strategy_backtest_snapshot.json"
+        return data_path("strategy_backtest_snapshot.json")
 
     @staticmethod
     def _strategy_snapshots_dir():
-        from pathlib import Path
-        return Path(__file__).resolve().parents[3] / "data" / "strategy_backtest_snapshots"
+        return data_dir("strategy_backtest_snapshots")
 
     def _delete_strategy_snapshot_for_record(self, record) -> None:
         self._delete_strategy_snapshot_path(record.get("snapshot_path"))

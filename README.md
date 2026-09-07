@@ -24,6 +24,8 @@
 
 CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，也不是投资建议——它的目标是帮助你更快发现 *"值得人工复核"* 的低估、转股折价、事件风险和异常标的。
 
+当前开发目标是 **2.0.0rc1 候选版**（计划 tag：`v2.0.0-rc.1`，尚未发布）。这一版把关注池、历史策略研究和桌面交付连成完整工作流。升级涉及 API、CLI、CSV 和模型口径变化，请先读 [版本说明](CHANGELOG.md) 与 [v1 → v2 升级指南](docs/UPGRADING_V2.md)。
+
 ---
 ![alt text](assets/cblens-screenshot.png)
 ## 🧩 核心能力
@@ -141,10 +143,10 @@ pip install -e ".[dev]"
 
 ```bash
 python -m pip install -e ".[desktop]"
-python scripts/build_desktop.py
+python scripts/build_desktop.py --ref HEAD
 ```
 
-桌面 Release 发布已拆分：Windows 包由 GitHub Actions 的 `build-desktop.yml` 上传；macOS 包需在装有 Wind API 的本机运行 `python scripts/release_macos_desktop.py --tag v1.0.0` 上传，避免 CI 构建覆盖包内 WindPy 支持。
+构建要求干净的源码 checkout，产物记录构建 commit。Windows Release 包由 GitHub Actions 按 tag 构建；macOS Release 包由装有 Wind API 的本机构建。候选包准备与正式上传的区别见 [使用文档 · 桌面 APP](docs/USAGE.md#桌面-app)。
 
 ### 启动 GUI
 
@@ -306,6 +308,8 @@ CBLens/
 | 文档 | 说明 |
 | --- | --- |
 | 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 六大页面、CLI 命令、Python API、常见问题排障 |
+| 🆕 [版本说明](CHANGELOG.md) | 2.0 候选版亮点、兼容性变化与已知边界 |
+| ⬆️ [v1 → v2 升级指南](docs/UPGRADING_V2.md) | 数据备份、环境与脚本迁移、旧结果处理和回退 |
 | 🎨 [品牌说明](docs/BRAND.md) | 项目名称由来、图标含义、调色板与使用建议 |
 | 📦 [数据说明](data/README.md) | `cb_data.json`、`cb_events.json` 字段定义与刷新节奏 |
 | 🔧 [维护约定](AGENTS.md) | 给 agent 和维护者看的项目级上下文与编码规范 |
@@ -340,6 +344,8 @@ pytest tests/test_batch_pricing.py -x -q
 - **下修幅度**：已公告（提议/通过）时优先用公告解析到的真实新转股价（`parse_down_reset_new_price`）；解析不到或纯背景博弈时才回落 `down_reset_premium` + 监管下限（20 日均价/前收）近似，每股净资产下限暂未纳入。
 - **利率结构**：当前为标量利率，未建完整期限结构。
 - **股息率口径**：`q` 按连续股息率处理，数据源缺失时默认 0；不同数据源的股息率口径可能不同，建议对高股息正股做人工复核。
+- **历史股息率**：akshare 的股息率兜底使用实时快照，不能保证是估值日当时已知的值；股息率也未进入回测磁盘缓存，重跑可能重复取数并长时间等待。可显式指定固定 `q` 做可重复的情景研究，但这不等于恢复了真实历史股息率；详见 [升级指南](docs/UPGRADING_V2.md#模型口径与旧研究结果)。
+- **Gamma 边界**：下修价下限在一次求解中按初始股价冻结，附近的折点会让部分标的的 Γ 为负或随网格加密明显漂移。当前版本保留这一近似，Γ 不宜直接作为对冲或精细风险限额依据；价格结果也应结合下修情景复核。
 - **历史回测**：策略页推荐 `Wind高保真`，按估值日查询历史条款并用公告重建状态；`标准` 口径适合快速诊断，正式结论需要高保真复核。
 - **排序局限**：批量排序用于研究复核，不能替代流动性、公告、成交约束和组合风险判断。
 - **下修优势已删除**：`down_reset_edge` / `down_reset_robust_edge` 建在"反解让模型价等于市价的下修强度 λ"之上，而 `price(λ)` 对 λ 单调增、`λ ≥ 0` 意味着下修**只能把理论价往上推**——可解带宽恰是 `[price(0), price(3.0)]`，落在带外就返回 NaN。实测这条带太窄：全量程只能推高**中位 12.2 元**，而需要解释的缺口（市价 − `price(0)`）**中位 24.5 元 = 2.0 倍**，12 只样本里 8 只超出上界。于是**两个 regime 从相反的两端同时失效** —— 2026-08 高位（中位偏差 +21%）`no_implied_solution` 270/284，仅 13 只可解且隐含 λ 中位 1.74（模型 0.25 的 7 倍，实为系统性偏移被洗进 λ）；2024-09~11 谷底（中位偏差 −10%~−23%）市价掉在 `price(0)` 下方，**0 只可解**，四期回测 100% 现金、超额 −13.03%。**该字段与其全部消费者（列、「下修优势」视图、`rank_signal` 两档、`min_down_reset_edge_value` 门槛、σ/利差扰动带、CSV 列、`solve_implied_p_down` 与 `down_reset_sensitivity`）已于 2026-08-29 整体删除**；`down_reset_uplift`（模型自己的下修价值贡献）与三 regime 强度机制**保留**，它们与这个反解无关。

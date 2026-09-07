@@ -317,7 +317,7 @@ def parse_terms_patch_from_announcement(
         )
 
     if event_type in {"down_reset_approved", "conversion_price_adjusted"}:
-        parsed = parse_conversion_price_adjustment(body or title)
+        parsed = parse_conversion_price_adjustment(body or title, bond_code=bond_code)
         if not parsed or parsed.get("new_price") is None:
             return None
         old_price = parsed.get("old_price")
@@ -373,8 +373,39 @@ def parse_terms_patch_from_announcement(
     )
 
 
-def parse_conversion_price_adjustment(text: str | None) -> dict | None:
-    """解析转股价格调整公告中的新旧转股价和生效日."""
+def _multi_bond_conversion_prices(
+    summary: str, name: str, price: str, value_sep: str,
+) -> tuple[float, float] | None:
+    """多债摘要只接受按简称明确列出的前后价, 不去正文沿革补缺失值。"""
+    named = rf"[“\"‘']?{re.escape(name)}[”\"’']?的?"
+
+    def unique_price(pattern: str, text: str) -> float | None:
+        values = {_safe_float(m.group(1)) for m in re.finditer(pattern, text)}
+        return values.pop() if len(values) == 1 else None
+
+    # 聚合/合顺: 每只债各有「简称 + 修正前/后转股价格」两行。
+    before = unique_price(
+        rf"{named}(?:调整前|修正前)的?转股价格{value_sep}{price}", summary)
+    after = unique_price(
+        rf"{named}(?:调整后|修正后)的?转股价格{value_sep}{price}", summary)
+    if before is not None and after is not None:
+        return before, after
+
+    # 上声/上26: 「调整前/后」各领一个块, 块内每只债按简称列价。
+    blocks = re.search(r"(?:调整前|修正前)(.*?)(?:调整后|修正后)(.*)", summary)
+    if blocks:
+        pattern = rf"{named}转股价格{value_sep}{price}"
+        before = unique_price(pattern, blocks.group(1))
+        after = unique_price(pattern, blocks.group(2))
+        if before is not None and after is not None:
+            return before, after
+    return None
+
+
+def parse_conversion_price_adjustment(
+    text: str | None, *, bond_code: str | None = None,
+) -> dict | None:
+    """解析新旧转股价和生效日; 明确列出多只债的公告须给目标代码并能从摘要消歧。"""
     if not text:
         return None
     t = re.sub(r"\s+", "", str(text))
@@ -389,25 +420,83 @@ def parse_conversion_price_adjustment(text: str | None) -> dict | None:
     # 因此按可靠性排序, 并逐 pattern 指定取首个还是最后一个:
     #   结构化摘要只描述本次 → 取**首个** (它在文首, 后文的沿革不会命中这个句式);
     #   叙述型沿革按时间排   → 取**最后一个** (最新的那次)。
+    # 「为：」是两个连续字, 不能写成 (?:为|：)? 的互斥分支; 「由原」同理。
+    # 只放宽明确的连接词, 不跨过「不低于」等条件措辞去捡数字。
+    price = r"(?:人民币)?([0-9]+(?:\.[0-9]+)?)元/股"
+    value_sep = r"(?:为)?[:：]?"
+    # cninfo 按发行人返回公告。同一份 PDF 可同时调整两只债, 标题包含本债不代表首个价
+    # 就属于本债。先认文首「债券/转债代码」, 多债时强制通过代码→简称→摘要价映射。
+    header = re.split(r"一[、．.]", t[:1500], maxsplit=1)[0]
+    # 发行人也会同列普通公司债 (如 242471、149812), 它们没有转股价。
+    # 六位代码须有右边界, 避免 PDF 页码与下一页代码黏合后截出一个假代码。
+    code_matches = list(re.finditer(
+        r"(?:债券|转债)代码[:：]?[“\"]?((?:11[0138]|12[378])\d{3})(?!\d)", header))
+    codes = {m.group(1) for m in code_matches}
+    target = str(bond_code or "").split(".")[0]
+    if bond_code and codes and target not in codes:
+        return None
+    if len(codes) > 1:
+        if target not in codes:
+            return None
+        names = set()
+        for match in code_matches:
+            if match.group(1) != target:
+                continue
+            name = re.match(
+                r"[”\"]?[,，;；]?(?:债券|转债)简称[:：]?[“\"]?"
+                r"([A-Za-z0-9\u4e00-\u9fff]{0,10}?(?:转债|转\d{1,2}(?:债)?))",
+                header[match.end():],
+            )
+            if name:
+                names.add(name.group(1))
+        if len(names) != 1:
+            return None
+        summary = header
+        prices = _multi_bond_conversion_prices(summary, names.pop(), price, value_sep)
+        # 目前只支持摘要明确披露同一个实施日。多债各有实施日时也不能拿首个日期套所有债。
+        dates = set(re.findall(
+            r"(?:生效日期|转股价格?(?:调整|修正)?的?(?:生效|实施|实行|起始)(?:日期|时间))"
+            r"(?:为)?[:：]?(\d{4}年\d{1,2}月\d{1,2}日)", summary))
+        if prices is None or len(dates) != 1:
+            return None
+        old_price, new_price = prices
+        t = summary
+
     pair_patterns = (
-        (r"(?:调整前|修正前).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股.{0,80}?(?:调整后|修正后).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股", "first"),
-        (r"(?:原|当前)转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股.{0,80}?(?:调整后|修正后|本次调整后).{0,30}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股", "first"),
-        (r"转股价格.{0,30}?由([0-9]+(?:\.[0-9]+)?)元/股.{0,30}?(?:调整|修正)(?:为|至)([0-9]+(?:\.[0-9]+)?)元/股", "last"),
+        (rf"(?:调整前|修正前).{{0,30}}?转股价格{value_sep}{price}.{{0,80}}?(?:调整后|修正后).{{0,30}}?转股价格{value_sep}{price}", "first"),
+        (rf"转股价格[:：]?(?:调整前|修正前){value_sep}{price}.{{0,30}}?(?:调整后|修正后){value_sep}{price}", "first"),
+        (rf"(?:原|当前)转股价格{value_sep}{price}.{{0,80}}?(?:调整后|修正后|本次调整后).{{0,30}}?转股价格{value_sep}{price}", "first"),
     )
-    for pattern, pick in pair_patterns:
-        matches = list(re.finditer(pattern, t))
-        if matches:
-            match = matches[0] if pick == "first" else matches[-1]
-            old_price = _safe_float(match.group(1))
-            new_price = _safe_float(match.group(2))
-            break
+    if new_price is None:
+        for pattern, pick in pair_patterns:
+            matches = list(re.finditer(pattern, t))
+            if matches:
+                match = matches[0] if pick == "first" else matches[-1]
+                old_price = _safe_float(match.group(1))
+                new_price = _safe_float(match.group(2))
+                break
+
+    if new_price is None:
+        # 只有本次新价的摘要, 也比沿革里完整的一对旧价/新价更可信。
+        # 普通「调整后」不提前: 它也可能出现在沿革段, 会抢掉末尾本次叙述。
+        current = re.search(
+            rf"本次(?:调整后|修正后).{{0,35}}?转股价格{value_sep}{price}", t)
+        if current:
+            new_price = _safe_float(current.group(1))
+
+    if new_price is None:
+        narrative = list(re.finditer(
+            rf"转股价格.{{0,30}}?由(?:原(?:来)?的?)?{price}.{{0,30}}?(?:调整|修正)(?:为|至){price}", t))
+        if narrative:
+            old_price = _safe_float(narrative[-1].group(1))
+            new_price = _safe_float(narrative[-1].group(2))
 
     if new_price is None:
         # 单价兜底同理: "调整后转股价格为X" 是摘要句式取首个; 光杆
         # "转股价格调整为X" 会命中沿革里的每一次, 取最后一个。
         single_patterns = (
-            (r"(?:调整后|修正后|本次调整后|本次修正后).{0,35}?转股价格(?:为|:|：)?([0-9]+(?:\.[0-9]+)?)元/股", "first"),
-            (r"转股价格(?:调整|修正)(?:为|至)([0-9]+(?:\.[0-9]+)?)元/股", "last"),
+            (rf"(?:调整后|修正后).{{0,35}}?转股价格{value_sep}{price}", "first"),
+            (rf"转股价格(?:调整|修正)(?:为|至){price}", "last"),
         )
         for pattern, pick in single_patterns:
             matches = list(re.finditer(pattern, t))
@@ -416,7 +505,9 @@ def parse_conversion_price_adjustment(text: str | None) -> dict | None:
                 new_price = _safe_float(match.group(1))
                 break
 
-    if new_price is None:
+    # 回购注销公告常以「调整前/后」披露同一个价, 实际结论是「不调整」。
+    # 它是当前值的确认, 不应制造一条按公告日生效的 K 变更。
+    if new_price is None or old_price == new_price:
         return None
 
     effective_date = _parse_effective_date(t)
@@ -657,12 +748,14 @@ def _parse_credit_watch_status(t: str) -> str | None:
 def _parse_effective_date(text: str) -> date | None:
     date_re = r"(\d{4})年(\d{1,2})月(\d{1,2})日"
     patterns = (
-        r"(?:生效日期|调整生效日期|修正生效日期)(?:为|:|：)?.{0,20}?" + date_re,
-        r"自.{0,12}?" + date_re + r"起生效",
-        date_re + r"起生效",
+        (r"(?:生效日期|转股价格?(?:调整|修正)?的?(?:生效|实施|实行|起始)(?:日期|时间))(?:为)?[:：]?" + date_re, "first"),
+        (r"自.{0,12}?" + date_re + r"起生效", "last"),
+        (date_re + r"起生效", "last"),
     )
-    for pattern in patterns:
-        for match in re.finditer(pattern, text):
+    for pattern, pick in patterns:
+        # 与价格一致: 摘要日期优先; 只有叙述时取沿革之后的本次生效日。
+        matches = list(re.finditer(pattern, text))
+        for match in matches if pick == "first" else reversed(matches):
             parsed = _safe_date(*match.groups()[-3:])
             if parsed:
                 return parsed

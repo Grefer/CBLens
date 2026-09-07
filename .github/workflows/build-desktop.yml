@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Release tag to upload the Windows desktop asset to"
-        required: false
-        default: "v1.0.0"
+        description: "Existing release tag matching the package version (for example v2.0.0-rc.1)"
+        required: true
   push:
     tags:
       - "v*"
@@ -14,12 +13,18 @@ on:
 permissions:
   contents: write
 
+env:
+  CBLENS_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
 jobs:
   windows-release:
     name: Windows release asset
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.CBLENS_RELEASE_TAG }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
@@ -27,33 +32,62 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install -e ".[desktop]"
+        run: python -m pip install -e ".[desktop,dev]"
+
+      - name: Verify release source
+        run: python -c "import os; from pathlib import Path; from scripts.build_desktop import build_identity; build_identity(Path.cwd(), 'refs/tags/' + os.environ['CBLENS_RELEASE_TAG'], release_tag=os.environ['CBLENS_RELEASE_TAG'])"
+
+      - name: Compile check
+        run: python -m compileall -q convertible_bond CB.py gui.py scripts
+
+      - name: Lint
+        run: ruff check convertible_bond tests CB.py gui.py scripts
+
+      - name: Test
+        run: pytest -q
 
       - name: Build app
-        run: python scripts/build_desktop.py
+        run: python scripts/build_desktop.py --ref "refs/tags/$env:CBLENS_RELEASE_TAG"
 
-      - name: Package Windows app
+      - name: Diagnose first installation
         shell: pwsh
-        run: Compress-Archive -Path dist/CBLens.exe -DestinationPath dist/CBLens-Windows.zip -Force
+        run: |
+          $env:CBLENS_DATA_DIR = Join-Path $env:RUNNER_TEMP "cblens-first-install"
+          python -c "import subprocess; subprocess.run(['dist/CBLens.exe', '--diagnose', '--check'], check=True)"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: CBLens-Windows
-          path: dist/CBLens-Windows.zip
+          path: |
+            dist/CBLens-Windows.zip
+            dist/CBLens-Windows-build.json
+
+      - name: Refuse existing release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -c "import os; from scripts.release_macos_desktop import _check_assets_absent; _check_assets_absent(os.environ['CBLENS_RELEASE_TAG'], names={'CBLens-Windows.zip', 'CBLens-Windows-build.json'}, allow_missing_release=True)"
 
       - name: Upload Windows release asset
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
-          files: dist/CBLens-Windows.zip
+          tag_name: ${{ env.CBLENS_RELEASE_TAG }}
+          prerelease: ${{ contains(env.CBLENS_RELEASE_TAG, '-') }}
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/CBLens-Windows.zip
+            dist/CBLens-Windows-build.json
 
   macos-artifact:
     name: macOS artifact only
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.CBLENS_RELEASE_TAG }}
+          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
@@ -61,19 +95,33 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install -e ".[desktop]"
+        run: python -m pip install -e ".[desktop,dev]"
+
+      - name: Verify release source
+        run: python -c "import os; from pathlib import Path; from scripts.build_desktop import build_identity; build_identity(Path.cwd(), 'refs/tags/' + os.environ['CBLENS_RELEASE_TAG'], release_tag=os.environ['CBLENS_RELEASE_TAG'])"
+
+      - name: Compile check
+        run: python -m compileall -q convertible_bond CB.py gui.py scripts
+
+      - name: Lint
+        run: ruff check convertible_bond tests CB.py gui.py scripts
+
+      - name: Test
+        run: pytest -q
 
       - name: Build app
-        run: python scripts/build_desktop.py
+        run: python scripts/build_desktop.py --ref "refs/tags/$CBLENS_RELEASE_TAG"
 
-      - name: Package macOS app
-        run: ditto -c -k --norsrc --keepParent dist/CBLens.app dist/CBLens-macOS.zip
+      - name: Diagnose first installation
+        run: CBLENS_DATA_DIR="$RUNNER_TEMP/cblens-first-install" dist/CBLens.app/Contents/MacOS/CBLens --diagnose --check
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: CBLens-macOS
-          path: dist/CBLens-macOS.zip
+          path: |
+            dist/CBLens-macOS.zip
+            dist/CBLens-macOS-build.json
 
       - name: Keep release macOS asset local-only
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'

@@ -8,6 +8,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from ._version import __version__
 from .paths import (
     _SEEDED_DATA_FILES,
     app_data_dir,
@@ -101,13 +102,47 @@ def _import_status(module_name: str) -> str:
     return f"imported ({location})" if location else "imported"
 
 
+def _data_error(path: Path, filename: str) -> str | None:
+    """发布检查只验证真正能消费的种子，打印了 missing 不能仍然退出成功。"""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"{filename}: {exc}"
+    if not isinstance(payload, dict):
+        return f"{filename}: 应为 JSON object"
+    if filename == "cb_data.json" and not any(not str(key).startswith("_") for key in payload):
+        return f"{filename}: 没有条款"
+    if filename == "cb_terms_patches.json":
+        patches = payload.get("patches")
+        if not isinstance(patches, list) or not patches:
+            return f"{filename}: 没有历史 patch"
+    if filename == "batch_pricing_cache.json":
+        rows = payload.get("results")
+        if not isinstance(rows, list) or not any(isinstance(row, dict) and row.get("status") == "ok" for row in rows):
+            return f"{filename}: 没有成功定价行"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     """Print frozen app resource/data/import state for quick support checks."""
-    _ = argv or sys.argv[1:]
+    args = argv if argv is not None else sys.argv[1:]
+    strict = "--check" in args
+    errors: list[str] = []
     windpy_paths = prepare_windpy_import_path()
     seeded = seed_data_files()
 
     print("CBLens desktop diagnostics")
+    print(f"version: {__version__}")
+    identity_path = project_root() / "desktop_build.json"
+    try:
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        print(f"build: {json.dumps(identity, ensure_ascii=False, sort_keys=True)}")
+        if strict and (identity.get("version") != __version__ or not identity.get("commit")):
+            errors.append("构建身份缺少 commit 或版本不一致")
+    except (OSError, ValueError, AttributeError) as exc:
+        print(f"build: unavailable ({exc})")
+        if strict:
+            errors.append("构建身份清单不可读")
     print(f"frozen: {is_frozen_app()}")
     print(f"executable: {sys.executable}")
     print(f"_MEIPASS: {getattr(sys, '_MEIPASS', '')}")
@@ -119,20 +154,37 @@ def main(argv: list[str] | None = None) -> int:
     print("seeded targets:")
     for target in seeded:
         print(f"  {target}: {_json_summary(target)}")
+        if strict and (error := _data_error(target, target.name)):
+            errors.append(error)
     print()
     print("bundled seeds:")
     for filename in _DATA_FILES:
         source = bundled_data_path(filename)
         if source is None:
             print(f"  {filename}: missing")
+            if strict:
+                errors.append(f"包内种子缺失: {filename}")
         else:
             print(f"  {source}: {_json_summary(source)}")
+            if strict and (error := _data_error(source, filename)):
+                errors.append(error)
     print()
     print("modules:")
-    print(f"  WindPy: {_import_status('WindPy')}")
-    for module_name in ("akshare", "certifi", "requests"):
-        print(f"  {module_name}: {_module_status(module_name)}")
-    return 0
+    wind_status = _import_status("WindPy")
+    print(f"  WindPy: {wind_status}")
+    if "--require-windpy" in args and not wind_status.startswith("imported"):
+        errors.append("发布包 WindPy 无法导入")
+    modules = ("akshare", "certifi", "requests")
+    if strict:
+        modules += ("numpy", "scipy", "customtkinter", "matplotlib.backends.backend_tkagg")
+    for module_name in modules:
+        status = _import_status(module_name) if strict else _module_status(module_name)
+        print(f"  {module_name}: {status}")
+        if strict and not status.startswith("imported"):
+            errors.append(f"{module_name}: {status}")
+    for error in errors:
+        print(f"ERROR: {error}", file=sys.stderr)
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

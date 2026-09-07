@@ -682,7 +682,199 @@ def test_conversion_price_single_price_fallback_takes_latest():
     assert parse_conversion_price_adjustment(text)["new_price"] == pytest.approx(20.88)
 
 
+@pytest.mark.parametrize("separator", ["为", ":", "：", "为:", "为："])
+def test_conversion_price_summary_accepts_punctuation_without_taking_old_recap(separator):
+    """长海 2026-09-02: 「为：」摘要不能让位给 2024 年沿革。"""
+    text = (
+        f"本次调整前“长海转债”的转股价格{separator}14.99元/股。"
+        f"本次调整后“长海转债”的转股价格{separator}14.79元/股。"
+        "本次转股价格调整生效日期：2026年9月9日。"
+        "历次调整情况：转股价格由15.79元/股调整为15.64元/股，"
+        "调整后的转股价格自2024年5月29日起生效。"
+    )
+    assert parse_conversion_price_adjustment(text) == {
+        "old_price": 14.99, "new_price": 14.79,
+        "effective_date": date(2026, 9, 9), "confidence": "parsed",
+    }
+
+
+def test_conversion_price_compact_summary_and_start_date_precede_history():
+    """希望转 2 的共享表头与「调整起始日期」都在摘要, 不能拿沿革日期拼接。"""
+    text = (
+        "特别提示：“希望转2”转股价格：调整前为10.59元/股，调整后为10.13元/股。"
+        "转股价格调整起始日期：2026年9月1日。"
+        "前次转股价格调整情况：转股价格由14.39元/股向下修正为10.6元/股，"
+        "修正后的转股价格自2023年12月28日起生效。"
+        "转股价格由10.61元/股调整为10.59元/股。"
+    )
+    assert parse_conversion_price_adjustment(text) == {
+        "old_price": 10.59, "new_price": 10.13,
+        "effective_date": date(2026, 9, 1), "confidence": "parsed",
+    }
+
+
+@pytest.mark.parametrize("date_label", [
+    "本次转股价格调整实施日期", "本次转股价格修正实施日期",
+    "转股价格调整生效时间", "新转股价实行日期",
+])
+def test_conversion_price_effective_date_label_does_not_fall_back_to_history(date_label):
+    text = (
+        "调整前转股价格：19.00元/股。调整后转股价格：19.02元/股。"
+        f"{date_label}：2026年7月10日。"
+        "此前调整后的转股价格自2024年6月24日起生效。"
+    )
+    assert parse_conversion_price_adjustment(text)["effective_date"] == date(2026, 7, 10)
+
+
+@pytest.mark.parametrize("original", ["原", "原来的"])
+def test_conversion_price_narrative_accepts_original_price_and_its_latest_date(original):
+    text = (
+        "前次转股价格由15.79元/股调整为15.64元/股，"
+        "调整后的转股价格自2024年5月29日起生效。"
+        f"本次转股价格由{original}14.99元/股调整为14.79元/股，"
+        "调整后的转股价格自2026年9月9日起生效。"
+    )
+    parsed = parse_conversion_price_adjustment(text)
+    assert parsed["old_price"] == 14.99
+    assert parsed["new_price"] == 14.79
+    assert parsed["effective_date"] == date(2026, 9, 9)
+
+
+def test_conversion_price_summary_accepts_currency_label_for_upward_adjustment():
+    """国微 2026-07-24 是回购后的上调, 不应误取前一次派息下调。"""
+    text = (
+        "调整前转股价格：人民币96.99元/股。调整后转股价格：人民币97.01元/股。"
+        "转股价格调整生效日期：2026年7月24日。"
+        "前次转股价格由97.30元/股调整为96.99元/股，"
+        "调整后的转股价格自2026年6月30日起生效。"
+    )
+    parsed = parse_conversion_price_adjustment(text)
+    assert parsed["old_price"] == 96.99
+    assert parsed["new_price"] == 97.01
+    assert parsed["effective_date"] == date(2026, 7, 24)
+
+
+def test_conversion_price_current_single_summary_precedes_historical_pair():
+    text = (
+        "本次调整后“测试转债”的转股价格为：14.79元/股。"
+        "调整生效日期：2026年9月9日。"
+        "历次调整情况：转股价格由15.79元/股调整为15.64元/股。"
+    )
+    parsed = parse_conversion_price_adjustment(text)
+    assert parsed["new_price"] == 14.79
+    assert parsed["old_price"] is None, "本次摘要没给旧价, 不许拿沿革补齐"
+
+
+@pytest.mark.parametrize("body", [
+    "调整前转股价格：42.38元/股。调整后转股价格：42.38元/股。转股价格不变。",
+    "转股价格：调整前为8.67元/股，调整后为8.67元/股。本次不作调整。",
+    "本次调整后转股价格为：不低于10.00元/股。",
+])
+def test_conversion_price_does_not_create_a_change_from_confirmation_or_condition(body):
+    assert parse_conversion_price_adjustment(body) is None
+    assert parse_terms_patch_from_announcement(
+        "111025.SH", "关于可转债转股价格调整的公告", date(2026, 8, 20),
+        event_type="conversion_price_adjusted", body=body,
+    ) is None
+
+
 # ── 标的串号: 同一发行人两只转债 ──
+
+_MULTI_BOND_SHARED_BLOCKS = (
+    "证券代码：688533 证券简称：上声电子\n"
+    "转债代码：118037 转债简称：上声转债\n"
+    "转债代码：118067 转债简称：上 26 转债\n"
+    "重要内容提示："
+    "调整前“上声转债”转股价格：28.99元/股；“上26转债”转股价格：32.60元/股。"
+    "调整后“上声转债”转股价格：28.64元/股；“上26转债”转股价格：32.25元/股。"
+    "转股价格调整实施日期：2026年6月8日。"
+    "一、转股价格调整依据。"
+    "历次调整情况：“上声转债”转股价格由32.00元/股调整为28.99元/股。"
+)
+_MULTI_BOND_NAMED_ROWS = (
+    "证券代码：605166 证券简称：聚合顺\n"
+    "转债代码：111003 转债简称：聚合转债\n"
+    "转债代码：111020 转债简称：合顺转债\n"
+    "重要内容提示："
+    "“聚合转债”修正前转股价格：11.37元/股。"
+    "“聚合转债”修正后转股价格：11.31元/股。"
+    "“合顺转债”修正前转股价格：10.59元/股。"
+    "“合顺转债”修正后转股价格：10.53元/股。"
+    "“聚合转债”、“合顺转债”本次转股价格调整实施日期：2026年6月24日。"
+    "一、可转债基本情况。"
+    "历次调整情况：转股价格由14.63元/股调整为14.42元/股。"
+)
+
+
+@pytest.mark.parametrize("body,code,old,new,effective", [
+    (_MULTI_BOND_SHARED_BLOCKS, "118037.SH", 28.99, 28.64, date(2026, 6, 8)),
+    (_MULTI_BOND_SHARED_BLOCKS, "118067.SH", 32.60, 32.25, date(2026, 6, 8)),
+    (_MULTI_BOND_NAMED_ROWS, "111003.SH", 11.37, 11.31, date(2026, 6, 24)),
+    (_MULTI_BOND_NAMED_ROWS, "111020.SH", 10.59, 10.53, date(2026, 6, 24)),
+])
+def test_conversion_price_multi_bond_announcement_selects_target(body, code, old, new, effective):
+    """两份官方 PDF 的摘要结构; 同一公告按查询债券返回各自的 K。"""
+    expected = {
+        "old_price": old, "new_price": new,
+        "effective_date": effective, "confidence": "parsed",
+    }
+    assert parse_conversion_price_adjustment(body, bond_code=code) == expected
+    assert parse_conversion_price_adjustment(body, bond_code=code[:6]) == expected
+    patch = parse_terms_patch_from_announcement(
+        code, "关于实施年度权益分派调整可转债转股价格的公告", date(2026, 5, 29),
+        event_type="conversion_price_adjusted", body=body,
+    )
+    assert patch.fields == {"conversion_price": new}
+    assert patch.before_fields == {"conversion_price": old}
+    assert patch.effective_date == effective
+
+
+@pytest.mark.parametrize("body", [_MULTI_BOND_SHARED_BLOCKS, _MULTI_BOND_NAMED_ROWS])
+@pytest.mark.parametrize("code", [None, "123456.SZ"])
+def test_conversion_price_multi_bond_without_known_target_is_ambiguous(body, code):
+    assert parse_conversion_price_adjustment(body, bond_code=code) is None
+
+
+@pytest.mark.parametrize("body", [
+    _MULTI_BOND_SHARED_BLOCKS.replace("“上26转债”转股价格：32.25元/股", "本次不调整"),
+    _MULTI_BOND_SHARED_BLOCKS.replace("转债简称：上 26 转债", "转债简称：未知简称"),
+    _MULTI_BOND_SHARED_BLOCKS.replace(
+        "一、转股价格调整依据", "上26转债转股价格调整实施日期：2026年6月9日。一、转股价格调整依据"),
+    _MULTI_BOND_SHARED_BLOCKS.replace(
+        "一、转股价格调整依据", "“上26转债”转股价格：31.00元/股。一、转股价格调整依据"),
+])
+def test_conversion_price_multi_bond_incomplete_or_conflicting_summary_does_not_fall_back(body):
+    assert parse_conversion_price_adjustment(body, bond_code="118067.SH") is None
+
+
+def test_conversion_price_single_bond_code_rejects_other_target():
+    body = "债券代码：123002 债券简称：测试转债。调整前转股价格：10.0元/股。调整后转股价格：9.8元/股。"
+    assert parse_conversion_price_adjustment(body, bond_code="123091.SZ") is None
+    assert parse_conversion_price_adjustment(body, bond_code="123002.SZ")["new_price"] == 9.8
+    assert parse_conversion_price_adjustment(body)["new_price"] == 9.8
+
+
+def test_conversion_price_regular_bond_codes_and_pdf_page_number_do_not_imply_multiple_cbs():
+    body = (
+        "债券代码：242471 债券简称：25渝水01。"
+        "债券代码：149812 债券简称：22太阳G1。"
+        "转债代码：123269 转债简称：金杨转债。"
+        "债券代码：\n1\n123269。"
+        "本次调整前的转股价格：39.80元/股。本次调整后的转股价格：28.32元/股。"
+        "调整后的转股价格生效日期：2026年6月3日。"
+    )
+    assert parse_conversion_price_adjustment(body, bond_code="123269.SZ")["new_price"] == 28.32
+
+
+def test_conversion_price_multi_bond_header_without_named_summary_stays_ambiguous():
+    body = (
+        "转债代码：111003 转债简称：聚合转债。转债代码：111020 转债简称：合顺转债。"
+        "重要内容提示：修正前转股价格：11.31元/股。修正后转股价格：8.85元/股。"
+        "“聚合转债”本次转股价格修正实施日期：2026年8月14日。"
+    )
+    assert parse_conversion_price_adjustment(body, bond_code="111003.SH") is None
+    assert parse_conversion_price_adjustment(body, bond_code="111020.SH") is None
+
 
 def test_terms_patch_rejects_announcement_naming_another_bond():
     """cninfo 按发行人返回公告, 另一只债的调整公告会被归到当前查询的 code 上。

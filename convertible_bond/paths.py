@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 APP_NAME = "CBLens"
-_SEEDED_DATA_FILES = {"cb_data.json", "cb_events.json", "down_reset_overrides.json", "batch_pricing_cache.json", "cb_valuation_history.json"}
+_SEEDED_DATA_FILES = {
+    "cb_data.json", "cb_events.json", "cb_terms_patches.json",
+    "down_reset_overrides.json", "batch_pricing_cache.json", "cb_valuation_history.json",
+}
 _BUNDLED_DATA_ALIASES = {
     # 运行态批量缓存仍写入/读取 batch_pricing_cache.json；Release 构建则可携带
     # 一个只读种子文件，避免 CI 没有本机运行态缓存时桌面包首启空表。
@@ -144,6 +147,10 @@ def _needs_seed(target: Path, filename: str | None = None) -> bool:
     """True when the target file is missing or looks corrupt/empty."""
     if not target.exists():
         return True
+    if filename == "cb_terms_patches.json":
+        # 升级只补缺失的 patch 库。已有文件可能含用户回洗/同步结果，即使为空或
+        # 损坏也不擅自用发行种子覆盖；严格诊断会报告损坏，修复由显式迁移处理。
+        return False
     try:
         if target.stat().st_size < 10:
             return True
@@ -161,7 +168,7 @@ def _needs_seed(target: Path, filename: str | None = None) -> bool:
                 and any(not str(k).startswith("_") for k in payload)
             )
         if filename == "batch_pricing_cache.json":
-            results = payload.get("results")
+            results = payload.get("results") if isinstance(payload, dict) else None
             return not (
                 isinstance(payload, dict)
                 and isinstance(results, list)

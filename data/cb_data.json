@@ -19772,14 +19772,15 @@
   },
   "113665.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-07T00:20:59",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
         "akshare:ratings": "2026-08-25T08:59:19",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-09-03T20:10:28",
+        "cninfo:conversion_price": "2026-09-07T00:20:59"
       },
-      "source": "cb_events"
+      "source": "cninfo:conversion_price"
     },
     "bond_turnover_amount": 19848560.0,
     "call_announce_date": null,
@@ -19789,7 +19790,7 @@
     "call_status": null,
     "call_trigger_pct": 130.0,
     "close": 129.6098,
-    "conversion_price": 6.28,
+    "conversion_price": 6.31,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": "2026-06-05",
     "conversion_suspension_status": null,
@@ -26504,13 +26505,14 @@
   },
   "118066.SH": {
     "_meta": {
-      "fetched_at": "2026-09-03T06:20:54",
+      "fetched_at": "2026-09-07T00:20:59",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-08-30T22:55:52"
+        "cb_events": "2026-08-30T22:55:52",
+        "cninfo:conversion_price": "2026-09-07T00:20:59"
       },
-      "source": "Wind:admission_status"
+      "source": "cninfo:conversion_price"
     },
     "bond_turnover_amount": 17094689.0,
     "call_announce_date": null,
@@ -26520,7 +26522,7 @@
     "call_status": null,
     "call_trigger_pct": 130.0,
     "close": 132.1984,
-    "conversion_price": 56.2,
+    "conversion_price": 55.96,
     "conversion_suspension_end_date": null,
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": null,
@@ -36159,13 +36161,14 @@
   },
   "123150.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-07T00:20:59",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-09-03T20:10:28",
+        "cninfo:conversion_price": "2026-09-07T00:20:59"
       },
-      "source": "cb_events"
+      "source": "cninfo:conversion_price"
     },
     "bond_turnover_amount": 29556270.2,
     "call_announce_date": null,
@@ -36175,7 +36178,7 @@
     "call_status": null,
     "call_trigger_pct": 130.0,
     "close": 134.1329,
-    "conversion_price": 11.6,
+    "conversion_price": 11.45,
     "conversion_suspension_end_date": "2026-09-03",
     "conversion_suspension_start_date": null,
     "conversion_suspension_status": "恢复转股",
@@ -48323,13 +48326,14 @@
   },
   "127049.SZ": {
     "_meta": {
-      "fetched_at": "2026-09-03T20:10:28",
+      "fetched_at": "2026-09-07T00:20:59",
       "fetched_at_by_source": {
         "Wind": "2026-08-30T22:27:07",
         "Wind:admission_status": "2026-09-03T06:20:54",
-        "cb_events": "2026-09-03T20:10:28"
+        "cb_events": "2026-09-03T20:10:28",
+        "cninfo:conversion_price": "2026-09-07T00:20:59"
       },
-      "source": "cb_events"
+      "source": "cninfo:conversion_price"
     },
     "bond_turnover_amount": 468199181.8,
     "call_announce_date": null,
@@ -48339,7 +48343,7 @@
     "call_status": null,
     "call_trigger_pct": 130.0,
     "close": 112.7039,
-    "conversion_price": 10.59,
+    "conversion_price": 10.13,
     "conversion_suspension_end_date": "2026-09-02",
     "conversion_suspension_start_date": "2021-11-08",
     "conversion_suspension_status": "恢复转股",
@@ -62015,7 +62019,7 @@
   },
   "_bundle_meta": {
     "n_bonds": 1060,
-    "updated_at": "2026-09-03T20:31:16"
+    "updated_at": "2026-09-07T00:20:59"
   },
   "q18082207.IME": {
     "_meta": {

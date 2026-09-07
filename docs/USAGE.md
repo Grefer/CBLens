@@ -8,6 +8,8 @@
 
 本文面向第一次运行和日常维护 CBLens 的使用者。更底层的数据字段说明见 [`data/README.md`](../data/README.md)，维护约定见 [`AGENTS.md`](../AGENTS.md)。
 
+从 v1 或期间的开发版升级，请先按 [v1 → v2 升级指南](UPGRADING_V2.md) 备份数据并迁移脚本；候选版变更见 [版本说明](../CHANGELOG.md)。
+
 ## 目录
 
 - [1. 安装](#1-安装)
@@ -101,7 +103,7 @@ WindPy 不通过 pip 发布。如需使用：
 
 ```bash
 python -m pip install -e ".[desktop]"
-python scripts/build_desktop.py
+python scripts/build_desktop.py --ref HEAD
 ```
 
 构建产物位于 `dist/`。打包后的 APP 会把运行态数据写入用户目录，而不是写入应用安装目录：
@@ -109,6 +111,8 @@ python scripts/build_desktop.py
 - macOS: `~/Library/Application Support/CBLens/data`
 - Windows: `%APPDATA%\CBLens\data`
 - 可用 `CBLENS_DATA_DIR` 环境变量覆盖数据目录
+
+构建同时生成平台 ZIP 与旁置的 `CBLens-macOS-build.json` / `CBLens-Windows-build.json`，其中记录包版本、构建 commit、tag、架构和 ZIP 的 SHA-256。下载和归档时保留 ZIP 与对应清单；APP 内的诊断也会显示构建版本与 commit。
 
 若打包后怀疑内置数据或数据源依赖没有被带上，可在终端运行：
 
@@ -121,10 +125,18 @@ dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位；WindPy 会实际 import 一次但不会启动连接。
 GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时，APP 会像 DeltaLab 一样优先使用包内 WindPy。若发布包未内置 WindPy，运行时会自动探测本机 Wind 终端；非默认位置可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
 
-发布桌面包时，Windows 与 macOS 分开处理，避免 CI 中无 WindPy 的 macOS 包覆盖本机 WindPy 版：
+构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前准备的包版本为 `2.0.0rc1`，计划 tag 为 `v2.0.0-rc.1`；创建 tag 与上传 Release 是单独的发布动作。
 
-- Windows: 触发 GitHub Actions 的 `build-desktop.yml`，它只会覆盖 Release 里的 `CBLens-Windows.zip`
-- macOS: 在装有 Wind API 的本机运行 `python scripts/release_macos_desktop.py --tag v1.0.0`，脚本会先诊断 WindPy 与缓存数据，再覆盖上传 `CBLens-macOS.zip`
+桌面包分平台发布：
+
+- Windows：GitHub Actions 的 `build-desktop.yml` 按 tag 检出、运行测试、构建并上传 Windows 包；手动触发时必须填写 `release_tag`。
+- macOS：在装有 Wind API 的本机准备候选包。目标 tag 已建立且 checkout 干净后运行：
+
+```bash
+python scripts/release_macos_desktop.py --tag v2.0.0-rc.1 --skip-upload
+```
+
+这条命令只构建、诊断和打包，不联系 GitHub，因此只要求本地 tag 已存在。确认上传前，目标 GitHub Release 也必须已经建立（可由 Windows 发布工作流创建），再去掉 `--skip-upload`；脚本会核对远端 tag 与产物 commit 一致后上传 ZIP 与构建清单，不复用来源不明的旧 APP，也不覆盖已有同名资产。诊断在临时用户目录中检查首启种子和依赖，macOS 发布还要求 WindPy 可导入；仍需实际启动 GUI 验证使用流程。
 
 ---
 
@@ -409,6 +421,10 @@ cb-strategy-backtest --source wind --history-mode wind-high-fidelity \
   --M 120 --N 400 --cache-dir .cache/bt
 ```
 
+akshare 的股息率取数可能回落到实时快照，历史回测不能因此声称所有输入都已按时点重建；股息率目前也没有跨运行磁盘缓存。需要固定假设的对比实验可显式传 `--q 0`（小数制，表示假设不计股息），并在结果中注明该假设。它可以跳过这条取数链，但不代表真实历史股息率为 0。
+
+开发版留下的策略快照可继续加载，加载保留已保存的结果，不会重新计算旧策略。退休信号的配置别名在重新运行时会映射到估值偏差，不能据此承诺新旧收益相同；快照备份、保留数量与迁移路径见 [升级指南](UPGRADING_V2.md#旧快照和导出文件)。
+
 ### 4.4 定价页
 
 定价页适合**单债深度分析**。
@@ -470,7 +486,7 @@ PDE 中股价风险中性漂移使用 `r - q`，折现仍使用 `r + credit_spre
 回测会沿用定价页中的 `r`、`q`、信用利差、下修强度和强赎宽限天数。历史正股价与滚动 `sigma` 从数据源取数，`q` 当前作为固定输入参与整段回测。
 
 > [!NOTE]
-> 历史回测默认使用当前条款。发生过下修的债可能出现历史转股价跳点偏差。
+> 单债回测默认启用历史条款投影（Python API 的 `point_in_time=True`），按采样日应用条款 patch 和公告事件，与策略回测共用定价条款组装。缺少历史证据时仍可能回落到当前静态字段，应查看条款来源诊断。API 仅在刻意研究“用今天条款回看历史”或已提供可靠的逐日 provider 时才设置 `point_in_time=False`。
 
 ---
 
@@ -558,6 +574,10 @@ cb-repair-balance-patches --apply          # 确认后回洗 (自动备份 .bak-
 
 解析侧已按**措辞**而非数值修复，真实披露的「未转股余额为 3,000 万元」仍会正常解析；
 本命令只清洗历史存量，日常同步不需要重复跑。
+
+### 修数据：重放转股价公告
+
+旧库可能保存了错误的转股价前后关系。`cb-repair-conversion-prices` 默认只用本地公告正文缓存预览，`--download` 可补取正文，`--apply` 会先备份再应用修复；可用 `--codes` 限制债券范围。它只处理 cninfo 转股价公告 patch，保留 Wind 与其他字段的记录。已有数据升级时按 [升级指南](UPGRADING_V2.md#修复旧公告数据) 先看差异，再决定应用。
 
 ### 补历史：两个一次性回填工具
 

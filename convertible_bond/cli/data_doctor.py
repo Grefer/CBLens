@@ -42,7 +42,7 @@ from ..cache import (
     project_bundle_path,
     terms_fetched_at,
 )
-from ..data_providers.base import CREDIT_RATING_ORDER, CREDIT_RATING_RANK
+from ..data_providers.base import CREDIT_RATING_ORDER, CREDIT_RATING_RANK, safe_date
 from ..cb_events import project_events_path
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
 from ..market_time import market_today
@@ -247,18 +247,23 @@ def check_patch_chain(ctx: dict) -> list[Check]:
 
 
 def check_patch_tail_matches_current(ctx: dict) -> Check:
-    """末条 patch 应等于 cb_data 当前值 —— 仅对未走重大变化过滤的字段有意义。"""
+    """截至体检日已生效的末条 patch 应等于 cb_data 当前值。"""
     bundle, store, today = ctx["bundle"], ctx["patch_store"], ctx["today"]
     fname = "conversion_price"
     chains = _patches_by_field(store, fname)
     same = 0
     live_bad = []
     for code, seq in chains.items():
+        # 提前公告的新 K 尚未生效时，不能拿它与今天的 K 比；也不能因链尾在未来
+        # 就整只跳过，否则更早已生效 patch 的真实分歧会被藏住。
+        latest = next((p for p in reversed(seq) if p.effective_date <= today), None)
+        if latest is None:
+            continue
         terms = bundle.get(code)
         cur = getattr(terms, fname, None)
         if cur is None:
             continue
-        tail = float(seq[-1].fields[fname])
+        tail = float(latest.fields[fname])
         if abs(float(cur) - tail) <= max(1e-6, abs(float(cur)) * 1e-6):
             same += 1
         elif not _looks_delisted(terms, today):
@@ -267,7 +272,8 @@ def check_patch_tail_matches_current(ctx: dict) -> Check:
     return Check(
         f"末条 patch == 当前值 · {fname}",
         FAIL if in_pool else (WARN if live_bad else OK),
-        f"在市债不符 {len(live_bad)} 只, 其中主池 {len(in_pool)} 只 (已摘牌的不计, 其值本就冻结)",
+        f"在市债不符 {len(live_bad)} 只, 其中主池 {len(in_pool)} 只 "
+        f"(仅比较截至 {today} 已生效 patch; 已摘牌的不计, 其值本就冻结)",
         "曾 73.5% 不符 —— 解析出的历史 K 与 Wind 权威值系统性冲突",
         "patch",
         extra=live_bad[:6])
@@ -750,18 +756,34 @@ def check_batch_invariants(ctx: dict) -> list[Check]:
         except (TypeError, ValueError):
             return None
 
-    bad_k = [r["bond_code"] for r in rows
-             if (lambda t: t and getattr(t, "conversion_price", None) is not None
-                 and f(r.get("K")) is not None
-                 and abs(t.conversion_price - f(r.get("K"))) > 1e-9)(bundle.get(r["bond_code"]))]
+    bad_k = []
+    for row in rows:
+        code = row["bond_code"]
+        terms = bundle.get(code)
+        if terms is None:
+            continue
+        valuation_date = safe_date(row.get("valuation_date"))
+        if valuation_date is not None and valuation_date != ctx["today"]:
+            # 旧快照仍须检查，但参照值也要回到那一天。复用历史投影，含首条
+            # patch 生效前的 before_fields；不能拿今天已调整的 K 判旧行情有错。
+            anchor = terms_fetched_at(bundle, code, source=TERMS_SYNC_SOURCE)
+            # 不晚于估值日的条款抓取已含此前变化，旧 patch 不能覆盖它；晚于
+            # 估值日的抓取却不能证明当时的 K，必须让历史链重新投影。
+            if anchor is not None and anchor > valuation_date:
+                anchor = None
+            terms = ctx["patch_store"].apply(code, terms, valuation_date, after=anchor)
+        expected_k = f(getattr(terms, "conversion_price", None))
+        actual_k = f(row.get("K"))
+        if expected_k is not None and actual_k is not None and abs(expected_k - actual_k) > 1e-9:
+            bad_k.append(code)
     neg_uplift = [r["bond_code"] for r in rows if (f(r.get("down_reset_uplift")) or 0) < -1e-6]
     bad_parity = [r["bond_code"] for r in rows
                   if all(f(r.get(k)) for k in ("S0", "K", "parity"))
                   and abs(f(r["parity"]) - f(r["S0"]) / f(r["K"]) * 100) > 0.05]
     no_bucket = [r["bond_code"] for r in rows if not r.get("review_bucket")]
     return [
-        Check("批量 K 与 cb_data 一致", FAIL if bad_k else OK,
-              f"不一致 {_pct(len(bad_k), len(rows))}",
+        Check("批量 K 与估值日条款一致", FAIL if bad_k else OK,
+              f"不一致 {_pct(len(bad_k), len(rows))} (按行估值日投影，缺日期时按当前条款)",
               "条款 patch 写坏 K 时, 转股价值与理论价会整体失真而不报错", "不变量",
               extra=bad_k[:6]),
         Check("下修价值非负", FAIL if neg_uplift else OK,

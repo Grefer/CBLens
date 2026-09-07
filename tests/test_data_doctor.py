@@ -130,6 +130,127 @@ def test_rating_divergence_stays_silent_when_they_agree(tmp_path):
     assert same.extra == []
 
 
+# ── 「末条 patch == 当前值」必须锚体检日 ────────────────────────────────────
+
+def _conversion_tail_ctx(tmp_path, *, current, patches, today):
+    code = "123091.SZ"
+    bundle = TermsBundle(tmp_path / "cb_data.json")
+    bundle.set(code, BondTerms(sec_name="测试转债", conversion_price=current), source="unit")
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        TermsPatch(bond_code=code, effective_date=day,
+                   fields={"conversion_price": value}, source="cninfo")
+        for day, value in patches
+    ])
+    return {"bundle": bundle, "patch_store": store, "today": today, "pool": [code]}
+
+
+@pytest.mark.parametrize("today,expected", [
+    (date(2026, 9, 8), mod.OK),
+    (date(2026, 9, 9), mod.FAIL),
+    (date(2026, 9, 10), mod.FAIL),
+])
+def test_patch_tail_checks_new_price_only_from_its_effective_date(tmp_path, today, expected):
+    """提前公告的未来 K 不应报错，生效日当天当前 K 未跟进仍必须 FAIL。"""
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=14.99,
+        patches=[(date(2026, 8, 1), 14.99), (date(2026, 9, 9), 14.79)],
+        today=today,
+    )
+    result = mod.check_patch_tail_matches_current(ctx)
+    assert result.status == expected
+    assert len(result.extra) == (0 if expected == mod.OK else 1)
+
+
+def test_patch_tail_future_record_does_not_hide_existing_mismatch(tmp_path):
+    """未来尾值恰巧等于当前 K，也不能盖掉已生效末条的真实冲突。"""
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=14.99,
+        patches=[(date(2026, 8, 1), 15.10), (date(2026, 9, 9), 14.99)],
+        today=date(2026, 9, 7),
+    )
+    result = mod.check_patch_tail_matches_current(ctx)
+    assert result.status == mod.FAIL
+    assert len(result.extra) == 1
+    assert "末patch=15.1" in result.extra[0]
+
+
+def test_patch_tail_skips_chain_with_no_effective_records(tmp_path):
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=14.99,
+        patches=[(date(2026, 9, 9), 14.79), (date(2026, 10, 1), 14.59)],
+        today=date(2026, 9, 7),
+    )
+    result = mod.check_patch_tail_matches_current(ctx)
+    assert result.status == mod.OK
+    assert result.extra == []
+
+
+@pytest.mark.parametrize("valuation_date,k,expected", [
+    ("2026-09-03", 56.2, mod.OK),       # 当时尚未调整，旧 K 正确
+    (date(2026, 9, 3), 55.96, mod.FAIL), # 陈旧快照也不能带入未来 K
+    ("2026-09-07", 56.2, mod.FAIL),     # 生效当天仍用旧 K，确实有错
+    ("2026-09-08", 55.96, mod.OK),
+    (None, 56.2, mod.FAIL),             # 缺估值日不豁免，回落当前条款比较
+    ("invalid", 56.2, mod.FAIL),
+])
+def test_batch_k_uses_the_rows_valuation_date(tmp_path, valuation_date, k, expected):
+    """9/7 的转股价调整不能把正确的 9/3 缓存判错，但错误历史 K 必须继续报错。"""
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=55.96,
+        patches=[(date(2026, 9, 7), 55.96)],
+        today=date(2026, 9, 8),
+    )
+    from dataclasses import replace
+    ctx["patch_store"].rewrite(
+        lambda p: replace(p, before_fields={"conversion_price": 56.2}))
+    ctx["batch_rows"] = [{"bond_code": "123091.SZ", "valuation_date": valuation_date,
+                          "K": k, "review_bucket": "全池"}]
+    result = mod.check_batch_invariants(ctx)[0]
+    assert result.status == expected
+    assert result.extra == ([] if expected == mod.OK else ["123091.SZ"])
+
+
+def test_batch_k_historical_projection_uses_the_last_effective_patch(tmp_path):
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=8.0,
+        patches=[(date(2026, 8, 1), 10.0), (date(2026, 9, 4), 9.0),
+                 (date(2026, 9, 7), 8.0)],
+        today=date(2026, 9, 8),
+    )
+    ctx["batch_rows"] = [
+        {"bond_code": "123091.SZ", "valuation_date": "2026-09-03", "K": 10.0},
+        {"bond_code": "123091.SZ", "valuation_date": "2026-09-05", "K": 9.0},
+        {"bond_code": "123091.SZ", "valuation_date": "2026-09-05", "K": 8.0},
+    ]
+    result = mod.check_batch_invariants(ctx)[0]
+    assert result.status == mod.FAIL
+    assert len(result.extra) == 1, "同一池里每行应各按自己的估值日检查"
+
+
+def test_batch_k_does_not_exempt_old_rows_without_historical_patches(tmp_path):
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=10.0, patches=[], today=date(2026, 9, 8))
+    ctx["batch_rows"] = [
+        {"bond_code": "123091.SZ", "valuation_date": "2026-09-03", "K": 9.0},
+    ]
+    assert mod.check_batch_invariants(ctx)[0].status == mod.FAIL
+
+
+def test_batch_k_respects_terms_already_fetched_before_valuation(tmp_path, monkeypatch):
+    """8/30 已取到的真实 K，不应被更早的残缺 patch 链覆盖成旧值。"""
+    from datetime import datetime
+    ctx = _conversion_tail_ctx(
+        tmp_path, current=10.13,
+        patches=[(date(2025, 7, 25), 10.59)], today=date(2026, 9, 8))
+    monkeypatch.setattr(ctx["bundle"], "fetched_at",
+                        lambda code, source=None: datetime(2026, 8, 30))
+    ctx["batch_rows"] = [
+        {"bond_code": "123091.SZ", "valuation_date": "2026-09-03", "K": 10.13},
+    ]
+    assert mod.check_batch_invariants(ctx)[0].status == mod.OK
+
+
 # ── 「已摘牌」的判据 ────────────────────────────────────────────────────────
 
 def test_looks_delisted_needs_the_date_to_have_passed():

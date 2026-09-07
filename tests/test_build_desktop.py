@@ -2,8 +2,15 @@ import json
 import importlib
 
 
+def _version_file(root, version="2.0.0rc1"):
+    path = root / "convertible_bond" / "_version.py"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+
+
 def test_generate_spec_includes_tracked_desktop_cache_seed(tmp_path, monkeypatch):
     build_desktop = importlib.import_module("scripts.build_desktop")
+    _version_file(tmp_path)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     payload = {
@@ -23,6 +30,7 @@ def test_generate_spec_includes_tracked_desktop_cache_seed(tmp_path, monkeypatch
 
 def test_generate_spec_skips_unusable_runtime_batch_cache(tmp_path, monkeypatch):
     build_desktop = importlib.import_module("scripts.build_desktop")
+    _version_file(tmp_path)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "batch_pricing_cache.json").write_text(
@@ -37,7 +45,7 @@ def test_generate_spec_skips_unusable_runtime_batch_cache(tmp_path, monkeypatch)
     assert "batch_pricing_cache.json" not in spec
 
 
-def test_frozen_build_can_actually_launch_the_pool_sync_clis():
+def test_frozen_build_can_actually_launch_the_pool_sync_clis(monkeypatch):
     """「🌐 同步池」按**字符串模块名**起子进程, PyInstaller 静态分析看不见。
 
     实测从 ``gui.py`` 静态可达的 35 个模块里 ``convertible_bond.cli.*`` 一个都没有,
@@ -51,10 +59,16 @@ def test_frozen_build_can_actually_launch_the_pool_sync_clis():
     from convertible_bond.cli import POOL_SYNC_MODULES, RUN_CLI_FLAG
 
     root = Path(__file__).resolve().parent.parent
-    for spec in ("CBLens.spec", "scripts/build_desktop.py"):
-        text = (root / spec).read_text(encoding="utf-8")
-        for module in POOL_SYNC_MODULES:
-            assert module in text, f"{spec} 的 hiddenimports 里没有 {module}"
+    build_desktop = importlib.import_module("scripts.build_desktop")
+    monkeypatch.setattr(build_desktop, "_icon_path", lambda root: None)
+    monkeypatch.setattr(build_desktop, "_detect_windpy", lambda: (False, None))
+    generated = build_desktop._generate_spec(root)
+    for module in POOL_SYNC_MODULES:
+        assert module in generated, f"构建 hiddenimports 里没有 {module}"
+    # 参考入口委托同一生成器，不再保留第二份会漏改的清单。
+    reference = (root / "CBLens.spec").read_text(encoding="utf-8")
+    assert "_generate_spec(ROOT," in reference
+    assert "batch_pricing_cache.json" not in reference
 
     # 菜单里用到的模块必须都在白名单里 —— 白名单是冻结入口唯一放行的那份
     from convertible_bond.gui.controllers.wind_sync import (
@@ -177,3 +191,35 @@ def test_diagnostics_recognises_the_seed_file_by_its_own_name():
             summary = _json_summary(path)
             assert "2 rows, 1 ok" in summary, f"{name}: {summary}"
             assert "42 days ago" in summary, f"{name} 没报年龄: {summary}"
+
+
+def test_local_runtime_cache_never_changes_the_release_data(tmp_path, monkeypatch):
+    build_desktop = importlib.import_module("scripts.build_desktop")
+    _version_file(tmp_path)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "batch_pricing_cache.json").write_text(
+        json.dumps({"results": [{"status": "ok", "theoretical_price": 999}]}), encoding="utf-8")
+    monkeypatch.setattr(build_desktop, "_detect_windpy", lambda: (False, None))
+    monkeypatch.setattr(build_desktop, "_icon_path", lambda root: None)
+    assert "batch_pricing_cache.json" not in build_desktop._generate_spec(tmp_path)
+
+
+def test_bundle_metadata_comes_from_the_package_version(tmp_path, monkeypatch):
+    import ast
+    import sys
+
+    build_desktop = importlib.import_module("scripts.build_desktop")
+    _version_file(tmp_path, "7.4.2rc3")
+    monkeypatch.setattr(build_desktop, "_detect_windpy", lambda: (False, None))
+    monkeypatch.setattr(build_desktop, "_icon_path", lambda root: None)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    tree = ast.parse(build_desktop._generate_spec(tmp_path))
+    bundle = next(node for node in ast.walk(tree)
+                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "BUNDLE")
+    values = {arg.arg: ast.literal_eval(arg.value) for arg in bundle.keywords}
+    assert values["version"] == "7.4.2rc3"
+    assert values["info_plist"] == {
+        "CFBundleShortVersionString": "7.4.2",
+        "CFBundleVersion": "7.4.2fc3",
+        "CBLensVersion": "7.4.2rc3",
+    }

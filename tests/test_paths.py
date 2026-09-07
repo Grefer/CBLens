@@ -238,3 +238,33 @@ def test_frozen_seed_falls_back_to_desktop_batch_cache_seed(monkeypatch, tmp_pat
 
 def test_asset_path_points_to_assets_dir():
     assert paths.asset_path("cblens-icon.png").parts[-2:] == ("assets", "cblens-icon.png")
+
+
+def test_upgrade_seeds_missing_patches_and_keeps_existing_user_data(monkeypatch, tmp_path):
+    """旧安装补回历史 K / 评级依据，同时保留用户已有的条款和关注池。"""
+    bundled = tmp_path / "bundle"
+    bundled_data = bundled / "data"
+    user_data = tmp_path / "user"
+    bundled_data.mkdir(parents=True)
+    user_data.mkdir()
+    patch_seed = {"patches": [{"bond_code": "123064.SZ", "fields": {"conversion_price": 26.6}}]}
+    (bundled_data / "cb_terms_patches.json").write_text(json.dumps(patch_seed), encoding="utf-8")
+    (bundled_data / "cb_data.json").write_text('{"new": {"conversion_price": 99}}', encoding="utf-8")
+    existing = {
+        "cb_data.json": '{"old": {"conversion_price": 20}}',
+        "watchlist.json": '{"entries": [{"bond_code": "old"}]}',
+    }
+    for filename, content in existing.items():
+        (user_data / filename).write_text(content, encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
+    monkeypatch.setenv("CBLENS_DATA_DIR", str(user_data))
+    paths.seed_data_files()
+    assert json.loads((user_data / "cb_terms_patches.json").read_text()) == patch_seed
+    for filename, content in existing.items():
+        assert (user_data / filename).read_text() == content
+    # 此后用户同步/修复过 patch，再开新版也不能用内置种子覆盖它。
+    for local_patches in ('{"patches": [], "_meta": {"note": "user repaired"}}', '{}', '{broken'):
+        (user_data / "cb_terms_patches.json").write_text(local_patches, encoding="utf-8")
+        paths.seed_data_files()
+        assert (user_data / "cb_terms_patches.json").read_text() == local_patches

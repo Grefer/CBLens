@@ -1,6 +1,6 @@
 [project]
 name = "cblens"
-version = "1.0.0"
+dynamic = ["version"]
 description = "CBLens: A 股可转债定价与机会筛选工作台，支持 Crank-Nicolson PDE、公告事件、Wind/akshare 和 GUI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -35,6 +35,7 @@ cb-backfill-down-reset-patches = "convertible_bond.cli.backfill_down_reset_patch
 cb-calibrate-down-reset = "convertible_bond.cli.calibrate_down_reset:main"
 cb-rebuild-terms-patches = "convertible_bond.cli.rebuild_terms_patches:main"
 cb-repair-balance-patches = "convertible_bond.cli.repair_balance_patches:main"
+cb-repair-conversion-prices = "convertible_bond.cli.repair_conversion_prices:main"
 cb-repair-events = "convertible_bond.cli.repair_events:main"
 cb-repair-putback-windows = "convertible_bond.cli.repair_putback_windows:main"
 cb-repair-rating-patches = "convertible_bond.cli.repair_rating_patches:main"
@@ -81,3 +82,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["convertible_bond*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "convertible_bond._version.__version__"}
