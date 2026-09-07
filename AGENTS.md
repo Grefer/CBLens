@@ -1325,6 +1325,7 @@ pytest                    # 全部测试 (380+, ~5s)
 pytest -x -q              # 快速失败
 pytest -k "down_reset"    # 按关键词
 ruff check convertible_bond tests CB.py gui.py scripts  # lint (E9+F, CI 阻塞)
+python scripts/check_like_ci.py  # 在全新导出树上跑 CI 的三步 (推之前)
 ```
 
 修改 pricer.py / pricing_api.py / batch_pricing.py 后必须运行 `pytest -x` 确认无回归。
@@ -1342,12 +1343,29 @@ UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆�
 而它头一件事是 `_configure_tree_style()` → `ttk.Style()` → 隐式建 root。**顺手 skip 不是
 出路** —— 那条断言的是"悬垂树不许打断整轮重染", 在 CI 上跳过等于没有守护; 真正要 root
 的东西 (量字体) 才按现有那两条的写法 `try: ... except Exception: pytest.skip(...)`。
-在本机复现无头环境 (比等一轮 CI 快, `tests/headless.py` 把 `_tkinter.create` 换成
-照样抛 `TclError` 的函数, 本机就能把 CI 的失败逐条复现出来):
+无头环境现在是**默认**: `tests/headless.py` 由 `pyproject.toml` 的 `addopts` 加载,
+裸跑 `pytest` 就是 CI 口径。此前它是个要人记得加的 `-p` 开关, 而人不会记得 ——
+守护在 `tests/test_ci_parity.py`, 判据取**运行时效果** (`_tkinter.create` 是不是被
+换掉了) 而不是配置文本, 因为"配置写对了但插件没生效"一样是假绿。
+要用本机真实的 Tk (那 1 条量字体的用例在无头下会 skip): `CBLENS_REAL_TK=1 pytest`。
+**逃生口只能是环境变量**, `-p no:tests.headless` 关不掉 —— 插件在 import 时就打了
+补丁, 而 addopts 的 `-p` 先于命令行的 `no:` 生效, 实测两种跑法 skip 数完全相同。
+
+**"本机全绿、CI 全红"不止 Tk 这一种**, 共同形状是**本机比 CI 宽松**: 测试在你机器上
+看得见的东西, CI 的全新 checkout 上没有。第二种已经踩过 —— `CBLens.spec` 命中
+`.gitignore` 的 `*.spec` 而 `test_build_desktop` 读它, 本机有文件所以全绿, CI 报
+`FileNotFoundError`, 两次推送连红三天 (2026-09-04 ~ 09-07) 没人发现。
+
+推之前用**一棵全新导出的树**跑一遍 CI 的三步 —— `git archive` 出来的树里只有版本库
+里真有的东西, 凡是"本机有、库里没有"的一次全抓, 不需要维护任何名单:
 
 ```bash
-pytest -p tests.headless -q
+python scripts/check_like_ci.py
 ```
+
+它检查的是 **HEAD** (会被推上去的那一版) 而不是工作区。装成 `.git/hooks/pre-push`
+就推不上去红的提交。脚本与 `ci.yml` 的三条命令行由 `test_ci_parity.py` 逐字比对 ——
+两边分叉的表现是"本机这个脚本绿、CI 还是红", 比没有这个脚本更误导人。
 
 ### 按改动选测试
 
