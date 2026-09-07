@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from ...cache import CachedBondDataProvider
+from ...cache import CachedBondDataProvider, TERMS_SYNC_SOURCE, terms_fetched_at
 from ...cli import RUN_CLI_FLAG
 from ...paths import is_frozen_app
 from ...data_providers import (
@@ -213,6 +213,7 @@ class WindSyncMixin:
             terms,
             market_today(),
             event_store=getattr(self, "event_store", None),
+            terms_as_of=terms_fetched_at(self.terms_cache, code, source=TERMS_SYNC_SOURCE),
         )
         terms = projection.terms
         self._populate_down_reset_from_resolver(code, terms)
@@ -434,6 +435,7 @@ class WindSyncMixin:
                 terms,
                 val_date,
                 event_store=getattr(self, "event_store", None),
+                terms_as_of=provider.terms_as_of(code, val_date),
             )
             terms = projection.terms
 
@@ -611,8 +613,10 @@ class WindSyncMixin:
             )
         if d.get("call_ratio") is not None:
             self._set_field(self.v_call_ratio, f"{float(d['call_ratio']):.0f}", self.v_src_call_ratio, terms_label)
-        if d.get("put_ratio") is not None:
-            self._set_field(self.v_put_ratio, f"{float(d['put_ratio']):.0f}", self.v_src_put_ratio, terms_label)
+        if "put_ratio" in d:
+            # None 是明确的无回售条款, 不能沿用默认 70 或上一只债的触发比例。
+            put_text = "无" if d["put_ratio"] is None else f"{float(d['put_ratio']):.0f}"
+            self._set_field(self.v_put_ratio, put_text, self.v_src_put_ratio, terms_label)
         if d.get("put_years") is not None:
             self._set_field(self.v_put_years, f"{int(d['put_years'])}", self.v_src_put_years, terms_label)
         if d.get("sigma") is not None:

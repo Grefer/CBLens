@@ -131,6 +131,7 @@ class TermsBundle:
         self._load()
 
     def _load(self):
+        self._dirty_codes: set[str] = set()
         if not self.path.exists():
             self._data = {}
             self._disk_stamp = None
@@ -152,19 +153,11 @@ class TermsBundle:
         return (st.st_mtime_ns, st.st_size)
 
     def _merge_foreign_writes(self) -> int:
-        """把**别人写进盘、而我内存里没有**的条目补回来, 返回补了几条。
+        """重读外部更新, 仅让本轮实际改过的债覆盖磁盘, 返回合并的记录数。
 
-        ``_save`` 是整份重写 (``json.dump(self._data)``), 所以一个长命实例只要快照
-        比盘上旧, 下一次写就会静默删掉别人新增的债。实测: 实例 a 与 b 都读到 {A},
-        a 写入 B, b 再写入 C —— 盘上只剩 {A, C}, B 无声消失, 而 ``_bundle_meta.n_bonds``
-        跟着一起被改小, 连"少了"都看不出来。
-
-        这不是假想的并发: GUI 的「🌐 同步池」菜单**就是**在 GUI 持有 bundle 的同时
-        起子进程去写同一个文件 (``gui/controllers/wind_sync.py``)。``reload()`` 是给这个
-        场景准备的, 但它要人显式调, 而两次写之间的任何一次 ``set()`` 都来不及。
-
-        本 bundle 是**只增不删**的 (见类 docstring), 所以合并规则很简单: 盘上有而我
-        没有的补进来; 两边都有的**以我为准** —— 我是这一次的写入方, 我的值更新。
+        GUI 长驻实例的其余记录可能早于同步子进程。只补新增记录会把外部对已有债的
+        更新回退, 甚至复活外部删除的债。本轮 set/set_many/delete 涉及的代码才以
+        本地为准; 其余记录及来源时间戳以磁盘为准。这不是跨进程读改写锁。
         """
         try:
             with open(self.path, "r", encoding="utf-8") as f:
@@ -172,22 +165,26 @@ class TermsBundle:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("bundle %s 合并前重读失败, 按整份重写处理: %s", self.path, e)
             return 0
-        added = 0
-        for key, value in on_disk.items():
-            if key == self.BUNDLE_META_KEY:
-                continue
-            if key not in self._data:
-                self._data[key] = value
-                added += 1
-        return added
+        changed = sum(
+            self._data.get(key) != on_disk.get(key)
+            for key in self._data.keys() | on_disk.keys()
+            if key not in self._dirty_codes and not key.startswith("_")
+        )
+        for code in self._dirty_codes:
+            if code in self._data:
+                on_disk[code] = self._data[code]
+            else:
+                on_disk.pop(code, None)
+        self._data = on_disk
+        return changed
 
     def _save(self):
-        # 我读过之后别人动过这个文件 → 先把他们新增的条目并回来, 再整份重写。
+        # 我读过之后别人动过这个文件 → 先合并未被本轮修改的记录, 再整份重写。
         # 戳没变时一个字节都不读, 所以独占写 (全量同步的常态) 零开销。
         if getattr(self, "_disk_stamp", None) != self._stat_stamp():
-            added = self._merge_foreign_writes()
-            if added:
-                logger.info("bundle %s 合并了外部写入的 %d 条记录", self.path, added)
+            changed = self._merge_foreign_writes()
+            if changed:
+                logger.info("bundle %s 合并了外部写入的 %d 条记录", self.path, changed)
         # 元信息
         n = sum(1 for k in self._data if not k.startswith("_"))
         meta = self._data.get(self.BUNDLE_META_KEY, {})
@@ -197,6 +194,7 @@ class TermsBundle:
         # 原子写
         atomic_write_json(self.path, self._data)
         self._disk_stamp = self._stat_stamp()
+        self._dirty_codes.clear()
 
     def reload(self):
         """重新读取磁盘上的 bundle.
@@ -252,6 +250,7 @@ class TermsBundle:
         d["_meta"] = self._meta_for_write(
             bond_code, source, datetime.now().isoformat(timespec="seconds"))
         self._data[bond_code] = d
+        self._dirty_codes.add(bond_code)
         self._save()
         return self.path
 
@@ -263,6 +262,7 @@ class TermsBundle:
             d = _terms_to_json_dict(terms)
             d["_meta"] = self._meta_for_write(code, source, now)
             self._data[code] = d
+            self._dirty_codes.add(code)
         self._save()
 
     def fetched_at(self, bond_code: str, *, source: str | None = None) -> datetime | None:
@@ -292,6 +292,7 @@ class TermsBundle:
     def delete(self, bond_code: str) -> bool:
         if bond_code in self._data:
             del self._data[bond_code]
+            self._dirty_codes.add(bond_code)
             self._save()
             return True
         return False

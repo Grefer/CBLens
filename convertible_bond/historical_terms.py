@@ -18,6 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
+from .atomic_io import atomic_write_json
 from .cache import TermsBundle
 from .cb_events import CBEventStore, apply_events_to_terms, project_events_path
 from .data_providers import BondTerms, DataProvider, finite_float, to_date
@@ -243,10 +244,7 @@ class TermsPatchStore:
             "_meta": meta,
             "patches": [_patch_to_json(p) for p in sorted(self._patches, key=_patch_sort_key)],
         }
-        tmp = self.path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
-        tmp.replace(self.path)
+        atomic_write_json(self.path, payload)
 
     def list_patches(
         self,

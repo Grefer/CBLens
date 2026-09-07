@@ -152,7 +152,7 @@ def build(app, tab):
               tooltip="正股价格达到转股价的该比例附近时触发强赎条款。")
     _form_row(sec_terms, "回售触发 (%K)", app.v_put_ratio, 9, wind=True,
               source_var=app.v_src_put_ratio,
-              tooltip="正股价格低于转股价的该比例附近时触发回售条款。")
+              tooltip="正股低于该比例附近时触发回售；填“无”或留空时，不计股价触发回售权。")
     _form_row(sec_terms, "回售生效年数", app.v_put_years, 10, wind=True,
               source_var=app.v_src_put_years)
     _form_row(sec_terms, "强赎宽限天数", app.v_call_notice, 11,

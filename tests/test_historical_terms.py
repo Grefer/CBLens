@@ -1,6 +1,9 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -20,6 +23,54 @@ from convertible_bond.historical_terms import (
     TermsPatchStore,
     project_terms,
 )
+
+
+def test_patch_store_concurrent_saves_publish_complete_json(tmp_path, monkeypatch):
+    """让两次写盘都停在发布前, 验证临时文件独立且最终是某份完整快照。"""
+    path = tmp_path / "patches.json"
+    stores = [TermsPatchStore(path), TermsPatchStore(path)]
+    patches = [TermsPatch("A", date(2026, 1, 1), {"conversion_price": 9}, note="甲"),
+               TermsPatch("B", date(2026, 1, 2), {"conversion_price": 8}, note="乙" * 20000)]
+    barrier = Barrier(2)
+    temporary_paths = []
+    real_replace = Path.replace
+
+    def publish_together(src, dst):
+        temporary_paths.append(src)
+        barrier.wait(timeout=5)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(Path, "replace", publish_together)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(store.add_many, [patch])
+                   for store, patch in zip(stores, patches)]
+        for future in futures:
+            future.result(timeout=10)
+
+    assert len(set(temporary_paths)) == 2
+    assert all(p.parent == path.parent for p in temporary_paths)
+    reloaded = TermsPatchStore(path)
+    assert reloaded.list_patches() in ([patches[0]], [patches[1]])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path.read_text(encoding="utf-8") == json.dumps(
+        payload, ensure_ascii=False, indent=2, sort_keys=True)
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_patch_store_failed_publish_preserves_previous_json(tmp_path, monkeypatch):
+    path = tmp_path / "patches.json"
+    store = TermsPatchStore(path)
+    store.add_many([TermsPatch("A", date(2026, 1, 1), {"conversion_price": 9})])
+    before = path.read_bytes()
+
+    def fail_replace(src, dst):
+        raise OSError("模拟发布失败")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="模拟发布失败"):
+        store.add_many([TermsPatch("B", date(2026, 1, 2), {"conversion_price": 8})])
+    assert path.read_bytes() == before
+    assert list(tmp_path.iterdir()) == [path]
 
 
 class FakeHistoricalProvider(DataProvider):

@@ -5,8 +5,9 @@
 这些测试是最划算的"投资性测试"。
 """
 from datetime import date, datetime
-from dataclasses import fields
+from dataclasses import fields, replace
 
+import pytest
 
 from convertible_bond.cache import (
     TermsBundle,
@@ -207,6 +208,86 @@ def test_terms_bundle_delete_removes_entry_and_meta(tmp_path):
     assert bundle.delete("128009.SZ") is True
     assert bundle.delete("128009.SZ") is False
     assert "128009.SZ" not in bundle.list_bonds()
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_stale_bundle_preserves_foreign_updates_to_existing_bonds(tmp_path, batch):
+    """旧 GUI 只改甲债时, 不得回退同步进程对乙债的评级和来源时间戳更新。"""
+    path = tmp_path / "cb_data.json"
+    sync = TermsBundle(path)
+    sync.set_many([("A", _sample_terms()), ("B", _sample_terms())], source="Wind")
+    gui = TermsBundle(path)
+    updated_b = replace(sync.get("B"), credit_rating="C", outstanding_balance=1.0)
+    sync.set("B", updated_b, source="akshare:ratings")
+    sync.set("C", _sample_terms(), source="Wind")
+    updated_a = replace(gui.get("A"), conversion_price=9.0)
+    if batch:
+        gui.set_many([("A", updated_a)], source="manual")
+    else:
+        gui.set("A", updated_a, source="manual")
+
+    reloaded = TermsBundle(path)
+    assert reloaded.get("A") == updated_a
+    assert reloaded.get("B") == gui.get("B") == updated_b
+    assert reloaded.fetched_at("B", source="akshare:ratings") == sync.fetched_at(
+        "B", source="akshare:ratings")
+    assert reloaded.list_bonds() == ["A", "B", "C"]
+    assert reloaded.bundle_meta()["n_bonds"] == 3
+
+
+def test_stale_bundle_honours_local_and_foreign_deletions(tmp_path):
+    path = tmp_path / "cb_data.json"
+    sync = TermsBundle(path)
+    sync.set_many((code, _sample_terms()) for code in ("A", "B", "C"))
+    gui = TermsBundle(path)
+    sync.delete("B")
+    sync.set("C", replace(sync.get("C"), credit_rating="C"))
+    gui.delete("A")
+
+    reloaded = TermsBundle(path)
+    assert reloaded.list_bonds() == ["C"]
+    assert reloaded.get("C").credit_rating == "C"
+    assert reloaded.bundle_meta()["n_bonds"] == 1
+
+
+def test_bundle_only_treats_this_write_as_dirty(tmp_path):
+    """上次写过不代表本次仍脏; 同债冲突则仅本次的显式 set 优先。"""
+    path = tmp_path / "cb_data.json"
+    gui = TermsBundle(path)
+    gui.set("A", _sample_terms())
+    sync = TermsBundle(path)
+    sync.set("A", replace(sync.get("A"), credit_rating="C"))
+    gui.set("B", _sample_terms())
+    assert TermsBundle(path).get("A").credit_rating == "C"
+
+    sync.set("A", replace(sync.get("A"), conversion_price=7.0))
+    local_a = replace(gui.get("A"), conversion_price=8.0)
+    gui.set("A", local_a)
+    assert TermsBundle(path).get("A") == local_a
+
+
+def test_bundle_failed_save_keeps_pending_changes_for_retry(tmp_path, monkeypatch):
+    from convertible_bond import cache as cache_module
+
+    path = tmp_path / "cb_data.json"
+    gui = TermsBundle(path)
+    gui.set_many((code, _sample_terms()) for code in ("A", "B"))
+    sync = TermsBundle(path)
+    updated_a = replace(gui.get("A"), conversion_price=8.0)
+
+    def fail_write(*args, **kwargs):
+        raise OSError("模拟磁盘故障")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(cache_module, "atomic_write_json", fail_write)
+        with pytest.raises(OSError, match="模拟磁盘故障"):
+            gui.set("A", updated_a)
+    sync.set("B", replace(sync.get("B"), credit_rating="C"))
+    gui.set("C", _sample_terms())
+    reloaded = TermsBundle(path)
+    assert reloaded.get("A") == updated_a
+    assert reloaded.get("B").credit_rating == "C"
+    assert reloaded.has("C")
 
 
 # ── 按来源分桶的抓取时间 ────────────────────────────────────────────────────

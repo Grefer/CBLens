@@ -14,6 +14,7 @@ from ...announcement_pdf import (
     render_pdf_pages as _render_pdf_pages,
 )
 from ...cb_event_sync import sync_cb_events
+from ...cache import TERMS_SYNC_SOURCE, terms_fetched_at
 from ...cb_events import (
     CBEvent,
     CBEventStore,
@@ -556,6 +557,8 @@ class EventsMixin:
             terms,
             market_today(),
             event_store=self.event_store,
+            terms_as_of=terms_fetched_at(
+                getattr(self, "terms_cache", None), code, source=TERMS_SYNC_SOURCE),
         )
         projected = projection.terms
         self._current_projected_terms = projected

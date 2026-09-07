@@ -12,6 +12,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from ...batch_pricing import _underlying_has_st_risk
+from ...cache import TERMS_SYNC_SOURCE, terms_fetched_at
 from ...pricer import UniversalCBPricer
 from ...dateutil import add_years as _add_years
 from ...cb_events import is_down_reset_trigger_notice_title
@@ -381,6 +382,8 @@ class PricingMixin:
                 return float(s0_fallback)
             return pf(_in.v_S0, "正股价 S")
 
+        put_ratio = (None if _in.v_put_ratio.get().strip() in {"", "无"}
+                     else pf(_in.v_put_ratio, "回售触发") / 100.0)
         pricer = dict(
             S0=_s0(),
             K=pf(_in.v_K, "转股价 K"),
@@ -392,8 +395,9 @@ class PricingMixin:
             conversion_start_date=pd(_in.v_conv_date, "转股起始日"),
             coupon_rates=coupon_rates,
             call_trigger_ratio=pf(_in.v_call_ratio, "强赎触发") / 100.0,
-            put_trigger_ratio=pf(_in.v_put_ratio, "回售触发") / 100.0,
-            put_active_years=int(pf(_in.v_put_years, "回售生效年数")),
+            put_trigger_ratio=put_ratio,
+            put_active_years=(int(pf(_in.v_put_years, "回售生效年数"))
+                              if put_ratio is not None else 0),
             call_notice_days=int(pf(_in.v_call_notice, "强赎宽限天数")),
         )
         down_reset_trigger_pct = pfo(_in.v_down_reset_trigger_ratio, "下修触发")
@@ -543,6 +547,8 @@ class PricingMixin:
                         base_terms,
                         val_date,
                         event_store=getattr(self, "event_store", None),
+                        terms_as_of=terms_fetched_at(
+                            self.terms_cache, code, source=TERMS_SYNC_SOURCE),
                     )
                     terms = projection.terms
             except Exception:
@@ -856,6 +862,8 @@ class PricingMixin:
             if putback_end and val_date > putback_end:
                 return f"回售已截止\n{end_text}", TEXT_DIM
             return f"回售申报中\n{end_text}", ORANGE
+        if put_ratio is None:
+            return "无股价触发回售", TEXT_DIM
         maturity = self._date_text_or_none(self.v_mat_date.get())
         trigger = (k * put_ratio / 100.0) if k and put_ratio else None
         if maturity and put_years is not None:
@@ -1115,6 +1123,11 @@ class PricingMixin:
                 "put", status=status, detail=detail,
                 progress=progress, progress_text=progress_text,
                 color=event_color)
+            return
+        if put_ratio is None:
+            self._set_term_event(
+                "put", status="无股价触发回售", detail="不计股价触发的回售权",
+                progress=None, progress_text="—", color=TEXT_DIM)
             return
         maturity = self._date_text_or_none(self.v_mat_date.get())
         start = None
