@@ -50,15 +50,15 @@ cb-sync-tradable = "convertible_bond.cli.sync_tradable:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 无头模式是**默认**, 不是需要记得加的开关。macOS 的 Tk 不需要 X11, 所以
-# `ttk.Style()` / `tkinter.Tk()` 在本机悄悄成功、在 runner 上抛 TclError ——
-# 曾靠 AGENTS 里一句"记得跑 `pytest -p tests.headless`"防守, 而人不会记得
-# (实测连红三次推送都是同一条测试)。放进 addopts 之后本机与 CI 同口径。
-# CI 上它是无操作 (那里本来就没有显示器), 所以两边的 skip 数不变。
-# 逃生口是 `CBLENS_REAL_TK=1 pytest`, **不是** `-p no:tests.headless` —— 插件在
-# import 时就打了补丁, 而 addopts 的 -p 先于命令行的 no: 生效, 后者什么也关不掉
-# (实测两种跑法 skip 数完全相同)。
-addopts = ["-p", "tests.headless"]
+# 无头模式是**默认**, 不是需要记得加的开关: 加载点在 tests/conftest.py。
+# macOS 的 Tk 不需要 X11, 所以 `ttk.Style()` / `tkinter.Tk()` 在本机悄悄成功、
+# 在 runner 上抛 TclError —— 曾靠 AGENTS 里一句"记得跑 -p tests.headless"防守,
+# 而人不会记得 (实测连红三次推送都是同一条测试)。
+#
+# **不要改回 `addopts = ["-p", "tests.headless"]`**: 那要求 `tests` 包可 import,
+# 而这取决于怎么调 pytest —— `python -m pytest` 把 cwd 放进 sys.path (本机全绿),
+# 裸 `pytest` 不会 (ci.yml 用的正是裸的), 实测 CI 一条用例都没跑就 ImportError。
+# 逃生口: `CBLENS_REAL_TK=1 pytest`。
 
 [tool.ruff]
 # 起步只选高价值正确性规则: E9 (语法/IO 错误) + F (pyflakes: 未定义名/未用导入/重复定义)。
