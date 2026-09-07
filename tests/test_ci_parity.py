@@ -75,6 +75,28 @@ def test_like_ci_runs_every_workflow_step_or_says_why_not():
     assert ran["Lint (ruff E9+F)"].startswith("ruff check "), ran["Lint (ruff E9+F)"]
 
 
+def test_pre_push_hook_sample_is_installable_and_points_at_the_real_checker():
+    """钩子样板 / AGENTS 里的装法 / 被调的脚本, 三者必须对得上。
+
+    **钩子失效是静默的**: push 照常成功, 只是没检查 —— 和"根本没装"长得一模一样。
+    所以路径不许靠人肉同步: 改名 `pre-push.sample` 或 `check_like_ci.py` 而漏改另
+    一头, 这条当场红。
+    """
+    sample = ROOT / "scripts/pre-push.sample"
+    assert sample.is_file(), "scripts/pre-push.sample 不见了, AGENTS 记的装法会失败"
+    assert os.access(sample, os.X_OK), "样板没有执行位, 软链过去的钩子跑不起来"
+
+    body = sample.read_text(encoding="utf-8")
+    assert "scripts/check_like_ci.py" in body, "样板没在调 check_like_ci.py"
+
+    # AGENTS 里那条 ln 命令的目标必须真的存在 —— 文档腐烂同样是静默的。
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    install = "ln -sf ../../scripts/pre-push.sample .git/hooks/pre-push"
+    assert install in agents, f"AGENTS.md 里没有这条装法: {install}"
+    linked = (ROOT / ".git/hooks" / "../../scripts/pre-push.sample").resolve()
+    assert linked == sample.resolve(), f"AGENTS 里的相对路径解析到了 {linked}"
+
+
 def test_every_repo_file_the_tests_read_is_actually_tracked_by_git():
     """测试读的仓库文件必须进过版本库。
 

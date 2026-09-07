@@ -1363,9 +1363,28 @@ UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆�
 python scripts/check_like_ci.py
 ```
 
-它检查的是 **HEAD** (会被推上去的那一版) 而不是工作区。装成 `.git/hooks/pre-push`
-就推不上去红的提交。脚本与 `ci.yml` 的三条命令行由 `test_ci_parity.py` 逐字比对 ——
-两边分叉的表现是"本机这个脚本绿、CI 还是红", 比没有这个脚本更误导人。
+它检查的是 **HEAD** (会被推上去的那一版) 而不是工作区, 约 25s。**命令不在脚本里
+另抄一份, 直接从 `ci.yml` 读并原样执行** —— 上一版手抄成 `python -m pytest` 而
+`ci.yml` 是裸 `pytest`, 两者只差"cwd 在不在 `sys.path`", 而那恰好就是它那一轮该抓的
+bug (`-p tests.headless` 找不到 `tests` 包), 于是这个号称复现 CI 的脚本在**唯一要紧
+的那一维**上和 CI 不同, 照样放行。`test_ci_parity.py` 守的是覆盖面: `ci.yml` 里每个
+`run:` 步骤要么真跑, 要么显式登记在 `_SKIP_STEPS` (目前只有 `Install dependencies`,
+它会把 editable 安装指向临时树)。
+
+**装成 pre-push 钩子, 红的提交就推不上去** (钩子不进版本库, 每个 clone 装一次):
+
+```bash
+ln -sf ../../scripts/pre-push.sample .git/hooks/pre-push
+```
+
+用软链不要拷贝: 拷贝会分叉 —— 脚本改了而某台机器上的钩子还是旧的, 而**钩子失效是
+静默的** (push 照常成功, 只是没检查)。紧急绕过 `git push --no-verify`。
+
+**"比 CI 更严"和"比 CI 更松"一样坏**: 假红会训练你忽略这个检查。已经修掉三处 ——
+`git archive` 出来的树没有 `.git` (问 git 的用例在本机炸而 CI 上是好的)、
+`fetch --depth 1 <sha>` 取任意 SHA 要服务端放行 (exit 128)、`ci.yml` 写 `python` 而
+macOS 上常常只有 `python3`。改这个脚本时拿**真实的红/绿 commit** 当靶子验一遍
+(`--rev <某个 CI 判红的 sha>` 必须红), 别只看它"跑起来是绿的"。
 
 ### 按改动选测试
 

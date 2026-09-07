@@ -1,0 +1,28 @@
+#!/bin/sh
+# push 之前, 在一棵全新检出的树上跑一遍 ci.yml 的每一步 (scripts/check_like_ci.py)。
+# 拦的是"本机全绿、CI 全红": 本机有而版本库里没有的文件、与 CI 不同的调用形式。
+#
+# 装法 (钩子不进版本库, 每个 clone 装一次):
+#     ln -sf ../../scripts/pre-push.sample .git/hooks/pre-push
+#
+# 软链而不是拷贝: 拷贝会分叉 —— 脚本改了而某台机器上的钩子还是旧的, 而钩子失效是
+# **静默**的 (push 照常成功, 只是没检查)。
+#
+# 紧急绕过: git push --no-verify
+set -e
+
+root=$(git rev-parse --show-toplevel)
+
+# runner 上有 `python`, macOS 上常常只有 `python3` —— 两个都试, 都没有就放行并说明,
+# 因为"钩子自己坏了"不该表现成"你的改动有问题"。
+if command -v python3 >/dev/null 2>&1; then
+    py=python3
+elif command -v python >/dev/null 2>&1; then
+    py=python
+else
+    echo "[pre-push] 找不到 python/python3, 跳过本地 CI 检查 (push 继续)" >&2
+    exit 0
+fi
+
+echo "[pre-push] 在全新检出树上跑 ci.yml 的每一步 (约 25s; 要跳过用 --no-verify)"
+exec "$py" "$root/scripts/check_like_ci.py"
