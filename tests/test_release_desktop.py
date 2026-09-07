@@ -212,3 +212,56 @@ def test_strict_diagnostics_accept_writable_streams_and_keep_them(monkeypatch, d
         assert diagnostics.sys.stdout is stdout and diagnostics.sys.stderr is stderr
     assert "CBLens desktop diagnostics" in stdout.getvalue()
     assert stderr.getvalue() == ""
+
+
+def test_diagnostics_json_records_startup_streams_and_real_offline_probe(monkeypatch, diagnostic_environment, tmp_path):
+    diagnostics = diagnostic_environment
+    startup = {"python_none": {"stdin": True, "stdout": True, "stderr": True}}
+    monkeypatch.setattr(diagnostics.sys, "_cblens_stdio_startup", startup, raising=False)
+    output = tmp_path / "report.json"
+    assert diagnostics.main(["--diagnose", "--check", "--probe-stdio", "--output", str(output)]) == 0
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["ok"] is True and report["startup_stdio"] == startup
+    assert report["stdio_probe"] == {
+        "ok": True, "result": ["OfflineProbeError", "离线分页失败"], "network_used": False,
+    }
+    assert report["build"]["commit"] == "a" * 40
+    assert all(stream["usable"] for stream in report["streams"].values())
+
+
+def test_missing_streams_still_write_a_failed_json_report(monkeypatch, diagnostic_environment, tmp_path):
+    diagnostics = diagnostic_environment
+    output = tmp_path / "failure.json"
+    with monkeypatch.context() as patch:
+        patch.setattr(diagnostics.sys, "stdout", None)
+        patch.setattr(diagnostics.sys, "stderr", None)
+        assert diagnostics.main(["--check", "--output", str(output)]) == 1
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["ok"] is False and len(report["errors"]) == 2
+    assert all(stream["missing"] for stream in report["streams"].values())
+
+
+def test_offline_probe_restores_tqdm_state_when_worker_does_not_exit(monkeypatch, diagnostic_environment):
+    from tqdm import tqdm
+
+    diagnostics = diagnostic_environment
+    previous_lock = getattr(tqdm, "_lock", None)
+    previous_interval = tqdm.monitor_interval
+
+    class StuckThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+        def join(self, **kwargs):
+            pass
+
+        def is_alive(self):
+            return True
+
+    monkeypatch.setattr(diagnostics.threading, "Thread", StuckThread)
+    assert diagnostics._probe_stdio()["ok"] is False
+    assert getattr(tqdm, "_lock", None) is previous_lock
+    assert tqdm.monitor_interval == previous_interval

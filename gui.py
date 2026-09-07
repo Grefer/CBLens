@@ -26,7 +26,10 @@ def _run_cli_from_argv(argv: list[str]) -> int:
     import importlib
 
     from convertible_bond.cli import POOL_SYNC_MODULES
+    from convertible_bond.cli._console import configure_utf8_stdio
 
+    # 目标模块的导入与白名单错误也可能输出中文/emoji, 必须在它们之前调整子进程编码。
+    configure_utf8_stdio()
     module = argv[0] if argv else ""
     if module not in POOL_SYNC_MODULES:
         print(f"不允许的模块: {module!r}", file=sys.stderr)

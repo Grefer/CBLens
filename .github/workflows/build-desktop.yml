@@ -49,11 +49,8 @@ jobs:
       - name: Build app
         run: python scripts/build_desktop.py --ref "refs/tags/$env:CBLENS_RELEASE_TAG"
 
-      - name: Diagnose first installation
-        shell: pwsh
-        run: |
-          $env:CBLENS_DATA_DIR = Join-Path $env:RUNNER_TEMP "cblens-first-install"
-          python -c "import subprocess; subprocess.run(['dist/CBLens.exe', '--diagnose', '--check'], check=True)"
+      - name: Diagnose detached first installation
+        run: python scripts/check_windows_desktop.py
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
@@ -62,6 +59,7 @@ jobs:
           path: |
             dist/CBLens-Windows.zip
             dist/CBLens-Windows-build.json
+            build/CBLens-Windows-diagnostics.json
 
       - name: Refuse existing release assets
         env:

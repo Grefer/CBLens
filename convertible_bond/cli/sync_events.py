@@ -13,6 +13,11 @@ import sys
 import time
 from pathlib import Path
 
+from ._console import configure_utf8_stdio
+
+if __name__ == "__main__":
+    configure_utf8_stdio()
+
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_event_sync import apply_events_to_bundle, sync_cb_events
 from ..cb_events import CBEventStore, project_events_path
@@ -31,6 +36,7 @@ def _make_provider(name: str) -> DataProvider:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="同步公告标题并解析为 cb_events 事件表",
         formatter_class=argparse.RawDescriptionHelpFormatter,

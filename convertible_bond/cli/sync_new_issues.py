@@ -2,7 +2,7 @@
 
 ``listing_date`` 全库只有全量条款同步一条写入通道, 而新债挂牌是**每天**发生的事 ——
 两次全量同步之间, 新债就一直挂着空上市日, 既进不了主池也在"扫新债"里显示"待定"。
-这条命令只碰那几只新债 (实测每天 4 只上下), 一次 ``ak.bond_zh_cov()`` 秒级完成。
+这条命令只更新那几只新债, 从东财可转债清单按字段取数, 带连接/读取超时与分页预算。
 
 设计约定与实测依据见 :mod:`convertible_bond.new_issue_sync` 的模块 docstring。
 
@@ -17,6 +17,11 @@ import argparse
 import json
 import sys
 
+from ._console import configure_utf8_stdio
+
+if __name__ == "__main__":
+    configure_utf8_stdio()
+
 from ..new_issue_sync import sync_new_issues
 
 
@@ -25,8 +30,9 @@ def _fmt(value) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
-        description="从 akshare 刷新新债上市日 (窄同步, 不重建条款, 不需要 Wind)")
+        description="从东财刷新新债上市日 (窄同步, 不重建条款, 不需要 Wind)")
     parser.add_argument("--apply", action="store_true", help="真正写盘 (默认只预览)")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--bundle-path", default=None)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 # CLI 入口表: (菜单标签, python -m 模块名, 额外 CLI 参数, 提示文案)
 _POOL_SYNC_TARGETS = (
     ("🔄 增量更新基础信息 (推荐)", "convertible_bond.cli.sync_tradable", ["--incremental"],
-     "只拉本地条款库中超过 7 天未刷新或新发行的债, 显著比全量快\n通常 1-3 分钟."),
+     "只拉本地条款库中超过 7 天未刷新或新发行的债\n待更新债券较多时可能需要十几分钟或更久, 可在同步窗口终止."),
     ("🌐 全量同步基础信息", "convertible_bond.cli.sync_tradable", [],
      "拉取全部可交易转债的发行条款 / 票息 / 转股价 / 评级 / 余额到本地条款库\n慢, 通常 5-15 分钟; 期间会占用 Wind 接口."),
     ("🚦 刷新状态字段", "convertible_bond.cli.sync_admission_status", [],
@@ -318,7 +319,7 @@ class WindSyncMixin:
         # 同一 module 可能对应多个菜单项 (全量 / 增量), 用 label 精确匹配 desc
         desc = next((d for lbl, mod, _, d in _POOL_SYNC_TARGETS
                      if mod == module and lbl == label), "")
-        if confirm and not messagebox.askokcancel(label, f"{desc}\n\n继续执行?"):
+        if confirm and not messagebox.askokcancel(label, f"{desc}\n\n继续执行?", parent=self):
             return
 
         win = ctk.CTkToplevel(self)
@@ -388,6 +389,11 @@ class WindSyncMixin:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
+                    # 子 CLI 在入口统一 UTF-8; 父进程也必须显式按同一编码解码。
+                    # 环境变量让源码子进程在业务模块导入前就使用 UTF-8, 不改父进程环境。
+                    encoding="utf-8",
+                    errors="replace",
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8:backslashreplace"},
                     bufsize=1,
                 )
                 proc_holder["proc"] = proc
@@ -403,7 +409,8 @@ class WindSyncMixin:
                 else:
                     self.after(0, lambda: status_var.set(f"❌ 退出码 {rc}"))
             except Exception as exc:
-                self.after(0, lambda exc=exc: status_var.set(f"❌ 启动失败: {exc}"))
+                error = str(exc)
+                self.after(0, lambda: status_var.set(f"❌ 同步失败: {error}"))
             finally:
                 # 关窗之后这两个按钮已经不存在了; 顺序不能反过来 (先 configure 再判)
                 self.after(0, lambda: _configure_if_alive(cancel_btn, state="disabled"))

@@ -740,6 +740,35 @@ def test_scan_continues_when_the_narrow_sync_fails(monkeypatch):
     assert "网络不通" in app.v_watchlist_status.value
 
 
+@pytest.mark.parametrize("accept_wind", [False, True])
+def test_scan_failure_defaults_to_local_data_and_only_runs_wind_when_chosen(monkeypatch, accept_wind):
+    app = _FakeApp()
+    prompts, syncs = [], []
+    monkeypatch.setattr(watchlist_tab, "_terms_sync_available", lambda: True)
+
+    def ask(*args, **kwargs):
+        prompts.append(kwargs)
+        return accept_wind
+
+    monkeypatch.setattr(watchlist_tab.messagebox, "askyesno", ask)
+    app._run_pool_sync = lambda *args, **kwargs: syncs.append((args, kwargs))
+    seen = _run_sync_to_completion(
+        monkeypatch, app, exc=RuntimeError("取数超时"), prompt_on_error=True)
+    assert prompts == [{"parent": app, "default": watchlist_tab.messagebox.NO}]
+    if accept_wind:
+        assert seen == []
+        assert len(syncs) == 1
+        args, kwargs = syncs[0]
+        assert args[0] == "convertible_bond.cli.sync_tradable"
+        assert args[2] == ("--incremental",)
+        assert kwargs["confirm"] is False
+        kwargs["on_success"]()
+        assert seen == [True]
+    else:
+        assert syncs == []
+        assert seen == [False]
+
+
 def test_concurrent_scan_requests_are_dropped(monkeypatch):
     """「扫新债」与「批量重算」共用这条路径, 同步的这两秒里两个按钮都还能点."""
     app = _FakeApp()

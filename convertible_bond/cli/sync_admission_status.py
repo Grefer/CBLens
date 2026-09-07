@@ -16,6 +16,11 @@ import sys
 import time
 from pathlib import Path
 
+from ._console import configure_utf8_stdio
+
+if __name__ == "__main__":
+    configure_utf8_stdio()
+
 from ..admission_status import refresh_admission_status
 from ..cache import TermsBundle, project_bundle_path
 from ..data_providers import DataProvider, WindDataProvider
@@ -29,6 +34,7 @@ def _make_provider(name: str) -> DataProvider:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="刷新 cb_data 中的交易状态与风险字段",
         formatter_class=argparse.RawDescriptionHelpFormatter,

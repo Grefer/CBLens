@@ -21,6 +21,11 @@ import sys
 import time
 from pathlib import Path
 
+from ._console import configure_utf8_stdio
+
+if __name__ == "__main__":
+    configure_utf8_stdio()
+
 from ..cache import TermsBundle, project_bundle_path
 from ..cb_data_sync import filter_listed_codes, sync_cb_terms
 from ..data_providers import DataProvider, WindDataProvider
@@ -49,6 +54,7 @@ def _make_provider(name: str) -> DataProvider:
 
 
 def main():
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="一键同步全市场存续可转债基础信息到项目 cb_data 文件",
         formatter_class=argparse.RawDescriptionHelpFormatter,

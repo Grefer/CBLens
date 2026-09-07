@@ -272,10 +272,13 @@ def _after_new_issue_sync(app, report, error: str | None, then, prompt_on_error:
     if error is not None:
         app.v_watchlist_status.set(f"⚠ 新债上市日刷新失败 ({error}) — 按本地条款库继续")
         if prompt_on_error and _terms_sync_available() and messagebox.askyesno(
-            "改用全量条款同步?",
+            "改用 Wind 增量同步?",
             f"新债上市日刷新失败:\n{error}\n\n"
-            "「是」: 改跑 Wind 增量条款同步 (通常 1-3 分钟), 完成后继续扫描\n"
+            "「是」: 改跑 Wind 增量条款同步, 完成后继续扫描。\n"
+            "待更新债券较多时可能需要十几分钟或更久, 可在同步窗口终止。\n"
             "「否」: 直接扫描现有条款库",
+            parent=app,
+            default=messagebox.NO,
         ):
             app._run_pool_sync(
                 _TERMS_SYNC_MODULE, _TERMS_SYNC_LABEL, ("--incremental",),

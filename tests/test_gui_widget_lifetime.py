@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -132,16 +134,13 @@ class _StubApp:
 
 
 @pytest.fixture
-def pool_sync_env(monkeypatch):
-    """把 `_run_pool_sync` 的外部依赖全换成 stub, 线程改为同步执行。"""
+def pool_sync_widgets(monkeypatch):
+    """只替换 Tk 控件与调度, 允许管道用例启动真实子进程。"""
     stub_ctk = types.SimpleNamespace(
         CTkToplevel=_StubWidget, CTkLabel=_StubWidget, CTkTextbox=_StubWidget,
         CTkFrame=_StubWidget, CTkButton=_StubWidget, StringVar=_StubVar,
     )
     monkeypatch.setattr(wind_sync, "ctk", stub_ctk)
-
-    lines = ["第 1 行\n", "第 2 行\n", "第 3 行\n"]
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: _StubProc(lines))
 
     class _SyncThread:
         def __init__(self, target=None, **_kwargs):
@@ -151,6 +150,13 @@ def pool_sync_env(monkeypatch):
             self._target()
 
     monkeypatch.setattr(wind_sync.threading, "Thread", _SyncThread)
+
+
+@pytest.fixture
+def pool_sync_env(monkeypatch, pool_sync_widgets):
+    """生命周期用例不需要启动真实进程。"""
+    lines = ["第 1 行\n", "第 2 行\n", "第 3 行\n"]
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: _StubProc(lines))
     return lines
 
 
@@ -188,6 +194,47 @@ def test_pool_sync_writes_output_when_the_window_is_still_open(pool_sync_env):
     assert text_box.inserted == ["第 1 行\n", "第 2 行\n", "第 3 行\n"]
     assert {"state": "disabled"} in cancel_btn.configured
     assert {"state": "normal"} in close_btn.configured
+
+
+def test_pool_sync_pipe_displays_utf8_output_under_a_cp936_default(monkeypatch, pool_sync_widgets):
+    """真实子进程 → 真实文本管道 → GUI 回调, 中文/emoji 与异常字节都能显示。"""
+    real_popen = subprocess.Popen
+    processes = []
+
+    def windows_default_popen(*args, **kwargs):
+        # 只在调用方没选编码时模拟中文 Windows 的 CP936 默认解码。
+        kwargs.setdefault("encoding", "cp936")
+        proc = real_popen(*args, **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", windows_default_popen)
+    monkeypatch.setenv("PYTHONIOENCODING", "cp936")
+    monkeypatch.setenv("CBLENS_PIPE_TEST", "keep-existing-env")
+    code = (
+        "import os, sys; "
+        "assert os.environ['CBLENS_PIPE_TEST'] == 'keep-existing-env'; "
+        "print(sys.stdout.encoding, flush=True); "
+        "print('✅ 同步完成 🆕', flush=True); "
+        "sys.stderr.buffer.write('❌ 附加错误 '.encode('utf-8') + b'\\xff\\n'); "
+        "sys.stderr.flush()"
+    )
+    monkeypatch.setattr(wind_sync, "pool_sync_command", lambda *args: [sys.executable, "-c", code])
+    app = _StubApp()
+    try:
+        _win, text_box, cancel_btn, close_btn = _run_pool_sync_on_stub(app)
+        app.drain()
+        assert text_box.inserted == ["utf-8\n", "✅ 同步完成 🆕\n", "❌ 附加错误 �\n"]
+        assert all(proc.returncode == 0 for proc in processes)
+        assert {"state": "disabled"} in cancel_btn.configured
+        assert {"state": "normal"} in close_btn.configured
+        assert os.environ["PYTHONIOENCODING"] == "cp936", "不得改动父进程环境"
+    finally:
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+            proc.stdout.close()
 
 
 def test_pool_sync_survives_a_window_the_user_closed_midway(pool_sync_env):
