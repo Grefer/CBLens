@@ -1,12 +1,14 @@
+import errno
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Lock
 
 import pytest
 
+import convertible_bond.atomic_io as atomic_io
 from convertible_bond.cache import TermsBundle
 from convertible_bond.cb_events import CBEvent, CBEventStore
 from convertible_bond.data_providers import BondTerms, DataProvider
@@ -25,30 +27,53 @@ from convertible_bond.historical_terms import (
 )
 
 
-def test_patch_store_concurrent_saves_publish_complete_json(tmp_path, monkeypatch):
-    """让两次写盘都停在发布前, 验证临时文件独立且最终是某份完整快照。"""
+@pytest.mark.parametrize("inject_contention", [False, True], ids=["normal", "single-winerror5"])
+def test_patch_store_concurrent_saves_publish_complete_json(tmp_path, monkeypatch, inject_contention):
+    """每次写操作只同步一次; 重试仍能发布某一份完整快照。"""
     path = tmp_path / "patches.json"
     stores = [TermsPatchStore(path), TermsPatchStore(path)]
     patches = [TermsPatch("A", date(2026, 1, 1), {"conversion_price": 9}, note="甲"),
                TermsPatch("B", date(2026, 1, 2), {"conversion_price": 8}, note="乙" * 20000)]
     barrier = Barrier(2)
+    lock = Lock()
     temporary_paths = []
+    attempts = {}
+    injected_paths = []
+    real_publish = atomic_io._replace_with_retry
     real_replace = Path.replace
 
     def publish_together(src, dst):
-        temporary_paths.append(src)
+        with lock:
+            temporary_paths.append(src)
+        # 屏障放在整次发布操作的入口。若挂在 Path.replace 上, Windows 重试时另一
+        # writer 可能已完成, 第二次进入屏障就会永远等不到它。
         barrier.wait(timeout=5)
+        return real_publish(src, dst)
+
+    def replace_with_contention(src, dst):
+        with lock:
+            attempts[src] = attempts.get(src, 0) + 1
+            if inject_contention and not injected_paths:
+                injected_paths.append(src)
+                failure = PermissionError(errno.EACCES, "模拟一次 Windows 目标句柄占用")
+                failure.winerror = 5
+                raise failure
         return real_replace(src, dst)
 
-    monkeypatch.setattr(Path, "replace", publish_together)
+    monkeypatch.setattr(atomic_io, "_replace_with_retry", publish_together)
+    monkeypatch.setattr(Path, "replace", replace_with_contention)
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(store.add_many, [patch])
                    for store, patch in zip(stores, patches)]
         for future in futures:
             future.result(timeout=10)
 
-    assert len(set(temporary_paths)) == 2
+    assert len(temporary_paths) == len(set(temporary_paths)) == 2
     assert all(p.parent == path.parent for p in temporary_paths)
+    assert set(attempts) == set(temporary_paths)
+    assert len(injected_paths) == int(inject_contention)
+    if inject_contention:
+        assert attempts[injected_paths[0]] >= 2, "注入的占用必须走真实重试链恢复"
     reloaded = TermsPatchStore(path)
     assert reloaded.list_patches() in ([patches[0]], [patches[1]])
     payload = json.loads(path.read_text(encoding="utf-8"))
