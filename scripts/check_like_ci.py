@@ -11,10 +11,10 @@ checkout 上没有。已经踩过两种 ——
   两次推送连红三天没人发现。
 
 第二种不可能靠一份名单挡住 (下一次换成哪个文件事先不知道), 所以这里不做名单:
-``git archive`` 导出的树里**只有版本库里真有的东西**, 凡是"本机有、库里没有"的
-一次全抓, 包括还没发生的那些。
+新检出的树里**只有版本库里真有的东西**, 凡是"本机有、库里没有"的一次全抓,
+包括还没发生的那些。
 
-一个必要条件已经实测过: 导出树里的 ``convertible_bond`` 会压过 ``pip install -e``
+一个必要条件已经实测过: 检出树里的 ``convertible_bond`` 会压过 ``pip install -e``
 装的那份 (import 解析到临时目录而不是仓库), 否则这个检查等于什么都没查。
 
 用法::
@@ -32,7 +32,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -53,13 +52,17 @@ def _repo_root() -> Path:
 
 
 def _export(root: Path, rev: str, dest: Path) -> None:
-    """把 *rev* 那一版导出到 *dest* —— 与 CI 的 checkout 同形。"""
-    archive = dest.parent / "tree.tar"
-    with open(archive, "wb") as f:
-        subprocess.run(["git", "archive", rev], cwd=root, stdout=f, check=True)
-    with tarfile.open(archive) as tar:
-        tar.extractall(dest, filter="data")
-    archive.unlink()
+    """把 *rev* 那一版检出到 *dest* —— 与 ``actions/checkout`` 同形。
+
+    用 ``init`` + 浅 ``fetch`` 而不是 ``git archive``: 后者只吐工作树、**没有
+    ``.git``**, 于是任何 shell 出去问 git 的用例 (``test_ci_parity`` 那条"读的文件
+    必须被跟踪"就是) 在这里炸 ``CalledProcessError``, 而它在 CI 上明明是好的 ——
+    一个比 CI 更严的检查会制造假红, 和假绿一样糟。只写 *dest*, 不碰仓库本体。
+    """
+    subprocess.run(["git", "init", "-q", str(dest)], check=True)
+    subprocess.run(["git", "fetch", "-q", "--depth", "1", str(root), rev],
+                   cwd=dest, check=True)
+    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
 
 
 def _clean_env() -> dict[str, str]:
