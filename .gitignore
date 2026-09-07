@@ -6,7 +6,12 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+# PyInstaller 生成的 spec 落在 build/pyinstaller-config/ 下, 已被 build/ 挡住。
+# 根目录这份是**手工维护的参考模板**: README 的手动构建入口
+# (pyinstaller --noconfirm CBLens.spec), 也是 test_build_desktop 的断言对象。
+# 它曾被 *.spec 一起吞掉 —— 本机有文件所以全绿, CI 全新 checkout 报 FileNotFoundError。
 *.spec
+!CBLens.spec
 
 # Virtual env
 .venv/
