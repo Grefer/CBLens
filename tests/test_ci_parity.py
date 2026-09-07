@@ -42,25 +42,37 @@ def test_headless_plugin_is_loaded_by_default_not_by_remembering_a_flag():
     )
 
 
-def test_like_ci_script_runs_the_same_steps_as_the_workflow():
-    """``scripts/check_like_ci.py`` 与 ``ci.yml`` 分叉 = 比没有这个脚本更糟。
+def test_like_ci_runs_every_workflow_step_or_says_why_not():
+    """``check_like_ci.py`` 漏掉 ci.yml 的某一步 = 比没有这个脚本更糟。
 
     分叉的表现是"本机这个脚本绿、CI 还是红": 你照着一个自称等价的检查放行, 而它
-    查的根本不是同一批东西。所以逐字比对两边的三条命令行。
+    查的根本不是同一批东西。**上一版就是这么漏的** —— 脚本把命令手抄成
+    ``python -m pytest`` 而 ci.yml 是裸 ``pytest``, 而这条用例只比对模块名之后的
+    参数, 对调用形式免疫, 于是两边一起放行、CI 一条用例都没跑。
+
+    所以现在脚本直接读 ci.yml (不再有第二份命令), 这条改为守**覆盖面**:
+    每个 ``run:`` 步骤要么真的跑, 要么显式登记在 ``_SKIP_STEPS`` 里。
     """
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     sys.path.insert(0, str(ROOT / "scripts"))
     try:
         import check_like_ci
     finally:
         sys.path.pop(0)
 
-    for name, cmd in check_like_ci._STEPS:
-        assert name in workflow, f"ci.yml 里没有名为 {name!r} 的步骤"
-        # 脚本用 `python -m X ...`, workflow 里是 `X ...` 或 `python -m X ...`;
-        # 比的是模块名之后那串参数, 那才是"查了哪些东西"。
-        tail = " ".join(cmd[2:])
-        assert tail in workflow, f"步骤 {name!r} 的参数与 ci.yml 不一致: {tail!r}"
+    steps = check_like_ci._ci_steps(ROOT / check_like_ci.WORKFLOW)
+    names = [name for name, _ in steps]
+    assert len(steps) >= 4, f"ci.yml 只解析出 {len(steps)} 个 run 步骤, 解析器坏了: {names}"
+    for expected in ("Compile check", "Lint (ruff E9+F)", "Test"):
+        assert expected in names, f"没解析到 {expected!r} 这一步: {names}"
+
+    stale = check_like_ci._SKIP_STEPS - set(names)
+    assert not stale, f"这些步骤 ci.yml 里已经没有了, 从 _SKIP_STEPS 删掉: {stale}"
+
+    # 真正会被执行的那几步, 命令必须与 ci.yml 逐字一致 (读的就是同一份文件,
+    # 这里再断言一次是为了钉住"解析出来的确实是命令行而不是别的什么")。
+    ran = {name: cmd for name, cmd in steps if name not in check_like_ci._SKIP_STEPS}
+    assert ran["Test"] == "pytest -q", f"Test 步骤解析成了 {ran['Test']!r}"
+    assert ran["Lint (ruff E9+F)"].startswith("ruff check "), ran["Lint (ruff E9+F)"]
 
 
 def test_every_repo_file_the_tests_read_is_actually_tracked_by_git():
