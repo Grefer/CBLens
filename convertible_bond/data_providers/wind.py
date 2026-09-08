@@ -36,6 +36,7 @@ from ._helpers import (
 from ..market_time import market_today
 from ..wind_config import get_session_wind_selection
 from .wind_errors import WindConnectionError, wind_connection_error, wind_import_error
+from .wind_discovery import windows_python_site_paths, windows_wind_install_paths
 from .wind_runtime import (
     prepare_windows_wind_runtime, read_windpy_pth, windpy_module_file,
 )
@@ -102,6 +103,20 @@ def _frozen_windpy_candidate_paths() -> list[Path]:
     return candidates
 
 
+def _wind_install_interface_paths(root: Path) -> list[Path]:
+    """从已定位的 Wind 安装根查固定接口子目录，不递归扫描磁盘。"""
+    roots = [root]
+    if root.name.casefold() in {"wind.net.client", "windnetclient", "bin", "x64", "x86"}:
+        roots.append(root.parent)
+    paths = []
+    for install_root in roots:
+        paths.extend(install_root / relative for relative in (
+            "", "x64", "python", "WindPy", "Wind.NET.Client", "Wind.NET.Client/x64",
+            "Wind.NET.Client/python", "WindNETClient", "WindNETClient/x64",
+        ))
+    return paths
+
+
 def _windpy_candidate_paths() -> list[Path]:
     """按本次启动的选择返回候选；明确指定的接口不回退到另一安装版本。"""
     selection = get_session_wind_selection()
@@ -119,33 +134,19 @@ def _windpy_candidate_paths() -> list[Path]:
             Path("/Applications/Wind金融终端.app/Contents/python"),
         ])
     elif sys.platform == "win32":
-        roots = [
-            os.environ.get("WIND_HOME"),
-            os.environ.get("WINDDIR"),
-            os.environ.get("ProgramFiles"),
-            os.environ.get("ProgramFiles(x86)"),
-            os.environ.get("LOCALAPPDATA"),
-            os.environ.get("APPDATA"),
-            "C:\\Wind",
-            "C:\\Software\\Wind",
-        ]
-        suffixes = [
-            "",
-            "Wind",
-            "Wind\\Wind.NET.Client",
-            "Wind\\WindNETClient",
-            "Wind\\WindPy",
-            "Wind.NET.Client",
-            "WindPy",
-            "x64",
-            "Wind\\x64",
-        ]
+        # 先定位终端安装，再向下查接口；不要求用户给另一套 Python 配置过 Wind。
+        roots = [Path(value).expanduser() for name in ("WIND_HOME", "WINDDIR")
+                 if (value := os.environ.get(name, "").strip())]
+        roots.extend(windows_wind_install_paths())
         for root in roots:
-            if not root:
-                continue
-            root_path = Path(root).expanduser()
-            candidates.append(root_path)
-            candidates.extend(root_path / suffix for suffix in suffixes if suffix)
+            candidates.extend(_wind_install_interface_paths(root))
+        for name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "APPDATA"):
+            if value := os.environ.get(name, "").strip():
+                base = Path(value).expanduser()
+                candidates.extend(_wind_install_interface_paths(base / "Wind"))
+                candidates.extend(_wind_install_interface_paths(base))
+        for root in (Path(r"C:\Wind"), Path(r"C:\Software\Wind")):
+            candidates.extend(_wind_install_interface_paths(root))
 
     try:
         candidates.append(Path(site.getusersitepackages()))
@@ -157,6 +158,8 @@ def _windpy_candidate_paths() -> list[Path]:
         logger.debug("site.getsitepackages() 不可用, 跳过该候选路径", exc_info=True)
 
     if sys.platform == "win32":
+        # Wind 修复工具只配置它选中的 Python；冻结包的 site 不含这些外部安装目录。
+        candidates.extend(windows_python_site_paths())
         candidates.extend(_frozen_windpy_candidate_paths())
 
     unique: list[Path] = []

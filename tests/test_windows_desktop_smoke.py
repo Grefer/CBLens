@@ -33,16 +33,21 @@ def _valid_report(result_path):
     return report, copy.deepcopy(identity)
 
 
-def _valid_wind_report(interface, result_path, token):
-    return {
+def _valid_wind_report(interface, result_path, token, *, mode="explicit"):
+    report = {
         "schema_version": 1, "ok": True, "loaded": True, "stage": "load",
         "connected": None, "cancelled": False, "bundled": False,
-        "source": "probe", "path": str(interface), "selection_path": str(interface),
+        "source": "probe" if mode == "explicit" else "auto", "path": str(interface),
+        "selection_path": str(interface) if mode == "explicit" else "",
         "output": str(result_path.resolve()), "token": token, "pid": 202,
         "launcher": {"pid": 201, "exit_code": 0, "detached": True},
         "smoke": {"interface_kind": "external_python_stub", "loaded": True,
                   "gui_loaded": False, "api_calls": [], "network_used": False},
     }
+    if mode == "auto_install":
+        report["smoke"].update(installation_root=str(interface.parent.parent),
+                                relative_interface="x64/WindPy.py")
+    return report
 
 
 def test_detached_launch_supplies_null_handles_without_redirects(monkeypatch):
@@ -149,13 +154,15 @@ def test_old_success_report_is_never_used_when_new_process_writes_nothing(monkey
     ("smoke", {"interface_kind": "external_python_stub", "loaded": True,
                "gui_loaded": False, "api_calls": ["w.start"], "network_used": False}),
 ])
-def test_wind_probe_rejects_wrong_identity_or_side_effects(tmp_path, field, value):
-    interface, output, token = tmp_path / "WindPy.py", tmp_path / "result.json", "fresh-token"
-    report = _valid_wind_report(interface, output, token)
-    smoke._validate_wind_probe_report(report, interface=interface, result_path=output, token=token)
+@pytest.mark.parametrize("mode", ["explicit", "auto", "auto_install"])
+def test_wind_probe_rejects_wrong_identity_or_side_effects(tmp_path, field, value, mode):
+    interface = tmp_path / "Wind" / "x64" / "WindPy.py"
+    output, token = tmp_path / "result.json", "fresh-token"
+    report = _valid_wind_report(interface, output, token, mode=mode)
+    smoke._validate_wind_probe_report(report, interface=interface, result_path=output, token=token, mode=mode)
     report[field] = value
     with pytest.raises(ValueError):
-        smoke._validate_wind_probe_report(report, interface=interface, result_path=output, token=token)
+        smoke._validate_wind_probe_report(report, interface=interface, result_path=output, token=token, mode=mode)
 
 
 def test_generated_wind_stub_records_import_and_forbids_connections(tmp_path):
@@ -201,13 +208,17 @@ def test_release_stub_passes_actual_probe_dispatch_without_gui_or_connection(tmp
     }
 
 
-def test_release_check_runs_and_saves_both_detached_reports(monkeypatch, tmp_path):
+def test_release_check_saves_three_isolated_wind_discovery_reports(monkeypatch, tmp_path):
     output = tmp_path / "combined.json"
     _, manifest = _valid_report(output)
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     monkeypatch.setattr(smoke.sys, "platform", "win32")
+    for name in ("CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR", "WIND_HOME", "WINDDIR"):
+        monkeypatch.setenv(name, str(tmp_path / "wrong-interface"))
+    parent_env = dict(os.environ)
     launches = []
+    local_dirs, roaming_dirs = [], []
 
     def launch(command, *, env, timeout):
         launches.append(command)
@@ -218,12 +229,34 @@ def test_release_check_runs_and_saves_both_detached_reports(monkeypatch, tmp_pat
             launcher_pid = 101
         else:
             assert command[1] == "--wind-probe" and "--connect" not in command
+            local_dirs.append(env["LOCALAPPDATA"])
+            roaming_dirs.append(env["APPDATA"])
             selection = json.loads(env["CBLENS_WINDPY_SESSION_SELECTION"])
-            interface = Path(selection["path"])
-            assert selection["source"] == "probe" and interface.is_file()
+            mode = result_path.stem.removeprefix("wind-probe-")
+            if mode != "explicit":
+                assert selection == {"path": "", "source": "auto"}
+                assert not {"CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR", "WINDDIR"} & env.keys()
+            if mode == "auto":
+                assert "WIND_HOME" not in env
+                pth = (Path(env["LOCALAPPDATA"]) / "Programs" / "Python" / "Python313"
+                       / "Lib" / "site-packages" / "WindPy.pth")
+                interface = Path(pth.read_text(encoding="utf-8").strip()) / "WindPy.py"
+            elif mode == "auto_install":
+                installation = Path(env["WIND_HOME"])
+                interface = installation / "x64" / "WindPy.py"
+                assert installation.name == "wind-install" and installation != interface.parent
+                assert not (installation / "WindPy.py").exists()
+                assert not list(Path(env["LOCALAPPDATA"]).rglob("WindPy.pth"))
+                assert not list(Path(env["APPDATA"]).rglob("WindPy.pth"))
+            else:
+                interface = Path(selection["path"])
+                assert selection["source"] == "probe"
+            assert interface == (result_path.parent / "wind-install" / "x64" / "WindPy.py").resolve()
+            assert interface.is_file()
             token = command[command.index("--token") + 1]
-            report = _valid_wind_report(interface, result_path, token)
+            report = _valid_wind_report(interface, result_path, token, mode=mode)
             marker = interface.parent / "import.json"
+            assert not marker.exists(), "每轮必须清除上一轮的导入记录"
             marker.write_text(json.dumps({key: value for key, value in report["smoke"].items()
                                           if key != "interface_kind"}), encoding="utf-8")
             launcher_pid = 201
@@ -234,12 +267,27 @@ def test_release_check_runs_and_saves_both_detached_reports(monkeypatch, tmp_pat
     assert smoke.main(["--exe", str(tmp_path / "CBLens.exe"), "--manifest", str(manifest_path),
                        "--output", str(output)]) == 0
     saved = json.loads(output.read_text(encoding="utf-8"))
-    assert len(launches) == 2
+    assert len(launches) == 4 and dict(os.environ) == parent_env
+    assert len(set(local_dirs)) == len(set(roaming_dirs)) == 3
     assert saved["ok"] is True and saved["wind_probe"]["loaded"] is True
     assert saved["wind_probe"]["smoke"]["interface_kind"] == "external_python_stub"
+    assert saved["wind_probe"]["mode"] == "explicit"
+    assert saved["wind_probe_auto"]["mode"] == "auto"
+    assert saved["wind_probe_auto"]["source"] == "auto" and saved["wind_probe_auto"]["selection_path"] == ""
+    assert saved["wind_probe_auto"]["path"] == saved["wind_probe"]["path"]
+    assert saved["wind_probe_auto"]["smoke"]["api_calls"] == []
+    assert saved["wind_probe_auto"]["output"] != saved["wind_probe"]["output"]
+    assert saved["wind_probe_auto"]["token"] != saved["wind_probe"]["token"]
+    install = saved["wind_probe_install"]
+    assert install["mode"] == "auto_install" and install["source"] == "auto"
+    assert install["selection_path"] == "" and install["path"] == saved["wind_probe"]["path"]
+    assert install["smoke"]["relative_interface"] == "x64/WindPy.py"
+    assert Path(install["smoke"]["installation_root"]) / "x64" / "WindPy.py" == Path(install["path"])
+    assert len({saved[key]["token"] for key in ("wind_probe", "wind_probe_auto", "wind_probe_install")}) == 3
 
 
-def test_wind_probe_failure_blocks_release_and_is_saved(monkeypatch, tmp_path):
+@pytest.mark.parametrize("failed_mode", ["explicit", "auto", "auto_install"])
+def test_wind_probe_failure_blocks_release_and_records_each_mode(monkeypatch, tmp_path, failed_mode):
     output = tmp_path / "combined.json"
     _, manifest = _valid_report(output)
     manifest_path = tmp_path / "manifest.json"
@@ -252,18 +300,56 @@ def test_wind_probe_failure_blocks_release_and_is_saved(monkeypatch, tmp_path):
         result_path.write_text(json.dumps(report), encoding="utf-8")
         return 101, 0
 
-    def fail_probe(*args, **kwargs):
-        raise ValueError("冻结包未包含 Wind 检测入口")
+    attempts = []
+
+    def fail_probe(*args, mode, **kwargs):
+        attempts.append(mode)
+        if mode == failed_mode:
+            raise ValueError("冻结包未包含 Wind 检测入口")
+        return {"ok": True, "mode": mode}
 
     monkeypatch.setattr(smoke, "_run_detached", launch)
     monkeypatch.setattr(smoke, "_run_wind_probe", fail_probe)
-    with pytest.raises(ValueError, match="冻结包未包含"):
+    with pytest.raises(RuntimeError, match=f"{failed_mode}: ValueError: 冻结包未包含"):
         smoke.main(["--exe", str(tmp_path / "CBLens.exe"), "--manifest", str(manifest_path),
                     "--output", str(output)])
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert saved["ok"] is False
-    assert saved["wind_probe"]["ok"] is False
-    assert "冻结包未包含" in saved["wind_probe"]["error"]
+    assert attempts == ["explicit", "auto", "auto_install"]
+    for mode, key in (("explicit", "wind_probe"), ("auto", "wind_probe_auto"),
+                      ("auto_install", "wind_probe_install")):
+        assert saved[key]["mode"] == mode
+        assert saved[key]["ok"] is (mode != failed_mode)
+        if mode == failed_mode:
+            assert "冻结包未包含" in saved[key]["error"]
+
+
+@pytest.mark.parametrize("mode", ["auto", "auto_install"])
+def test_auto_probe_cannot_reuse_explicit_import_marker(monkeypatch, tmp_path, mode):
+    interface, marker = smoke._write_wind_stub(tmp_path / "wind-install" / "x64")
+    marker.write_text(json.dumps({"loaded": True, "gui_loaded": False,
+                                  "api_calls": [], "network_used": False}), encoding="utf-8")
+
+    def launch(command, **kwargs):
+        output = Path(command[command.index("--output") + 1])
+        token = command[command.index("--token") + 1]
+        report = _valid_wind_report(interface, output, token, mode=mode)
+        output.write_text(json.dumps(report), encoding="utf-8")
+        return 201, 0
+
+    monkeypatch.setattr(smoke, "_run_detached", launch)
+    with pytest.raises(FileNotFoundError):
+        smoke._run_wind_probe(Path("CBLens.exe"), work=tmp_path, env={}, timeout=1,
+                              interface=interface, marker=marker, mode=mode)
+
+
+def test_install_probe_rejects_using_the_interface_directory_as_installation_root(tmp_path):
+    interface, output = tmp_path / "Wind" / "x64" / "WindPy.py", tmp_path / "result.json"
+    report = _valid_wind_report(interface, output, "fresh", mode="auto_install")
+    report["smoke"]["installation_root"] = str(interface.parent)
+    with pytest.raises(ValueError, match="安装根"):
+        smoke._validate_wind_probe_report(report, interface=interface, result_path=output,
+                                          token="fresh", mode="auto_install")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="需要 Windows 原生 CreateProcess 与标准句柄")

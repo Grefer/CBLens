@@ -255,17 +255,28 @@ def _probe_in_child(*, connect: bool, connect_wait: int) -> dict:
     except Exception as exc:
         return _result(stage="discovery", message="Wind 接口选择无效", diagnostic=str(exc),
                        source=source, selection_path=selection_path)
+    located_file = None
     try:
-        from .data_providers.wind import load_windpy
+        from .data_providers.wind import discover_windpy_paths, load_windpy
+        from .data_providers.wind_runtime import windpy_module_file
 
+        # 留下本轮实际找到的文件：DLL 加载失败也不应显示成“接口未找到”。
+        # 此步骤只读路径，发生在可终止的检测子进程中。
+        prepared = discover_windpy_paths()
+        if selection_path:
+            located_file = windpy_module_file(Path(selection_path).expanduser())
+        if located_file is None:
+            located_file = next((file for path in prepared
+                                 if (file := windpy_module_file(path)) is not None), None)
         module = load_windpy()
         api = getattr(module, "w", None)
         if not all(callable(getattr(api, name, None)) for name in ("start", "isconnected")):
             raise ImportError("WindPy 未提供可调用的 w.start / w.isconnected 接口")
     except Exception as exc:
-        missing = isinstance(exc, ModuleNotFoundError) and exc.name == "WindPy"
+        missing = located_file is None and isinstance(exc, ModuleNotFoundError) and exc.name == "WindPy"
         return _result(stage="discovery" if missing else "load", source=source,
                        selection_path=selection_path,
+                       path=str(located_file.resolve()) if located_file is not None else None,
                        message="未找到可用的 WindPy 接口" if missing else "WindPy 接口加载失败",
                        diagnostic=f"{type(exc).__name__}: {exc}")
     actual_path = str(Path(module.__file__).resolve()) if getattr(module, "__file__", None) else None

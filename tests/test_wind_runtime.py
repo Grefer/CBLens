@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from convertible_bond.data_providers import wind
+from convertible_bond.data_providers import wind_discovery as discovery
 from convertible_bond.data_providers import wind_runtime as runtime
 
 
@@ -19,6 +20,7 @@ def isolate_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(wind.site, "getsitepackages", lambda: [])
     monkeypatch.setattr(wind.site, "getusersitepackages", lambda: str(tmp_path / "missing"))
+    monkeypatch.setattr(wind, "windows_wind_install_paths", lambda: [])
     yield
     sys.modules.pop("WindPy", None)
     for temp, _, handles in runtime._RUNTIMES.values():
@@ -142,6 +144,87 @@ def test_auto_discovers_site_pth_without_executing_code(monkeypatch, tmp_path):
     module = wind.load_windpy()
     assert Path(module.__file__).resolve() == actual.resolve()
     assert not marker.exists()
+
+
+@pytest.mark.parametrize("layout", ["pth", "copied_module"])
+def test_frozen_auto_reads_wind_configured_for_external_python313(monkeypatch, tmp_path, layout):
+    """复现官方修复工具配置独立 Python313、桌面包须沿记录找到非默认 Wind 目录。"""
+    _choose(monkeypatch, "", "auto")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "bundle"), raising=False)
+    monkeypatch.setattr(wind, "_frozen_windpy_candidate_paths", lambda: [])
+    monkeypatch.setattr(discovery, "registered_python_roots", lambda: [])
+    local = tmp_path / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    for name in ("APPDATA", "ProgramFiles", "ProgramFiles(x86)", "WIND_HOME", "WINDDIR"):
+        monkeypatch.setenv(name, str(tmp_path / "missing"))
+    site_dir = local / "Programs/Python/Python313/Lib/site-packages"
+    site_dir.mkdir(parents=True)
+    marker = tmp_path / "module-imported"
+    terminal = tmp_path / "D-drive/Software/Wind/x64"
+    interface = _module(terminal if layout == "pth" else site_dir, f"""
+from pathlib import Path
+Path({str(marker)!r}).touch()
+w = 'configured for external Python313'
+""")
+    if layout == "pth":
+        (site_dir / "WindPy.pth").write_text(str(terminal), encoding="utf-8")
+
+    original_path = list(sys.path)
+    assert interface.parent in wind.discover_windpy_paths()
+    assert sys.path == original_path
+    assert not marker.exists()  # GUI 启动只发现，不导入原生接口。
+    loaded = wind.load_windpy()
+    assert Path(loaded.__file__).resolve() == interface.resolve()
+    assert loaded.w == 'configured for external Python313'
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("source", ["install_record", "wind_home"])
+def test_windows_finds_interface_under_terminal_install_without_external_python(monkeypatch, tmp_path, source):
+    _choose(monkeypatch, "", "auto")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(wind, "windows_python_site_paths", lambda: [])
+    for name in ("WIND_HOME", "WINDDIR", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+        monkeypatch.setenv(name, str(tmp_path / "missing"))
+    installation = tmp_path / "D-drive/Software/Wind"
+    interface = _module(installation / "x64", "w = 'installed Wind'\n")
+    if source == "install_record":
+        monkeypatch.setattr(wind, "windows_wind_install_paths", lambda: [installation])
+    else:
+        monkeypatch.setenv("WIND_HOME", str(installation))
+    original_path = list(sys.path)
+    assert interface.parent in wind.discover_windpy_paths()
+    assert sys.path == original_path and "WindPy" not in sys.modules
+    assert wind.load_windpy().w == 'installed Wind'
+
+
+def test_terminal_install_takes_priority_over_python_registration(monkeypatch, tmp_path):
+    _choose(monkeypatch, "", "auto")
+    monkeypatch.setattr(sys, "platform", "win32")
+    terminal = tmp_path / "terminal"
+    preferred = _module(terminal / "x64", "w = 'terminal'\n")
+    fallback = _module(tmp_path / "Python313/Lib/site-packages", "raise AssertionError('旧 Python 接口不应抢先')\n")
+    monkeypatch.setattr(wind, "windows_wind_install_paths", lambda: [terminal])
+    monkeypatch.setattr(wind, "windows_python_site_paths", lambda: [fallback.parent])
+    module = wind.load_windpy()
+    assert Path(module.__file__).resolve() == preferred.resolve()
+
+
+def test_terminal_client_location_finds_sibling_x64_without_recursive_search(monkeypatch, tmp_path):
+    _choose(monkeypatch, "", "auto")
+    monkeypatch.setattr(sys, "platform", "win32")
+    root = tmp_path / "Wind"
+    client = root / "Wind.NET.Client"
+    client.mkdir(parents=True)
+    interface = _module(root / "x64")
+    unrelated = _module(root / "unrelated/deep/python")
+    monkeypatch.setattr(wind, "windows_wind_install_paths", lambda: [client])
+    monkeypatch.setattr(wind, "windows_python_site_paths", lambda: [])
+    discovered = wind.discover_windpy_paths()
+    assert interface.parent in discovered
+    assert unrelated.parent not in discovered
 
 
 def test_windows_external_pth_precedes_bundle_and_retains_dll_handles(monkeypatch, tmp_path):

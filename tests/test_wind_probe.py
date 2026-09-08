@@ -80,6 +80,7 @@ def test_invalid_path_and_native_load_error_are_distinguished(tmp_path):
     path = _fake_module(tmp_path, "raise OSError('模拟 DLL 加载错误')\n")
     result = probe.run_wind_probe(str(path), timeout=8)
     assert result["stage"] == "load" and result["loaded"] is False
+    assert result["path"] == str(path.resolve())
     assert "模拟 DLL 加载错误" in result["diagnostic"]
 
 

@@ -218,7 +218,11 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   `settings.json`，不导入 Wind；优先级为环境覆盖 → 应用保存 → 自动发现。当前进程
   首次读取后固定选择，业务子进程必须通过 `wind_subprocess_env()` 继承，保存路径只在
   重启后生效，不能让一次任务中途切换 DLL。显式路径失效必须报错，不能悄悄换另一套。
-  设置窗口的接口检测与连接测试均走 `wind_probe` 独立进程，默认只加载、不连接；
+  设置窗口只有「检测并连接」一个主动作，显式路径就检测该路径、留空才自动查找。
+  Windows 先定位 Wind 安装根，再查固定接口子目录；Python 的 `.pth` 记录作为补充，
+  不要求另装 Python，不全盘递归，也不执行安装记录中的命令。
+  GUI 由用户点击后通过 `wind_probe(connect=True)` 独立进程连接；底层 probe 默认
+  仍只加载、不连接，供离线发布检查使用。修改路径或重新检测时必须清除旧结果；
   有效接口即使未登录仍可保存。关闭窗口取消检测，应用退出清理检测进程；返回值只含
   文字和状态，不携带异常或 Tk 对象。onefile 子进程的包内临时路径不能落到用户设置。
 - **关注池是独立主页, 但「⭐ 加入关注池」搬不走**。`tabs/home.py` 是默认落地页, 拥有

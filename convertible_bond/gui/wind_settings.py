@@ -16,6 +16,15 @@ from ..wind_probe import run_wind_probe
 from .theme import BG_CARD, BG_INPUT, FONT_FAMILY, FONT_MONO, GREEN, RED, TEXT, TEXT_DIM
 
 
+_STAGE_TEXT = {
+    "discovery": "查找接口",
+    "load": "加载接口",
+    "connection": "连接终端",
+    "timeout": "等待超时",
+    "process": "检测进程",
+}
+
+
 def _source_text(selection: dict) -> str:
     source = selection.get("source", "auto")
     if source == "auto":
@@ -63,7 +72,7 @@ class _WindSettingsDialog:
                      text_color=TEXT, anchor="w").grid(
                          row=0, column=0, sticky="ew", padx=24, pady=(20, 8))
         ctk.CTkLabel(
-            window, text="使用本机 Wind 终端安装的 Python 接口。检测接口不连接终端；测试连接由你发起。",
+            window, text="填写 WindPy.py 路径，留空则自动查找本机 Wind。点击“检测并连接”会测试终端连接。",
             font=(FONT_FAMILY, 13), text_color=TEXT_DIM, wraplength=680,
             justify="left", anchor="w",
         ).grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 12))
@@ -83,15 +92,10 @@ class _WindSettingsDialog:
 
         actions = ctk.CTkFrame(window, fg_color="transparent")
         actions.grid(row=3, column=0, sticky="ew", padx=24, pady=14)
-        self.auto_button = ctk.CTkButton(actions, text="自动检测", width=110,
-                                       command=lambda: self._start_probe(auto=True))
-        self.load_button = ctk.CTkButton(actions, text="检测接口", width=110,
-                                       command=self._start_probe)
-        self.connect_button = ctk.CTkButton(actions, text="测试连接", width=110,
-                                          command=lambda: self._start_probe(connect=True))
-        for button in (self.auto_button, self.load_button, self.connect_button):
-            button.pack(side="left", padx=(0, 10))
-        self.status_label = ctk.CTkLabel(window, text="选择接口后先检测，再保存。", wraplength=680,
+        self.probe_button = ctk.CTkButton(actions, text="检测并连接", width=120,
+                                        command=self._start_probe)
+        self.probe_button.pack(side="left")
+        self.status_label = ctk.CTkLabel(window, text="检测完成后可保存接口配置。", wraplength=680,
                                         font=(FONT_FAMILY, 13), text_color=TEXT,
                                         justify="left", anchor="w")
         self.status_label.grid(row=4, column=0, sticky="ew", padx=24, pady=(0, 10))
@@ -119,6 +123,7 @@ class _WindSettingsDialog:
                                               + (f" · {active}" if active else ""))
             self._set_details(f"设置文件：{wind_settings_path()}\n"
                               "保存的更改在重启 CBLens 后生效，当前任务继续使用原接口。")
+            self._status("填写接口路径或留空自动查找，然后点击“检测并连接”。")
         except (OSError, ValueError) as exc:
             self._status(str(exc), error=True)
             self._set_details(str(exc))
@@ -133,10 +138,13 @@ class _WindSettingsDialog:
         self.details.delete("1.0", "end")
         self.details.insert("1.0", text)
         self.details.configure(state="disabled")
+        self.copy_button.configure(text="复制诊断")
 
     def _path_changed(self, *_args):
         self._validated_path = None
         self.save_button.configure(state="disabled")
+        self._set_details("")
+        self._status("路径已更改，请重新检测并连接。")
 
     def _browse(self):
         selected = filedialog.askopenfilename(parent=self.window, title="选择 WindPy.py",
@@ -144,32 +152,32 @@ class _WindSettingsDialog:
                                                          ("Python 文件", "*.py")])
         if selected:
             self.path.set(selected)
-            self._status("已选择文件，请先检测接口。")
+            self._status("已选择文件，请先检测并连接。")
 
     def _set_busy(self, busy: bool):
         self.busy = busy
-        for widget in (self.entry, self.browse_button, self.auto_button, self.load_button,
-                       self.connect_button, self.reset_button):
+        for widget in (self.entry, self.browse_button, self.probe_button, self.reset_button):
             widget.configure(state="disabled" if busy else "normal")
         self.save_button.configure(state="disabled" if busy or self._validated_path is None else "normal")
 
-    def _start_probe(self, *, auto: bool = False, connect: bool = False):
+    def _start_probe(self):
         if self.closed or self.busy:
             return
-        path = "" if auto else self.path.get().strip()
+        path = self.path.get().strip()
         self._validated_path = None
+        self._set_details("")
         self._set_busy(True)
         self._cancel = threading.Event()
         cancel = self._cancel
         results = self._results
-        self._status("正在测试连接…" if connect else "正在检测接口…")
+        self._status("正在检测接口并连接终端…")
 
         def worker():
             try:
-                report = run_wind_probe(path, connect=connect, cancel_event=cancel)
+                report = run_wind_probe(path, connect=True, cancel_event=cancel)
             except Exception as exc:
                 report = {"ok": False, "loaded": False, "message": "检测未完成",
-                          "diagnostic": f"{type(exc).__name__}: {exc}"}
+                          "selection_path": path, "diagnostic": f"{type(exc).__name__}: {exc}"}
             results.put(report)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -189,6 +197,7 @@ class _WindSettingsDialog:
     def _apply_report(self, report: dict):
         if self.closed:
             return
+        self._validated_path = None
         if report.get("loaded") and report.get("path"):
             # onefile 子进程退出后 _MEIPASS 就会消失；包内接口只保存“自动”选择。
             self.path.set("" if report.get("bundled") else report["path"])
@@ -196,12 +205,18 @@ class _WindSettingsDialog:
         self._set_busy(False)
         message = report.get("message", "检测未完成")
         if self._validated_path is not None:
-            message += ("\n可保存为自动查找，随应用启动定位包内接口。" if report.get("bundled") else
-                        "\n接口路径可以保存；连接状态以测试结果为准。")
+            if report.get("bundled"):
+                message += "\n可保存为自动查找，随应用启动定位包内接口。"
+            elif report.get("connected") is False:
+                message += "\n终端尚未连接，但接口路径可以保存。"
+            else:
+                message += "\n接口路径可以保存。"
         self._status(message, error=not report.get("ok"), success=bool(report.get("ok")))
-        self._set_details(f"接口：{report.get('path') or '未找到'}\n"
-                          f"阶段：{report.get('stage', 'process')}\n\n"
-                          + report.get("diagnostic", ""))
+        details = f"本轮接口：{report.get('path') or '未加载'}\n"
+        if report.get("selection_path"):
+            details += f"指定路径：{report['selection_path']}\n"
+        stage = _STAGE_TEXT.get(report.get("stage"), "检测进程")
+        self._set_details(details + f"阶段：{stage}\n\n" + report.get("diagnostic", ""))
 
     def _saved_message(self, text: str):
         selection = get_wind_selection()

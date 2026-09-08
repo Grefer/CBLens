@@ -76,7 +76,7 @@ def _validate_report(report: dict, manifest: dict, result_path: Path) -> None:
 
 def _write_wind_stub(directory: Path) -> tuple[Path, Path]:
     """构造只允许导入的接口替身；检测连接/GUI 回退会留下失败记录。"""
-    directory.mkdir()
+    directory.mkdir(parents=True)
     interface, marker = directory / "WindPy.py", directory / "import.json"
     source = '''"""发布检查用 Wind 接口源码替身，不代表真实 Wind DLL。"""
 import json
@@ -112,16 +112,18 @@ socket.socket.connect_ex = _forbidden("socket.connect_ex")
     return interface.resolve(), marker
 
 
-def _validate_wind_probe_report(report: dict, *, interface: Path, result_path: Path, token: str) -> None:
+def _validate_wind_probe_report(report: dict, *, interface: Path, result_path: Path, token: str,
+                                mode: str = "explicit") -> None:
+    source, selection_path = (("probe", str(interface)) if mode == "explicit" else ("auto", ""))
     if (report.get("schema_version") != 1 or report.get("ok") is not True
             or report.get("loaded") is not True or report.get("stage") != "load"
             or report.get("connected") is not None or report.get("cancelled") is not False
             or report.get("bundled") is not False):
         raise ValueError("离线 Wind 接口加载检测未成功，或意外连接/使用包内接口")
     if (report.get("token") != token or report.get("output") != str(result_path.resolve())
-            or report.get("source") != "probe" or report.get("selection_path") != str(interface)
+            or report.get("source") != source or report.get("selection_path") != selection_path
             or report.get("path") != str(interface)):
-        raise ValueError("Wind 检测结果不属于本轮明确指定的外置接口")
+        raise ValueError(f"Wind {mode} 检测结果不属于本轮外置接口")
     launcher = report.get("launcher") or {}
     if (type(report.get("pid")) is not int or report["pid"] <= 0
             or type(launcher.get("pid")) is not int or launcher["pid"] <= 0
@@ -132,22 +134,48 @@ def _validate_wind_probe_report(report: dict, *, interface: Path, result_path: P
             or smoke.get("gui_loaded") is not False or smoke.get("api_calls") != []
             or smoke.get("network_used") is not False):
         raise ValueError("离线 Wind 替身未实际载入，或触发了 GUI/接口连接/网络")
+    if mode == "auto_install" and (
+        smoke.get("installation_root") != str(interface.parent.parent)
+        or smoke.get("relative_interface") != "x64/WindPy.py" or interface.parent.name != "x64"
+    ):
+        raise ValueError("Wind 安装目录检测必须从安装根向下找到 x64/WindPy.py")
 
 
-def _run_wind_probe(exe: Path, *, work: Path, env: dict, timeout: float) -> dict:
-    interface, marker = _write_wind_stub(work / "wind-stub")
-    result_path, token = work / "wind-probe.json", uuid.uuid4().hex
+def _run_wind_probe(exe: Path, *, work: Path, env: dict, timeout: float,
+                    interface: Path, marker: Path, mode: str) -> dict:
+    # 每轮都必须重新导入同一替身，不能借用上一轮的成功记录。
+    marker.unlink(missing_ok=True)
+    result_path, token = work / f"wind-probe-{mode}.json", uuid.uuid4().hex
+    # 三轮的 Python 提示文件及用户目录相互隔离，安装根检测不能借用上一轮的 .pth。
+    mode_root = work / f"environment-{mode}"
+    env = {**env, "LOCALAPPDATA": str(mode_root / "local-appdata"),
+           "APPDATA": str(mode_root / "appdata")}
+    selection = {"path": str(interface), "source": "probe"}
+    if mode != "explicit":
+        for name in ("CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR", "WIND_HOME", "WINDDIR"):
+            env.pop(name, None)
+        selection = {"path": "", "source": "auto"}
+        if mode == "auto":
+            site = (Path(env["LOCALAPPDATA"]) / "Programs" / "Python" / "Python313"
+                    / "Lib" / "site-packages")
+            site.mkdir(parents=True)
+            (site / "WindPy.pth").write_text(str(interface.parent) + "\n", encoding="utf-8")
+        elif mode == "auto_install":
+            env["WIND_HOME"] = str(interface.parent.parent)
     probe_env = {**env, "PYINSTALLER_RESET_ENVIRONMENT": "1",
-                 "CBLENS_WINDPY_SESSION_SELECTION": json.dumps({"path": str(interface), "source": "probe"})}
+                 "CBLENS_WINDPY_SESSION_SELECTION": json.dumps(selection)}
     command = [str(exe.resolve()), "--wind-probe", "--output", str(result_path), "--token", token]
     pid, returncode = _run_detached(command, env=probe_env, timeout=timeout)
     if returncode != 0:
-        raise RuntimeError(f"无控制台 Wind 检测进程失败: {returncode}")
+        raise RuntimeError(f"无控制台 Wind {mode} 检测进程失败: {returncode}")
     report = json.loads(result_path.read_text(encoding="utf-8"))
+    report["mode"] = mode
     report["launcher"] = {"pid": pid, "exit_code": returncode, "detached": True}
     report["smoke"] = {**json.loads(marker.read_text(encoding="utf-8")),
                        "interface_kind": "external_python_stub"}
-    _validate_wind_probe_report(report, interface=interface, result_path=result_path, token=token)
+    if mode == "auto_install":
+        report["smoke"].update(installation_root=probe_env["WIND_HOME"], relative_interface="x64/WindPy.py")
+    _validate_wind_probe_report(report, interface=interface, result_path=result_path, token=token, mode=mode)
     return report
 
 
@@ -179,12 +207,20 @@ def main(argv: list[str] | None = None) -> int:
             if returncode != 0:
                 raise RuntimeError(f"无控制台诊断进程失败: {returncode}")
             _validate_report(report, manifest, result_path)
-            try:
-                report["wind_probe"] = _run_wind_probe(args.exe, work=work, env=env, timeout=args.timeout)
-            except Exception as exc:
-                report["ok"] = False
-                report["wind_probe"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                raise
+            interface, marker = _write_wind_stub(work / "wind-install" / "x64")
+            failures = []
+            for mode, key in (("explicit", "wind_probe"), ("auto", "wind_probe_auto"),
+                              ("auto_install", "wind_probe_install")):
+                try:
+                    report[key] = _run_wind_probe(args.exe, work=work, env=env, timeout=args.timeout,
+                                                  interface=interface, marker=marker, mode=mode)
+                except Exception as exc:
+                    report["ok"] = False
+                    error = f"{type(exc).__name__}: {exc}"
+                    report[key] = {"ok": False, "mode": mode, "error": error}
+                    failures.append(f"{mode}: {error}")
+            if failures:
+                raise RuntimeError("Wind 离线烟测失败；" + "；".join(failures))
         finally:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

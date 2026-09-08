@@ -173,7 +173,7 @@ def test_loaded_but_disconnected_interface_can_be_saved(dialog_ui, monkeypatch):
     dialog._apply_report(_report(module, connected=False, ok=False))
     assert dialog.save_button.options["state"] == "normal"
     assert "接口路径可以保存" in dialog.status_label.options["text"]
-    assert "连接状态以测试结果为准" in dialog.status_label.options["text"]
+    assert "终端尚未连接" in dialog.status_label.options["text"]
     dialog._save()
     assert saves == [str(module)]
     assert wind_config.load_wind_settings()["windpy_path"] == str(module)
@@ -241,6 +241,53 @@ def test_editing_or_browsing_path_invalidates_previous_result(dialog_ui, monkeyp
     assert "先检测" in dialog.status_label.options["text"]
 
 
+def test_single_probe_button_and_opening_settings_never_connects(dialog_ui):
+    """构造窗口时 probe 替身直接报错；这里只检查唯一可操作检测入口。"""
+    buttons = []
+
+    def collect(widget):
+        if "command" in widget.options:
+            buttons.append(widget)
+        for child in widget.children:
+            collect(child)
+
+    collect(dialog_ui.dialog.window)
+    assert [button.options["text"] for button in buttons] == [
+        "选择文件…", "检测并连接", "恢复自动", "复制诊断", "关闭", "保存配置",
+    ]
+    assert dialog_ui.dialog.probe_button.options["command"] == dialog_ui.dialog._start_probe
+
+
+def test_changing_path_removes_previous_error_and_copied_diagnostic(dialog_ui):
+    dialog = dialog_ui.dialog
+    report = {**_report(dialog_ui.module, loaded=False, ok=False),
+              "message": "旧接口加载失败", "diagnostic": "旧 DLL 错误"}
+    dialog._apply_report(report)
+    dialog._copy()
+    assert "旧 DLL 错误" in dialog._diagnostic
+    assert dialog.copy_button.options["text"] == "已复制"
+
+    dialog.path.set(str(dialog_ui.module.parent / "replacement" / "WindPy.py"))
+    assert dialog._diagnostic == ""
+    assert dialog.details.content == ""
+    assert "旧接口" not in dialog.status_label.options["text"]
+    assert "重新检测并连接" in dialog.status_label.options["text"]
+    assert dialog.copy_button.options["text"] == "复制诊断"
+    assert dialog.save_button.options["state"] == "disabled"
+
+
+@pytest.mark.parametrize("stage, expected", [
+    ("discovery", "查找接口"), ("load", "加载接口"), ("connection", "连接终端"),
+])
+def test_report_names_current_path_and_stage_in_chinese(dialog_ui, stage, expected):
+    dialog = dialog_ui.dialog
+    report = {**_report(dialog_ui.module), "stage": stage, "diagnostic": "底层错误 ErrorCode=-1"}
+    dialog._apply_report(report)
+    assert f"本轮接口：{dialog_ui.module}" in dialog.details.content
+    assert f"阶段：{expected}" in dialog.details.content
+    assert "底层错误 ErrorCode=-1" in dialog.details.content
+
+
 def test_save_and_reset_preserve_other_settings_and_explain_environment_priority(dialog_ui, monkeypatch):
     dialog, module = dialog_ui.dialog, dialog_ui.module
     target = wind_config.wind_settings_path()
@@ -284,23 +331,24 @@ def test_save_failure_keeps_validated_path_and_reports_error(dialog_ui, monkeypa
     assert "保存失败" in dialog.status_label.options["text"]
 
 
-@pytest.mark.parametrize("auto, connect", [(False, False), (True, False), (False, True)])
-def test_probe_runs_in_worker_and_only_main_thread_poll_updates_gui(dialog_ui, monkeypatch, auto, connect):
+@pytest.mark.parametrize("explicit_path", [True, False])
+def test_probe_always_connects_and_respects_input_path_in_worker(dialog_ui, monkeypatch, explicit_path):
     dialog = dialog_ui.dialog
     main_thread = threading.get_ident()
     calls = []
-    dialog.path.set(str(dialog_ui.module))
+    entered_path = f"  {dialog_ui.module}  " if explicit_path else "   "
+    dialog.path.set(entered_path)
 
     def probe(path, **kwargs):
         calls.append((path, kwargs, threading.get_ident()))
-        return _report(dialog_ui.module)
+        return _report(dialog_ui.module, connected=True)
 
     monkeypatch.setattr(wind_settings, "run_wind_probe", probe)
-    dialog._start_probe(auto=auto, connect=connect)
+    dialog.probe_button.options["command"]()
     assert dialog._results.completed.wait(timeout=3)
     assert len(calls) == 1
-    assert calls[0][0] == ("" if auto else str(dialog_ui.module))
-    assert calls[0][1] == {"connect": connect, "cancel_event": dialog._cancel}
+    assert calls[0][0] == (str(dialog_ui.module) if explicit_path else "")
+    assert calls[0][1] == {"connect": True, "cancel_event": dialog._cancel}
     assert calls[0][2] != main_thread
     assert dialog.busy
     assert dialog.save_button.options["state"] == "disabled"
@@ -325,11 +373,16 @@ def test_busy_probe_is_single_flight_and_main_thread_poll_reschedules(dialog_ui,
 
     monkeypatch.setattr(wind_settings, "run_wind_probe", probe)
     monkeypatch.setattr(wind_settings, "save_windpy_path", saves.append)
+    dialog._apply_report({**_report(dialog_ui.module, loaded=False, ok=False),
+                          "message": "旧检测失败", "diagnostic": "上一轮错误"})
     try:
         dialog._start_probe()
         assert entered.wait(timeout=3)
-        dialog._start_probe(auto=True)
-        dialog._start_probe(connect=True)
+        assert dialog.details.content == ""
+        assert dialog._diagnostic == ""
+        assert "旧检测" not in dialog.status_label.options["text"]
+        dialog.probe_button.options["command"]()
+        dialog.probe_button.options["command"]()
         dialog._save()
         dialog._reset()
         dialog.window.tick()  # 未完成，只在主线程续约一次轮询。
