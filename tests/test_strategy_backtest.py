@@ -2507,10 +2507,11 @@ def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
     在一个没人走的路径上成立, 而生产路径的候选池悄悄从 116 涨到 263, 用例全绿。
     安全网架在被改的路径之外, 等于没有。
     """
+    import dataclasses
     import json
 
     from convertible_bond import batch_pricing as bp
-    from convertible_bond.paths import data_path
+    from convertible_bond.paths import bundled_data_path, data_path
     from convertible_bond.strategy_backtest import (
         PDEStrategyConfig, ScoreStrategyConfig,
         _candidate_filter_reason, _select_candidate_rows,
@@ -2518,7 +2519,18 @@ def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
 
     cache = data_path("batch_pricing_cache.json")
     if not cache.exists():                      # 运行态缓存, gitignored
-        pytest.skip("需要 data/batch_pricing_cache.json")
+        # 回落到**入库**的发行种子。没有这一步, 全仓唯一逐只比对选债口径的用例在
+        # CI 与 pre-push 上永远 skip —— 实测 ``git archive HEAD data`` 出来的树上是
+        # ``102 passed, 1 skipped``, 跳掉的就是这一条。而"默认选债行为不变"这句话
+        # 每次改选债层都要说一遍, 说的时候手里没有任何能跑的东西。
+        #
+        # 走 ``bundled_data_path`` 而不是 ``data_path(..., seed=True)``: 前者只**查找**,
+        # 后者会 ``shutil.copy2`` 出一份 1.2MB 的运行态文件到仓库 ``data/`` —— 跑一次
+        # 测试就在工作区里凭空长出一个 gitignored 的大文件, 而且它之后会被当成
+        # "运行态缓存"优先读, 把这条回落路径自己遮掉。
+        cache = bundled_data_path("batch_pricing_cache.json")
+    if cache is None or not cache.exists():
+        pytest.skip("需要 batch_pricing_cache.json (运行态缓存或入库的发行种子)")
     rows = bp.annotate_batch_results(
         json.load(open(cache, encoding="utf-8"))["results"])
     if len(rows) < 50:
@@ -2559,6 +2571,44 @@ def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
     explained = {r["bond_code"] for r in rows
                  if _candidate_filter_reason(r, ScoreStrategyConfig()) is None}
     assert by_threshold <= explained
+
+    # ── ④ fixture 自守卫: 这份缓存必须真的测得出阈值被关掉 ──────────────────
+    # 上面三条断言只在阈值**真的在筛东西**时有判别力。换一份谁都不触阈值的种子
+    # (小样本、或恰好都是干净券), 两边同为全池、三条断言照样绿, 而"默认值被改动
+    # 会红"这个承诺已经没了 —— 而种子刷新是**发布流程**的一步, 不会有人顺手复核
+    # 它对这条用例的判别力。这正是「安全网架在被改的路径之外等于没有」的变体:
+    # 那次是路径选错, 这次是样本选空。
+    #
+    # 判据取**运行时效果**而不是"缓存里有几行": 八条阈值全关, 候选集必须严格变大。
+    # 实测两份缓存: 运行态 123 → 303, 入库种子 122 → 305。
+    knobs = {
+        "max_model_premium": None, "max_relative_deviation": None,
+        "min_years_to_maturity": None, "min_outstanding_balance": None,
+        "min_credit_rating": None, "max_sigma": None,
+        "exclude_underlying_st": False, "exclude_underlying_limit_down": False,
+    }
+    # 阈值只会**拒**行, 所以放开必然是超集; 断言取真超集, 相等即"一条都没在筛"。
+    # 字段改名不必另设守卫: ``replace`` 遇到不存在的字段直接 TypeError。
+    relaxed = {r["bond_code"] for r in _select_candidate_rows(
+        rows, dataclasses.replace(ScoreStrategyConfig(), **knobs))}
+    assert relaxed > by_threshold, (
+        f"这份缓存上八条阈值一条都没在筛 (候选 {len(by_threshold)}, 全关后 "
+        f"{len(relaxed)}), 上面的等价性断言已经没有判别力")
+
+    # 再数**逐条**放开时边际非零的族数。上面那条只保证"至少一条在筛", 拦不住
+    # 从五族塌到一族; 而塌了之后另外四条阈值的默认值改动就再也测不出来。
+    # 下限取 3 不取 5: 拦的是塌方, 不是钉住今天是哪几族 —— 把一次测量固化成规则,
+    # 换一份合理的种子就会红。实测两份缓存都是同样 5 族 (模型溢价/评级/相对偏差/
+    # 剩余年限/HV); 余额与两个正股开关今天边际为 0, 不代表它们没接线
+    # (那由 ``test_config_summary_echoes_every_field_the_selector_reads`` 用合成行覆盖)。
+    binding = sorted(
+        name for name, off in knobs.items()
+        if {r["bond_code"] for r in _select_candidate_rows(
+            rows, dataclasses.replace(ScoreStrategyConfig(), **{name: off}))} != by_threshold
+    )
+    assert len(binding) >= 3, (
+        f"这份缓存只测得到 {binding} 在筛东西, 覆盖面塌了: 其余阈值的默认值"
+        "被改动不会让这条用例变红")
 
 
 def test_thresholds_let_missing_values_through():

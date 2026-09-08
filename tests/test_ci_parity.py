@@ -19,6 +19,12 @@ ROOT = Path(__file__).resolve().parent.parent
 #:
 #: 能登记的**只有会 skip 的**: 文件缺席时用例自己 `pytest.skip`。缺席就报错的那种
 #: 不许进这张表 —— 那正是 CBLens.spec 那个 bug, 要修不要登记。
+#: **这张表不是完整的消费者清单**: 下面那条扫描只认得出**字符串字面量**形式的路径,
+#: 而 ``data_path("batch_pricing_cache.json")`` 这种拼法它一个都看不见 —— 新加一条读
+#: gitignored 文件的用例, 既不会被扫描器提醒、也不会出现在这里, 表现就是它在 CI 上
+#: 永远 skip 而没有任何人知道 (``test_strategy_backtest`` 里那条逐只比对选债口径的
+#: 用例正是这么躺了很久, 现已改成回落到入库的发行种子)。写这类用例时自己检查一遍:
+#: 它读的文件进版本库了吗? 没有的话有没有入库的种子可以回落?
 _RUNTIME_ONLY_INPUTS = {
     # 批量定价缓存 (gitignored, 见 AGENTS「数据文件」)。test_pricer 用它钉住
     # down_reset_floor == S0 的现存量级, 缺席时那条用例 skip。
