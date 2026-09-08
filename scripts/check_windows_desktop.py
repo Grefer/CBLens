@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import uuid
 
 
 def _detached_options() -> dict:
@@ -73,6 +74,83 @@ def _validate_report(report: dict, manifest: dict, result_path: Path) -> None:
         raise ValueError("离线进度条及主线程异常清理检查未通过")
 
 
+def _write_wind_stub(directory: Path) -> tuple[Path, Path]:
+    """构造只允许导入的接口替身；检测连接/GUI 回退会留下失败记录。"""
+    directory.mkdir()
+    interface, marker = directory / "WindPy.py", directory / "import.json"
+    source = '''"""发布检查用 Wind 接口源码替身，不代表真实 Wind DLL。"""
+import json
+from pathlib import Path
+import socket
+import sys
+
+_marker = Path(MARKER_PATH)
+_record = {"loaded": True, "gui_loaded": "convertible_bond.gui.app" in sys.modules,
+           "api_calls": [], "network_used": False}
+_marker.write_text(json.dumps(_record), encoding="utf-8")
+if _record["gui_loaded"]:
+    raise AssertionError("Wind 检测入口不应加载 GUI app")
+
+def _forbidden(name):
+    def fail(*args, **kwargs):
+        _record["api_calls"].append(name)
+        if name.startswith("socket."):
+            _record["network_used"] = True
+        _marker.write_text(json.dumps(_record), encoding="utf-8")
+        raise AssertionError("只加载接口的离线检测不应调用 " + name)
+    return fail
+
+class w:
+    start = staticmethod(_forbidden("w.start"))
+    isconnected = staticmethod(_forbidden("w.isconnected"))
+
+socket.create_connection = _forbidden("socket.create_connection")
+socket.socket.connect = _forbidden("socket.connect")
+socket.socket.connect_ex = _forbidden("socket.connect_ex")
+'''
+    interface.write_text(source.replace("MARKER_PATH", repr(str(marker.resolve()))), encoding="utf-8")
+    return interface.resolve(), marker
+
+
+def _validate_wind_probe_report(report: dict, *, interface: Path, result_path: Path, token: str) -> None:
+    if (report.get("schema_version") != 1 or report.get("ok") is not True
+            or report.get("loaded") is not True or report.get("stage") != "load"
+            or report.get("connected") is not None or report.get("cancelled") is not False
+            or report.get("bundled") is not False):
+        raise ValueError("离线 Wind 接口加载检测未成功，或意外连接/使用包内接口")
+    if (report.get("token") != token or report.get("output") != str(result_path.resolve())
+            or report.get("source") != "probe" or report.get("selection_path") != str(interface)
+            or report.get("path") != str(interface)):
+        raise ValueError("Wind 检测结果不属于本轮明确指定的外置接口")
+    launcher = report.get("launcher") or {}
+    if (type(report.get("pid")) is not int or report["pid"] <= 0
+            or type(launcher.get("pid")) is not int or launcher["pid"] <= 0
+            or report["pid"] == launcher["pid"] or launcher.get("exit_code") != 0):
+        raise ValueError("Wind 检测未来自已正常退出的 onefile 子进程")
+    smoke = report.get("smoke") or {}
+    if (smoke.get("interface_kind") != "external_python_stub" or smoke.get("loaded") is not True
+            or smoke.get("gui_loaded") is not False or smoke.get("api_calls") != []
+            or smoke.get("network_used") is not False):
+        raise ValueError("离线 Wind 替身未实际载入，或触发了 GUI/接口连接/网络")
+
+
+def _run_wind_probe(exe: Path, *, work: Path, env: dict, timeout: float) -> dict:
+    interface, marker = _write_wind_stub(work / "wind-stub")
+    result_path, token = work / "wind-probe.json", uuid.uuid4().hex
+    probe_env = {**env, "PYINSTALLER_RESET_ENVIRONMENT": "1",
+                 "CBLENS_WINDPY_SESSION_SELECTION": json.dumps({"path": str(interface), "source": "probe"})}
+    command = [str(exe.resolve()), "--wind-probe", "--output", str(result_path), "--token", token]
+    pid, returncode = _run_detached(command, env=probe_env, timeout=timeout)
+    if returncode != 0:
+        raise RuntimeError(f"无控制台 Wind 检测进程失败: {returncode}")
+    report = json.loads(result_path.read_text(encoding="utf-8"))
+    report["launcher"] = {"pid": pid, "exit_code": returncode, "detached": True}
+    report["smoke"] = {**json.loads(marker.read_text(encoding="utf-8")),
+                       "interface_kind": "external_python_stub"}
+    _validate_wind_probe_report(report, interface=interface, result_path=result_path, token=token)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, default=Path("dist/CBLens.exe"))
@@ -89,19 +167,28 @@ def main(argv: list[str] | None = None) -> int:
         work = Path(temp)
         result_path = work / "diagnostics.json"  # 每次新目录，不能读到旧成功结果。
         env = {**os.environ, "CBLENS_DATA_DIR": str(work / "data"),
+               "CBLENS_CONFIG_DIR": str(work / "config"),
                "MPLCONFIGDIR": str(work / "mplconfig")}
         command = [str(args.exe.resolve()), "--diagnose", "--check", "--probe-stdio",
                    "--output", str(result_path)]
         pid, returncode = _run_detached(command, env=env, timeout=args.timeout)
         report = json.loads(result_path.read_text(encoding="utf-8"))
         report["launcher"] = {"pid": pid, "exit_code": returncode, "detached": True}
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps(report, ensure_ascii=True, indent=2))
-        # 文件写完仍不算完成：先等 onefile bootloader 返回，并且检查真实退出码。
-        if returncode != 0:
-            raise RuntimeError(f"无控制台诊断进程失败: {returncode}")
-        _validate_report(report, manifest, result_path)
+        try:
+            # 文件写完仍不算完成：先等 onefile bootloader 返回，并且检查真实退出码。
+            if returncode != 0:
+                raise RuntimeError(f"无控制台诊断进程失败: {returncode}")
+            _validate_report(report, manifest, result_path)
+            try:
+                report["wind_probe"] = _run_wind_probe(args.exe, work=work, env=env, timeout=args.timeout)
+            except Exception as exc:
+                report["ok"] = False
+                report["wind_probe"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                raise
+        finally:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(json.dumps(report, ensure_ascii=True, indent=2))
     print(f"Windows detached desktop check passed: {args.output}")
     return 0
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import os
 import subprocess
 import sys
@@ -235,6 +236,42 @@ def test_pool_sync_pipe_displays_utf8_output_under_a_cp936_default(monkeypatch, 
                 proc.kill()
             proc.wait(timeout=5)
             proc.stdout.close()
+
+
+def test_pool_sync_child_keeps_session_interface_after_saving_another_path(
+    monkeypatch, tmp_path, pool_sync_widgets,
+):
+    """实际 GUI 启动器必须传会话快照：保存 B 不得让本次池同步偷换掉 A。"""
+    from convertible_bond import wind_config
+
+    interface_a = tmp_path / "Wind-A" / "WindPy.py"
+    interface_b = tmp_path / "Wind-B" / "WindPy.py"
+    for module in (interface_a, interface_b):
+        module.parent.mkdir()
+        module.write_text("raise AssertionError('不得导入真实接口')\n", encoding="utf-8")
+    wind_config.save_windpy_path(str(interface_a))
+    assert wind_config.get_session_wind_selection() == {
+        "path": str(interface_a), "source": "settings",
+    }
+    wind_config.save_windpy_path(str(interface_b))
+    assert wind_config.get_wind_selection()["path"] == str(interface_b)
+    popen_environments = []
+
+    def capture_popen(*args, **kwargs):
+        popen_environments.append(kwargs["env"])
+        return _StubProc(["沿用本次启动的接口\n"])
+
+    monkeypatch.setattr(subprocess, "Popen", capture_popen)
+    app = _StubApp()
+    _win, text_box, _cancel, _close = _run_pool_sync_on_stub(app)
+    app.drain()
+
+    assert len(popen_environments) == 1
+    assert json.loads(popen_environments[0][wind_config.WINDPY_SESSION_ENV]) == {
+        "path": str(interface_a), "source": "settings",
+    }
+    assert wind_config.WINDPY_SESSION_ENV not in os.environ
+    assert text_box.inserted == ["沿用本次启动的接口\n"]
 
 
 def test_pool_sync_survives_a_window_the_user_closed_midway(pool_sync_env):

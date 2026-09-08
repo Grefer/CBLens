@@ -28,7 +28,7 @@ WindPy 在不同平台的 bootstrap 逻辑不同:
     2. 把硬编码路径替换为 bundle 内的对应 dylib 路径
     3. 写回修改后的文件, 后续 ``import WindPy`` 载入修改版
 
-  Windows:
+  Windows（仅含包内 DLL 的构建）:
     1. 在 ``_MEIPASS/site-packages/`` 下写 ``WindPy.pth``, 内容为 ``_MEIPASS`` 绝对路径
     2. 把 ``_MEIPASS/site-packages/`` 插进 ``sys.path`` 开头
        (spec 文件已把 WindPy.dll 等原生库打到 ``_MEIPASS`` 根目录)
@@ -100,8 +100,13 @@ else:
                 except Exception as _e:
                     sys.stderr.write(f"[pyi_rth_windpy] macOS patch failed: {_e!r}\n")
 
-    else:
-        # ── Windows / Linux: 写入 WindPy.pth ─────────────────────
+    elif sys.platform == "win32" and any(
+        _entry.lower().endswith(".dll") and os.path.isfile(os.path.join(_mei, _entry))
+        and _entry.lower().startswith("wind")
+        for _entry in os.listdir(_mei)
+    ):
+        # 这里只准备包内库。外置接口由统一加载器写本进程的临时 .pth，优先于此目录；
+        # 无 Wind 原生库的 CI 包不可伪造指向 _MEIPASS 的 Wind 安装路径。
         _sp = os.path.join(_mei, "site-packages")
         try:
             os.makedirs(_sp, exist_ok=True)

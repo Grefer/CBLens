@@ -9,3 +9,19 @@ conftest 由 pytest 自己按路径加载, 不经过 ``sys.path``, 两种调法�
 补丁在 import 时生效, 而 conftest 先于任何测试模块被 import, 所以时机是够的。
 """
 from . import headless  # noqa: F401  —— import 本身就是打补丁
+
+import pytest
+
+from convertible_bond import wind_config
+
+
+@pytest.fixture(autouse=True)
+def isolated_wind_settings(monkeypatch, tmp_path):
+    """每项测试独立配置，不能读写用户设置或继承上项测试的接口选择。"""
+    monkeypatch.setenv("CBLENS_CONFIG_DIR", str(tmp_path / "cblens-config"))
+    for name in (
+        wind_config.WINDPY_SESSION_ENV,
+        "CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(wind_config, "_session_selection", None)

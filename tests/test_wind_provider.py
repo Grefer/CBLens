@@ -58,7 +58,7 @@ def test_prepare_windpy_import_path_finds_windows_x64(monkeypatch, tmp_path):
     assert Path(r"C:\Software\Wind") / "x64" in wind_mod._windpy_candidate_paths()
 
 
-def test_prepare_windpy_import_path_prefers_frozen_bundle(monkeypatch, tmp_path):
+def test_prepare_windpy_import_path_explicit_choice_beats_frozen_bundle(monkeypatch, tmp_path):
     bundle_dir = tmp_path / "bundle"
     external_dir = tmp_path / "external"
     bundle_dir.mkdir()
@@ -77,8 +77,8 @@ def test_prepare_windpy_import_path_prefers_frozen_bundle(monkeypatch, tmp_path)
 
     added = prepare_windpy_import_path()
 
-    assert added[:2] == [bundle_dir, external_dir]
-    assert sys.path[:3] == [str(bundle_dir), str(external_dir), "original"]
+    assert added == [external_dir]
+    assert sys.path[:3] == [str(external_dir), str(bundle_dir), "original"]
 
 
 def test_get_bond_terms_reads_wind_reset_trigger_ratio(monkeypatch):

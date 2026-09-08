@@ -169,18 +169,18 @@ def default_market_source() -> str:
     而 GUI 侧从来没引用过 ``detect_available_providers``, 用户拿到的只是一句
     "未安装 WindPy"。
 
-    判据只看**可导入性**, 故意不看"终端连没连": 连接状态是会变的 (用户可能先开
+    判据只看**接口文件是否存在**, 故意不看"终端连没连": 连接状态是会变的 (用户可能先开
     CBLens 再登录 Wind 终端), 拿它定默认值会让下拉框的初值随开机顺序漂移。
     "装了但没连"那一档由 ``wind_is_ready()`` 在**非用户发起**的取数处单独挡
     (见 ``tabs/batch_watchlist._source_ready_without_connecting``)。
 
-    只探测一次并缓存: 探测本身是 import (实测 WindPy 0.11s / akshare 0.56s),
-    在启动路径上重复做没有意义。
+    只探测一次并缓存，不在主线程导入 WindPy 或 akshare。坏 DLL 可能在 import
+    阶段挂住；实际加载由独立检测或用户主动取数的后台任务负责。
     """
     if not _DEFAULT_SOURCE_CACHE:
         try:
             from ..data_providers import detect_available_providers
-            available = detect_available_providers()
+            available = detect_available_providers(import_check=False)
         except Exception:
             available = []
         # 两个都探测不到时仍回落 akshare: 它是 pip 依赖, 失败信息 ("pip install akshare")

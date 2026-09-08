@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import math
 import os
@@ -33,7 +34,11 @@ from ._helpers import (
     _wind_table_rows,
 )
 from ..market_time import market_today
+from ..wind_config import get_session_wind_selection
 from .wind_errors import WindConnectionError, wind_connection_error, wind_import_error
+from .wind_runtime import (
+    prepare_windows_wind_runtime, read_windpy_pth, windpy_module_file,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -98,12 +103,14 @@ def _frozen_windpy_candidate_paths() -> list[Path]:
 
 
 def _windpy_candidate_paths() -> list[Path]:
-    """Return possible WindPy locations on the running machine."""
-    candidates: list[Path] = _frozen_windpy_candidate_paths()
-    for env_name in ("CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR"):
-        value = os.environ.get(env_name)
-        if value:
-            candidates.append(Path(value).expanduser())
+    """按本次启动的选择返回候选；明确指定的接口不回退到另一安装版本。"""
+    selection = get_session_wind_selection()
+    if selection["path"]:
+        return [Path(selection["path"]).expanduser()]
+
+    # macOS 保留已有包内 dylib 兼容；Windows 优先本机终端配套接口。
+    candidates: list[Path] = ([] if sys.platform == "win32" else
+                              _frozen_windpy_candidate_paths())
 
     if sys.platform == "darwin":
         candidates.extend([
@@ -149,6 +156,9 @@ def _windpy_candidate_paths() -> list[Path]:
     except Exception:
         logger.debug("site.getsitepackages() 不可用, 跳过该候选路径", exc_info=True)
 
+    if sys.platform == "win32":
+        candidates.extend(_frozen_windpy_candidate_paths())
+
     unique: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
@@ -159,34 +169,80 @@ def _windpy_candidate_paths() -> list[Path]:
     return unique
 
 
-def prepare_windpy_import_path() -> list[Path]:
-    """Prepend WindPy directories to ``sys.path`` when they exist.
-
-    Local builds can bundle WindPy like DeltaLab, while CI builds cannot.  In
-    frozen apps, bundled WindPy paths are preferred over user-machine fallback
-    paths.  The function is intentionally import-only; it does not start Wind.
-    """
+def discover_windpy_paths() -> list[Path]:
+    """只查找会话选中的接口目录；不导入接口，也不更改 sys.path。"""
     prepared: list[Path] = []
-    insert_at = 0
     for candidate in _windpy_candidate_paths():
-        path = candidate
-        if path.is_file() and path.name.lower() == "windpy.py":
-            path = path.parent
-        has_windpy = (
-            (path / "WindPy.py").is_file()
-            or (path / "WindPy" / "__init__.py").is_file()
-            or (path / "WindPy.pth").is_file()
+        paths = [candidate]
+        if candidate.is_dir():
+            paths.extend(read_windpy_pth(candidate / "WindPy.pth"))
+        for path in paths:
+            module_file = windpy_module_file(path)
+            if module_file is None:
+                continue
+            path = (module_file.parent.parent if module_file.name == "__init__.py"
+                    else module_file.parent)
+            if path in prepared:
+                continue
+            prepared.append(path)
+    selection = get_session_wind_selection()
+    if selection["path"] and not prepared:
+        raise ModuleNotFoundError(
+            f"指定的 Wind Python 接口不存在：{selection['path']}。请重新选择 WindPy.py。",
+            name="WindPy",
         )
-        if not has_windpy:
-            continue
+    return prepared
+
+
+def prepare_windpy_import_path() -> list[Path]:
+    """准备会话选中的接口路径，不导入接口、不连接 Wind，也不执行 .pth 代码。"""
+    prepared = discover_windpy_paths()
+    for insert_at, path in enumerate(prepared):
         path_str = str(path)
-        # Preserve candidate priority.  Plain insert(0, ...) in a loop reverses
-        # the order and can make user site-packages shadow bundled WindPy.
         sys.path[:] = [entry for entry in sys.path if entry != path_str]
         sys.path.insert(insert_at, path_str)
-        insert_at += 1
-        prepared.append(path)
     return prepared
+
+
+_WIND_IMPORT_LOCK = threading.RLock()
+
+
+def load_windpy():
+    """所有入口共用的 WindPy 加载器；实际导入选中文件，绝不启动终端连接。"""
+    with _WIND_IMPORT_LOCK:
+        prepared = prepare_windpy_import_path()
+        selection = get_session_wind_selection()
+        selected_file = (windpy_module_file(Path(selection["path"]).expanduser())
+                         if selection["path"] else None)
+        if selected_file is None:
+            selected_file = next((file for path in prepared
+                                  if (file := windpy_module_file(path)) is not None), None)
+        if "WindPy" in sys.modules:
+            current = sys.modules["WindPy"]
+            loaded_path = getattr(current, "__file__", None)
+            if selection["path"] and selected_file is not None:
+                if not loaded_path or Path(loaded_path).resolve() != selected_file.resolve():
+                    raise ImportError("本进程已加载另一位置的 Wind Python 接口，请重启 CBLens 后再试。")
+            # 保留标准 import 的模块缓存/失败行为，兼容嵌入式或测试提供的 WindPy 模块。
+            import WindPy  # type: ignore[import-not-found]
+            return WindPy
+        if selected_file is None:
+            import WindPy  # type: ignore[import-not-found]
+            return WindPy
+
+        prepare_windows_wind_runtime(selected_file)
+        # 明确从文件加载，防止 PyInstaller 的 PYZ finder 抢先返回包内同名模块。
+        spec = importlib.util.spec_from_file_location("WindPy", selected_file)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"无法加载 Wind Python 接口：{selected_file}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["WindPy"] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop("WindPy", None)
+            raise
+        return module
 
 
 # Wind 对"尚未确定最后交易日"的存续券返回哨兵日期 (实测 2079-06-02), 而不是空值。
@@ -225,16 +281,17 @@ WIND_CONNECT_COOLDOWN_SEC = float(
 
 
 def wind_is_ready() -> bool:
-    """WindPy 可导入**且**终端已连接 —— 只做检查, 不发起连接, 不阻塞.
+    """WindPy 已加载**且**终端已连接 —— 不首次导入原生库，不发起连接。
 
     与 ``detect_available_providers()`` 的区别很重要: 那个只回答"装没装",
-    而"装了但终端没开"恰恰是会卡住两分钟的那一档 (实测本机 WindPy 可导入、
-    ``w.isconnected()`` 为 False)。凡是**非用户发起**的取数 (启动自愈那一轮)
-    都该用这个函数当闸, 而不是拿可导入性当可用性。
+    而"装了但终端没开"恰恰是会卡住两分钟的那一档。坏 DLL 还可能在 import
+    阶段阻塞；启动自愈只复用先前由主动操作加载的接口，冷启动时提示手动刷新。
     """
     try:
-        prepare_windpy_import_path()
-        from WindPy import w  # type: ignore[import-not-found]
+        module = sys.modules.get("WindPy")
+        if module is None:
+            return False
+        w = module.w
         return bool(w.isconnected())
     except Exception:
         return False
@@ -322,14 +379,21 @@ class WindDataProvider(DataProvider):
             frozen = bool(getattr(sys, "frozen", False))
             prepared_paths: list[Path] = []
             try:
-                prepared_paths = prepare_windpy_import_path()
+                module = load_windpy()
+                if getattr(module, "__file__", None):
+                    prepared_paths = [Path(module.__file__).parent]
                 from WindPy import w  # type: ignore[import-not-found]
             except Exception as e:
+                try:
+                    selection = get_session_wind_selection()
+                except Exception:
+                    # 原始异常可能就是损坏的设置；诊断取值不可再次抛出而掩盖它。
+                    selection = {"path": "", "source": "auto"}
                 error = wind_import_error(
                     e, platform=sys.platform, frozen=frozen,
                     bits=64 if sys.maxsize > 2**32 else 32,
                     prepared_paths=[str(path) for path in prepared_paths],
-                    configured_path=os.environ.get("CBLENS_WINDPY_PATH", ""),
+                    configured_path=selection["path"], configured_source=selection["source"],
                 )
                 # 同样进负缓存: prepare_windpy_import_path 会扫盘找 WindPy.py,
                 # 没装 Wind 的机器上跑一轮批量会把这件事重复几百遍。

@@ -39,7 +39,7 @@ class WindConnectionError(ConnectionError):
 
 def wind_import_error(
     cause: Exception, *, platform: str, frozen: bool, bits: int,
-    prepared_paths: list[str], configured_path: str = "",
+    prepared_paths: list[str], configured_path: str = "", configured_source: str = "CBLENS_WINDPY_PATH",
 ) -> WindImportError:
     """只把 WindPy 本身缺失判为未找到，依赖/DLL 错误归为加载失败。"""
     missing = isinstance(cause, ModuleNotFoundError) and cause.name == "WindPy"
@@ -56,11 +56,11 @@ def wind_import_error(
         f"原始错误：{type(cause).__name__}: {cause}",
         f"运行环境：{platform} / {bits} 位 / {'桌面包' if frozen else 'Python 源码'}",
         "已加入接口目录：" + ("；".join(prepared_paths) or "无"),
-        "已安装但仍无法找到时，可将环境变量 CBLENS_WINDPY_PATH 设为 WindPy.py 的完整路径，"
-        "或它所在的文件夹，然后重启 CBLens。",
+        "已安装但仍无法找到时，请在 CBLens 的「同步池 → Wind 接口设置」中检测或选择 WindPy.py，"
+        "保存后重启 CBLens。高级配置也可使用环境变量 CBLENS_WINDPY_PATH。",
     ]
     if configured_path:
-        diagnostic.append(f"当前 CBLENS_WINDPY_PATH：{configured_path}")
+        diagnostic.append(f"当前接口设置（{configured_source}）：{configured_path}")
     if platform == "win32":
         diagnostic.append(r"路径示例（请按实际安装位置填写）：C:\Software\Wind\x64\WindPy.py")
     elif platform == "darwin":

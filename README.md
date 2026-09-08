@@ -24,7 +24,7 @@
 
 CBLens 面向 **A 股可转债研究与复盘**。它不是交易下单系统，也不是投资建议——它的目标是帮助你更快发现 *"值得人工复核"* 的低估、转股折价、事件风险和异常标的。
 
-当前版本是 **2.0.0rc5 候选版**（tag：`v2.0.0-rc.5`），优化 Wind 接口检测及报错指引，并保留 Windows「扫新债」卡死、池同步管道编码修复与脱离控制台的安装包检查。这一版把关注池、历史策略研究和桌面交付连成完整工作流。升级涉及 API、CLI、CSV 和模型口径变化，请先读 [版本说明](CHANGELOG.md) 与 [v1 → v2 升级指南](docs/UPGRADING_V2.md)。
+当前版本是 **2.0.0rc6 候选版**（tag：`v2.0.0-rc.6`），新增应用内 Wind 接口设置、独立检测与连接测试，并保留 Windows「扫新债」卡死、池同步管道编码修复与脱离控制台的安装包检查。这一版把关注池、历史策略研究和桌面交付连成完整工作流。升级涉及 API、CLI、CSV 和模型口径变化，请先读 [版本说明](CHANGELOG.md) 与 [v1 → v2 升级指南](docs/UPGRADING_V2.md)。
 
 ---
 ![alt text](assets/cblens-screenshot.png)
@@ -123,6 +123,8 @@ pip install -e ".[dev]"
 
 > [!NOTE]
 > **WindPy** 不通过 pip 发布。如需同步全市场条款或使用 Wind 行情，需在 Wind 终端的插件管理中把 Python 接口安装到当前虚拟环境。仅使用离线 PDE 模型、已有 `data/cb_data.json` 或 akshare 动态行情时，无需连接 Wind。
+
+桌面端可在 **同步池 → Wind 接口设置** 中自动检测或选择本机 `WindPy.py`，检测成功后保存并重启，无需配置系统环境变量。安装与路径优先级见[Wind 接口配置](docs/USAGE.md#windpy-安装与桌面配置)。
 
 ### 直接使用桌面 APP
 

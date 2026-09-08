@@ -73,19 +73,31 @@ pip install -e ".[dev]"
 | `akshare` | 免费动态行情源 | |
 | WindPy | 全字段条款同步 + 实时行情 | ⚠️ 需从 Wind 终端安装，不能通过 pip |
 
-### WindPy 安装
+### WindPy 安装与桌面配置
 
-WindPy 不通过 pip 发布。如需使用：
+WindPy 不通过 pip 发布。需先通过本机 Wind 金融终端的 Python 接口安装或修复功能安装，保留接口文件和配套运行库。桌面包无需另装 Python 虚拟环境。
+
+**桌面端（RC6 起）**：
+
+1. 打开 **同步池 → Wind 接口设置**，点击 **自动检测**。
+2. 未找到时点击 **选择文件…**，选择 Wind 安装目录里的 `WindPy.py`，再点 **检测接口**。Windows 常见位置为 `C:\Software\Wind\x64\WindPy.py`，macOS 为 `/Applications/Wind API.app/Contents/python/WindPy.py`，以实际安装位置为准。
+3. 接口可加载后点 **保存配置**，重启 CBLens。终端未登录也能保存有效的接口路径。
+4. 需要验证行情服务时，先登录 Wind 终端，再点 **测试连接**。
+
+检测接口不会建立终端连接；测试连接由用户主动发起。两者均在独立进程中执行，总超时默认 45 秒，关闭设置窗口会取消检测。启动应用只查找接口文件，首次 Wind 取数需主动刷新。
+
+路径优先级为：**环境变量覆盖 → 应用保存的路径 → 自动查找**。设置窗口显示当前会话的来源；保存后当前任务和同步子进程仍使用原选择，重启才切换。**恢复自动**只清除应用保存的路径；如果设置过环境变量，它仍然优先。
+
+应用设置保存在 Windows `%APPDATA%\CBLens\settings.json`、macOS `~/Library/Application Support/CBLens/settings.json`，与行情数据分开保存。升级保留设置，不需要编辑该文件。高级用户仍可把 `CBLENS_WINDPY_PATH` 设为 `WindPy.py` 完整路径或所在文件夹；也兼容 `WINDPY_PATH`、`WINDPY_DIR`，按上述顺序取第一个非空值。
+
+**源码用户**可把官方接口安装到当前 Python 环境：
 
 1. 打开 Wind 金融终端
 2. 进入 **插件管理 → Python 接口**
 3. 选择当前虚拟环境的 Python 路径进行安装
 4. 验证：`python -c "from WindPy import w; print(w)"`
 
-桌面包遇到「未找到 Wind Python 接口」时，也可能是接口已安装但不在查找范围内。
-可将环境变量 `CBLENS_WINDPY_PATH` 设为本机 `WindPy.py` 的完整路径或所在文件夹，
-然后重新打开 CBLens。Windows 示例为 `C:\Software\Wind\x64\WindPy.py`（按实际位置填写）；
-macOS 示例为 `/Applications/Wind API.app/Contents/python/WindPy.py`。
+桌面包遇到「未找到 Wind Python 接口」时，也可能是接口已安装但不在查找范围内，可通过上述设置指定。
 「接口加载失败」表示加载过程出错，应检查接口依赖及架构；「Wind 连接失败」则需确认终端登录、网络和 API 权限。
 回测错误窗口可展开或复制技术详情，反馈问题时保留原始错误信息。
 
@@ -131,9 +143,9 @@ dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 
 诊断输出会列出 APP 内置种子数据、用户数据目录中的 `cb_data.json` 债券数量，以及 WindPy / akshare / certifi / requests 是否能被定位；WindPy 会实际 import 一次但不会启动连接。
 Windows 无控制台启动时可用 `CBLens.exe --diagnose --check --output cblens-diagnostics.json` 将结果写入文件；加 `--probe-stdio` 可离线检查进度条和异常回调清理，不访问行情接口。
-GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时，APP 会像 DeltaLab 一样优先使用包内 WindPy。若发布包未内置 WindPy，运行时会自动探测本机 Wind 终端；非默认位置可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
+GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时可能包含接口。未显式指定路径时，Windows 优先查找本机终端配套接口，macOS 保留包内接口优先；未找到时继续探测其他默认位置。非默认位置可通过「Wind 接口设置」指定。明确指定但失效的路径会报错，需重新选择或恢复自动查找。
 
-构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前包版本为 `2.0.0rc5`，对应 tag 为 `v2.0.0-rc.5`；创建 tag 与上传 Release 是单独的发布动作。
+构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前包版本为 `2.0.0rc6`，对应 tag 为 `v2.0.0-rc.6`；创建 tag 与上传 Release 是单独的发布动作。
 
 桌面包分平台发布：
 
@@ -141,7 +153,7 @@ GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打
 - macOS：在装有 Wind API 的本机准备候选包。目标 tag 已建立且 checkout 干净后运行：
 
 ```bash
-python scripts/release_macos_desktop.py --tag v2.0.0-rc.5 --skip-upload
+python scripts/release_macos_desktop.py --tag v2.0.0-rc.6 --skip-upload
 ```
 
 这条命令只构建、诊断和打包，不联系 GitHub，因此只要求本地 tag 已存在。确认上传前，目标 GitHub Release 也必须已经建立（可由 Windows 发布工作流创建），再去掉 `--skip-upload`；脚本会核对远端 tag 与产物 commit 一致后上传 ZIP 与构建清单，不复用来源不明的旧 APP，也不覆盖已有同名资产。诊断在临时用户目录中检查首启种子和依赖，macOS 发布还要求 WindPy 可导入；仍需实际启动 GUI 验证使用流程。
@@ -212,7 +224,7 @@ python gui.py
 | :--- | :--- |
 | **深色/浅色模式** | 切换 Catppuccin Latte/Mocha 主题 |
 | **Tab 切换** | ⭐ 关注 · 📦 批量 · 🎯 策略 · ⚡ 定价 · 📈 回测 · 🔥 敏感性（启动默认落在 **⭐ 关注**） |
-| **行情源** | 选择 Wind 或 akshare —— **全局唯一，各页共用**：关注池主页、批量定价、单债定价、策略回测走的都是这一个（各页不再各摆一个下拉）。默认值按本机实际可用性挑，没装 WindPy 时自动落到 akshare |
+| **行情源** | 选择 Wind 或 akshare —— **全局唯一，各页共用**：关注池主页、批量定价、单债定价、策略回测走的都是这一个（各页不再各摆一个下拉）。默认值按本机接口文件是否可发现挑选；加载和连接结果可在「Wind 接口设置」中检测 |
 | **🌐 同步池** | 全市场基础信息、准入状态、公告事件同步入口 |
 | **代码输入** | 输入 `128009.SZ` 或六位代码，命中条款库时自动补全 |
 | **📥 同步** | 读取本地条款库 + 拉取正股行情、历史波动率与股息率 |
@@ -681,7 +693,9 @@ rows = [row for row in rows if row.get("status") == "ok"]
 
 ### ❓ WindPy import 失败
 
-确认 Wind 终端已安装 Python 接口到当前 venv：
+桌面端可从错误窗口的 **设置接口** 或 **同步池 → Wind 接口设置** 打开检测窗口，重新选择官方安装目录中的接口文件。检测详情保留原始错误；加载失败时需检查配套运行库和架构，连接失败时检查终端登录和 API 权限。
+
+源码运行时，确认 Wind 终端已安装 Python 接口到当前 venv：
 
 ```bash
 which python

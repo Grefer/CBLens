@@ -115,6 +115,9 @@ def _show_wind_error(parent, title: str, error: ErrorPresentation):
     detail_button.pack(side="left", padx=(0, 10))
     copy_button = ctk.CTkButton(buttons, text="复制诊断", width=120, command=copy_diagnostic)
     copy_button.pack(side="left", padx=(0, 10))
+    configure_wind = getattr(parent, "_open_wind_settings", None)
+    if callable(configure_wind):
+        ctk.CTkButton(buttons, text="设置接口", width=90, command=configure_wind).pack(side="left")
     ctk.CTkButton(buttons, text="关闭", width=88, command=window.destroy).pack(side="right")
     window.lift()
     return window

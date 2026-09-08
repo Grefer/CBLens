@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 import threading
@@ -40,6 +39,7 @@ from ..theme import (
     VOL_WINDOW_MAP,
 )
 from ...market_time import market_today
+from ...wind_config import wind_subprocess_env
 
 
 logger = logging.getLogger(__name__)
@@ -303,12 +303,20 @@ class WindSyncMixin:
                 label=label,
                 command=lambda m=module, l=label, a=tuple(extra_args): self._run_pool_sync(m, l, a),
             )
+        menu.add_separator()
+        menu.add_command(label="Wind 接口设置…", command=self._open_wind_settings)
         try:
             x = self.btn_sync_pool.winfo_rootx()
             y = self.btn_sync_pool.winfo_rooty() + self.btn_sync_pool.winfo_height()
             menu.tk_popup(x, y)
         finally:
             menu.grab_release()
+
+    def _open_wind_settings(self):
+        """打开应用内接口配置，不占用顶部行情/研究控件的空间。"""
+        from ..wind_settings import show_wind_settings
+
+        return show_wind_settings(self)
 
     def _run_pool_sync(self, module: str, label: str, extra_args: tuple = (),
                        *, confirm: bool = True, on_success=None):
@@ -394,7 +402,7 @@ class WindSyncMixin:
                     # 环境变量让源码子进程在业务模块导入前就使用 UTF-8, 不改父进程环境。
                     encoding="utf-8",
                     errors="replace",
-                    env={**os.environ, "PYTHONIOENCODING": "utf-8:backslashreplace"},
+                    env={**wind_subprocess_env(), "PYTHONIOENCODING": "utf-8:backslashreplace"},
                     bufsize=1,
                 )
                 proc_holder["proc"] = proc

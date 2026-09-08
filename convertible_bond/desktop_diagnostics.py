@@ -21,7 +21,7 @@ from .paths import (
     project_root,
     seed_data_files,
 )
-from .data_providers.wind import prepare_windpy_import_path
+from .data_providers.wind import load_windpy, prepare_windpy_import_path
 
 
 #: 诊断要报告的种子文件 —— **由 ``paths`` 那份算出来, 不再另抄一份清单**。
@@ -99,7 +99,7 @@ def _module_status(module_name: str) -> str:
 
 def _import_status(module_name: str) -> str:
     try:
-        module = importlib.import_module(module_name)
+        module = load_windpy() if module_name == "WindPy" else importlib.import_module(module_name)
     except Exception as exc:
         return f"import failed ({type(exc).__name__}: {exc})"
     location = getattr(module, "__file__", None) or ""
@@ -224,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception:
                     continue
             return finish()
-    windpy_paths = prepare_windpy_import_path()
+    try:
+        windpy_paths = prepare_windpy_import_path()
+    except Exception as exc:
+        windpy_paths = []
+        report["wind_config_error"] = f"{type(exc).__name__}: {exc}"
     seeded = seed_data_files()
 
     print("CBLens desktop diagnostics")

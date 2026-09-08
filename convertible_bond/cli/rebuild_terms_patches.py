@@ -177,8 +177,9 @@ def rebuild(
     progress_cb=None,
 ) -> dict[str, Any]:
     """从 Wind 重建指定字段的 patch, 返回统计与明细。"""
-    from WindPy import w as wind
+    from ..data_providers.wind import load_windpy
 
+    wind = load_windpy().w
     wind.start()
     target_fields = [f for f in (fields or list(REBUILDABLE_FIELDS)) if f in REBUILDABLE_FIELDS]
     if not target_fields:

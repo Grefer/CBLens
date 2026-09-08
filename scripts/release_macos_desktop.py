@@ -105,6 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="cblens-release-check-") as tmp:
         env = os.environ.copy()
         env["CBLENS_DATA_DIR"] = str(Path(tmp) / "data")
+        env["CBLENS_CONFIG_DIR"] = str(Path(tmp) / "config")
         env["MPLCONFIGDIR"] = str(Path(tmp) / "mplconfig")
         _run([APP_PATH / "Contents" / "MacOS" / "CBLens", "--diagnose", "--check", "--require-windpy"], env=env)
     if build_identity(ROOT, f"refs/tags/{tag}", release_tag=tag) != identity:

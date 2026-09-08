@@ -10,8 +10,8 @@
 
 三道防线, 每条一组用例:
 1. ``w.start()`` 有界 + 失败进负缓存 (否则全池 284 只每只重等一遍)
-2. 非用户发起的那一轮按 ``wind_is_ready()`` 直接不起 —— 它只检查, 不连接
-3. 默认行情源按**实际可用性**挑, 不再硬编码 "Wind"
+2. 非用户发起的那一轮按 ``wind_is_ready()`` 直接不起 —— 只复用已加载接口，不连接
+3. 默认行情源只查文件/模块位置，不在主线程导入 Wind 原生库
 """
 from __future__ import annotations
 
@@ -142,6 +142,19 @@ def test_wind_is_ready_true_when_connected(monkeypatch):
     assert wind_is_ready() is True
 
 
+def test_wind_is_ready_does_not_first_import_interface(monkeypatch, tmp_path):
+    """启动自愈不能在主线程碰原生库，即使文件存在且用户已经登录终端。"""
+    interface = tmp_path / "WindPy.py"
+    interface.write_text("raise AssertionError('启动时不应导入')\n", encoding="utf-8")
+    monkeypatch.setenv("CBLENS_WINDPY_PATH", str(interface))
+    monkeypatch.delitem(sys.modules, "WindPy", raising=False)
+    calls = []
+    monkeypatch.setattr(wind_mod, "load_windpy", lambda: calls.append("import"))
+    assert wind_is_ready() is False
+    assert calls == []
+    assert "WindPy" not in sys.modules
+
+
 # ── ③ 非用户发起的那一轮必须被挡住 ────────────────────────────────
 
 class _Var:
@@ -214,7 +227,7 @@ def test_default_source_falls_back_to_akshare_when_nothing_detected(monkeypatch)
     from convertible_bond.gui import constants
     monkeypatch.setattr(constants, "_DEFAULT_SOURCE_CACHE", [])
     monkeypatch.setattr("convertible_bond.data_providers.detect_available_providers",
-                        lambda: [])
+                        lambda **kwargs: [])
     assert constants.default_market_source() == "akshare"
 
 
@@ -222,7 +235,7 @@ def test_default_source_prefers_first_available(monkeypatch):
     from convertible_bond.gui import constants
     monkeypatch.setattr(constants, "_DEFAULT_SOURCE_CACHE", [])
     monkeypatch.setattr("convertible_bond.data_providers.detect_available_providers",
-                        lambda: ["akshare"])
+                        lambda **kwargs: ["akshare"])
     assert constants.default_market_source() == "akshare"
 
 
@@ -231,11 +244,80 @@ def test_default_source_survives_detection_blowing_up(monkeypatch):
     from convertible_bond.gui import constants
     monkeypatch.setattr(constants, "_DEFAULT_SOURCE_CACHE", [])
 
-    def boom():
+    def boom(**kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr("convertible_bond.data_providers.detect_available_providers", boom)
     assert constants.default_market_source() == "akshare"
+
+
+def test_default_source_only_discovers_files_without_native_import(monkeypatch, tmp_path):
+    """真实的候选文件可被发现，但启动路径不能执行文件或改 sys.path。"""
+    from convertible_bond.data_providers import auto
+    from convertible_bond.gui import constants
+
+    interface = tmp_path / "WindPy.py"
+    interface.write_text("raise AssertionError('坏DLL加载将卡住主线程')\n", encoding="utf-8")
+    monkeypatch.setenv("CBLENS_WINDPY_PATH", str(interface))
+    monkeypatch.delitem(sys.modules, "WindPy", raising=False)
+    monkeypatch.setattr(constants, "_DEFAULT_SOURCE_CACHE", [])
+    calls = []
+
+    def no_native_import():
+        calls.append("native")
+        raise AssertionError("不允许加载 WindPy")
+
+    monkeypatch.setattr(auto, "load_windpy", no_native_import)
+    monkeypatch.setattr(auto.importlib.util, "find_spec", lambda name: None)
+    before = list(sys.path)
+    assert constants.default_market_source() == "Wind"
+    assert calls == []
+    assert "WindPy" not in sys.modules
+    assert sys.path == before
+
+
+def test_import_free_detection_does_not_fall_back_from_invalid_choice(monkeypatch, tmp_path):
+    from convertible_bond.data_providers import auto
+
+    monkeypatch.setenv("CBLENS_WINDPY_PATH", str(tmp_path / "missing" / "WindPy.py"))
+    monkeypatch.setitem(sys.modules, "WindPy", types.SimpleNamespace(w=object()))
+    specs = []
+    monkeypatch.setattr(auto.importlib.util, "find_spec", lambda name: specs.append(name) or object())
+    assert auto.detect_available_providers(import_check=False) == ["akshare"]
+    assert specs == ["akshare"]
+
+
+def test_default_provider_detection_keeps_import_check_for_cli(monkeypatch):
+    from convertible_bond.data_providers import auto
+
+    calls = []
+    monkeypatch.setattr(auto, "load_windpy", lambda: calls.append("WindPy"))
+    monkeypatch.setitem(sys.modules, "akshare", types.ModuleType("akshare"))
+    assert auto.detect_available_providers() == ["Wind", "akshare"]
+    assert calls == ["WindPy"]
+
+
+def test_invalid_settings_keeps_original_import_error_and_cooldown(monkeypatch):
+    from convertible_bond.data_providers.wind_errors import WindImportError
+    from convertible_bond.wind_config import WindSettingsError
+
+    original = WindSettingsError("设置 JSON 无法解析")
+    calls = []
+
+    def invalid_selection():
+        calls.append("settings")
+        raise original
+
+    monkeypatch.setattr(wind_mod, "get_session_wind_selection", invalid_selection)
+    monkeypatch.setattr(wind_mod, "WIND_CONNECT_COOLDOWN_SEC", 3600)
+    provider = WindDataProvider()
+    for _ in range(2):
+        with pytest.raises(WindImportError) as caught:
+            provider._ensure()
+        assert caught.value.__cause__ is original
+        assert "设置 JSON 无法解析" in caught.value.details.diagnostic
+    # 第一次加载及诊断各读取一次，第二次调用从负缓存直接返回同一分类错误。
+    assert calls == ["settings", "settings"]
 
 
 def test_no_hardcoded_wind_default_left_in_gui():

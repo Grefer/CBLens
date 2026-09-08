@@ -193,13 +193,14 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   拒记时**不静默** —— `_record_valuation_history` 返回**不记的原因**(记了返回 None),
   由 `_batch_worker` 追加到状态栏; 那一句的 `app.after` 必须登记在渲染**之后**,
   否则被 `_render_table` 重写的视图摘要盖掉 (有守护测试钉源码顺序)。
-- **GUI 启动路径上不许建立新的数据源连接**。`w.start()` 的 WindPy 默认签名是
+- **GUI 启动路径上不许建立新的数据源连接，也不首次导入 Wind 原生接口**。`w.start()` 的 WindPy 默认签名是
   `start(options=None, waitTime=120)` —— **终端没开时它等满两分钟**, 而"装了 WindPy
   但终端没登录"恰恰是最常见的一档 (实测本机: 可导入、`isconnected()` 为 False)。
   启动 80ms 后那一轮自愈 (`_load_result_cache` → `price_unpriced_new_bonds` →
   `_start_watchlist_pricing(quiet=True)` → worker → `build_batch_provider("Wind")` →
   `get_risk_free_rate`) 于是把"打开 GUI"变成"打开后转两分钟圈"。三道闸缺一不可:
-  ① `wind_is_ready()` 只问 `isconnected()`、**绝不 start**, 非用户发起的取数按它决定起不起
+  ① `wind_is_ready()` 只对 `sys.modules` 中已加载的 WindPy 问 `isconnected()`，
+  **绝不首次 import 或 start**；非用户发起的取数按它决定起不起
   (`_source_ready_without_connecting`: Wind 要已连接 / akshare 纯 HTTP 放行 /
   CSV 要弹模态挡住)。注意它与 `detect_available_providers()` 不是一回事 —— 后者只答
   "装没装", 而"装了但没连"正是会卡住的那一档。
@@ -207,9 +208,19 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   可覆盖; 设 0 沿用 WindPy 默认)。
   ③ 连接失败进负缓存 (`WIND_CONNECT_COOLDOWN_SEC`, 默认 60s) —— 失败时 `self._w` 仍是
   None, 没有这道闸每次取数都重等一遍, 全池 284 只按 10 线程折算就是约 570s 的假死。
-  行情源默认值也不再硬编码 `"Wind"`, 改走 `gui.constants.default_market_source()`
-  (有守护测试扫 `StringVar(value="Wind")`)。**代价要认**: Wind 没连时启动那一轮不再给
+  行情源默认值也不再硬编码 `"Wind"`, 改走 `gui.constants.default_market_source()`，
+  其中 `detect_available_providers(import_check=False)` 只做接口文件发现，不导入原生库；
+  CLI 默认仍会检查可导入性。首次加载由用户主动取数或「Wind 接口设置」独立检测发起，
+  防止损坏的 DLL 在设置入口出现前卡住 GUI。
+  (有守护测试扫 `StringVar(value="Wind")`)。**代价要认**: 冷启动未加载接口或 Wind 没连时，启动那一轮不再给
   新债补价, 状态栏改为提示点「⚡ 关注池重算」—— 但它此前的结局本来也是失败, 只是先卡两分钟。
+- **Wind 接口配置是用户设置，不是行情数据或模型预设**。`wind_config` 只读写独立的
+  `settings.json`，不导入 Wind；优先级为环境覆盖 → 应用保存 → 自动发现。当前进程
+  首次读取后固定选择，业务子进程必须通过 `wind_subprocess_env()` 继承，保存路径只在
+  重启后生效，不能让一次任务中途切换 DLL。显式路径失效必须报错，不能悄悄换另一套。
+  设置窗口的接口检测与连接测试均走 `wind_probe` 独立进程，默认只加载、不连接；
+  有效接口即使未登录仍可保存。关闭窗口取消检测，应用退出清理检测进程；返回值只含
+  文字和状态，不携带异常或 Tk 对象。onefile 子进程的包内临时路径不能落到用户设置。
 - **关注池是独立主页, 但「⭐ 加入关注池」搬不走**。`tabs/home.py` 是默认落地页, 拥有
   关注池表 / 摘要条 / 事件横幅 / 「⚡ 今日刷新」/「🆕 扫新债」; 而「⭐ 加入关注池」必须
   留在批量页 —— 它读主表控件 `app._batch_main_tree` 的 selection, 且 iid 是

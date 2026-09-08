@@ -1,27 +1,35 @@
 """自动探测可用的在线 provider."""
 from __future__ import annotations
 
+import importlib.util
+
 from .base import DataProvider
 from .akshare import AkshareDataProvider
-from .wind import WindDataProvider, prepare_windpy_import_path
+from .wind import WindDataProvider, discover_windpy_paths, load_windpy
 
 
-def detect_available_providers() -> list[str]:
+def detect_available_providers(*, import_check: bool = True) -> list[str]:
     """返回当前环境可用的在线 provider 名字列表 (按优先级排序: Wind > akshare).
 
-    仅做 import 检测, 不实例化, 不发起任何网络调用.
+    默认做 import 检测，不连接 Wind、不发起网络调用。
+    GUI 启动用 import_check=False：只查接口文件/模块位置，避免坏 DLL 在主线程加载。
     """
     available: list[str] = []
-    prepare_windpy_import_path()
     try:
-        import WindPy  # type: ignore[import-not-found]  # noqa: F401
-        available.append("Wind")
-    except ImportError:
+        if import_check:
+            load_windpy()
+            available.append("Wind")
+        elif discover_windpy_paths():
+            available.append("Wind")
+    except Exception:
         pass
     try:
-        import akshare  # type: ignore[import-not-found]  # noqa: F401
-        available.append("akshare")
-    except ImportError:
+        if import_check:
+            import akshare  # type: ignore[import-not-found]  # noqa: F401
+            available.append("akshare")
+        elif importlib.util.find_spec("akshare") is not None:
+            available.append("akshare")
+    except (ImportError, ValueError):
         pass
     return available
 

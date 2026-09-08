@@ -39,7 +39,15 @@ def _run_cli_from_argv(argv: list[str]) -> int:
     return int(rc or 0)
 
 
-if __name__ == "__main__" and "--run-cli" in sys.argv[1:]:
+if __name__ == "__main__" and "--wind-probe" in sys.argv[1:]:
+    from convertible_bond.cli._console import configure_utf8_stdio
+
+    configure_utf8_stdio()
+    from convertible_bond.wind_probe import main as _wind_probe_main
+
+    _i = sys.argv.index("--wind-probe")
+    raise SystemExit(_wind_probe_main(sys.argv[_i + 1:]))
+elif __name__ == "__main__" and "--run-cli" in sys.argv[1:]:
     _i = sys.argv.index("--run-cli")
     raise SystemExit(_run_cli_from_argv(sys.argv[_i + 1:]))
 elif __name__ == "__main__" and any(arg in {"--diagnose", "--diagnostics"} for arg in sys.argv[1:]):
