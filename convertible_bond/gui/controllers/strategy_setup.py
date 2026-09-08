@@ -31,6 +31,37 @@ from .strategy_common import (
 )
 
 
+# 预检结果按**文件指纹**缓存: 两份 JSON 加起来 3 万多条, 从头解析一次 0.19s, 而
+# `_refresh_strategy_setup_summary` 挂在 `v_st_pool_mode` / `v_st_history_mode` /
+# `v_st_codes` 三个 var 的 trace 上 —— 实测在「自选代码」框里敲 10 个字符会触发 9 次,
+# 卡 1.34s; 建页时它自己也跑两遍 (一次显式调用 + 一次 trace 回调)。
+# 键含 mtime 与大小, 所以同步/回洗改过盘之后下一次读的还是新数, 不会拿旧数糊弄人。
+_PRECHECK_CACHE: dict[str, tuple[tuple, dict]] = {}
+
+
+def _file_stamp(path) -> tuple:
+    """(路径, mtime_ns, 大小) —— 文件没动过就没必要重新解析。
+
+    取不到 stat (文件不存在) 也要返回一个**确定**的键: 那一档的预检结果同样固定
+    (count=0 / 「未找到」), 缓存住它是对的; 文件后来被建出来时 stamp 自然会变。
+    """
+    try:
+        st = path.stat()
+        return (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (str(path), None, None)
+
+
+def _cached_precheck(name: str, path, compute) -> dict:
+    """按文件指纹缓存 *compute* 的结果; 返回浅拷贝, 免得调用方改到缓存里那一份。"""
+    stamp = _file_stamp(path)
+    cached = _PRECHECK_CACHE.get(name)
+    if cached is None or cached[0] != stamp:
+        cached = (stamp, compute())
+        _PRECHECK_CACHE[name] = cached
+    return dict(cached[1])
+
+
 class StrategySetupMixin:
     """策略回测 — 输入与预检 (模板/代码池/导入/precheck)."""
 
@@ -323,6 +354,10 @@ class StrategySetupMixin:
 
     def _strategy_patch_precheck(self) -> dict:
         path = project_terms_patches_path()
+        return _cached_precheck("patches", path, lambda: self._read_patch_precheck(path))
+
+    @staticmethod
+    def _read_patch_precheck(path) -> dict:
         try:
             store = TermsPatchStore(path)
             patches = store.list_patches()
@@ -348,6 +383,10 @@ class StrategySetupMixin:
 
     def _strategy_events_precheck(self) -> dict:
         path = project_events_path()
+        return _cached_precheck("events", path, lambda: self._read_events_precheck(path))
+
+    @staticmethod
+    def _read_events_precheck(path) -> dict:
         try:
             count = len(CBEventStore(path).list_events())
         except Exception as exc:

@@ -212,9 +212,40 @@ class TermsPatchStore:
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else project_terms_patches_path()
+        self._by_bond: dict[str, list[TermsPatch]] | None = None
         self._patches: list[TermsPatch] = []
         self._meta: dict = {}
         self._load()
+
+    # ``_patches`` 走 property 只为一件事: **任何**改写都自动让 ``_by_bond`` 失效。
+    # 三处赋值 (``_load`` / ``add_many`` / ``rewrite``) 各自记得清一次索引, 就是又一张
+    # 会分叉的表 —— 漏掉一处的表现是"改完 patch, 投影还按旧的算", 不报错。
+    @property
+    def _patches(self) -> list[TermsPatch]:
+        return self._patch_list
+
+    @_patches.setter
+    def _patches(self, patches: list[TermsPatch]) -> None:
+        self._patch_list = patches
+        self._by_bond = None
+
+    def _patches_for_bond(self, bond_code: str) -> list[TermsPatch]:
+        """按 ``bond_code`` 取 patch —— 全库扫描时这里是唯一的热点。
+
+        ``list_patches(bond_code=...)`` 原本每次都先 ``list(self._patches)`` 复制整张表
+        再逐条比对, 而 ``split_batch_codes_from_cache`` 会给库里**每只**债各调一次:
+        实测 1060 只 × 23174 条, 光这一步 0.43s, 每次开 GUI、每次批量重算都白跑一遍。
+
+        索引按**文件顺序**分桶, 与"过滤整张表"得到的子序列逐位相同; 排序与遮蔽都在
+        后面做, 所以返回值一个字节都不变 (见
+        ``test_bond_code_index_returns_exactly_what_the_full_scan_did``)。
+        """
+        if self._by_bond is None:
+            index: dict[str, list[TermsPatch]] = {}
+            for patch in self._patch_list:
+                index.setdefault(patch.bond_code, []).append(patch)
+            self._by_bond = index
+        return self._by_bond.get(bond_code, [])
 
     def _load(self) -> None:
         if not self.path.exists():
@@ -228,11 +259,12 @@ class TermsPatchStore:
         if rows is None:
             # 兼容早期讨论里的 "events" 命名。
             rows = payload.get("events", [])
-        self._patches = []
+        patches: list[TermsPatch] = []
         for row in rows:
             patch = _patch_from_json(row)
             if patch is not None:
-                self._patches.append(patch)
+                patches.append(patch)
+        self._patches = patches
 
     def _save(self) -> None:
         from datetime import datetime
@@ -259,9 +291,7 @@ class TermsPatchStore:
         要的是**文件里到底有什么**, 传 ``include_shadowed=True`` —— 否则一条被 Wind 遮蔽的
         脏 patch 会既扫不到、也删不掉, 等哪天权威源覆盖收窄就原地复活。
         """
-        patches = list(self._patches)
-        if bond_code:
-            patches = [p for p in patches if p.bond_code == bond_code]
+        patches = list(self._patches_for_bond(bond_code) if bond_code else self._patches)
         if through_date:
             patches = [p for p in patches if p.effective_date <= through_date]
         if after is not None:

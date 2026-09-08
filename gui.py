@@ -8,6 +8,15 @@
 
 import sys
 
+from convertible_bond.paths import use_persistent_matplotlib_cache
+
+# 必须在**任何** matplotlib 导入之前 —— 见 use_persistent_matplotlib_cache 的说明:
+# PyInstaller 的 pyi_rth_mplconfig 每次启动都换一个临时 MPLCONFIGDIR, 于是字体缓存
+# 每次重建 (实测冷 8.23s / 热 0.005s), 而 GUI 在建 Tk 窗口前就会走到 pyplot。
+# 自定义 runtime hook 救不了: 它跑在内建钩子之前, 设了会被覆盖。这里是入口脚本,
+# 排在全部钩子之后, 是唯一还来得及的地方。
+use_persistent_matplotlib_cache()
+
 
 def _run_cli_from_argv(argv: list[str]) -> int:
     """``gui.py --run-cli <模块> [参数...]`` → 跑那个 CLI 的 ``main()`` 并退出。

@@ -1151,3 +1151,80 @@ def test_future_lifecycle_fields_are_all_scrubbed_from_a_historical_view():
                 leaks.get("conversion_suspension_end_date(孤儿)", 0) + 1)
     assert checked > 300, f"只检查了 {checked} 只, 样本太小说明前提坏了"
     assert not leaks, f"未来值仍然泄漏: {leaks}"
+
+
+# ── bond_code 索引 (启动/批量重算的热点) ──────────────────────────
+# ``split_batch_codes_from_cache`` 给库里**每只**债各调一次 ``list_patches(bond_code=)``,
+# 而它原本每次复制整张 patch 表再逐条比对: 实测 1060 只 × 23174 条 = 0.43s, 每次开 GUI、
+# 每次批量重算都白跑一遍。索引换掉的只是"从哪张表开始过滤", 排序与遮蔽都在后面。
+
+
+def _patch(code: str, day: int, *, field="conversion_price", value=1.0, source="manual"):
+    return TermsPatch(bond_code=code, effective_date=date(2026, 1, day),
+                      fields={field: value}, source=source)
+
+
+def _full_scan_list_patches(store, bond_code=None, **kwargs):
+    """索引之前的实现: 复制整张表再按 bond_code 过滤。"""
+    from convertible_bond.historical_terms import _drop_shadowed_patches, _patch_sort_key
+
+    patches = list(store._patches)
+    if bond_code:
+        patches = [p for p in patches if p.bond_code == bond_code]
+    if kwargs.get("through_date"):
+        patches = [p for p in patches if p.effective_date <= kwargs["through_date"]]
+    if kwargs.get("after") is not None:
+        patches = [p for p in patches if p.effective_date > kwargs["after"]]
+    patches = sorted(patches, key=_patch_sort_key)
+    return patches if kwargs.get("include_shadowed") else _drop_shadowed_patches(patches)
+
+
+def _store_with_mixed_patches(tmp_path):
+    store = TermsPatchStore(tmp_path / "patches.json")
+    store.add_many([
+        _patch("128009.SZ", 3, value=12.3),
+        _patch("110045.SH", 1, value=9.9),
+        _patch("128009.SZ", 1, value=11.1),
+        # 同日同债不同字段: 排序键有并列时, "从哪张表开始过滤"才可能改变输出顺序
+        _patch("128009.SZ", 1, field="credit_rating", value="AA"),
+        _patch("110045.SH", 5, value=8.8, source="wind_asof"),
+        _patch("110045.SH", 2, value=7.7),
+        # ⚠ 必须造出**排序键并列**的两条: ``_patch_sort_key`` 只到
+        # (生效日, 事件日, 代码, 字段名集合) 为止, 值与来源都不在键里。没有并列时
+        # 排序是全序, 桶内顺序怎么乱都看不出来 —— 那样的 fixture 会把"索引打乱了
+        # 顺序"这个真 bug 测成绿的 (实测: 把索引改成 reversed 照样全过)。
+        _patch("128009.SZ", 3, value=99.9, source="announcement"),
+    ])
+    return store
+
+
+def test_bond_code_index_returns_exactly_what_the_full_scan_did(tmp_path):
+    """逐位相同, 不只是"集合一样" —— 顺序会一路传到投影结果与 applied_patches。"""
+    store = _store_with_mixed_patches(tmp_path)
+
+    for code in ("128009.SZ", "110045.SH", "999999.SZ"):
+        for kwargs in ({}, {"through_date": date(2026, 1, 2)}, {"after": date(2026, 1, 1)},
+                       {"include_shadowed": True},
+                       {"through_date": date(2026, 1, 4), "include_shadowed": True}):
+            assert store.list_patches(bond_code=code, **kwargs) == \
+                _full_scan_list_patches(store, code, **kwargs), (code, kwargs)
+    # 不传 bond_code 的全库口径同样不能变 (数据体检与存量回洗走这一条)
+    assert store.list_patches() == _full_scan_list_patches(store)
+    assert store.list_patches(include_shadowed=True) == \
+        _full_scan_list_patches(store, include_shadowed=True)
+
+
+def test_index_follows_add_many_and_rewrite(tmp_path):
+    """索引失效由 ``_patches`` 的 setter 兜底 —— 漏一处的表现是"改完还按旧的算", 不报错。"""
+    store = _store_with_mixed_patches(tmp_path)
+    assert len(store.list_patches(bond_code="128009.SZ")) == 4   # 先把索引建起来
+
+    store.add_many([_patch("128009.SZ", 9, value=5.5)])
+    assert [p.effective_date.day for p in store.list_patches(bond_code="128009.SZ")] == [1, 1, 3, 3, 9]
+
+    store.rewrite(lambda p: None if p.bond_code == "128009.SZ" else p)
+    assert store.list_patches(bond_code="128009.SZ") == []
+    assert store.list_patches(bond_code="110045.SH"), "只该删掉那一只债的"
+
+    # 重新读盘也要能拿到新状态 (``_load`` 攒到本地列表再一次性赋值, 不原地 append)
+    assert TermsPatchStore(store.path).list_patches(bond_code="128009.SZ") == []

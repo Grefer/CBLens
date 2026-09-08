@@ -105,11 +105,39 @@ class CBEventStore:
 
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else project_events_path()
+        self._by_bond: dict[str, list[CBEvent]] | None = None
         self._events: list[CBEvent] = []
         self._meta: dict = {}
         #: 上一次 add_many 原地升级了几条 (与新增分开报, 见 add_many 的说明)
         self.last_upgraded = 0
         self._load()
+
+    # 与 ``TermsPatchStore._patches`` 同形: property 只为让**任何**改写自动作废
+    # ``_by_bond``。四处赋值各自记得清一次索引就是一张会分叉的表, 而漏掉一处的表现是
+    # "事件同步完了, 准入还按旧的判", 不报错。
+    @property
+    def _events(self) -> list[CBEvent]:
+        return self._event_list
+
+    @_events.setter
+    def _events(self, events: list[CBEvent]) -> None:
+        self._event_list = events
+        self._by_bond = None
+
+    def _events_for_bond(self, bond_code: str) -> list[CBEvent]:
+        """按 ``bond_code`` 取事件 —— 与 patch 那一侧同一个热点。
+
+        ``split_batch_codes_from_cache`` 给库里每只债各调一次 ``list_events(bond_code=)``,
+        而它原本每次复制整张表: 实测 1060 只 × 8035 条 = 0.25s, 每次开 GUI、每次批量
+        重算都白跑。索引按**文件顺序**分桶, 与过滤整张表得到的子序列逐位相同, 排序在
+        后面, 返回值不变。
+        """
+        if self._by_bond is None:
+            index: dict[str, list[CBEvent]] = {}
+            for event in self._event_list:
+                index.setdefault(event.bond_code, []).append(event)
+            self._by_bond = index
+        return self._by_bond.get(bond_code, [])
 
     def _load(self) -> None:
         if not self.path.exists():
@@ -137,9 +165,7 @@ class CBEventStore:
         event_type: str | None = None,
         through_date: date | None = None,
     ) -> list[CBEvent]:
-        events = list(self._events)
-        if bond_code:
-            events = [e for e in events if e.bond_code == bond_code]
+        events = list(self._events_for_bond(bond_code) if bond_code else self._events)
         if event_type:
             events = [e for e in events if e.event_type == event_type]
         if through_date:

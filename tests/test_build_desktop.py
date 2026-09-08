@@ -223,3 +223,52 @@ def test_bundle_metadata_comes_from_the_package_version(tmp_path, monkeypatch):
         "CFBundleVersion": "7.4.2fc3",
         "CBLensVersion": "7.4.2rc3",
     }
+
+
+def test_entry_sets_the_persistent_font_cache_before_any_heavy_import():
+    """``MPLCONFIGDIR`` 必须在**任何** matplotlib 导入之前设好, 否则整个修复是空转。
+
+    matplotlib 在 ``import`` 时就把 ``get_configdir()`` / ``get_cachedir()`` memo 住了,
+    之后再设环境变量一个字都不生效 —— 而失效是**静默**的: 启动照旧慢 8 秒, 没有异常、
+    没有红测试。改用自定义 runtime hook 也救不了: PyInstaller 的自定义钩子排在内建钩子
+    **之前** (``depend/analysis.py``: custom hooks 进 ``priority_scripts`` 头部), 设了
+    会被 ``pyi_rth_mplconfig`` 无条件覆盖。入口脚本跑在全部钩子之后, 是唯一来得及的地方。
+
+    所以这里钉的是**位置**: 那一句要排在 ``gui.py`` 里除 ``sys`` 与它自己那行之外的
+    每一个模块级 import 之前 —— 只扫"有没有调用"抓不到真实故障形态 (调用还在, 只是
+    被人挪到了某个 import 后面)。
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    tree = ast.parse((root / "gui.py").read_text(encoding="utf-8"))
+
+    call_lines = [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id == "use_persistent_matplotlib_cache"
+    ]
+    assert call_lines, "gui.py 不再设置持久字体缓存了"
+
+    exempt = {"sys", "convertible_bond.paths"}
+    import_lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue  # 函数体里的 import 要等到被调用, 不在启动导入链上
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Import):
+                names = {alias.name for alias in child.names}
+            elif isinstance(child, ast.ImportFrom):
+                names = {child.module or ""}
+            else:
+                continue
+            if not names <= exempt:
+                import_lines.append((child.lineno, sorted(names)))
+
+    assert import_lines, "gui.py 一个模块级 import 都没有? 这条守护失去意义了"
+    first_line, first_names = min(import_lines)
+    assert max(call_lines) < first_line, (
+        f"持久字体缓存设在第 {max(call_lines)} 行, 却晚于第 {first_line} 行的 "
+        f"{first_names} —— 那一行只要间接拉到 matplotlib, 设置就静默失效"
+    )

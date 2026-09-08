@@ -8,10 +8,14 @@ import shutil
 import sys
 from pathlib import Path
 
+from ._version import __version__
+
 logger = logging.getLogger(__name__)
 
 
 APP_NAME = "CBLens"
+MPLCONFIGDIR_ENV = "MPLCONFIGDIR"
+MPL_CACHE_DIR_ENV = "CBLENS_MPLCONFIGDIR"
 _SEEDED_DATA_FILES = {
     "cb_data.json", "cb_events.json", "cb_terms_patches.json",
     "down_reset_overrides.json", "batch_pricing_cache.json", "cb_valuation_history.json",
@@ -62,6 +66,104 @@ def _user_data_dir() -> Path:
     base = os.environ.get("XDG_DATA_HOME")
     root = Path(base) if base else Path.home() / ".local" / "share"
     return root / APP_NAME / "data"
+
+
+def _user_cache_dir() -> Path:
+    """平台级的用户缓存目录 —— 与 ``data/`` 分开: 丢了只是慢一次, 不丢任何数据。
+
+    Windows 走 ``LOCALAPPDATA`` 而不是 ``data/`` 用的 ``APPDATA``: 字体缓存里存的是
+    **本机**字体的绝对路径, 跟着漫游配置同步到另一台机器上只会是一堆坏路径。
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / APP_NAME
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Local"
+        return root / APP_NAME / "Cache"
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    return root / APP_NAME
+
+
+def matplotlib_cache_dir() -> Path:
+    """桌面包复用的 Matplotlib 缓存目录 (``MPLCONFIGDIR``)。
+
+    **按版本分目录**: 缓存里那份 ``fontlist-vNNN.json`` 对随包分发的字体只存**相对**
+    ``mpl.get_data_path()`` 的路径, 换 matplotlib 版本时文件名里的 ``vNNN`` 自己会变,
+    但"这一版包里带了哪些字体"没有任何东西盯着 —— 拿 CBLens 版本当键, 升级只多付一次
+    冷启动, 不会拿旧名单去找已经不在包里的字体文件。
+    """
+    override = os.environ.get(MPL_CACHE_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return _user_cache_dir() / f"matplotlib-{__version__}"
+
+
+def _prune_stale_matplotlib_caches(keep: Path) -> None:
+    """删掉旧版本留下的字体缓存目录 —— 只碰 ``_user_cache_dir()`` 下自己建的那几个。"""
+    root = keep.parent
+    if root != _user_cache_dir():
+        return  # CBLENS_MPLCONFIGDIR 指到别处时不清理: 那不是我们建的目录
+    try:
+        siblings = list(root.iterdir())
+    except OSError:
+        return
+    for entry in siblings:
+        if entry == keep or not entry.name.startswith("matplotlib-"):
+            continue
+        if not entry.is_dir():
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+
+
+def use_persistent_matplotlib_cache(*, force: bool = False) -> Path | None:
+    """把 ``MPLCONFIGDIR`` 指到跨启动存活的目录; 返回真正生效的路径 (没改则 None)。
+
+    **这是桌面包启动慢的主因**。PyInstaller 的标准钩子 ``pyi_rth_mplconfig`` 每次启动
+    ``secure_mkdtemp()`` 一个全新临时目录当 ``MPLCONFIGDIR``, 退出时删掉 —— 于是
+    ``fontlist-vNNN.json`` **每次都要重建**。实测本机 (Python 3.13 / matplotlib 3.10.8)
+    冷缓存 ``font_manager`` 要 **8.23s**, 热缓存 **0.005s**; 而 GUI 在建 Tk 窗口**之前**
+    就经 ``controllers.backtest → pyplot`` 走到这一步, 那 8 秒整个落在首窗等待上。
+
+    钩子当年的理由 (注释里写的 ``fontList.cache`` 指向上一个已删除的 ``_MEIxxxxx``)
+    在现代 matplotlib 上**已经不成立**: ``_JSONEncoder`` 把随包字体存成相对
+    ``mpl.get_data_path()`` 的路径, ``_json_decode`` 读回来再拼上**当前**的数据路径。
+    实测连开三次、每次换一个 ``_MEIPASS``: 38 个随包字体全部落到当次的路径上,
+    ``missing_files=0``, 载入 0.0009s。系统字体那部分是绝对路径, 但同一台机器上不变。
+
+    只在**冻结包**里改 (``force=True`` 供测试): 源码 checkout 本来就用
+    ``~/.matplotlib`` / XDG 缓存, 已经是持久的, 再插一手只会多出第二份缓存。
+
+    必须在 **``import matplotlib`` 之前**调用 —— ``matplotlib/__init__`` 在导入时就把
+    ``get_configdir()`` / ``get_cachedir()`` memo 住了。而且必须在**入口脚本**里调,
+    不能写成自定义 runtime hook: PyInstaller 的自定义钩子跑在内建钩子**之前**
+    (``analysis.py`` 里 custom hooks 排在 ``priority_scripts`` 头部), 设了也会被
+    ``pyi_rth_mplconfig`` 无条件覆盖掉。
+    """
+    if not force and not is_frozen_app():
+        return None
+    if "matplotlib" in sys.modules:
+        # 设了也没用 (配置目录已 memo)。静默失败等于"改完还是慢 8 秒且查不出原因"。
+        logger.warning(
+            "matplotlib 已导入, %s 不再生效 —— 持久字体缓存必须在导入前设置。",
+            MPLCONFIGDIR_ENV,
+        )
+        return None
+    target = matplotlib_cache_dir()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        # 探针名带 pid: 冻结包里 GUI 与 `--run-cli` 子进程可能同时起, 同名探针会互相
+        # 把对方的文件 unlink 掉, 表现成"目录不可写"而白白退回临时目录。
+        probe = target / f".write-probe-{os.getpid()}"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        # 目录不可写就留着钩子那份临时目录: 慢, 但能用。
+        logger.warning("Matplotlib 持久字体缓存不可用 (%s): %s", target, exc)
+        return None
+    os.environ[MPLCONFIGDIR_ENV] = str(target)
+    _prune_stale_matplotlib_caches(target)
+    return target
 
 
 _warned_installed_layout = False

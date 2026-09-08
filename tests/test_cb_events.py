@@ -1618,3 +1618,86 @@ def test_stock_driven_down_reset_events_survive_the_pre_listing_filter():
             raw_title="上一只同名债的公告",
         )
         assert not _event_postdates_listing(stale, terms), f"{blocked} 不该豁免上市日判据"
+
+
+# ── bond_code 索引 (与 TermsPatchStore 同一个热点) ────────────────
+# ``split_batch_codes_from_cache`` 给库里每只债各调一次 ``list_events(bond_code=)``,
+# 而它原本每次复制整张事件表: 实测 1060 只 × 8035 条 = 0.25s, 每次开 GUI、每次批量
+# 重算都白跑一遍。
+
+
+def _event_row(code, day, etype="call_redemption", title="公告", **extra):
+    return {"bond_code": code, "event_date": f"2026-01-{day:02d}", "event_type": etype,
+            "raw_title": title, **extra}
+
+
+def _event_store_with_ties(tmp_path):
+    """直接写盘, 因为 ``add_many`` 按 ``key()`` 去重而 ``key()`` 恰好就是排序键的四元组。
+
+    ⚠ 并列是这条守护的**全部意义**: ``_event_sort_key`` 只到
+    (事件日, 代码, 类型, 标题) 为止, 没有并列时排序是全序, 桶内顺序怎么乱都看不出来。
+    而 ``_load`` 不去重, 文件里真会有这种行。
+    """
+    import json
+
+    path = tmp_path / "events.json"
+    path.write_text(json.dumps({"events": [
+        _event_row("128009.SZ", 3),
+        _event_row("110045.SH", 1, etype="down_reset_proposed"),
+        _event_row("128009.SZ", 1, etype="suspension"),
+        _event_row("128009.SZ", 3, note="同排序键的第二条"),
+        _event_row("110045.SH", 2),
+    ]}, ensure_ascii=False), encoding="utf-8")
+    return CBEventStore(path)
+
+
+def _full_scan_list_events(store, bond_code=None, event_type=None, through_date=None):
+    """索引之前的实现: 复制整张表再按 bond_code 过滤。"""
+    from convertible_bond.cb_events import _event_sort_key
+
+    events = list(store._events)
+    if bond_code:
+        events = [e for e in events if e.bond_code == bond_code]
+    if event_type:
+        events = [e for e in events if e.event_type == event_type]
+    if through_date:
+        events = [e for e in events if e.event_date <= through_date]
+    return sorted(events, key=_event_sort_key)
+
+
+def test_bond_code_index_returns_exactly_what_the_full_scan_did(tmp_path):
+    """逐位相同 —— 顺序一路传到准入投影 (``apply_events_to_terms`` 逐条覆盖状态字段)。"""
+    store = _event_store_with_ties(tmp_path)
+
+    for code in ("128009.SZ", "110045.SH", "999999.SZ", None):
+        for kwargs in ({}, {"event_type": "call_redemption"},
+                       {"through_date": date(2026, 1, 2)},
+                       {"event_type": "suspension", "through_date": date(2026, 1, 5)}):
+            assert store.list_events(bond_code=code, **kwargs) == \
+                _full_scan_list_events(store, code, **kwargs), (code, kwargs)
+
+
+def test_event_index_follows_add_many(tmp_path):
+    """索引失效靠 ``_events`` 的 setter —— 漏一处的表现是"同步完了准入还按旧的判"。
+
+    这里**不能**复用带并列的那份 fixture: ``add_many`` 按 ``key()`` 去重, 而 ``key()``
+    恰好就是排序键的四元组 —— 那两条并列行会在第一次 ``add_many`` 时被合并掉, 计数
+    对不上的原因就跟索引没关系了。
+    """
+    import json
+
+    path = tmp_path / "events.json"
+    path.write_text(json.dumps({"events": [
+        _event_row("128009.SZ", 3),
+        _event_row("128009.SZ", 1, etype="suspension"),
+        _event_row("110045.SH", 2),
+    ]}, ensure_ascii=False), encoding="utf-8")
+    store = CBEventStore(path)
+    assert len(store.list_events(bond_code="128009.SZ")) == 2   # 先把索引建起来
+
+    store.add_many([CBEvent(bond_code="128009.SZ", event_date=date(2026, 2, 1),
+                            event_type="putback", raw_title="新增回售")])
+
+    assert len(store.list_events(bond_code="128009.SZ")) == 3
+    assert store.list_events(bond_code="128009.SZ")[-1].event_type == "putback"
+    assert len(store.list_events(bond_code="110045.SH")) == 1, "只该多出那一只债的"

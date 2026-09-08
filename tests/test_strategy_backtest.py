@@ -3592,3 +3592,101 @@ def test_summary_stats_helpers_stay_importable_from_strategy_backtest():
 
     sweep = importlib.import_module("convertible_bond.strategy_sweep")
     assert sweep._periods_per_year is strategy_backtest._periods_per_year
+
+
+# ── 预检缓存 (策略页摘要的响应性) ───────────────────────────────
+# `_refresh_strategy_setup_summary` 挂在 `v_st_pool_mode` / `v_st_history_mode` /
+# `v_st_codes` 三个 var 的 write trace 上, 而两个预检各自 **新建 store 重解析整份 JSON**
+# (合计 5 万多条, 0.19s)。实测: 建页时跑两遍 (显式调用 + trace 回调); 在「自选代码」框里
+# 敲 10 个字符触发 9 次、卡 **1.34s**。缓存后同样 9 次只要 0.14s。
+
+
+def _precheck_owner(tmp_path, monkeypatch):
+    """只要那两个预检方法, 不建 Tk —— GUI 在测试环境起不来 (见 tests/headless.py)。"""
+    from convertible_bond.gui.controllers import strategy_setup as ss
+
+    ss._PRECHECK_CACHE.clear()
+    patches = tmp_path / "cb_terms_patches.json"
+    events = tmp_path / "cb_events.json"
+    monkeypatch.setattr(ss, "project_terms_patches_path", lambda: patches)
+    monkeypatch.setattr(ss, "project_events_path", lambda: events)
+    return ss.StrategySetupMixin(), patches, events
+
+
+def _write_patches(path, count):
+    path.write_text(json.dumps({"patches": [
+        {"bond_code": f"1280{i:02d}.SZ", "effective_date": "2026-01-05",
+         "fields": {"conversion_price": 10.0 + i}} for i in range(count)
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+
+def test_precheck_reads_the_file_once_until_it_changes(tmp_path, monkeypatch):
+    from convertible_bond.gui.controllers import strategy_setup as ss
+
+    owner, patches, _events = _precheck_owner(tmp_path, monkeypatch)
+    _write_patches(patches, 3)
+    reads = []
+    original = ss.StrategySetupMixin._read_patch_precheck
+    monkeypatch.setattr(ss.StrategySetupMixin, "_read_patch_precheck",
+                        staticmethod(lambda p: (reads.append(p), original(p))[1]))
+
+    first = owner._strategy_patch_precheck()
+    for _ in range(5):
+        owner._strategy_patch_precheck()
+
+    assert first["count"] == 3
+    assert len(reads) == 1, f"六次调用解析了 {len(reads)} 遍 —— 缓存没生效"
+
+
+def test_precheck_cache_expires_when_the_file_changes(tmp_path, monkeypatch):
+    """同步/回洗改过盘之后必须读到新数 —— 拿旧计数糊弄人比慢更糟。
+
+    键含 ``st_mtime_ns`` 与大小: 只看 mtime 秒级精度时, 同一秒内的回洗会被吃掉。
+    """
+    owner, patches, _events = _precheck_owner(tmp_path, monkeypatch)
+    _write_patches(patches, 3)
+    assert owner._strategy_patch_precheck()["count"] == 3
+
+    _write_patches(patches, 7)
+
+    assert owner._strategy_patch_precheck()["count"] == 7, "文件变了还在报旧计数"
+
+
+def test_precheck_handles_a_missing_file_and_notices_it_appearing(tmp_path, monkeypatch):
+    """文件不存在是常态 (全新安装), 而它被建出来之后不能永远停在「未找到」。"""
+    owner, patches, _events = _precheck_owner(tmp_path, monkeypatch)
+
+    missing = owner._strategy_patch_precheck()
+    assert missing["count"] == 0 and "未找到" in missing["label"]
+
+    _write_patches(patches, 2)
+
+    appeared = owner._strategy_patch_precheck()
+    assert appeared["count"] == 2 and "已启用" in appeared["label"]
+
+
+def test_precheck_callers_cannot_scribble_on_the_cached_dict(tmp_path, monkeypatch):
+    """返回浅拷贝: 调用方给 dict 塞一个键, 不该让后面每个人都看见。"""
+    owner, patches, _events = _precheck_owner(tmp_path, monkeypatch)
+    _write_patches(patches, 4)
+
+    owner._strategy_patch_precheck()["count"] = 999
+
+    assert owner._strategy_patch_precheck()["count"] == 4
+
+
+def test_events_precheck_is_cached_on_its_own_file(tmp_path, monkeypatch):
+    """两份预检各自认自己的文件 —— 共用一个键会让改 A 作废 B (或者更糟, 反过来)。"""
+    owner, patches, events = _precheck_owner(tmp_path, monkeypatch)
+    _write_patches(patches, 1)
+    events.write_text(json.dumps({"events": [
+        {"bond_code": "128009.SZ", "event_date": "2026-01-03",
+         "event_type": "call_redemption", "raw_title": "赎回"}
+    ]}, ensure_ascii=False), encoding="utf-8")
+
+    assert owner._strategy_events_precheck()["count"] == 1
+
+    _write_patches(patches, 9)   # 只动 patch 文件
+
+    assert owner._strategy_events_precheck()["count"] == 1, "事件预检被 patch 文件带作废了"
+    assert owner._strategy_patch_precheck()["count"] == 9

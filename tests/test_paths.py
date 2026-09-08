@@ -268,3 +268,124 @@ def test_upgrade_seeds_missing_patches_and_keeps_existing_user_data(monkeypatch,
         (user_data / "cb_terms_patches.json").write_text(local_patches, encoding="utf-8")
         paths.seed_data_files()
         assert (user_data / "cb_terms_patches.json").read_text() == local_patches
+
+
+# ── 桌面包的持久字体缓存 ────────────────────────────────────────
+# 背景 (实测 2026-09-07, Python 3.13.1 / matplotlib 3.10.8): PyInstaller 的标准钩子
+# ``pyi_rth_mplconfig`` 每次启动 ``secure_mkdtemp()`` 一个新的 ``MPLCONFIGDIR``, 退出即删,
+# 于是 ``fontlist-vNNN.json`` 每次重建 —— 冷 **8.23s** / 热 **0.005s**。GUI 在建 Tk 窗口
+# **之前**就经 ``controllers.backtest → pyplot`` 走到那一步, 8 秒整个落在首窗等待上。
+# 钩子当年的理由 (缓存指向上一个已删的 ``_MEIxxxxx``) 在现代 matplotlib 上已不成立:
+# 随包字体存的是相对 ``mpl.get_data_path()`` 的路径, 载入时再拼当前路径 —— 实测连开三次
+# 各换一个 ``_MEIPASS``, 38 个随包字体全部命中当次路径, ``missing_files=0``。
+
+
+def _fake_frozen(monkeypatch, tmp_path: Path) -> None:
+    """冒充 PyInstaller onefile: frozen + _MEIPASS, 且 MPLCONFIGDIR 已被标准钩子占住。
+
+    ``sys.modules`` 里的 matplotlib 也要摘掉: 入口脚本跑到这一步时它还没被导入, 而
+    **同一次 pytest 里**别的用例可能早就导入过 —— 不摘就成了跟测试顺序有关的红/绿
+    (实测单跑绿、全量跑红, 而全量那次红得对: 函数确实拒绝了一个无效的设置)。
+    """
+    monkeypatch.delitem(sys.modules, "matplotlib", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_MEIxxxx"), raising=False)
+    monkeypatch.setenv(paths.MPLCONFIGDIR_ENV, str(tmp_path / "rthook-temp"))
+    monkeypatch.setenv(paths.MPL_CACHE_DIR_ENV, str(tmp_path / "cache" / "matplotlib-test"))
+
+
+def test_source_checkout_keeps_its_own_matplotlib_cache(monkeypatch, tmp_path):
+    """源码 checkout 不改 ``MPLCONFIGDIR`` —— ``~/.matplotlib`` 本来就是持久的。
+
+    插一手只会多出第二份缓存, 并让开发机与用户机的字体解析路径不一致。
+    """
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    monkeypatch.delenv(paths.MPLCONFIGDIR_ENV, raising=False)
+
+    assert paths.use_persistent_matplotlib_cache() is None
+    assert paths.MPLCONFIGDIR_ENV not in __import__("os").environ
+
+
+def test_frozen_app_overrides_the_rthooks_throwaway_dir(monkeypatch, tmp_path):
+    """冻结包里必须**盖掉**钩子设的临时目录 —— setdefault 语义会让这个修复整个失效。"""
+    import os
+
+    _fake_frozen(monkeypatch, tmp_path)
+    throwaway = os.environ[paths.MPLCONFIGDIR_ENV]
+
+    target = paths.use_persistent_matplotlib_cache()
+
+    assert target is not None, "冻结包里没有生效"
+    assert os.environ[paths.MPLCONFIGDIR_ENV] == str(target) != throwaway
+    assert target.is_dir(), "目录要真的建出来, 否则 matplotlib 自己会再回落一次"
+
+
+def test_cache_dir_is_keyed_by_app_version(monkeypatch):
+    """按版本分目录: 升级后包里带哪些字体没有任何东西盯着, 版本号是唯一可靠的键。"""
+    monkeypatch.delenv(paths.MPL_CACHE_DIR_ENV, raising=False)
+
+    assert paths.matplotlib_cache_dir().name == f"matplotlib-{paths.__version__}"
+
+
+def test_already_imported_matplotlib_is_reported_not_swallowed(monkeypatch, tmp_path, caplog):
+    """导入后再设是**无效**的 (配置目录已 memo) —— 静默返回等于"改完还是慢 8 秒"。"""
+    import os
+
+    _fake_frozen(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "matplotlib", object())
+    before = os.environ[paths.MPLCONFIGDIR_ENV]
+
+    with caplog.at_level("WARNING", logger=paths.logger.name):
+        assert paths.use_persistent_matplotlib_cache() is None
+
+    assert os.environ[paths.MPLCONFIGDIR_ENV] == before, "无效时不许假装设置成功"
+    assert "matplotlib" in caplog.text
+
+
+def test_unwritable_cache_dir_degrades_to_the_rthook_temp_dir(monkeypatch, tmp_path):
+    """缓存目录建不出来时保持现状 (慢, 但能用), 不能让启动崩在一个性能优化上。"""
+    import os
+
+    _fake_frozen(monkeypatch, tmp_path)
+    blocker = tmp_path / "blocked"
+    blocker.write_text("我是文件不是目录", encoding="utf-8")
+    monkeypatch.setenv(paths.MPL_CACHE_DIR_ENV, str(blocker / "matplotlib-x"))
+    before = os.environ[paths.MPLCONFIGDIR_ENV]
+
+    assert paths.use_persistent_matplotlib_cache() is None
+    assert os.environ[paths.MPLCONFIGDIR_ENV] == before
+
+
+def test_pruning_only_removes_our_own_stale_version_dirs(monkeypatch, tmp_path):
+    """清理旧版本缓存只许碰 ``_user_cache_dir()`` 下自己建的 ``matplotlib-*`` 目录。"""
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(paths, "_user_cache_dir", lambda: cache_root)
+    _fake_frozen(monkeypatch, tmp_path)
+    monkeypatch.delenv(paths.MPL_CACHE_DIR_ENV, raising=False)
+    stale = cache_root / "matplotlib-1.0.0"
+    stale.mkdir(parents=True)
+    (stale / "fontlist-v390.json").write_text("{}", encoding="utf-8")
+    innocent_dir = cache_root / "announcement_text"
+    innocent_dir.mkdir()
+    innocent_file = cache_root / "matplotlib-not-a-dir.txt"
+    innocent_file.write_text("x", encoding="utf-8")
+
+    target = paths.use_persistent_matplotlib_cache()
+
+    assert target == cache_root / f"matplotlib-{paths.__version__}"
+    assert not stale.exists(), "旧版本目录没清掉, 每升一次级留一份"
+    assert innocent_dir.is_dir() and innocent_file.is_file(), "清理越界了"
+
+
+def test_pruning_stays_away_from_an_explicit_override_location(monkeypatch, tmp_path):
+    """``CBLENS_MPLCONFIGDIR`` 指到别处时不清理: 那不是我们建的目录, 邻居也不是我们的。"""
+    _fake_frozen(monkeypatch, tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    neighbour = elsewhere / "matplotlib-someone-elses"
+    neighbour.mkdir(parents=True)
+    monkeypatch.setenv(paths.MPL_CACHE_DIR_ENV, str(elsewhere / "matplotlib-mine"))
+
+    paths.use_persistent_matplotlib_cache()
+
+    assert neighbour.is_dir(), "override 路径下的邻居目录被删了"

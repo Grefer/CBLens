@@ -214,6 +214,51 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   防止损坏的 DLL 在设置入口出现前卡住 GUI。
   (有守护测试扫 `StringVar(value="Wind")`)。**代价要认**: 冷启动未加载接口或 Wind 没连时，启动那一轮不再给
   新债补价, 状态栏改为提示点「⚡ 关注池重算」—— 但它此前的结局本来也是失败, 只是先卡两分钟。
+- **桌面包的 `MPLCONFIGDIR` 必须持久, 而且只能在*入口脚本*里设 (2026-09-07)**。
+  这是「双击后等十秒」的主因: PyInstaller 的标准钩子 `pyi_rth_mplconfig` 每次启动
+  `secure_mkdtemp()` 一个新目录当 `MPLCONFIGDIR`、退出即删, 于是 `fontlist-vNNN.json`
+  **每次重建** —— 实测 (Python 3.13.1 / matplotlib 3.10.8) 冷 **8.23s** / 热 **0.005s**,
+  而 GUI 在建 Tk 窗口**之前**就经 `app → controllers.backtest → pyplot` 走到那一步,
+  8 秒整个落在首窗等待上。走 `paths.use_persistent_matplotlib_cache()`, 实测跑真正的
+  `gui.py` 入口 (伪装 frozen, 每次换 `_MEIPASS`): 首启 8.32s → 次启 **0.53s**。
+  三条约束缺一不可:
+  ① **不能写成自定义 runtime hook**。PyInstaller 的自定义钩子跑在内建钩子**之前**
+     (`depend/analysis.py`: custom hooks 进 `priority_scripts` 头部), 设了会被
+     `pyi_rth_mplconfig` 无条件覆盖 —— 而覆盖是静默的。入口脚本排在全部钩子之后,
+     是唯一还来得及的地方; 又必须在**任何** matplotlib 导入之前 (`matplotlib/__init__`
+     导入时就把 `get_configdir()`/`get_cachedir()` memo 住了)。有守护测试用 `ast` 钉住
+     那一句排在 `gui.py` 里除 `sys` 与它自己之外的每个模块级 import 之前 ——
+     只扫"有没有调用"抓不到真实故障形态 (调用还在, 只是被挪到了某个 import 后面)。
+  ② **钩子当年的理由已经不成立, 但要自己验过再拿掉**。它的注释说缓存会指向上一个已删的
+     `_MEIxxxxx`, 那是 matplotlib 1.x `fontList.cache` 时代的事: 现在 `_JSONEncoder` 把
+     随包字体存成相对 `mpl.get_data_path()` 的路径, `_json_decode` 读回来再拼**当前**
+     路径。实测连开三次各换一个 `_MEIPASS`: 38 个随包字体全部命中当次路径,
+     `missing_files=0`, 载入 0.0009s。系统字体那部分是绝对路径, 但同一台机器上不变。
+  ③ **目录按 CBLens 版本分, 且放缓存区不放数据区**。`fontlist-vNNN.json` 的文件名只跟
+     matplotlib 版本走, "这一版包里带了哪些字体"没有任何东西盯着 —— 拿 app 版本当键,
+     升级只多付一次冷启动。Windows 走 `LOCALAPPDATA` 而不是 `data/` 用的 `APPDATA`:
+     缓存里存的是**本机**字体的绝对路径, 跟着漫游配置同步到另一台机器只会是一堆坏路径。
+     目录不可写就**保持钩子那份临时目录** (慢, 但能用), 不让启动崩在一个性能优化上。
+- **`list_patches(bond_code=)` / `list_events(bond_code=)` 走 bond_code 索引 (2026-09-07)**。
+  两者原本都是"复制整张表再逐条比对", 而 `split_batch_codes_from_cache` 会给库里**每只**
+  债各调一次 —— 实测 1060 只 × (23174 条 patch + 8035 条事件), 全池准入扫描 **0.810s**,
+  每次开 GUI、每次批量重算都白跑一遍。索引按**文件顺序**分桶, 排序与遮蔽都在后面,
+  所以返回值逐位不变 (实测 kept=311 / excluded=749 与改前逐元素相同); 扫描 → **0.192s**。
+  两条约定: ① 失效走 `_patches` / `_events` 的 **property setter**, 不在
+  `_load`/`add_many`/`rewrite` 里各清一次 —— 那是又一张会分叉的表, 漏一处的表现是
+  "同步完了准入还按旧的判", 不报错; 为此 `_load` 要攒到本地列表再一次性赋值,
+  **不能原地 `append`** (绕过 setter, 索引静默变旧)。② 等价性用例的 fixture 必须含
+  **排序键并列**的两条: `_patch_sort_key` 只到 (生效日, 事件日, 代码, 字段名集合)、
+  `_event_sort_key` 只到 (事件日, 代码, 类型, 标题), 没有并列时排序是全序, 桶内顺序
+  怎么乱都看不出来 —— 实测把索引改成 `reversed` 照样全绿。
+- **策略页的两个预检按文件指纹缓存 (2026-09-07)**。`_strategy_patch_precheck` /
+  `_strategy_events_precheck` 各自**新建 store 重解析整份 JSON**, 而
+  `_refresh_strategy_setup_summary` 挂在 `v_st_pool_mode` / `v_st_history_mode` /
+  `v_st_codes` 三个 var 的 write trace 上 —— 实测建页时跑两遍 (一次显式调用 + 一次 trace
+  回调), 而在「自选代码」框里敲 10 个字符会触发 **9 次、卡 1.34s**。缓存键是
+  `(路径, st_mtime_ns, 大小)`: 同步/回洗改过盘之后下一次读的还是新数 (**拿旧计数糊弄人
+  比慢更糟**), 而只看 mtime 秒级精度会把同一秒内的回洗吃掉。返回**浅拷贝**, 免得调用方
+  塞个键进去让后面每个人都看见。改后同样 9 次 → 0.14s。
 - **Wind 接口配置是用户设置，不是行情数据或模型预设**。`wind_config` 只读写独立的
   `settings.json`，不导入 Wind；优先级为环境覆盖 → 应用保存 → 自动发现。当前进程
   首次读取后固定选择，业务子进程必须通过 `wind_subprocess_env()` 继承，保存路径只在
