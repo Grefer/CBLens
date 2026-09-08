@@ -1150,6 +1150,8 @@ def _should_emit_code_progress(done: int, total: int) -> bool:
 
 
 def _looks_like_transport_failure(reason: Any) -> bool:
+    from .data_providers.wind_errors import WIND_LOAD_FAILED, WIND_NOT_FOUND
+
     text = str(reason)
     markers = (
         "SkyClient request failed",
@@ -1158,6 +1160,8 @@ def _looks_like_transport_failure(reason: Any) -> bool:
         "GetConnectStatus: 0",
         "Wind 连接失败",
         "未安装 WindPy",
+        WIND_NOT_FOUND,
+        WIND_LOAD_FAILED,
     )
     return any(marker in text for marker in markers)
 

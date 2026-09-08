@@ -40,6 +40,24 @@ def test_prepare_windpy_import_path_uses_env_file(monkeypatch, tmp_path):
     assert sys.path[0] == str(tmp_path)
 
 
+def test_prepare_windpy_import_path_finds_windows_x64(monkeypatch, tmp_path):
+    """Wind 安装目录下的 x64 接口必须可发现，无需导入或连接终端。"""
+    wind_root = tmp_path / "Wind"
+    wind_dir = wind_root / "x64"
+    wind_dir.mkdir(parents=True)
+    (wind_dir / "WindPy.py").write_text("raise AssertionError('不应导入')\n", encoding="utf-8")
+    monkeypatch.setenv("WIND_HOME", str(wind_root))
+    for name in ("CBLENS_WINDPY_PATH", "WINDPY_PATH", "WINDPY_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    added = prepare_windpy_import_path()
+    assert wind_dir in added
+    assert str(wind_dir) in sys.path
+    from pathlib import Path
+    assert Path(r"C:\Software\Wind") / "x64" in wind_mod._windpy_candidate_paths()
+
+
 def test_prepare_windpy_import_path_prefers_frozen_bundle(monkeypatch, tmp_path):
     bundle_dir = tmp_path / "bundle"
     external_dir = tmp_path / "external"

@@ -31,6 +31,7 @@ from ..constants import (
     DEFAULT_DISTRESS_K_PCT,
     DEFAULT_P_DOWN_PCT,
 )
+from ..error_dialogs import prepare_error
 from ..theme import (
     BG_CARD, BG_INPUT, BTN_HOVER,
     CREDIT_SPREAD_TABLE,
@@ -546,7 +547,8 @@ class WindSyncMixin:
                 "vol_window": vol_window_label,
             })
         except Exception as exc:
-            err_msg = f"{source_name} 获取失败: {exc}"
+            error = prepare_error(exc)
+            err_msg = error if error.is_wind else f"{source_name} 获取失败: {exc}"
             self.after(0, self._on_error, err_msg, not auto)
         finally:
             if self._fetch_in_flight_code == code and self._fetch_in_flight_source == source_name:
@@ -768,7 +770,8 @@ class WindSyncMixin:
                 f"已按 {self.v_vol_window.get()} 窗口重算 σ = {sigma*100:.2f}%"
             ))
         except Exception as exc:
-            self.after(0, self._on_error, f"重算 σ 失败: {exc}")
+            error = prepare_error(exc)
+            self.after(0, self._on_error, error if error.is_wind else f"重算 σ 失败: {exc}")
         finally:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.vol_window_menu.configure(state="normal"))
@@ -790,7 +793,8 @@ class WindSyncMixin:
             self.after(0, lambda: self.v_status.set(
                 f"无风险利率 ({provider.name}) = {latest:.4f}%"))
         except Exception as exc:
-            self.after(0, self._on_error, f"无风险利率拉取失败: {exc}")
+            error = prepare_error(exc)
+            self.after(0, self._on_error, error if error.is_wind else f"无风险利率拉取失败: {exc}")
         finally:
             self.after(0, self._stop_progress)
             self.after(0, lambda: self.btn_shibor.configure(state="normal"))

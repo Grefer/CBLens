@@ -82,6 +82,13 @@ WindPy 不通过 pip 发布。如需使用：
 3. 选择当前虚拟环境的 Python 路径进行安装
 4. 验证：`python -c "from WindPy import w; print(w)"`
 
+桌面包遇到「未找到 Wind Python 接口」时，也可能是接口已安装但不在查找范围内。
+可将环境变量 `CBLENS_WINDPY_PATH` 设为本机 `WindPy.py` 的完整路径或所在文件夹，
+然后重新打开 CBLens。Windows 示例为 `C:\Software\Wind\x64\WindPy.py`（按实际位置填写）；
+macOS 示例为 `/Applications/Wind API.app/Contents/python/WindPy.py`。
+「接口加载失败」表示加载过程出错，应检查接口依赖及架构；「Wind 连接失败」则需确认终端登录、网络和 API 权限。
+回测错误窗口可展开或复制技术详情，反馈问题时保留原始错误信息。
+
 > [!TIP]
 > 不连接 Wind 也能正常使用！离线 PDE 模型、已有 `data/cb_data.json`、akshare 动态行情都不依赖 Wind。
 
@@ -126,7 +133,7 @@ dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 Windows 无控制台启动时可用 `CBLens.exe --diagnose --check --output cblens-diagnostics.json` 将结果写入文件；加 `--probe-stdio` 可离线检查进度条和异常回调清理，不访问行情接口。
 GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时，APP 会像 DeltaLab 一样优先使用包内 WindPy。若发布包未内置 WindPy，运行时会自动探测本机 Wind 终端；非默认位置可把 `CBLENS_WINDPY_PATH` 指向 `WindPy.py` 或其所在目录。
 
-构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前包版本为 `2.0.0rc4`，对应 tag 为 `v2.0.0-rc.4`；创建 tag 与上传 Release 是单独的发布动作。
+构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前包版本为 `2.0.0rc5`，对应 tag 为 `v2.0.0-rc.5`；创建 tag 与上传 Release 是单独的发布动作。
 
 桌面包分平台发布：
 
@@ -134,7 +141,7 @@ GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打
 - macOS：在装有 Wind API 的本机准备候选包。目标 tag 已建立且 checkout 干净后运行：
 
 ```bash
-python scripts/release_macos_desktop.py --tag v2.0.0-rc.4 --skip-upload
+python scripts/release_macos_desktop.py --tag v2.0.0-rc.5 --skip-upload
 ```
 
 这条命令只构建、诊断和打包，不联系 GitHub，因此只要求本地 tag 已存在。确认上传前，目标 GitHub Release 也必须已经建立（可由 Windows 发布工作流创建），再去掉 `--skip-upload`；脚本会核对远端 tag 与产物 commit 一致后上传 ZIP 与构建清单，不复用来源不明的旧 APP，也不覆盖已有同名资产。诊断在临时用户目录中检查首启种子和依赖，macOS 发布还要求 WindPy 可导入；仍需实际启动 GUI 验证使用流程。

@@ -27,6 +27,7 @@ from ...strategy_backtest import (
 )
 from ..theme import VOL_WINDOW_MAP, E
 from ..constants import normalize_pde_rank_signal_label, normalize_strategy_history_mode
+from ..error_dialogs import prepare_error, show_error
 
 from .strategy_common import (
     STRATEGY_BACKTEST_PRO_FEATURE,
@@ -318,8 +319,8 @@ class StrategyRunMixin:
         except StrategyBacktestCancelled:
             self.after(0, lambda: self.v_st_status.set("⏹ 策略回测已取消"))
         except Exception as exc:
-            self.after(0, lambda exc=exc: self.v_st_status.set(f"❌ 策略回测失败: {exc}"))
-            self.after(0, lambda exc=exc: messagebox.showerror("策略回测失败", str(exc)))
+            error = prepare_error(exc)
+            self.after(0, show_error, self, "策略回测失败", error, self.v_st_status)
         finally:
             self.after(0, self._finish_strategy_backtest)
 

@@ -17,6 +17,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 from ...backtest import backtest_theoretical_price
+from ..error_dialogs import prepare_error, show_error
 from ..theme import (
     ACCENT, BG_CARD, BG_INPUT, BORDER,
     GREEN, ORANGE, RED,
@@ -89,8 +90,13 @@ class BacktestMixin:
             self._last_bt_result = result
             self.after(0, self._render_backtest_chart, result)
         except Exception as exc:
-            self.after(0, lambda exc=exc: self.v_bt_status.set(f"❌ 回测失败: {exc}"))
-            self.after(0, lambda exc=exc: messagebox.showerror("回测失败", str(exc)))
+            error = prepare_error(
+                exc,
+                wind_guidance_suffix=(
+                    "如已有这只转债的本地条款，也可在窗口顶部将「行情源」改为 akshare 后重试。"
+                ),
+            )
+            self.after(0, show_error, self, "回测失败", error, self.v_bt_status)
         finally:
             self.after(0, lambda: self.btn_backtest.configure(state="normal"))
 

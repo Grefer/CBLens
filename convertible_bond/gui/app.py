@@ -58,6 +58,7 @@ from .tabs import home as home_tab
 from .tabs import pricing as pricing_tab
 from .tabs import sensitivity as sensitivity_tab
 from .tabs import strategy as strategy_tab
+from .error_dialogs import ErrorPresentation, show_error
 from .theme import (
     ACCENT, ACCENT_HOVER,
     BG_APP, BG_CARD, BG_INPUT, BORDER,
@@ -1107,11 +1108,15 @@ class CBPricerApp(
             self.v_bond_title.set("未加载转债")
             self.v_result.set("—")
             self.lbl_result.configure(text_color=RED)
-            messagebox.showerror("错误", str(msg))
+            if isinstance(msg, ErrorPresentation):
+                show_error(self, "获取失败", msg)
+            else:
+                messagebox.showerror("错误", str(msg))
         # 状态行写在**弹框之后**。showerror 是模态, 它在自己的事件循环里让那条 400ms
         # 的动画 tick 继续跑; 而这里已经不停进度了, 先写就会被 tick 盖掉 —— 用户关掉
         # 弹框, 看到的是一句"正在计算…"而不是错误原因。
-        self.v_status.set(E(f"❌ {msg}"))
+        summary = msg.summary if isinstance(msg, ErrorPresentation) else str(msg)
+        self.v_status.set(E(f"❌ {summary}"))
 
     # ── 参数预设保存/加载 ──────────────────────────────────
     _PRESET_VARS = (

@@ -33,6 +33,7 @@ from ._helpers import (
     _wind_table_rows,
 )
 from ..market_time import market_today
+from .wind_errors import WindConnectionError, wind_connection_error, wind_import_error
 
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,7 @@ def _windpy_candidate_paths() -> list[Path]:
             os.environ.get("LOCALAPPDATA"),
             os.environ.get("APPDATA"),
             "C:\\Wind",
+            "C:\\Software\\Wind",
         ]
         suffixes = [
             "",
@@ -128,6 +130,8 @@ def _windpy_candidate_paths() -> list[Path]:
             "Wind\\WindPy",
             "Wind.NET.Client",
             "WindPy",
+            "x64",
+            "Wind\\x64",
         ]
         for root in roots:
             if not root:
@@ -300,12 +304,7 @@ class WindDataProvider(DataProvider):
         self._bad_wss_fields: set[str] = set()
 
     def _ensure(self):
-        """启动 Wind 连接，若未安装或 DLL 加载失败则抛出详尽提示。
-
-        在 PyInstaller 冻结构建里 WindPy 的导入报错往往是 DLL 加载失败
-        (Windows) 或 dylib 找不到 (macOS), 而非 "模块缺失"。把原始异常接进
-        提示文本里，让用户 / 开发者能直接看到底层错误再对症处理。
-        """
+        """启动 Wind 连接；分开报告接口缺失、加载失败和终端连接失败。"""
         if self._w is not None:
             return self._w
 
@@ -321,23 +320,16 @@ class WindDataProvider(DataProvider):
                 self._connect_error = None
 
             frozen = bool(getattr(sys, "frozen", False))
-            prepare_windpy_import_path()
-
+            prepared_paths: list[Path] = []
             try:
+                prepared_paths = prepare_windpy_import_path()
                 from WindPy import w  # type: ignore[import-not-found]
             except Exception as e:
-                frozen_hint = ""
-                if frozen:
-                    frozen_hint = (
-                        "\n  [frozen build] 下载版不会自带 WindPy; 请确认本机已安装 "
-                        "Wind API/金融终端 Python 接口。macOS 常见路径为 "
-                        "`/Applications/Wind API.app/Contents/python/WindPy.py`。"
-                        "如安装在自定义位置, 请设置环境变量 CBLENS_WINDPY_PATH。"
-                    )
-                error = ImportError(
-                    "未安装 WindPy，请安装 Wind 金融终端并配置 Python 插件。\n"
-                    "  pip install WindPy  或在 Wind 终端中设置 Python 接口。"
-                    f"{frozen_hint}\n  原始错误: {type(e).__name__}: {e}"
+                error = wind_import_error(
+                    e, platform=sys.platform, frozen=frozen,
+                    bits=64 if sys.maxsize > 2**32 else 32,
+                    prepared_paths=[str(path) for path in prepared_paths],
+                    configured_path=os.environ.get("CBLENS_WINDPY_PATH", ""),
                 )
                 # 同样进负缓存: prepare_windpy_import_path 会扫盘找 WindPy.py,
                 # 没装 Wind 的机器上跑一轮批量会把这件事重复几百遍。
@@ -345,22 +337,21 @@ class WindDataProvider(DataProvider):
                 self._connect_error_at = time.monotonic()
                 raise error from e
 
-            if not w.isconnected():
-                # 有界等待: WindPy 默认 waitTime=120, 而"终端没开"是最常见的失败,
-                # 默认值会把调用线程钉住两分钟 (GUI 上就是"打开就卡住")。
-                ret = (w.start(waitTime=WIND_START_WAIT_SEC) if WIND_START_WAIT_SEC > 0
-                       else w.start())
-                if getattr(ret, "ErrorCode", -1) != 0:
-                    error = ConnectionError(
-                        f"Wind 连接失败: ErrorCode={getattr(ret, 'ErrorCode', -1)}, Data={getattr(ret, 'Data', '')}"
-                        + (
-                            "\n  [frozen build] 请确认 Wind 终端已在本机启动并已登录."
-                            if frozen else ""
-                        )
-                    )
-                    self._connect_error = error
-                    self._connect_error_at = time.monotonic()
-                    raise error
+            try:
+                if not w.isconnected():
+                    # 保留有界等待和失败冷却，避免每只债重复等待连接。
+                    ret = (w.start(waitTime=WIND_START_WAIT_SEC) if WIND_START_WAIT_SEC > 0
+                           else w.start())
+                    if getattr(ret, "ErrorCode", -1) != 0:
+                        raise wind_connection_error(_wind_error_text(ret))
+            except Exception as e:
+                error = (e if isinstance(e, WindConnectionError) else
+                         wind_connection_error(f"原始错误：{type(e).__name__}: {e}"))
+                self._connect_error = error
+                self._connect_error_at = time.monotonic()
+                if error is e:
+                    raise
+                raise error from e
             self._w = w
             self._connect_error = None
             return w

@@ -584,6 +584,20 @@ def test_error_text_is_written_after_the_modal(monkeypatch):
     assert "计算失败: boom" in app.v_status.value
 
 
+@pytest.mark.parametrize("show_dialog", [True, False])
+def test_wind_error_uses_short_status_and_keeps_background_refresh_quiet(monkeypatch, show_dialog):
+    from convertible_bond.gui.error_dialogs import ErrorPresentation
+
+    app = _App()
+    seen = []
+    error = ErrorPresentation("接口未找到", "请修复接口", "原始诊断", True)
+    monkeypatch.setattr(app_mod, "show_error", lambda *args: seen.append(args))
+    app._on_error(error, show_dialog=show_dialog)
+    assert seen == ([(app, "获取失败", error)] if show_dialog else [])
+    assert "接口未找到" in app.v_status.value
+    assert "原始诊断" not in app.v_status.value
+
+
 # ── ⑤ 被丢掉的第二次窄同步要说话 (R1-35) ────────────────────────
 
 def test_a_dropped_new_issue_sync_reports_itself(monkeypatch):
