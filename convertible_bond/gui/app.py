@@ -52,6 +52,7 @@ from .controllers import (
     SensitivityMixin,
     WindSyncMixin,
 )
+from .controllers.wind_sync import REFRESH_TERMS_LABEL
 from .tabs import backtest as backtest_tab
 from .tabs import batch as batch_tab
 from .tabs import home as home_tab
@@ -586,13 +587,17 @@ class CBPricerApp(
         self.btn_wind.pack(side="left", padx=(6, 0))
         Tooltip(self.btn_wind, "读取本地条款库, 拉取正股行情和历史波动率")
 
+        # 「同步」的一个修饰位, 不是第二个功能 (见 REFRESH_TERMS_LABEL): 主次靠**样式**
+        # 分 —— 同步是 ACCENT 实心, 这个是 ghost。宽度给足让宾语写得下, 光靠一个 30px
+        # 的 🔄 在 Windows 上会被 E() 降级成没有主语的「刷新」。
         self.btn_refresh_terms = ctk.CTkButton(
-            right_frame, text=E("🔄"), command=self._refresh_terms,
+            right_frame, text=E(REFRESH_TERMS_LABEL), command=self._refresh_terms,
             fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT,
-            font=(FONT_FAMILY, 14), width=30, height=30, corner_radius=6)
-        self.btn_refresh_terms.pack(side="left", padx=(4, 0))
+            font=(FONT_FAMILY, 12), width=96, height=30, corner_radius=6)
+        self.btn_refresh_terms.pack(side="left", padx=(6, 0))
         Tooltip(self.btn_refresh_terms,
-                "强制用 Wind 刷新当前债的本地条款\n适用于下修或评级变更后")
+                "强制用 Wind 重拉当前债的条款并覆盖本地条款库\n"
+                "适用于下修或评级变更后; 条款固定走 Wind, 与左边的行情源无关")
 
         self.btn_save = ctk.CTkButton(right_frame, text=E("💾"), command=self._save_preset, width=30, height=30, fg_color=BG_INPUT, hover_color=BTN_HOVER, text_color=TEXT, font=(FONT_FAMILY, 14), corner_radius=6)
         self.btn_save.pack(side="left", padx=(8, 0))

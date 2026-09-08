@@ -37,12 +37,27 @@ from ..theme import (
     FONT_FAMILY, FONT_MONO, TEXT, TEXT_DIM,
     VOL_WINDOW_DEFAULT,
     VOL_WINDOW_MAP,
+    E,
 )
 from ...market_time import market_today
 from ...wind_config import wind_subprocess_env
 
 
 logger = logging.getLogger(__name__)
+
+
+#: 顶栏那个强制重拉条款按钮的文案。
+#:
+#: 它**不是**「📥 同步」之外的第二个功能 —— ``_refresh_terms`` 只是把
+#: ``_force_refresh_terms`` 置位后调同一个 ``_fetch_wind``, 唯一的差别是条款强制走
+#: Wind 重拉并覆盖 cb_data。所以名字必须点出**宾语**: 此前它是个光秃秃的 🔄, 而
+#: Windows 上 ``E()`` 把独立 emoji 降级成纯文本, 两个等宽中文词并排就读成了重复的
+#: 按钮 (用户实测反馈)。
+#:
+#: 单一事实源: 取数失败时那句"请点…"要**插值**它, 不许再写一遍字面量 —— 与
+#: ``WATCH_REFRESH_LABEL`` 同一条约定, 真实故障形态是按钮改名后消息里留着一个
+#: 过期的名字, 用户在页面上找不到那个按钮。
+REFRESH_TERMS_LABEL = "🔄 强刷条款"
 
 
 # CLI 入口表: (菜单标签, python -m 模块名, 额外 CLI 参数, 提示文案)
@@ -272,7 +287,9 @@ class WindSyncMixin:
         self._fetch_in_flight_source = source_name
         self.btn_wind.configure(state="disabled")
         if self._force_refresh_terms:
-            msg = f"从 {source_name} 强制刷新 {code}"
+            # 条款固定走 Wind (``CachedBondDataProvider.static_source`` 缺省就是它),
+            # 与顶栏的行情源无关 —— 写成"从 akshare 强制刷新"是在说一件没发生的事。
+            msg = f"强制从 Wind 重拉 {code} 条款, 行情走 {source_name}"
         elif auto:
             msg = f"自动同步 {code} ({source_name})"
         else:
@@ -466,7 +483,8 @@ class WindSyncMixin:
                         "如确有公开交易的标的股票, 请在定价页手动填写正股价 S0 与波动率后定价")
                 if terms_origin == "cb_data":
                     raise ValueError(
-                        "本地条款库未包含标的正股代码 — 请尝试『Wind 强制刷新』")
+                        "本地条款库未包含标的正股代码 — 请点顶栏的"
+                        f"「{E(REFRESH_TERMS_LABEL)}」")
                 raise ValueError(
                     "Wind 未返回标的正股代码 — 可在定价页手动填写正股价 S0 与波动率后定价")
 

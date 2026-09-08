@@ -1,7 +1,10 @@
 """GUI 条款投影和无回售输入回归: 不建 Tk、不联网、不读真实条款库。"""
+import ast
+import inspect
 from dataclasses import replace
 from datetime import date, datetime
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +12,7 @@ import pytest
 from convertible_bond.cb_events import CBEventStore
 from convertible_bond.data_providers.base import BondTerms
 from convertible_bond.down_reset_overrides import DownResetOverrides, resolve_down_reset
+from convertible_bond.gui import theme
 from convertible_bond.gui.controllers import events, pricing, wind_sync
 from convertible_bond.historical_terms import TermsPatch, TermsPatchStore, project_terms
 from convertible_bond.pricer import UniversalCBPricer
@@ -193,3 +197,74 @@ def test_no_put_display_does_not_invent_trigger_but_preserves_announced_window(w
     assert rendered[0]["status"] == expected
     if not with_window:
         assert rendered[0]["progress"] is None
+
+
+# ── 强刷条款按钮: 文案单一事实源 + Windows 降级后仍带宾语 ──────────────
+
+def _gui_root():
+    from convertible_bond import gui as gui_pkg
+    return Path(gui_pkg.__file__).parent
+
+
+def test_refresh_terms_label_is_not_hardcoded_anywhere_else():
+    """指向这个按钮的提示必须**插值**常量, 不许再写一遍字面量.
+
+    与 ``WATCH_REFRESH_LABEL`` 那条同构: 真实故障形态是按钮改名之后消息里留着一个
+    过期的名字, 用户在页面上找不到它 —— 这一处此前就写着『Wind 强制刷新』, 而按钮
+    上一个字都没有。
+
+    只扫**运行期字符串字面量**: docstring 与注释里提到按钮名是说明文字, 不参与渲染,
+    拿它们报错只会逼人把解释删掉。
+    """
+    label = wind_sync.REFRESH_TERMS_LABEL
+    offenders = []
+    for path in sorted(_gui_root().rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        exempt = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef,
+                                 ast.FunctionDef, ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc is not None and node.body:
+                    exempt.add(id(node.body[0].value))
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", "") == "REFRESH_TERMS_LABEL" for t in node.targets):
+                exempt.add(id(node.value))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in exempt and label in node.value):
+                offenders.append(f"{path.name}:{node.lineno}: {node.value[:60]!r}")
+    assert not offenders, (
+        "这些运行期字符串硬编码了按钮文案, 请改引 REFRESH_TERMS_LABEL:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_missing_underlying_message_points_at_the_button_by_interpolation():
+    src = inspect.getsource(wind_sync.WindSyncMixin._fetch_wind_worker)
+    assert "本地条款库未包含标的正股代码" in src, "找不到那句提示, 用例需要更新"
+    idx = next(i for i, ln in enumerate(src.splitlines())
+               if "本地条款库未包含标的正股代码" in ln)
+    window = "\n".join(src.splitlines()[idx:idx + 3])
+    assert "REFRESH_TERMS_LABEL" in window, f"提示里的按钮名不是插值来的:\n{window}"
+
+
+def test_button_uses_the_label_constant():
+    from convertible_bond.gui import app as app_module
+    assert "text=E(REFRESH_TERMS_LABEL)" in inspect.getsource(app_module)
+
+
+def test_windows_fallback_keeps_the_object_in_the_name(monkeypatch):
+    """Windows 上 ``E()`` 剥掉 emoji 之后, 名字里必须还留着"刷的是什么".
+
+    这正是 bug 的形状: 常量表曾把独立的 🔄 映射成「刷新」, 于是顶栏出现两个等宽
+    中文词「同步」「刷新」并排, 读起来像重复的按钮, 而后者没有宾语。
+    """
+    monkeypatch.setattr(theme, "_IS_WIN", True)
+    label = wind_sync.REFRESH_TERMS_LABEL
+    rendered = theme.E(label)
+    assert "条款" in rendered, f"Windows 降级后名字丢了宾语: {rendered!r}"
+    assert "🔄" not in rendered, f"Windows 上不该留彩色 emoji: {rendered!r}"
+    # emoji 必须被**剥掉**而不是换成一个词 —— 光判"宾语还在"抓不到这一档:
+    # 映射表若退回 ``"🔄": "刷新"``, 渲染出来是「刷新 强刷条款」, "条款"照样在里面。
+    assert rendered == label.lstrip("🔄").strip(), (
+        f"emoji 没被剥干净, 名字前面多出一个词: {rendered!r}")
