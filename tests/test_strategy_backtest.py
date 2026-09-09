@@ -658,7 +658,8 @@ def test_strategy_template_resets_new_knobs_to_full_config():
     assert app.v_st_rank_signal.get() == "估值偏差"
     assert app.v_st_view.get() == "综合机会"
     assert app.v_st_top_n.get() == "10"
-    assert app.v_st_max_deviation.get() == "0"
+    # 「偏差上限」不再写死绝对闸 —— 便宜度改由 min_relative_cheapness 承担
+    assert app.v_st_max_deviation.get() == ""
     assert app.v_st_event_exit.get() is False
     assert app.v_st_template.get() == "估值偏差"
 
@@ -2563,8 +2564,13 @@ def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
 
     # ② CLI/GUI 实际构造的 config 也要等价 —— 它们对 σ 留空时**沿用默认上限**,
     #    传 None 会把风险闸关掉 (实测那样候选池 116 → 126)。
+    #
+    #    ``min_relative_cheapness=None``: 便宜度下限是**后来**加的一条闸 (取代 GUI 模板
+    #    与 CLI 写死的绝对 max_deviation=0), 不属于 2026-08-31 那次标签→阈值的等价声明。
+    #    这里显式关掉它, 这条断言才还在测它本来要测的东西; 它自己的行为由下面 ⑤ 断言。
     cli_like = PDEStrategyConfig(min_confidence=("高", "中"), min_sigma=None,
-                                 max_sigma=PDEStrategyConfig.max_sigma)
+                                 max_sigma=PDEStrategyConfig.max_sigma,
+                                 min_relative_cheapness=None)
     assert {r["bond_code"] for r in _select_candidate_rows(rows, cli_like)} == by_tag
 
     # ③ 选债路径与落选解释路径按定义一致: 解释里说的理由就是这里拦下它的理由
@@ -2609,6 +2615,47 @@ def test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row():
     assert len(binding) >= 3, (
         f"这份缓存只测得到 {binding} 在筛东西, 覆盖面塌了: 其余阈值的默认值"
         "被改动不会让这条用例变红")
+
+    # ── ⑤ 推荐口径 (PDEStrategyConfig) 的便宜度下限 ────────────────────────
+    # 它取代的是 GUI 模板/CLI 写死的绝对 max_deviation=0。两件事要钉住:
+    #   (a) 它**真的在筛** —— 是 ② 那个基线的真子集, 否则等于没加;
+    #   (b) 它筛的是**横截面**量 —— 留下的每一行都比当期中位便宜过 5pp。
+    # 只断言 (a) 不够: 一个写错成绝对偏差的实现同样会让候选变少。
+    recommended = _select_candidate_rows(rows, PDEStrategyConfig(
+        min_confidence=("高", "中"), min_sigma=None,
+        max_sigma=PDEStrategyConfig.max_sigma))
+    cheap = {r["bond_code"] for r in recommended}
+    assert cheap < by_tag, (
+        f"便宜度下限没在筛 (候选 {len(cheap)} vs 基线 {len(by_tag)}) —— "
+        "GUI 模板拿掉 max_deviation=0 之后, 便宜度就没有任何闸了")
+    floor = PDEStrategyConfig.min_relative_cheapness
+    for row in recommended:
+        relative = bp.finite_float(row.get("relative_deviation"))
+        assert relative is not None and relative <= -floor, (
+            f"{row.get('bond_code')} 相对偏差 {relative} 没便宜过 {floor}, "
+            "这条闸可能读成了绝对偏差")
+
+
+def test_cli_cheapness_floor_reads_blank_as_default_and_negative_as_off():
+    """``--min-relative-cheapness`` 的三档读法, 单独可测。
+
+    这条闸**默认开着**, 所以"怎么关"必须有明确入口且被测到 —— 一个关不掉的默认闸
+    等于把口径冻死在代码里, 而项目对选债层的既定立场是"每一条都能单独调"。
+
+    三档各有理由: 留空 = 沿用推荐默认 (与 ``max_sigma`` 同口径, 那里留空关掉风险闸
+    实测让候选 116 → 126); 负数 = 关闭 (沿用 ``--min-balance`` / ``--min-turnover``
+    的既有约定); **0 不是关闭** —— 下限 0 的语义是"必须便宜过中位", 仍在筛东西。
+    """
+    from argparse import Namespace
+
+    from convertible_bond.strategy_backtest import PDEStrategyConfig
+    from convertible_bond.cli.strategy_backtest import _cheapness_floor
+
+    assert _cheapness_floor(Namespace(min_relative_cheapness=None)) == (
+        PDEStrategyConfig.min_relative_cheapness)
+    assert _cheapness_floor(Namespace(min_relative_cheapness=-1)) is None
+    assert _cheapness_floor(Namespace(min_relative_cheapness=8)) == pytest.approx(0.08)
+    assert _cheapness_floor(Namespace(min_relative_cheapness=0)) == 0.0   # 不是关闭
 
 
 def test_thresholds_let_missing_values_through():
@@ -2926,10 +2973,22 @@ def test_relative_deviation_gate_only_applies_to_a_market_wide_anchor():
     legacy = dict(base, relative_deviation=0.25)
     assert "相对偏差" in (_candidate_filter_reason(legacy, cfg) or "")
 
-    # 真锚且在上限内照常放行
+    # 真锚、在上限内、且便宜过下限 → 放行。取 -15pp 而不是 +15pp: 同一个假锚守卫里
+    # 现在还有一条**反向**的便宜度下限 (min_relative_cheapness), +15pp 会被它拦下,
+    # 那样这条断言就测不出"上限内照常放行"了。
     assert _candidate_filter_reason(
-        dict(base, relative_deviation=0.15, cross_section_origin="market_median"),
+        dict(base, relative_deviation=-0.15, cross_section_origin="market_median"),
         cfg) is None
+
+    # 便宜度下限与上限同轴反向, 必须共用同一道假锚守卫 —— 少了它, 小池子上
+    # relative_deviation 就是绝对偏差, -5pp 又变回一个绝对阈值 (实测 25 只的池子
+    # 25/25 是假锚, 批量页「低估候选」在那种池子上放行 0 只)。
+    assert cfg.min_relative_cheapness == 0.05     # 前提
+    not_cheap = dict(base, relative_deviation=0.15, cross_section_origin="market_median")
+    assert "未便宜过" in (_candidate_filter_reason(not_cheap, cfg) or ""), "真锚下下限失效了"
+    assert _candidate_filter_reason(
+        dict(not_cheap, cross_section_origin="absolute_fallback"),
+        cfg) is None, "假锚下仍按绝对阈值要求便宜度"
 
 
 def test_disk_cache_does_not_freeze_an_empty_series(tmp_path):

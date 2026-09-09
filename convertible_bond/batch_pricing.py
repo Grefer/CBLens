@@ -1634,6 +1634,35 @@ MIN_VIEW_ROWS = 10
 DEFAULT_DOUBLE_LOW_PERCENTILE = 0.15
 
 
+def relative_cheapness_shortfall(
+    row: dict,
+    *,
+    floor: float | None = MIN_RELATIVE_CHEAPNESS,
+    missing_is_shortfall: bool,
+) -> str | None:
+    """「比当期全市场中位便宜得不够」的理由; 够便宜 (或 ``floor=None`` 关着) 则 None。
+
+    抽成具名谓词是因为它有**两个**消费者: 批量页的「低估候选」视图 (下面那个 gate)
+    与策略层的 ``ScoreStrategyConfig.min_relative_cheapness``。判据与常量只此一份 ——
+    "同一段口径两份实现"在本项目里翻过好几次车, 而这一条尤其危险: 它是个**横截面**
+    量, 抄一份过去很容易连 ``_anchor_is_market_wide`` 那道守卫一起抄漏, 于是在小池子
+    上悄悄退化成绝对阈值 (度量换了, 名字没换)。
+
+    ``missing_is_shortfall`` 是两个消费者**真实存在**的分歧, 所以写成必填参数而不是
+    挑一个当默认: 视图缺相对偏差就归不进「低估候选」(得给用户一个理由), 而策略层的
+    阈值一律**缺值放行** (与被取代的标签同口径, 见 ``_candidate_filter_reason``)。
+    """
+    if floor is None:
+        return None
+    relative = finite_float(row.get("relative_deviation"))
+    if relative is None:
+        return "缺少相对偏差" if missing_is_shortfall else None
+    if relative > -floor:
+        return (f"相对市场中位 {relative * 100:+.1f}pp, "
+                f"未便宜过 {floor * 100:.0f}pp")
+    return None
+
+
 def _cross_sectional_cheapness_gate(row: dict) -> str | None:
     """「低估候选」的当期横截面判据: 相对便宜度下限 + 名单长度上限。
 
@@ -1641,12 +1670,9 @@ def _cross_sectional_cheapness_gate(row: dict) -> str | None:
     的注释。这里只做判定, 不做估计 —— 相对偏差与名次都已由 annotate_batch_results
     在有 population 的那一层算好。
     """
-    relative = finite_float(row.get("relative_deviation"))
-    if relative is None:
-        return "缺少相对偏差"
-    if relative > -MIN_RELATIVE_CHEAPNESS:
-        return (f"相对市场中位 {relative * 100:+.1f}pp, "
-                f"未便宜过 {MIN_RELATIVE_CHEAPNESS * 100:.0f}pp")
+    reason = relative_cheapness_shortfall(row, missing_is_shortfall=True)
+    if reason is not None:
+        return reason
     rank = finite_float(row.get("cheapness_rank"))
     total = finite_float(row.get("cheapness_rank_total"))
     if rank is not None and total is not None:

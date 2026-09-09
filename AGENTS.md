@@ -828,8 +828,46 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   ② **`max_relative_deviation` 只在锚是全市场中位时适用**: 池子 <30 只时
      `median_deviation_of` 返回 None, 锚回落 0.0, 那个量就变成绝对偏差 —— 判据换了度量
      而名字没换。实测 29 → 30 只是一道悬崖 (同一批债全落选 vs 全入选)。
+     **同一道守卫现在还罩着反向的那条闸** (见下一段的 `min_relative_cheapness`)。
   ③ 新增阈值必须同步进 `_strategy_config_summary`, 否则快照复现不出那次运行 (有守护
      测试比对"选债读的每个 `cfg.X` 都要在快照里")。
+- **便宜度下限锚横截面, 而 GUI 模板/CLI 此前把它写成绝对闸 (2026-09-08)**。
+  `STRATEGY_TEMPLATES["估值偏差"]` 写死 `v_st_max_deviation="0"`, CLI 里还有一句
+  `if max_deviation is None: max_deviation = 0.0` (argparse `default=None` 且 help 不写
+  默认值) —— 于是**默认**回测只买"市价 ≤ 理论价"的债。那是个绝对闸架在一个水平时变的量上,
+  与「低估候选」当年那次 (`opportunity_score >= 8.0`) 同构: `cb_valuation_history` 24 期
+  基线里全市场中位偏差**全部为正** (+0.41% ~ +21.64%), 所以它的松紧完全是 regime 的函数。
+  实测 311 行主池上它只剩 **3 只**候选, `top_n=10` + `reserve_cash` 下 **70% 是现金**
+  (2.2%/年货基) —— Sharpe/超额/回撤度量的主要是货基而不是选债; 更糟的是**跨期不可比**:
+  同一份配置在不同 regime 上松紧不同, 等于在回测里嵌了一个用户从未要求、页面上也没说的
+  隐式择时层, 而它与"转债贵不贵"反向, 净值曲线上像 alpha 的东西可能全部来自它。
+  (对照: 项目已有**显式且默认关闭**的估值择时层 `exposure_mode="valuation"` —— 说明
+  "要不要择时"是有立场的, 不该由一条隐式闸代劳。)
+  换成 `ScoreStrategyConfig.min_relative_cheapness` (默认取 `MIN_RELATIVE_CHEAPNESS`),
+  两道闸各司其职 —— **下限**表达"今天真没便宜货"(候选诚实归零), **长度上限**由 `top_n`
+  本身承担。实测改动纯增量: 候选 3 → 39 / 4 → 37 (运行态与入库种子两份缓存),
+  持仓 3 → 10, **旧候选集是新集合的子集, Top10 只进不出**。
+  **四条约定**:
+  ① **闸在 `_candidate_filter_reason` 里, 不是把 `selection_view` 换成「低估候选」**。
+     后者看着更"复用单一事实源", 实测三处代价: (a) `_cross_sectional_cheapness_gate`
+     **不查** `_anchor_is_market_wide`, 25 只的池子实测 25/25 假锚 → 该视图放行 **0 只**,
+     原样重演本条要修的 bug; (b) 视图里有 `"转股折价" in tags → "转股折价单独归类"`,
+     那是批量页"别让同一只债出现在两个视图里"的**排版**决定, 进了选债口径就会在出现
+     转股折价的行情里静默丢掉最便宜的那一批 (今天 0 行, 成本为零, 但形状是错的);
+     (c) 视图的 15% 名额上限会让 deferred #8 在默认路径上变活 —— 实测过下限 107 只 →
+     名额 47 → 过视图 42 → 再过 8 条阈值只剩 14, **28 个名额被随后剔掉的行吃掉**。
+     今天两条路的 Top10 逐只相同, 但那是巧合, 不是理由。
+  ② **判据只此一份**: `batch_pricing.relative_cheapness_shortfall` 由视图与策略层共用。
+     它有一个必填的 `missing_is_shortfall` —— 两个消费者对"缺相对偏差"的处置**真的相反**
+     (视图要给用户一个归不进去的理由, 策略层一律缺值放行), 写成参数是为了让这个分歧
+     有名字, 而不是各留一份实现悄悄漂。
+  ③ **必须与 `max_relative_deviation` 共用同一道假锚守卫**: 两条同轴反向, 假锚下
+     `relative_deviation` 就是绝对偏差, 拿 −5pp 去卡它就又变回本条要修的那个东西。
+  ④ **基类默认 None, 推荐口径 `PDEStrategyConfig` 才打开**。`ScoreStrategyConfig()` 是
+     2026-08-31 标签→阈值等价性的锚 (有逐只比对的守护测试), 而便宜度下限不属于那次
+     等价声明 —— 在基类上打开会让那条用例按构造必红, 且红的是一个与本次改动无关的
+     历史结论。
+
 - **保守过滤**: 准入筛选"字段明确才剔除"，避免因数据源缺字段误杀。**连续量不做硬阈值**:
   余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
   "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用

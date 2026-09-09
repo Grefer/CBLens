@@ -214,7 +214,11 @@ STRATEGY_TEMPLATES = {
     "估值偏差": {
         "v_st_view": "综合机会", "v_st_freq": "月", "v_st_top_n": "10",
         "v_st_weighting": "Top N 排序", "v_st_rank_signal": "估值偏差",
-        "v_st_max_deviation": "0", "v_st_event_exit": False,
+        # 「偏差上限」留空 = 不设**绝对**闸。此前写死 "0" (只买市价 ≤ 理论价的),
+        # 而全市场中位偏差长期为正 —— 实测 311 行主池上它只剩 3 只候选, 10 个槽位
+        # 7 个是现金。便宜度改由 PDEStrategyConfig.min_relative_cheapness 用横截面
+        # 口径承担 (下限) + top_n (长度上限)。
+        "v_st_max_deviation": "", "v_st_event_exit": False,
         "v_st_history_mode": "Wind高保真",
     },
 }

@@ -73,6 +73,19 @@ def _print_stability(stability) -> None:
               f"为正窗占比 {rs['rolling_sharpe_pct_positive']*100:.0f}%  ({rs['n_windows']} 窗)")
 
 
+def _cheapness_floor(args) -> float | None:
+    """``--min-relative-cheapness`` 的读法: 留空 = 沿用推荐默认, 负数 = 关闭。
+
+    "留空 = 沿用默认"与 ``max_sigma`` 同口径 (见下面那段); "负数 = 关闭"沿用本文件
+    里 ``--min-balance`` / ``--min-turnover`` 的既有约定。**不能拿 0 当关闭** ——
+    下限 0 的语义是"必须便宜过中位", 那仍然是一道在筛东西的闸。
+    """
+    raw = args.min_relative_cheapness
+    if raw is None:
+        return PDEStrategyConfig.min_relative_cheapness
+    return None if raw < 0 else raw / 100.0
+
+
 def _risk_threshold_kwargs(args) -> dict:
     """取代旧标签排除集的那组风险阈值。
 
@@ -192,7 +205,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-deviation", type=float, default=None,
                         help="最低市价/理论价偏差, 百分数")
     parser.add_argument("--max-deviation", type=float, default=None,
-                        help="最高市价/理论价偏差, 百分数")
+                        help="最高市价/理论价偏差 (**绝对**口径), 百分数; 默认不限。"
+                             "便宜度请用 --min-relative-cheapness, 它锚当期横截面")
+    parser.add_argument("--min-relative-cheapness", type=float, default=None,
+                        help=f"便宜度下限: 比当期全市场中位便宜至少这么多, 百分数 "
+                             f"(默认 {PDEStrategyConfig.min_relative_cheapness * 100:.0f}; "
+                             f"传负数关闭)")
     parser.add_argument("--min-sigma", type=float, default=None,
                         help="最低历史波动率, 百分数")
     parser.add_argument("--max-sigma", type=float, default=None,
@@ -329,9 +347,11 @@ def main() -> int:
         min_credit_rating=args.min_rating.strip() or None,
         min_turnover_amount=None if args.min_turnover < 0 else args.min_turnover,
     )
+    # 此前这里有一句 `if max_deviation is None: max_deviation = 0.0` —— argparse
+    # default=None 且 help 不写默认值, 于是"不传这个参数"静默等于"只买市价 ≤ 理论价的",
+    # 而那是个绝对闸, 松紧随 regime 变 (实测 311 行主池只剩 3 只候选)。便宜度改由
+    # PDEStrategyConfig.min_relative_cheapness 承担, 这里留 None = 真的不限。
     max_deviation = args.max_deviation
-    if max_deviation is None:
-        max_deviation = 0.0
     strategy_config = PDEStrategyConfig(
         top_n=args.top_n,
         rebalance_freq=args.freq,
@@ -344,6 +364,7 @@ def main() -> int:
         max_conversion_premium=(args.max_premium / 100.0) if args.max_premium is not None else None,
         min_deviation=(args.min_deviation / 100.0) if args.min_deviation is not None else None,
         max_deviation=(max_deviation / 100.0) if max_deviation is not None else None,
+        min_relative_cheapness=_cheapness_floor(args),
         min_sigma=(args.min_sigma / 100.0) if args.min_sigma is not None else None,
         price_lookback_days=max(1, args.price_lookback_days),
         max_price_staleness_days=max(0, args.max_price_staleness_days),

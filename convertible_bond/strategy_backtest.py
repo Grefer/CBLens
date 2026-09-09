@@ -35,6 +35,8 @@ from . import backtest_stats
 from .batch_pricing import (
     AdmissionFilterConfig,
     BATCH_REVIEW_VIEWS,
+    MIN_RELATIVE_CHEAPNESS,
+    relative_cheapness_shortfall,
     view_exclusion_reason,
     batch_pricing_exclusion_reason,
     filter_batch_results_by_view,
@@ -127,6 +129,16 @@ class ScoreStrategyConfig:
     max_model_premium: float | None = 0.45
     #: 相对全市场中位的偏差上限。默认 0.20 = 旧「模型高估离群」判据 (贵得离谱的不买)。
     max_relative_deviation: float | None = 0.20
+    #: 相对全市场中位的**便宜度下限** (正数, 单位与 relative_deviation 同): 比当期
+    #: 中位便宜不足这么多就不买。与上面那条同轴反向 —— 一个挡"贵得离谱", 一个要求
+    #: "确实便宜"。判据与批量页「低估候选」共用 ``relative_cheapness_shortfall``。
+    #:
+    #: **基类默认 None (关着), 推荐口径在 PDEStrategyConfig 上打开**。这条分工是刻意的:
+    #: ``ScoreStrategyConfig()`` 是 2026-08-31 标签→阈值等价性的**锚**
+    #: (``test_threshold_filter_reproduces_the_legacy_tag_filter_row_for_row`` 逐只比对),
+    #: 而便宜度下限不属于那次等价声明 —— 在基类上打开会让那条守护测试按构造必红,
+    #: 而它红的是一个与本次改动无关的历史结论。
+    min_relative_cheapness: float | None = None
     #: 剩余年限下限。默认 0.5 = 旧「短久期」判据。
     min_years_to_maturity: float | None = 0.5
     #: 债项评级下限。默认 "AA-" = 旧「低评级」判据 (低于 AA- 即打标签)。
@@ -201,12 +213,24 @@ class PDEStrategyConfig(ScoreStrategyConfig):
 
     主策略为估值错定价：按模型偏差升序取前 N，公告后下一可得收盘退出。
     未满 Top N 的仓位保留现金。
+
+    **便宜度下限在这里打开** (``min_relative_cheapness``)。它取代的是 GUI 模板与 CLI
+    此前写死的 ``max_deviation=0`` —— 那是个**绝对**闸 (市价 ≤ 理论价), 而
+    ``cb_valuation_history`` 24 期基线里全市场中位偏差**全部为正** (+0.41%~+21.64%),
+    所以它的松紧完全是 regime 的函数: 实测 311 行主池上它只剩 3 只候选 (top_n=10 →
+    70% 现金, Sharpe 主要在度量货基), 而换个 regime 又几乎不筛。等于在回测里嵌了一个
+    用户从未要求、页面上也没说的隐式择时层, 且它与"转债贵不贵"反向。
+
+    换成横截面口径后两道闸各司其职 (分工与实测依据见 ``MIN_RELATIVE_CHEAPNESS``):
+    下限 = 这一条, 负责表达"今天真的没有便宜货" (候选诚实归零);
+    长度上限 = ``top_n`` 本身, 负责挡住谷底时的几百只。
     """
 
     execution_timing: str = "next_close"
     transaction_cost: float = 0.002
     rank_signal: str = "deviation"
     cash_yield_rate: float = 0.022
+    min_relative_cheapness: float | None = MIN_RELATIVE_CHEAPNESS
 
 
 @dataclass(frozen=True)
@@ -493,6 +517,7 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
         # 溢价 / 偏差 / σ) 是重构**之前**的字段, 留着是为了旧快照能读。
         "max_model_premium": cfg.max_model_premium,
         "max_relative_deviation": cfg.max_relative_deviation,
+        "min_relative_cheapness": cfg.min_relative_cheapness,
         "min_years_to_maturity": cfg.min_years_to_maturity,
         "min_credit_rating": cfg.min_credit_rating,
         "min_outstanding_balance": cfg.min_outstanding_balance,
@@ -1643,6 +1668,14 @@ def _candidate_filter_reason(row: dict[str, Any], cfg: ScoreStrategyConfig) -> s
         reason = _threshold_reason(
             "相对偏差", row.get("relative_deviation"),
             max_value=cfg.max_relative_deviation, pct=True, max_inclusive=True)
+        if reason:
+            return reason
+        # 便宜度下限与上面那条**同轴反向**, 所以必须在同一个假锚守卫之内: 假锚下
+        # relative_deviation 就是绝对偏差, 拿 -5pp 去卡它就又变回了一个绝对阈值 ——
+        # 而那正是这条闸要替换掉的东西 (GUI 模板写死的 max_deviation=0)。实测 25 只
+        # 的池子 25/25 是假锚, 批量页「低估候选」在那种池子上放行 0 只。
+        reason = relative_cheapness_shortfall(
+            row, floor=cfg.min_relative_cheapness, missing_is_shortfall=False)
         if reason:
             return reason
     reason = _threshold_reason(
