@@ -90,6 +90,7 @@ CBLens/
 | 6 | 「回售期内处处给底」 | 回售条款形态的普适性未验: 990 只有 `put_trigger_pct`, 而正文缓存里含「连续三十个交易日」的只有 305 份 | 要验就得给条款形态建字段 |
 | 7 | 同上 | 强赎 cap 削掉 65 只 0.005~7.94 元 | 是"cap 定得对不对"的取值问题, 没有不变量能判对错 |
 | 8 | `LEGACY_STRATEGY_EXCLUDE_TAGS` 上方那段注释 (2026-09-03 补) | ST 债进池会改变**横截面**: 进 `median_deviation_of` 的锚、占 `cheapness_rank` 的名次, 而 `_select_candidate_rows` **先**跑含 15% 名额上限的 `filter_batch_results_by_view` **再**逐行过阈值 —— 被随后剔掉的 ST 债照样吃掉名额。实测注入 6 只合成 ST 困境债, 「低估候选」11 → 9, 挤掉两只非 ST | 「锚该代表市场还是可投子集」两种立场都站得住; 改哪一边都是默认选债行为变更 |
+| 9 | 「cninfo 也按出口 IP 限流」那一段 (2026-09-08 补) | cninfo 每只债的请求放大: `_fetch_org_id` 用 GET 而接口只认 POST (GET 恒 500 被静默吞掉 → orgId 恒为 None), 没有 orgId 时 stock 查询恒返回 0 条, 于是每只债都掉进 searchkey **全市场全文检索**兜底 (每只 7~9 次请求而不是 2 次) | **这条与上面 8 条性质不同: 不是"决定不改", 是"还验不了"**。改它会变动同步到的公告集合, 而"拿到 orgId 后 stock 查询返回什么"必须先实测 —— 两次尝试时 cninfo 都在限流。等能连上再验再改 |
 
 ### 五层架构
 
@@ -1106,7 +1107,11 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   GlobalSign 证书 (没有中间盒), 请求**发完之后**不给响应 → ReadTimeout; 同一个查询走
   **80 端口 200/0.11s**; 同一时刻 baidu/pypi/sse.com.cn 全正常 (排除本机网络)。
   **按量触发**: 当天第一次 HTTPS 请求还是 0.37s 成功的, 几次之后 8/8 全超时; 继续敲会
-  **升级到 80 端口也 502**。形状与东财那条同源, 但**东财是 RemoteDisconnected 而 cninfo
+  **升级到 80 端口也 502**。
+  **`GET /` 不是有效的恢复探针** —— 封的是 **API 路径**不是整个主机: 实测根路径
+  `GET /` 返回 200/0.88s 的同一刻, `POST /new/information/topSearch/query` 立刻
+  ReadTimeout。要判恢复只能打**真正要用的那个接口**。(东财那条早就记过同一形状:
+  "同主机根路径 `/` 照常返回 404 而 `/api/*` 一律掐断" —— 照着它验就不会误判。)形状与东财那条同源, 但**东财是 RemoteDisconnected 而 cninfo
   是 timeout** —— `_REJECTION_MARKERS` 抓不到它, 于是它命中 `_TRANSIENT_MARKERS` 被当成
   瞬态重试 3 × 15s。实测 110030.SH 单只 **64.0s**, 全库 1060 只 ≈ **18.8 小时**, 而且
   那是在以三倍力度继续敲同一个限流器。
