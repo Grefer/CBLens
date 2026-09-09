@@ -976,6 +976,14 @@ def backtest_score_strategy(
 
     schedule = build_rebalance_schedule(start_date, end_date, cfg.rebalance_freq)
     _hint_close_window(provider, schedule)
+    # 整段回测里任何一期都不可能入池的代码, 只判一次 —— 判据与理由见那个函数。
+    # **摘掉的代码不再出现在逐期 `excluded` 里**, 所以要在诊断里留一笔, 否则它们就是
+    # 静默消失 (而"没有落选解释"和"根本没有落选"长得一模一样)。
+    bond_codes, window_dropped = _codes_reachable_in_window(
+        provider, list(bond_codes), schedule,
+        terms_cache=terms_cache, cancel_cb=cancel_cb)
+    if not bond_codes:
+        raise ValueError("标的池在整个回测区间内都不可交易 (全部已到期或尚未上市)")
     periods: list[dict[str, Any]] = []
     snapshots: list[dict[str, Any]] = []
     equity_curve = [{"date": schedule[0], "equity": 1.0}]
@@ -1073,6 +1081,9 @@ def backtest_score_strategy(
             f"runtime_cache.{key}": value
             for key, value in runtime_cache_provider.cache_stats().items()
         })
+    performance_stats["window_prefiltered"] = sum(window_dropped.values())
+    for _reason, _n in window_dropped.items():
+        performance_stats[f"window_prefiltered.{_reason}"] = _n
     diagnostics["performance"] = dict(performance_stats)
     return {
         "start_date": schedule[0],
@@ -1439,6 +1450,68 @@ def _terms_from_cache(terms_cache, code: str):
         return terms_cache.get(code)
     except Exception:
         return None
+
+
+def _codes_reachable_in_window(
+    provider: DataProvider,
+    bond_codes: list[str],
+    schedule: list[date],
+    *,
+    terms_cache=None,
+    cancel_cb=None,
+) -> tuple[list[str], dict[str, int]]:
+    """摘掉整段回测里**任何一期都不可能入池**的代码, 只跑一次而不是每期跑一遍。
+
+    默认标的池是整个条款库, 而 `_eligible_codes_for_date` 每期从头扫一遍 —— 实测
+    1060 只 / 13 期里有 **272 只 (25.7%)** 每期都被同一个结构性理由剔除
+    (已到期 162 · 尚未上市 67 · 代码段 18 · 定向 11 · 非沪深 10), 白付 3536 次条款
+    取数 + 3536 次收盘价取数。
+
+    **判据只用两个日期, 而且只用那两条对日期单调的**:
+      · 到期日 ≤ 第一个调仓日 → 每一期都是「已到期」(到期只会越来越早地成立)
+      · 上市日 > 最后一个调仓日 → 每一期都是「尚未上市」(上市只会越来越晚地不成立)
+    单调 ⇒ "两端不行"蕴含"中间也不行", 不必逐期再问。字段与取法都照抄
+    `_eligible_codes_for_date`/`_dynamic_pool_for_date` 里那两行 (上市日缺失才退回起息日)。
+
+    **其余剔除原因一概不碰**, 哪怕它们看着也很"结构性" (代码段/定向/非沪深)。要把它们
+    也预筛掉就得判断"这个原因是不是随日期单调", 而那个分类今天不存在 —— 现造一个
+    (比如按理由字符串前缀匹配) 就是在选债路径旁边再立一份判据, 而 `_select_candidate_rows`
+    的 docstring 记着上一次这么干的结果: 两份实现在重构里当场分叉, 而等价性用例测的正是
+    没接线的那一半, 全绿。**更糟的是这里分叉了不会红** —— 预筛少摘几只只是慢一点,
+    多摘一只是静默丢标的。所以宁可只吃这两条 (实测占那 272 只里的 229 只)。
+    停牌类原因尤其不能进来: 它随日期**反复横跳**, 两端都停牌中间照样能交易。
+
+    条款取在 ``schedule[0]``, 那是第一期的估值日 —— 于是这一轮取数会被
+    ``_BacktestCacheProvider`` 原样复用, 预筛本身**不额外发请求**。取不到条款就保留
+    (与 `_dynamic_pool_for_date` 的"无法获取条款, 保守保留"同口径)。
+    """
+    if len(schedule) < 2:
+        return list(bond_codes), {}
+    first, last = schedule[0], schedule[-1]
+    kept: list[str] = []
+    dropped: Counter = Counter()
+    for code in bond_codes:
+        _check_cancel(cancel_cb)
+        terms = _terms_from_cache(terms_cache, code)
+        if terms is None:
+            try:
+                terms = provider.get_bond_terms(code, first)
+            except Exception:
+                kept.append(code)
+                continue
+        maturity_dt = getattr(terms, "maturity_date", None) if terms is not None else None
+        if maturity_dt is not None and maturity_dt <= first:
+            dropped["已到期"] += 1
+            continue
+        listed_dt = (
+            (getattr(terms, "listing_date", None) or getattr(terms, "issue_date", None))
+            if terms is not None else None
+        )
+        if listed_dt is not None and listed_dt > last:
+            dropped["尚未上市"] += 1
+            continue
+        kept.append(code)
+    return kept, dict(dropped)
 
 
 def _dynamic_pool_for_date(

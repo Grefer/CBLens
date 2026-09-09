@@ -3084,6 +3084,130 @@ _STABILITY_FIXTURE = {
 }
 
 
+def test_window_prefilter_never_drops_a_bond_that_is_tradable_in_between():
+    """整段预筛只许摘掉**每一期都不可能入池**的代码, 逐期 eligible 必须逐只不变。
+
+    最容易做错的是那条看着很自然的规则:「首末两期都被剔除就摘掉」。反例就在这份
+    fixture 里 —— 一只债**在窗口开始之后上市、在窗口结束之前到期**: 首期「尚未上市」、
+    末期「已到期」, 两端都落选, 而中间它照常能买。真按"两端都落选"摘, 就是静默丢标的,
+    而且**不会红**: 回测照常跑完, 只是那只债从此不在池子里。
+
+    所以判据只取两条**对日期单调**的 (到期日 ≤ 首期 / 上市日 > 末期), 停牌之类会反复
+    横跳的原因一概不碰。
+
+    真实数据上验过: cb_data 全库 1060 只 × 四个区间 (79 期) 逐期比对 eligible,
+    不一致 **0 期**; 池子 1060 → 866 / 975 / 838 / 756。
+    """
+    from convertible_bond.data_providers.base import BondTerms
+    from convertible_bond.strategy_backtest import (
+        _codes_reachable_in_window, _eligible_codes_for_date, build_rebalance_schedule)
+
+    def _terms(listing, maturity):
+        return BondTerms(
+            sec_name="测试转债", underlying_code="000001.SZ",
+            issue_date=listing, listing_date=listing, maturity_date=maturity,
+        )
+
+    start, end = date(2024, 1, 1), date(2025, 1, 1)
+    library = {
+        # 全程可交易 —— 必须留
+        "110001.SH": _terms(date(2020, 1, 1), date(2030, 1, 1)),
+        # 窗口中途上市 —— 首期「尚未上市」, 但后面能买, 必须留
+        "110002.SH": _terms(date(2024, 6, 1), date(2030, 1, 1)),
+        # 窗口中途到期 —— 末期「已到期」, 但前面能买, 必须留
+        "110003.SH": _terms(date(2020, 1, 1), date(2024, 7, 1)),
+        # **两端都落选, 中间能买** —— naive「两端都剔就摘」会在这里丢标的
+        "110004.SH": _terms(date(2024, 3, 1), date(2024, 9, 1)),
+        # 窗口结束之后才上市 —— 每一期都不可能入池, 摘
+        "110005.SH": _terms(date(2026, 1, 1), date(2031, 1, 1)),
+        # 窗口开始之前就到期 —— 摘
+        "110006.SH": _terms(date(2015, 1, 1), date(2023, 6, 1)),
+    }
+
+    class _Cache:
+        def get(self, code):
+            return library.get(code)
+
+    class _P(DataProvider):
+        name = "p"
+
+        def __init__(self):
+            self.terms_dates = []
+
+        def get_bond_terms(self, code, valuation_date):
+            self.terms_dates.append((code, valuation_date))
+            return library.get(code)
+
+        def get_stock_close(self, code, on_date):
+            return 0.0
+
+        def get_stock_history(self, code, s, e):
+            return []
+
+        def get_bond_history(self, code, s, e):
+            return []
+
+        def get_terms_source_diagnostics(self, code, valuation_date):
+            return {"bond_code": code}
+
+    codes = sorted(library)
+    schedule = build_rebalance_schedule(start, end, "M")
+    cache = _Cache()
+    kept, dropped = _codes_reachable_in_window(_P(), codes, schedule, terms_cache=cache)
+
+    assert "110004.SH" in kept, "两端都落选但中间能买的债被摘了"
+    assert set(codes) - set(kept) == {"110005.SH", "110006.SH"}, kept
+    assert dropped == {"已到期": 1, "尚未上市": 1}, dropped
+
+    # 逐期 eligible 必须逐只相同 —— 这才是"预筛不改变结果"的真判据
+    for d in schedule[:-1]:
+        full, _, _ = _eligible_codes_for_date(_P(), codes, d, terms_cache=cache)
+        pre, _, _ = _eligible_codes_for_date(_P(), kept, d, terms_cache=cache)
+        assert full == pre, (d, sorted(set(full) - set(pre)))
+
+    # fixture 自守卫: 110004 真的在中间某期入过池, 否则上面那条断言什么也没测到
+    mid = [d for d in schedule[:-1]
+           if "110004.SH" in _eligible_codes_for_date(_P(), codes, d, terms_cache=cache)[0]]
+    assert mid, "110004 一期都没入池, 这条用例的靶子没立起来"
+
+    # 条款取在**首期估值日** —— 那一轮取数会被 _BacktestCacheProvider 复用, 预筛不额外发请求
+    probe = _P()
+    _codes_reachable_in_window(probe, codes, schedule)
+    assert {d for _, d in probe.terms_dates} == {schedule[0]}, probe.terms_dates
+    assert len(probe.terms_dates) == len(codes), "同一只债问了不止一次条款"
+
+
+def test_window_prefilter_keeps_codes_whose_terms_cannot_be_read():
+    """取不到条款就保留 —— 与 `_dynamic_pool_for_date` 的"保守保留"同口径。
+
+    预筛的两个方向代价完全不对称: 少摘几只只是慢一点, 多摘一只是**静默丢标的**。
+    所以一切拿不准的情况都往"留下"倒。
+    """
+    from convertible_bond.strategy_backtest import (
+        _codes_reachable_in_window, build_rebalance_schedule)
+
+    class _Broken(DataProvider):
+        name = "broken"
+
+        def get_bond_terms(self, code, valuation_date):
+            raise RuntimeError("Wind 没连上")
+
+        def get_stock_close(self, code, on_date):
+            return 0.0
+
+        def get_stock_history(self, code, s, e):
+            return []
+
+        def get_bond_history(self, code, s, e):
+            return []
+
+    schedule = build_rebalance_schedule(date(2024, 1, 1), date(2025, 1, 1), "M")
+    kept, dropped = _codes_reachable_in_window(
+        _Broken(), ["110001.SH", "110002.SH"], schedule)
+    assert kept == ["110001.SH", "110002.SH"]
+    assert dropped == {}
+
+
 def test_stability_reaches_every_outlet_through_one_wording():
     """块自助的三段必须**三个出口都到得了**, 而且措辞只有一份。
 
