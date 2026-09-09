@@ -2,7 +2,7 @@ import errno
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from threading import Barrier, Lock
 
@@ -1228,3 +1228,148 @@ def test_index_follows_add_many_and_rewrite(tmp_path):
 
     # 重新读盘也要能拿到新状态 (``_load`` 攒到本地列表再一次性赋值, 不原地 append)
     assert TermsPatchStore(store.path).list_patches(bond_code="128009.SZ") == []
+
+
+def _close_probe_provider(series_by_code):
+    """只回答 get_bond_history 的桩, 顺带数发了几次。"""
+    from convertible_bond.data_providers import DataProvider
+
+    class _Stub(DataProvider):
+        name = "stub"
+
+        def __init__(self):
+            self.calls = []
+
+        def get_bond_terms(self, code, valuation_date):
+            return None
+
+        def get_stock_close(self, code, on_date):
+            return 0.0
+
+        def get_stock_history(self, code, start, end):
+            return []
+
+        def get_bond_history(self, code, start, end):
+            self.calls.append((code, start, end))
+            return [(d, v) for d, v in series_by_code.get(code, []) if start <= d <= end]
+
+    return _Stub()
+
+
+def test_close_window_hint_is_byte_identical_to_the_narrow_window():
+    """宽窗口取一次再切片, 必须与"每个估值日打一发窄窗口"**逐日同值**。
+
+    这是提速改动的验收: ``get_bond_terms`` 每次都无条件重取 ``close``, 而那一发打的是
+    ``[估值日−15天, 估值日]`` 且直接问最内层 —— 同时绕开 ``_BacktestCacheProvider`` 与
+    ``DiskCacheProvider`` 的复用 (后者按精确区间做键, 每个估值日都是新键)。改成一只债
+    只取一次宽窗口之后, **结果不许有任何变化**。
+
+    fixture 必须含一段 **>15 天的空档** (停牌/长假): 那正是两条路会分叉的地方 ——
+    窄窗口里一根都没有 → ``close`` 是 None, 而宽窗口如果不把同一个下限再套一遍, 就会
+    退回更早的一根陈旧价, 从"没有收盘价"变成"用半个月前的价"。那是口径变更不是提速
+    (真实数据上实测: 去掉下限有 67 组从 None 变成陈旧价)。
+    """
+    from convertible_bond.historical_terms import (
+        HistoricalBondDataProvider, _CLOSE_LOOKBACK_DAYS, _latest_bond_close)
+
+    base = date(2025, 3, 3)
+    normal = [(base + timedelta(days=i), 100.0 + i)
+              for i in range(90) if (base + timedelta(days=i)).weekday() < 5]
+    # 停牌 24 天: 空档跨过 15 天下限
+    halted = [(d, v) for d, v in normal
+              if not (date(2025, 4, 1) <= d <= date(2025, 4, 25))]
+    series = {"110001.SH": normal, "110002.SH": halted, "110003.SH": []}
+
+    lo, hi = base, base + timedelta(days=89)
+    old_stub = _close_probe_provider(series)
+    new_stub = _close_probe_provider(series)
+    hp = HistoricalBondDataProvider(new_stub)
+    hp.set_close_window_hint(lo - timedelta(days=_CLOSE_LOOKBACK_DAYS + 5), hi)
+
+    saw_none = saw_value = 0
+    for code in series:
+        for offset in range((hi - lo).days + 1):
+            vd = lo + timedelta(days=offset)
+            expected = _latest_bond_close(old_stub, code, vd)
+            assert hp._bond_close_at(code, vd) == expected, (code, vd)
+            if expected is None:
+                saw_none += 1
+            else:
+                saw_value += 1
+    # fixture 自守卫: 两种结果都要出现过, 否则这条用例什么也没测到
+    assert saw_none > 0 and saw_value > 0, (saw_none, saw_value)
+
+    # 取数发数: 旧的每只债每个估值日一发, 新的**每只债一发**。
+    # 空序列那只 (110003.SH) 刻意每次都重问 —— 见下一条用例的理由, 所以只数有数据的。
+    n_dates = (hi - lo).days + 1
+    for code in ("110001.SH", "110002.SH"):
+        old_n = sum(1 for c, *_ in old_stub.calls if c == code)
+        new_n = sum(1 for c, *_ in new_stub.calls if c == code)
+        assert old_n == n_dates and new_n == 1, (code, old_n, new_n)
+
+
+def test_close_window_hint_falls_back_outside_the_window_and_never_memoizes_empty():
+    """两条边界: 窗口外原路走窄窗口; 空序列不记住。
+
+    终点会被夹到「今天−1」(好让 DiskCacheProvider 肯落盘), 而 GUI 默认区间的最后一期
+    可能就是今天 —— 那一期必须照常拿得到 close, 不能因为落在 hint 之外就变成 None。
+    空序列不记住的理由与 ``_BacktestCacheProvider._remember`` 同源: 取数彻底失败与
+    "这段本来就没行情"长得一样, 记下来这只债在整段回测里就再也拿不到 close 了。
+    """
+    from convertible_bond.historical_terms import HistoricalBondDataProvider
+
+    base = date(2025, 3, 3)
+    series = {"110001.SH": [(base + timedelta(days=i), 100.0 + i) for i in range(40)]}
+    stub = _close_probe_provider(series)
+    hp = HistoricalBondDataProvider(stub)
+    hp.set_close_window_hint(base, base + timedelta(days=10))
+
+    # 窗口内: 一发宽窗口
+    assert hp._bond_close_at("110001.SH", base + timedelta(days=5)) == 105.0
+    assert len(stub.calls) == 1
+    # 窗口外: 回落窄窗口, 值照样对
+    assert hp._bond_close_at("110001.SH", base + timedelta(days=30)) == 130.0
+    assert len(stub.calls) == 2
+    assert stub.calls[1][1] == base + timedelta(days=30 - 15)
+
+    # 空序列: 不进缓存, 下一次还要真的再问一遍
+    empty = _close_probe_provider({})
+    hp2 = HistoricalBondDataProvider(empty)
+    hp2.set_close_window_hint(base, base + timedelta(days=10))
+    assert hp2._bond_close_at("110099.SH", base + timedelta(days=5)) is None
+    assert hp2._bond_close_at("110099.SH", base + timedelta(days=6)) is None
+    assert len(empty.calls) == 2, "空序列被当成权威结果记住了"
+
+
+def test_backtest_hints_the_close_window_from_the_real_schedule():
+    """hint 必须由**编排层**按真实日程给, 而且要够宽。
+
+    窗口开小一格不会报错, 只会让那些估值日静默退回窄窗口 —— 提速没了而测试全绿。
+    所以这里断言的是"起点留够回看余量、终点覆盖到最后一个可用调仓日"。
+    """
+    from convertible_bond.strategy_backtest import (
+        _CLOSE_LOOKBACK_DAYS, _hint_close_window, build_rebalance_schedule)
+
+    class _Recorder:
+        inner = None
+        def __init__(self):
+            self.hint = None
+        def set_close_window_hint(self, start, end):
+            self.hint = (start, end)
+
+    schedule = build_rebalance_schedule(date(2024, 1, 1), date(2024, 12, 31), "M")
+    rec = _Recorder()
+    _hint_close_window(rec, schedule)
+    start, end = rec.hint
+    assert start <= min(schedule) - timedelta(days=_CLOSE_LOOKBACK_DAYS)
+    assert end >= max(schedule)
+
+    # 沿装饰链往里找 (回测里 provider 外面还套着 _BacktestCacheProvider)
+    class _Wrapper:
+        def __init__(self, inner):
+            self.inner = inner
+
+    rec2 = _Recorder()
+    _hint_close_window(_Wrapper(_Wrapper(rec2)), schedule)
+    assert rec2.hint is not None
+

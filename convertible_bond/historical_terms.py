@@ -498,6 +498,51 @@ class HistoricalBondDataProvider(DataProvider):
         self.merge_admission_status = merge_admission_status
         self.provider_history_terms = provider_history_terms
         self.name = f"{inner.name}+history"
+        #: 回测编排层告诉这一层"这次会问到的估值日落在哪个区间", 见
+        #: ``set_close_window_hint``。单债定价路径不设, 于是行为与从前逐字相同。
+        self._close_window: tuple[date, date] | None = None
+        self._close_series: dict[str, list] = {}
+
+    def set_close_window_hint(self, start: date, end: date) -> None:
+        """声明本次会问到的估值日区间, 让 ``close`` 改用**一次宽窗口**取数。
+
+        为什么需要: ``get_bond_terms`` 每次都无条件重取 ``close`` (理由见那里的注释),
+        而它打的是 ``[估值日−15天, 估值日]`` 这么一个窄窗口、且直接问 ``self.inner``
+        —— 于是它**同时绕开**外层的 ``_BacktestCacheProvider`` (那层按宽窗口存整段再
+        切片) 与 ``DiskCacheProvider`` 的跨运行复用 (那层的键是精确 ``(code, 起, 止)``,
+        每个估值日都是一个新键, 冷跑照样一发不少)。实测单债 12 期: 定价路径 1 发 +
+        11 次命中, 而条款路径 12 发全落网络。Wind 高保真下它还被全局 ``_wind_lock``
+        串行化; akshare 侧每发要过一次 MiniRacer 解密。
+
+        设了 hint 之后每只债只取一次 ``[start, end]``, 之后按估值日切片。
+        **缓存的是序列, 不是 close 本身** —— close 必须逐估值日重算, 否则就把
+        "别的日期的价带进这个估值日"那个坑原样重开一遍。
+
+        落在 hint 之外的估值日**原路走窄窗口**: end 通常被夹到 ``今天−1`` (好让
+        DiskCacheProvider 肯落盘, 它只缓存严格过去的区间), 而 GUI 默认区间的最后一期
+        可能就是今天。
+        """
+        self._close_window = (start, end)
+        self._close_series = {}
+
+    def _bond_close_at(self, bond_code: str, valuation_date: date) -> float | None:
+        hint = self._close_window
+        if hint is None or not (hint[0] <= valuation_date <= hint[1]):
+            return _latest_bond_close(self.inner, bond_code, valuation_date)
+        series = self._close_series.get(bond_code)
+        if series is None:
+            try:
+                series = self.inner.get_bond_history(bond_code, hint[0], hint[1])
+            except Exception:
+                series = None
+            if not series:
+                # **空序列不记住** —— 与 ``_BacktestCacheProvider._remember`` 同一条理由:
+                # 取数彻底失败与"这段本来就没有行情"长得一样, 记下来这只债就在整段回测里
+                # 再也拿不到 close 了。这里连回落都不做: 窄窗口是宽窗口的子集, 宽的取不到
+                # 窄的也取不到, 再打一发只是把失败重复一次。
+                return None
+            self._close_series[bond_code] = series
+        return _latest_close_from(series, valuation_date)
 
     def terms_as_of(self, bond_code: str, valuation_date: date) -> date | None:
         """用到快照时返回快照日期; 回落到 inner 的当前条款时返回 None。
@@ -568,7 +613,7 @@ class HistoricalBondDataProvider(DataProvider):
         # strip_fallback_status=False 不剥它 —— 于是今天的收盘价被当成历史价。
         # 下游 ``_latest_bond_close_with_provenance`` 又会把它当 ``terms_close`` 兜底价用,
         # 而那一档此前对 deviation / 覆盖率闸完全隐形。
-        close = _latest_bond_close(self.inner, bond_code, valuation_date)
+        close = self._bond_close_at(bond_code, valuation_date)
         return replace(terms, close=close)
 
     def get_terms_source_diagnostics(self, bond_code: str, valuation_date: date) -> dict[str, Any]:
@@ -882,19 +927,20 @@ def _patch_sort_key(patch: TermsPatch) -> tuple:
     )
 
 
-def _latest_bond_close(provider: DataProvider, bond_code: str, valuation_date: date) -> float | None:
-    try:
-        history = provider.get_bond_history(
-            bond_code,
-            valuation_date - timedelta(days=15),
-            valuation_date,
-        )
-    except Exception:
-        return None
+#: 取"估值日当天或之前最近一根收盘"时往回看多远。**它是判据的一部分, 不只是取数窗口**:
+#: 窗口里一根都没有 → close 为 None (停牌/长假), 而不是退回更早的一根陈旧价。
+#: 所以按宽窗口取数再切片时**必须把同一个下限再套一遍**, 否则一只停牌 20 天的债会从
+#: "没有收盘价"变成"用 20 天前的价", 那是口径变更不是提速。
+_CLOSE_LOOKBACK_DAYS = 15
+
+
+def _latest_close_from(history, valuation_date: date) -> float | None:
+    """从一段 ``(日期, 收盘)`` 序列里挑估值日当天或之前、且不早于回看下限的最近一根。"""
+    floor = valuation_date - timedelta(days=_CLOSE_LOOKBACK_DAYS)
     latest = None
     latest_date = None
-    for d, value in history:
-        if d is None or d > valuation_date:
+    for d, value in history or []:
+        if d is None or d > valuation_date or d < floor:
             continue
         close = finite_float(value)
         if close is None:
@@ -903,3 +949,15 @@ def _latest_bond_close(provider: DataProvider, bond_code: str, valuation_date: d
             latest_date = d
             latest = close
     return latest
+
+
+def _latest_bond_close(provider: DataProvider, bond_code: str, valuation_date: date) -> float | None:
+    try:
+        history = provider.get_bond_history(
+            bond_code,
+            valuation_date - timedelta(days=_CLOSE_LOOKBACK_DAYS),
+            valuation_date,
+        )
+    except Exception:
+        return None
+    return _latest_close_from(history, valuation_date)

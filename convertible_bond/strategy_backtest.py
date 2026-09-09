@@ -49,6 +49,7 @@ from .data_providers import DataProvider, finite_float, is_issued_pending_listin
 # 兼容再导出: CSV 导出已搬到 strategy_backtest_csv, 但 `convertible_bond/__init__`、
 # CLI、GUI 快照控制器和测试都从这里导入, 路径不能断。
 from .strategy_backtest_csv import write_strategy_backtest_csv  # noqa: F401
+from .historical_terms import _CLOSE_LOOKBACK_DAYS
 from .terms_diagnostics import terms_source_diagnostic
 from .pricing_api import batch_price_from_provider_threaded
 
@@ -974,6 +975,7 @@ def backtest_score_strategy(
         provider = runtime_cache_provider
 
     schedule = build_rebalance_schedule(start_date, end_date, cfg.rebalance_freq)
+    _hint_close_window(provider, schedule)
     periods: list[dict[str, Any]] = []
     snapshots: list[dict[str, Any]] = []
     equity_curve = [{"date": schedule[0], "equity": 1.0}]
@@ -1816,6 +1818,40 @@ def _passes_range(value: float | None, min_value: float | None, max_value: float
     if max_value is not None and value > max_value:
         return False
     return True
+
+
+def _hint_close_window(provider: DataProvider, schedule: list[date]) -> None:
+    """告诉历史投影层"这次会问到哪些估值日", 让它的 close 改用一次宽窗口取数。
+
+    投影层的 ``get_bond_terms`` 每次都无条件重取 ``close``, 而它打的是
+    ``[估值日−15天, 估值日]`` 的窄窗口且直接问最内层 —— 同时绕开 ``_BacktestCacheProvider``
+    与 ``DiskCacheProvider`` 的复用 (后者的键是精确区间, 每个估值日都是新键)。
+    实测单债 12 期: 定价路径 1 发 + 11 命中, 条款路径 12 发全落网络。
+
+    **hint 由编排层给而不是构造点给**: 只有这里知道真实的调仓日程 (频率、首末残期),
+    而窗口开小一格就会让那些估值日静默退回窄窗口 —— 不报错, 只是没提速。
+    单债定价路径不经过这里, 于是那条路行为逐字不变。
+
+    起点要留满 ``_CLOSE_LOOKBACK_DAYS`` 的余量, 否则第一期切不出它该看的那 15 天;
+    终点夹到 ``今天−1``, 与 ``_BacktestCacheProvider`` 同一个理由 —— ``DiskCacheProvider``
+    只肯缓存严格过去的区间, 越过今天就是每次复跑都重拉。夹掉之后落在窗口外的估值日
+    (GUI 默认区间的最后一期可能就是今天) 由投影层自己退回窄窗口。
+    """
+    if not schedule:
+        return
+    start = min(schedule) - timedelta(days=_CLOSE_LOOKBACK_DAYS + 5)
+    end = min(max(schedule), market_today() - timedelta(days=1))
+    if end < start:
+        return
+    current = provider
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        setter = getattr(current, "set_close_window_hint", None)
+        if callable(setter):
+            setter(start, end)
+            return
+        current = getattr(current, "inner", None)
 
 
 def _event_store_from_provider(provider: DataProvider):
