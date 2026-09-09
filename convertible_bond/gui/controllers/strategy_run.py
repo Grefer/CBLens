@@ -466,6 +466,16 @@ class StrategyRunMixin:
             "base_spread": float(self.v_st_spread.get()) / 100.0,
             "p_down": p_down,
             "distress_k": float(self.v_st_distress_k.get()) / 100.0,
+            # 正股股息率。**回测里这是最贵的一次取数**: 逐只债、逐期联网, 而
+            # `backtest_disk_cache` 恰恰不缓存它 (bond_history / stock_history / terms
+            # 三样都缓存了, 只有它直接透传), 拉的还是**实时**快照拿去给历史估值日用。
+            # 实测一次 3 期回测在这一步卡 55 分钟 0 进度, 623 只债全部取失败后回落 0
+            # —— 即与显式传 0 同结果, 只是花了 55 分钟才发现。
+            #
+            # 留空 = None = 照旧按数据源取; 给了值就整段跳过那次取数
+            # (`price_from_provider` 只在 q is None 时才去问 provider)。CLI 早就有
+            # `--q`, GUI 一直没有 —— 而 README 把 GUI 策略页列为主要研究界面。
+            "q": self._optional_pct(self.v_st_q),
             "M": _STRATEGY_PDE_GRID_M,
             "N": _STRATEGY_PDE_GRID_N,
             "vol_window_days": VOL_WINDOW_MAP.get(self.v_st_vol_window.get(), 21),

@@ -788,6 +788,7 @@ def test_strategy_pricing_params_are_independent_from_single_bond_page():
     app.v_st_p_down = Var("25")
     app.v_st_distress_k = Var("5")
     app.v_st_vol_window = Var("1M")
+    app.v_st_q = Var("")
     # 单债页故意放入完全不同的值，策略参数不应读取它们。
     app.v_r = Var("99")
     app.v_spread = Var("88")
@@ -804,6 +805,15 @@ def test_strategy_pricing_params_are_independent_from_single_bond_page():
     # 「HV扰动%」「利差扰动bp」已删 —— 它们只配置稳健下修优势的四角点
     assert "pde_signal_sigma_rel_band" not in params
     assert "pde_signal_spread_band" not in params
+
+    # 股息率 q: **留空必须是 None 而不是 0.0** —— 两者行为不同, None 才是"照旧按数据源
+    # 逐只取", 而 0.0 会整段跳过那次取数。写错方向的表现是静默的: 回测快了很多, 而所有
+    # 标的的股息率悄悄变成 0 (README 记的模型边界里 q 缺失就是回落 0, 数字看着完全正常)。
+    assert params["q"] is None
+    app.v_st_q = Var("0")
+    assert app._strategy_pricing_params()["q"] == pytest.approx(0.0)
+    app.v_st_q = Var("1.5")
+    assert app._strategy_pricing_params()["q"] == pytest.approx(0.015)
 
 
 def test_strategy_run_settings_record_effective_and_requested_data_sources():
@@ -3060,6 +3070,70 @@ def test_relative_deviation_gate_only_applies_to_a_market_wide_anchor():
     assert _candidate_filter_reason(
         dict(not_cheap, cross_section_origin="absolute_fallback"),
         cfg) is None, "假锚下仍按绝对阈值要求便宜度"
+
+
+def test_run_cache_does_not_freeze_an_empty_series():
+    """**运行内**缓存也不许把取数失败的空序列当权威事实记住。
+
+    与 ``test_disk_cache_does_not_freeze_an_empty_series`` 是同一件事的两层, 而这一层
+    更要命: 磁盘那层是"下次复跑还错", 运行内这层是"**这一次**回测的每一期都错"。
+    彻底失败与"这个窗口本来就没有行情"在 provider 层长得一模一样 (akshare 两个端点都
+    抛异常时返回的也是 ``[]``), 而东财按出口 IP 封禁是常态、熔断冷却默认 300s ——
+    一次 5 分钟的封禁就足以让被碰到的债从整段回测的候选池**和基准**里一起消失, 回测
+    照常跑完、照常出 Sharpe, 同一份配置跑两遍结果不同而没有任何输出说得出为什么。
+
+    两条分支都要测: 宽窗口那条 (按 code 存整段再切片) 与精确窗口那条 (按 (code, 起, 止)
+    存)。只测一条的话另一条改坏了照样绿。
+    """
+    from convertible_bond.strategy_backtest import _BacktestCacheProvider
+
+    class _Flaky(DataProvider):
+        name = "flaky"
+
+        def __init__(self):
+            self.stock_calls = 0
+            self.bond_calls = 0
+
+        def get_bond_terms(self, bond_code, valuation_date):      # ABC 要求
+            return None
+
+        def get_stock_close(self, stock_code, on_date):           # ABC 要求
+            return 10.0
+
+        def get_stock_history(self, stock_code, start, end):
+            self.stock_calls += 1
+            # 第一次"取数失败"(空序列), 之后恢复
+            return [] if self.stock_calls == 1 else [(date(2025, 1, 6), 10.0)]
+
+        def get_bond_history(self, bond_code, start, end):
+            self.bond_calls += 1
+            return [] if self.bond_calls == 1 else [(date(2025, 1, 6), 110.0)]
+
+    inner = _Flaky()
+    provider = _BacktestCacheProvider(
+        inner, start_date=date(2025, 1, 1), end_date=date(2025, 1, 31),
+        price_lookback_days=10, execution_lookahead_days=5, vol_window_days=21)
+
+    # ① 宽窗口分支: 空结果不许被记住, 下一次必须真的再问一遍 inner
+    assert provider.get_stock_history("000001.SZ", date(2025, 1, 5), date(2025, 1, 10)) == []
+    assert inner.stock_calls == 1
+    assert provider.get_stock_history("000001.SZ", date(2025, 1, 5), date(2025, 1, 10)) == [
+        (date(2025, 1, 6), 10.0)], "空序列被当成权威结果记住了"
+    assert inner.stock_calls == 2
+    # 恢复之后正常缓存, 不会每次都重取
+    provider.get_stock_history("000001.SZ", date(2025, 1, 5), date(2025, 1, 10))
+    assert inner.stock_calls == 2
+
+    # ② 精确窗口分支 (区间落在预取窗口之外, 走 _bond_history_exact)
+    far = (date(2030, 1, 1), date(2030, 1, 10))
+    assert provider.get_bond_history("128000.SZ", *far) == []
+    assert inner.bond_calls == 1
+    assert provider.get_bond_history("128000.SZ", *far) == [(date(2025, 1, 6), 110.0)]
+    assert inner.bond_calls == 2
+
+    stats = provider.cache_stats()
+    assert stats["stock_history_empty_refetch"] == 1, stats
+    assert stats["bond_history_empty_refetch"] == 1, stats
 
 
 def test_disk_cache_does_not_freeze_an_empty_series(tmp_path):

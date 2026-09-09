@@ -1064,6 +1064,23 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   623 只债的股息率全部取失败后回落 0 —— 即与显式传 0 同结果, 只是花了 55 分钟才发现。
   `cb-strategy-backtest --q 0` 可以整条跳过 (同一区间 9 分钟跑完)。补这个缓存是同构改动,
   但要单独立项。
+  **2026-09-08: 绕道已经补齐, 缓存本身仍未做** —— GUI 策略页加了「股息率%」输入框
+  (`_strategy_pricing_params` 的 `"q"`), 留空 = 照旧按数据源取, 填值 = 整段跳过
+  (`price_from_provider` 只在 `q is None` 时才问 provider)。此前这条绕法**只存在于 CLI**,
+  而 README 把 GUI 策略页列为主要研究界面。deferred #3 那条账还欠着, 欠的是缓存。
+- **运行内缓存不许把取数失败的空序列当权威事实记住 (2026-09-08)**。
+  `_BacktestCacheProvider` 的四个写入点 (stock/bond × 宽窗口/精确窗口) 都是无条件
+  `store[key] = inner.get(...)`, 而彻底失败与"这个窗口本来就没有行情"在 provider 层
+  长得一模一样 (akshare 两个端点都抛异常时返回的也是 `[]`)。东财按出口 IP 封禁是常态、
+  `AKSHARE_ENDPOINT_COOLDOWN_SEC` 默认 300s —— **一次 5 分钟的封禁就让被碰到的债从
+  整段回测的候选池和基准里一起消失**, 而回测照常跑完、照常出 Sharpe: 同一份配置跑两遍
+  结果不同, 没有任何输出说得出为什么 (玩具样本上 1/3 池子被毒化, 超额 −1.79pp → −4.70pp)。
+  `backtest_disk_cache` 对同一件事早有这道闸, 运行内这层漏了 —— 而它才是**每一期都要
+  问一遍**的那一层 (磁盘那层是"下次复跑还错", 这层是"这一次的每一期都错")。
+  收在 `_BacktestCacheProvider._remember`, 空结果计 `*_empty_refetch` 进 `cache_stats()`。
+  代价: 真正没有行情的标的每期重取一次, 与 disk cache 的取舍一致; 熔断冷却期内那是
+  零网络的即时 `[]`。**守护测试两条分支都要测** (宽窗口按 code 存整段再切片 / 精确窗口
+  按 (code, 起, 止) 存), 只测一条的话另一条改坏了照样绿。
 - **事件旗标与风险标签是两族, 不要合并**: `risk_tags` 驱动策略排除集
   (`LEGACY_STRATEGY_EXCLUDE_TAGS`)、置信度扣分与视图拦截 —— 加一个就是默认选债行为变更;
   `event_flags` (`batch_pricing.event_flags`) 只进展示与 CSV, 回答"这只债现在有没有正在

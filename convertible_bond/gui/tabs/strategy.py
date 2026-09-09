@@ -443,6 +443,13 @@ def build(app, tab):
         tune_grid, "成本bp", app.v_st_cost, 1, 2, "entry", None,
         "单边调仓交易成本; 基准同口径计成本",
         control_width=92, label_width=76)
+    _grid_cell(
+        tune_grid, "股息率%", app.v_st_q, 1, 3, "entry", None,
+        "正股股息率 (连续口径)\n"
+        "留空 = 按数据源逐只取; 填一个数就整段跳过那次取数\n"
+        "那是回测里最贵的一步 (逐只逐期联网, 且不进磁盘缓存), "
+        "取不到本来也是回落 0",
+        control_width=92, label_width=82)
 
     # 「HV扰动%」「利差扰动bp」「最低优势元」三格已删 —— 它们只配置稳健下修优势的
     # 四角点与门槛, 而那个信号已随隐含下修强度反解一并删除。`年化下修%` 留下: 它是

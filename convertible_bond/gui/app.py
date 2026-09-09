@@ -298,6 +298,9 @@ class CBPricerApp(
         self.v_st_distress_k = ctk.StringVar(value="5.0")
         self.v_st_p_down = ctk.StringVar(value=f"{DEFAULT_P_DOWN_PCT:g}")
         self.v_st_vol_window = ctk.StringVar(value=VOL_WINDOW_DEFAULT)
+        # 正股股息率: 留空 = 按数据源逐只取 (旧行为), 填值 = 整段跳过那次取数。
+        # 它是回测里最贵的一次取数, 见 _strategy_pricing_params 里那段。
+        self.v_st_q = ctk.StringVar(value="")
         self.v_st_event_exit = ctk.BooleanVar(value=False)
         # 闲置现金年化收益 (%/年, 默认≈无风险利率)。0 计息会让 Sharpe 的 rf 门槛
         # 系统性低估持现金配置 (留现金/择时缩放); 设 0 可复现旧口径。
@@ -1160,7 +1163,7 @@ class CBPricerApp(
         "v_st_freq", "v_st_top_n", "v_st_template", "v_st_view",
         "v_st_weighting", "v_st_rank_signal",
         "v_st_r", "v_st_spread", "v_st_distress_k", "v_st_p_down",
-        "v_st_vol_window", "v_st_event_exit", "v_st_cash_yield", "v_st_exposure",
+        "v_st_vol_window", "v_st_q", "v_st_event_exit", "v_st_cash_yield", "v_st_exposure",
         "v_st_pool_mode", "v_st_history_mode", "v_st_codes",
         "v_st_min_price", "v_st_max_price",
         "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",

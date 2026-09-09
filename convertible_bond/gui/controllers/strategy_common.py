@@ -243,6 +243,8 @@ _STRATEGY_TEMPLATE_BASE = {
     "v_st_rank_signal": "估值偏差",
     "v_st_r": "2.2", "v_st_spread": "3.0", "v_st_distress_k": "5.0",
     "v_st_p_down": f"{DEFAULT_P_DOWN_PCT:g}", "v_st_vol_window": "1M",
+    # 留空 = 按数据源取 (旧行为)。模板不替用户决定跳不跳这次取数。
+    "v_st_q": "",
     # 事件退出默认 False —— 与 ScoreStrategyConfig.down_reset_event_exit 对齐:
     # 它此前只在下修优势排序信号下才被激活, 而那个信号已删。
     "v_st_event_exit": False,

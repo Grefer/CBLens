@@ -296,6 +296,25 @@ class _BacktestCacheProvider(DataProvider):
         self._terms[key] = terms
         return terms
 
+    def _remember(self, store: dict, key, history, empty_stat: str) -> bool:
+        """**空序列不进缓存**。写进去了返回 True。
+
+        取数彻底失败与"这个窗口本来就没有行情"在 provider 层长得一模一样 —— akshare
+        两个端点都抛异常时返回的也是 ``[]``, 而东财按出口 IP 封禁是常态、熔断冷却默认
+        300s。记住这个空序列, 那一次抖动波及的债就从**整段回测的每一期**里消失, 而回测
+        照常跑完、照常出 Sharpe: 同一份配置跑两遍结果不同, 且没有任何输出说得出为什么。
+        (玩具样本上 1/3 池子被毒化, 超额从 −1.79pp 变 −4.70pp。)
+
+        ``backtest_disk_cache`` 对同一件事早就有这道闸 (见那里的两段注释), 运行内这层
+        漏了 —— 而它才是**每一期都要问一遍**的那一层。代价是真正没有行情的标的每期重取
+        一次, 与 disk cache 的取舍一致; 熔断冷却期内那是零网络的即时 ``[]``。
+        """
+        if history:
+            store[key] = history
+            return True
+        self.stats[empty_stat] += 1
+        return False
+
     def get_stock_close(self, stock_code: str, on_date: date) -> float:
         key = (stock_code, on_date)
         if key in self._stock_close:
@@ -308,20 +327,26 @@ class _BacktestCacheProvider(DataProvider):
 
     def get_stock_history(self, stock_code: str, start: date, end: date):
         if start >= self._history_start and end <= self._history_end:
-            if stock_code not in self._stock_history:
+            cached = self._stock_history.get(stock_code)
+            if cached is None:
                 self.stats["stock_history_misses"] += 1
-                self._stock_history[stock_code] = self.inner.get_stock_history(
+                cached = self.inner.get_stock_history(
                     stock_code, self._history_start, self._history_end)
+                if not self._remember(self._stock_history, stock_code, cached,
+                                      "stock_history_empty_refetch"):
+                    cached = cached or []
             else:
                 self.stats["stock_history_hits"] += 1
-            return _slice_history(self._stock_history[stock_code], start, end)
+            return _slice_history(cached, start, end)
         key = (stock_code, start, end)
-        if key in self._stock_history_exact:
+        cached = self._stock_history_exact.get(key)
+        if cached is not None:
             self.stats["stock_history_hits"] += 1
-            return self._stock_history_exact[key]
+            return cached
         self.stats["stock_history_misses"] += 1
         history = self.inner.get_stock_history(stock_code, start, end)
-        self._stock_history_exact[key] = history
+        self._remember(self._stock_history_exact, key, history,
+                       "stock_history_empty_refetch")
         return history
 
     def get_stock_dividend_yield(self, stock_code, on_date):
@@ -329,20 +354,26 @@ class _BacktestCacheProvider(DataProvider):
 
     def get_bond_history(self, bond_code: str, start: date, end: date):
         if start >= self._history_start and end <= self._history_end:
-            if bond_code not in self._bond_history:
+            cached = self._bond_history.get(bond_code)
+            if cached is None:
                 self.stats["bond_history_misses"] += 1
-                self._bond_history[bond_code] = self.inner.get_bond_history(
+                cached = self.inner.get_bond_history(
                     bond_code, self._history_start, self._history_end)
+                if not self._remember(self._bond_history, bond_code, cached,
+                                      "bond_history_empty_refetch"):
+                    cached = cached or []
             else:
                 self.stats["bond_history_hits"] += 1
-            return _slice_history(self._bond_history[bond_code], start, end)
+            return _slice_history(cached, start, end)
         key = (bond_code, start, end)
-        if key in self._bond_history_exact:
+        cached = self._bond_history_exact.get(key)
+        if cached is not None:
             self.stats["bond_history_hits"] += 1
-            return self._bond_history_exact[key]
+            return cached
         self.stats["bond_history_misses"] += 1
         history = self.inner.get_bond_history(bond_code, start, end)
-        self._bond_history_exact[key] = history
+        self._remember(self._bond_history_exact, key, history,
+                       "bond_history_empty_refetch")
         return history
 
     def get_cashflow(self, bond_code):
