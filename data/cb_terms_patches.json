@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "updated_at": "2026-09-07T00:16:44"
+    "updated_at": "2026-09-08T05:21:38"
   },
   "patches": [
     {
@@ -297541,6 +297541,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 31.86
+      },
+      "bond_code": "123113.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-04-27",
+      "event_date": "2026-04-24",
+      "fields": {
+        "conversion_price": 31.79
+      },
+      "note": "转股价 31.86->31.79 | https://static.cninfo.com.cn/finalpage/2026-04-24/1225173969.PDF",
+      "raw_title": "关于调整仙乐转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123113.SZ|2026-04-24|conversion_price_adjusted|关于调整仙乐转债转股价格的公告"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 1.8
       },
       "bond_code": "110816.SH",
@@ -297719,6 +297735,22 @@
       },
       "note": "outstanding_balance 6.866999->5.151449 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 41.05
+      },
+      "bond_code": "123158.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-04-28",
+      "event_date": "2026-04-21",
+      "fields": {
+        "conversion_price": 40.55
+      },
+      "note": "转股价 41.05->40.55 | https://static.cninfo.com.cn/finalpage/2026-04-21/1225129689.PDF",
+      "raw_title": "关于可转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "123158.SZ|2026-04-21|conversion_price_adjusted|关于可转债转股价格调整的公告"
     },
     {
       "before_fields": {
@@ -299878,6 +299910,22 @@
       "source": "wind_asof"
     },
     {
+      "before_fields": {
+        "conversion_price": 52.21
+      },
+      "bond_code": "127069.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-12",
+      "event_date": "2026-05-12",
+      "fields": {
+        "conversion_price": 45.0
+      },
+      "note": "转股价 52.21->45 | https://static.cninfo.com.cn/finalpage/2026-05-12/1225292834.PDF",
+      "raw_title": "关于向下修正小熊转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "127069.SZ|2026-05-12|down_reset_approved|关于向下修正小熊转债转股价格的公告"
+    },
+    {
       "bond_code": "128141.SZ",
       "confidence": "parsed",
       "effective_date": "2026-05-12",
@@ -299903,6 +299951,54 @@
       },
       "note": "outstanding_balance 1.862471->1.148461 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 54.44
+      },
+      "bond_code": "127069.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-12",
+      "event_date": "2026-05-14",
+      "fields": {
+        "conversion_price": 54.41
+      },
+      "note": "转股价 54.44->54.41 | https://static.cninfo.com.cn/finalpage/2026-05-14/1225303760.PDF",
+      "raw_title": "东莞证券股份有限公司关于小熊电器股份有限公司向下修正可转换公司债券转股价格的临时受托管理事务报告",
+      "source": "cninfo",
+      "source_event_key": "127069.SZ|2026-05-14|down_reset_approved|东莞证券股份有限公司关于小熊电器股份有限公司向下修正可转换公司债券转股价格的临时受托管理事务报告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 54.44
+      },
+      "bond_code": "127069.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-12",
+      "event_date": "2026-05-23",
+      "fields": {
+        "conversion_price": 54.41
+      },
+      "note": "转股价 54.44->54.41 | https://static.cninfo.com.cn/finalpage/2026-05-23/1225324763.PDF",
+      "raw_title": "东莞证券股份有限公司关于小熊电器股份有限公司可转换公司债券调整转股价格的临时受托管理事务报告",
+      "source": "cninfo",
+      "source_event_key": "127069.SZ|2026-05-23|conversion_price_adjusted|东莞证券股份有限公司关于小熊电器股份有限公司可转换公司债券调整转股价格的临时受托管理事务报告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 54.44
+      },
+      "bond_code": "127069.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-12",
+      "event_date": "2026-06-27",
+      "fields": {
+        "conversion_price": 54.41
+      },
+      "note": "转股价 54.44->54.41 | https://static.cninfo.com.cn/finalpage/2026-06-27/1225393352.PDF",
+      "raw_title": "东莞证券股份有限公司关于小熊电器股份有限公司可转换公司债券不调整转股价格的临时受托管理事务报告",
+      "source": "cninfo",
+      "source_event_key": "127069.SZ|2026-06-27|conversion_price_adjusted|东莞证券股份有限公司关于小熊电器股份有限公司可转换公司债券不调整转股价格的临时受托管理事务报告"
     },
     {
       "before_fields": {
@@ -300899,6 +300995,22 @@
       "raw_title": "关于“阳谷转债”转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "123211.SZ|2026-05-09|conversion_price_adjusted|关于“阳谷转债”转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 40.55
+      },
+      "bond_code": "123158.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-18",
+      "event_date": "2026-05-14",
+      "fields": {
+        "conversion_price": 40.49
+      },
+      "note": "转股价 40.55->40.49 | https://static.cninfo.com.cn/finalpage/2026-05-14/1225307202.PDF",
+      "raw_title": "关于可转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "123158.SZ|2026-05-14|conversion_price_adjusted|关于可转债转股价格调整的公告"
     },
     {
       "before_fields": {
@@ -302325,6 +302437,38 @@
     },
     {
       "before_fields": {
+        "conversion_price": 18.23
+      },
+      "bond_code": "123253.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-22",
+      "event_date": "2026-05-16",
+      "fields": {
+        "conversion_price": 18.19
+      },
+      "note": "转股价 18.23->18.19 | https://static.cninfo.com.cn/finalpage/2026-05-16/1225310697.PDF",
+      "raw_title": "关于可转换公司债券转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "123253.SZ|2026-05-16|conversion_price_adjusted|关于可转换公司债券转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 10.39
+      },
+      "bond_code": "127037.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-22",
+      "event_date": "2026-05-16",
+      "fields": {
+        "conversion_price": 10.27
+      },
+      "note": "转股价 10.39->10.27 | https://static.cninfo.com.cn/finalpage/2026-05-16/1225310642.PDF",
+      "raw_title": "关于实施权益分派调整银轮转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "127037.SZ|2026-05-16|conversion_price_adjusted|关于实施权益分派调整银轮转债转股价格的公告"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 9.18085
       },
       "bond_code": "110084.SH",
@@ -303558,6 +303702,22 @@
       "raw_title": "中信建投证券股份有限公司关于浙江伟明环保股份有限公司“伟22转债”转股价格调整的临时受托管理事务报告",
       "source": "cninfo",
       "source_event_key": "113652.SH|2026-05-22|conversion_price_adjusted|中信建投证券股份有限公司关于浙江伟明环保股份有限公司“伟22转债”转股价格调整的临时受托管理事务报告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 8.21
+      },
+      "bond_code": "110097.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-05-26",
+      "event_date": "2026-05-23",
+      "fields": {
+        "conversion_price": 8.19
+      },
+      "note": "转股价 8.21->8.19 | https://static.cninfo.com.cn/finalpage/2026-05-23/1225325260.PDF",
+      "raw_title": "中信建投证券股份有限公司关于新疆天润乳业股份有限公司可转换公司债券转股价格调整的临时受托管理事务报告",
+      "source": "cninfo",
+      "source_event_key": "110097.SH|2026-05-23|conversion_price_adjusted|中信建投证券股份有限公司关于新疆天润乳业股份有限公司可转换公司债券转股价格调整的临时受托管理事务报告"
     },
     {
       "before_fields": {
@@ -304839,6 +304999,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 45.0
+      },
+      "bond_code": "127069.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-28",
+      "event_date": "2026-05-21",
+      "fields": {
+        "conversion_price": 43.71
+      },
+      "note": "转股价 45->43.71 | https://static.cninfo.com.cn/finalpage/2026-05-21/1225321681.PDF",
+      "raw_title": "关于小熊转债调整转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "127069.SZ|2026-05-21|conversion_price_adjusted|关于小熊转债调整转股价格的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 37.49
       },
       "bond_code": "113666.SH",
@@ -304868,6 +305044,22 @@
       "raw_title": "关于实施2025年年度权益分派调整可转债转股价格的公告",
       "source": "cninfo",
       "source_event_key": "118024.SH|2026-05-22|conversion_price_adjusted|关于实施2025年年度权益分派调整可转债转股价格的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 72.55
+      },
+      "bond_code": "123259.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-05-28",
+      "event_date": "2026-05-22",
+      "fields": {
+        "conversion_price": 72.35
+      },
+      "note": "转股价 72.55->72.35 | https://static.cninfo.com.cn/finalpage/2026-05-22/1225324201.PDF",
+      "raw_title": "关于实施2025年年度权益分派调整“锦浪转02”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123259.SZ|2026-05-22|conversion_price_adjusted|关于实施2025年年度权益分派调整“锦浪转02”转股价格的公告"
     },
     {
       "bond_code": "110081.SH",
@@ -305818,6 +306010,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 25.36
+      },
+      "bond_code": "123194.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-01",
+      "event_date": "2026-05-22",
+      "fields": {
+        "conversion_price": 24.79
+      },
+      "note": "转股价 25.36->24.79 | https://static.cninfo.com.cn/finalpage/2026-05-22/1225325174.PDF",
+      "raw_title": "关于调整百洋转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123194.SZ|2026-05-22|conversion_price_adjusted|关于调整百洋转债转股价格的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 38.65
       },
       "bond_code": "123117.SZ",
@@ -305847,6 +306055,22 @@
       "raw_title": "浙江芯能光伏科技股份有限公司关于因实施2025年年度权益分派调整“芯能转债”转股价格的公告",
       "source": "cninfo",
       "source_event_key": "113679.SH|2026-05-26|conversion_price_adjusted|浙江芯能光伏科技股份有限公司关于因实施2025年年度权益分派调整“芯能转债”转股价格的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 12.74
+      },
+      "bond_code": "113698.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-01",
+      "event_date": "2026-05-29",
+      "fields": {
+        "conversion_price": 12.75
+      },
+      "note": "转股价 12.74->12.75 | https://static.cninfo.com.cn/finalpage/2026-05-29/1225335315.PDF",
+      "raw_title": "关于部分限制性股票回购注销实施完成暨调整“凯众转债”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "113698.SH|2026-05-29|conversion_price_adjusted|关于部分限制性股票回购注销实施完成暨调整“凯众转债”转股价格的公告"
     },
     {
       "before_fields": {
@@ -306353,6 +306577,22 @@
       "raw_title": "关于可转债调整转股价格的公告",
       "source": "cninfo",
       "source_event_key": "123172.SZ|2026-05-27|conversion_price_adjusted|关于可转债调整转股价格的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 36.7
+      },
+      "bond_code": "123264.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-03",
+      "event_date": "2026-05-27",
+      "fields": {
+        "conversion_price": 36.4
+      },
+      "note": "转股价 36.7->36.4 | https://static.cninfo.com.cn/finalpage/2026-05-27/1225333666.PDF",
+      "raw_title": "关于调整双乐转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123264.SZ|2026-05-27|conversion_price_adjusted|关于调整双乐转债转股价格的公告"
     },
     {
       "before_fields": {
@@ -306876,6 +307116,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 11.27
+      },
+      "bond_code": "127068.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-04",
+      "event_date": "2026-05-28",
+      "fields": {
+        "conversion_price": 11.16
+      },
+      "note": "转股价 11.27->11.16 | https://static.cninfo.com.cn/finalpage/2026-05-28/1225332865.PDF",
+      "raw_title": "关于可转换公司债券转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "127068.SZ|2026-05-28|conversion_price_adjusted|关于可转换公司债券转股价格调整的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 5.6
       },
       "bond_code": "127103.SZ",
@@ -306905,6 +307161,22 @@
       "raw_title": "关于可转换公司债券转股价格调整暨转股复牌的公告",
       "source": "cninfo",
       "source_event_key": "113616.SH|2026-05-29|conversion_price_adjusted|关于可转换公司债券转股价格调整暨转股复牌的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 11.82
+      },
+      "bond_code": "113643.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-04",
+      "event_date": "2026-05-29",
+      "fields": {
+        "conversion_price": 11.8
+      },
+      "note": "转股价 11.82->11.8 | https://static.cninfo.com.cn/finalpage/2026-05-29/1225336175.PDF",
+      "raw_title": "上海风语筑文化科技股份有限公司关于可转债转股价格调整的提示性公告",
+      "source": "cninfo",
+      "source_event_key": "113643.SH|2026-05-29|conversion_price_adjusted|上海风语筑文化科技股份有限公司关于可转债转股价格调整的提示性公告"
     },
     {
       "before_fields": {
@@ -307268,6 +307540,22 @@
       },
       "note": "outstanding_balance 3.669019->3.511587 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 31.79
+      },
+      "bond_code": "123113.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-05",
+      "event_date": "2026-05-28",
+      "fields": {
+        "conversion_price": 31.66
+      },
+      "note": "转股价 31.79->31.66 | https://static.cninfo.com.cn/finalpage/2026-05-28/1225335275.PDF",
+      "raw_title": "关于调整仙乐转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123113.SZ|2026-05-28|conversion_price_adjusted|关于调整仙乐转债转股价格的公告"
     },
     {
       "before_fields": {
@@ -307907,6 +308195,22 @@
       "raw_title": "关于可转换公司债券转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "123243.SZ|2026-06-01|conversion_price_adjusted|关于可转换公司债券转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 8.57
+      },
+      "bond_code": "113042.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-08",
+      "event_date": "2026-06-02",
+      "fields": {
+        "conversion_price": 8.35
+      },
+      "note": "转股价 8.57->8.35 | https://static.cninfo.com.cn/finalpage/2026-06-02/1225343748.PDF",
+      "raw_title": "上海银行关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "113042.SH|2026-06-02|conversion_price_adjusted|上海银行关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告"
     },
     {
       "before_fields": {
@@ -308718,6 +309022,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 32.7
+      },
+      "bond_code": "118056.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-10",
+      "event_date": "2026-06-04",
+      "fields": {
+        "conversion_price": 32.3
+      },
+      "note": "转股价 32.7->32.3 | https://static.cninfo.com.cn/finalpage/2026-06-04/1225350324.PDF",
+      "raw_title": "路维光电关于实施2025年年度权益分派调整“路维转债”转股价格暨转股复牌的公告",
+      "source": "cninfo",
+      "source_event_key": "118056.SH|2026-06-04|conversion_price_adjusted|路维光电关于实施2025年年度权益分派调整“路维转债”转股价格暨转股复牌的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 63.55
       },
       "bond_code": "118064.SH",
@@ -309476,6 +309796,22 @@
       "source_event_key": "113052.SH|2026-06-08|conversion_price_adjusted|兴业银行关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告"
     },
     {
+      "before_fields": {
+        "conversion_price": 12.75
+      },
+      "bond_code": "113698.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-12",
+      "event_date": "2026-06-08",
+      "fields": {
+        "conversion_price": 12.55
+      },
+      "note": "转股价 12.75->12.55 | https://static.cninfo.com.cn/finalpage/2026-06-08/1225356327.PDF",
+      "raw_title": "因实施2025年年度利润分派调整“凯众转债”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "113698.SH|2026-06-08|conversion_price_adjusted|因实施2025年年度利润分派调整“凯众转债”转股价格的公告"
+    },
+    {
       "bond_code": "110099.SH",
       "confidence": "parsed",
       "effective_date": "2026-06-12",
@@ -309821,6 +310157,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 55.93
+      },
+      "bond_code": "128135.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-15",
+      "event_date": "2026-06-05",
+      "fields": {
+        "conversion_price": 54.95
+      },
+      "note": "转股价 55.93->54.95 | https://static.cninfo.com.cn/finalpage/2026-06-05/1225352537.PDF",
+      "raw_title": "洽洽食品股份有限公司关于可转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "128135.SZ|2026-06-05|conversion_price_adjusted|洽洽食品股份有限公司关于可转债转股价格调整的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 84.42
       },
       "bond_code": "118042.SH",
@@ -309866,6 +310218,22 @@
       "raw_title": "汇通集团关于实施2025年年度权益分派时“汇通转债”转股价格调整暨转股复牌的公告",
       "source": "cninfo",
       "source_event_key": "113665.SH|2026-06-08|conversion_price_adjusted|汇通集团关于实施2025年年度权益分派时“汇通转债”转股价格调整暨转股复牌的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 10.37
+      },
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-15",
+      "event_date": "2026-06-08",
+      "fields": {
+        "conversion_price": 10.32
+      },
+      "note": "转股价 10.37->10.32 | https://static.cninfo.com.cn/finalpage/2026-06-08/1225355631.PDF",
+      "raw_title": "关于“恒逸转2”转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-06-08|conversion_price_adjusted|关于“恒逸转2”转股价格调整的公告"
     },
     {
       "before_fields": {
@@ -311222,6 +311590,22 @@
       "raw_title": "浙江华海药业股份有限公司关于实施2025年度权益分派调整可转债转股价格的公告",
       "source": "cninfo",
       "source_event_key": "110076.SH|2026-06-12|conversion_price_adjusted|浙江华海药业股份有限公司关于实施2025年度权益分派调整可转债转股价格的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 41.71
+      },
+      "bond_code": "113059.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-06-18",
+      "event_date": "2026-06-12",
+      "fields": {
+        "conversion_price": 41.56
+      },
+      "note": "转股价 41.71->41.56 | https://static.cninfo.com.cn/finalpage/2026-06-12/1225365215.PDF",
+      "raw_title": "福莱特玻璃集团股份有限公司关于因实施权益分派调整“福莱转债”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "113059.SH|2026-06-12|conversion_price_adjusted|福莱特玻璃集团股份有限公司关于因实施权益分派调整“福莱转债”转股价格的公告"
     },
     {
       "before_fields": {
@@ -316156,6 +316540,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 10.76
+      },
+      "bond_code": "127070.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-23",
+      "fields": {
+        "conversion_price": 10.56
+      },
+      "note": "转股价 10.76->10.56 | https://static.cninfo.com.cn/finalpage/2026-06-23/1225381257.PDF",
+      "raw_title": "关于调整“大中转债”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "127070.SZ|2026-06-23|conversion_price_adjusted|关于调整“大中转债”转股价格的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 5.12
       },
       "bond_code": "110098.SH",
@@ -316898,6 +317298,19 @@
       "source_event_key": "123119.SZ|2026-06-30|rating_change|深圳康泰生物制品股份有限公司相关债券2026年跟踪评级报告"
     },
     {
+      "bond_code": "123160.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-06-30/1225398279.PDF",
+      "raw_title": "浙江泰福泵业股份有限公司相关债券2026年跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "123160.SZ|2026-06-30|rating_change|浙江泰福泵业股份有限公司相关债券2026年跟踪评级报告"
+    },
+    {
       "before_fields": {
         "conversion_price": 15.2
       },
@@ -317181,6 +317594,22 @@
       },
       "note": "conversion_price 21.99->17.77 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 21.99
+      },
+      "bond_code": "128134.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-06-30",
+      "event_date": "2026-06-30",
+      "fields": {
+        "conversion_price": 17.77
+      },
+      "note": "转股价 21.99->17.77 | https://static.cninfo.com.cn/finalpage/2026-06-30/1225397161.PDF",
+      "raw_title": "关于向下修正鸿路转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "128134.SZ|2026-06-30|down_reset_approved|关于向下修正鸿路转债转股价格的公告"
     },
     {
       "before_fields": {
@@ -318366,6 +318795,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 17.77
+      },
+      "bond_code": "123209.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-06",
+      "event_date": "2026-06-26",
+      "fields": {
+        "conversion_price": 17.52
+      },
+      "note": "转股价 17.77->17.52 | https://static.cninfo.com.cn/finalpage/2026-06-26/1225392702.PDF",
+      "raw_title": "关于2025年年度权益分派调整可转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "123209.SZ|2026-06-26|conversion_price_adjusted|关于2025年年度权益分派调整可转债转股价格的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 8.03
       },
       "bond_code": "113043.SH",
@@ -318570,6 +319015,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 9.5
+      },
+      "bond_code": "113056.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-07-07",
+      "event_date": "2026-07-01",
+      "fields": {
+        "conversion_price": 9.22
+      },
+      "note": "转股价 9.5->9.22 | https://static.cninfo.com.cn/finalpage/2026-07-01/1225400036.PDF",
+      "raw_title": "关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "113056.SH|2026-07-01|conversion_price_adjusted|关于根据2025年度利润分配方案调整A股可转换公司债券转股价格的公告"
+    },
+    {
+      "before_fields": {
         "outstanding_balance": 2.286221
       },
       "bond_code": "110074.SH",
@@ -318664,6 +319125,22 @@
       },
       "note": "outstanding_balance 6.99093->5.622073 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 15.06
+      },
+      "bond_code": "127072.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-08",
+      "event_date": "2026-06-30",
+      "fields": {
+        "conversion_price": 14.81
+      },
+      "note": "转股价 15.06->14.81 | https://static.cninfo.com.cn/finalpage/2026-06-30/1225394691.PDF",
+      "raw_title": "关于博实转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "127072.SZ|2026-06-30|conversion_price_adjusted|关于博实转债转股价格调整的公告"
     },
     {
       "before_fields": {
@@ -319158,6 +319635,54 @@
       },
       "note": "conversion_price 11.16->10.0 (Wind as-of 日序列变化点)",
       "source": "wind_asof"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 11.16
+      },
+      "bond_code": "127068.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-09",
+      "event_date": "2026-07-09",
+      "fields": {
+        "conversion_price": 10.0
+      },
+      "note": "转股价 11.16->10 | https://static.cninfo.com.cn/finalpage/2026-07-09/1225415707.PDF",
+      "raw_title": "关于向下修正顺博转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "127068.SZ|2026-07-09|down_reset_approved|关于向下修正顺博转债转股价格的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 19.77
+      },
+      "bond_code": "123160.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-10",
+      "event_date": "2026-07-02",
+      "fields": {
+        "conversion_price": 19.7
+      },
+      "note": "转股价 19.77->19.7 | https://static.cninfo.com.cn/finalpage/2026-07-02/1225406684.PDF",
+      "raw_title": "关于泰福转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "123160.SZ|2026-07-02|conversion_price_adjusted|关于泰福转债转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 12.51
+      },
+      "bond_code": "123252.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-10",
+      "event_date": "2026-07-02",
+      "fields": {
+        "conversion_price": 12.5
+      },
+      "note": "转股价 12.51->12.5 | https://static.cninfo.com.cn/finalpage/2026-07-02/1225405335.PDF",
+      "raw_title": "关于可转换公司债券转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "123252.SZ|2026-07-02|conversion_price_adjusted|关于可转换公司债券转股价格调整的公告"
     },
     {
       "before_fields": {
@@ -319917,6 +320442,22 @@
     },
     {
       "before_fields": {
+        "conversion_price": 14.64
+      },
+      "bond_code": "128138.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-07-15",
+      "event_date": "2026-07-09",
+      "fields": {
+        "conversion_price": 14.54
+      },
+      "note": "转股价 14.64->14.54 | https://static.cninfo.com.cn/finalpage/2026-07-09/1225415704.PDF",
+      "raw_title": "关于2025年年度权益分派调整可转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "128138.SZ|2026-07-09|conversion_price_adjusted|关于2025年年度权益分派调整可转债转股价格的公告"
+    },
+    {
+      "before_fields": {
         "conversion_price": 36.95
       },
       "bond_code": "113666.SH",
@@ -320340,6 +320881,22 @@
       "raw_title": "浙江省建设投资集团股份有限公司关于可转债转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "127102.SZ|2026-07-11|conversion_price_adjusted|浙江省建设投资集团股份有限公司关于可转债转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 32.3
+      },
+      "bond_code": "118056.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-07-17",
+      "event_date": "2026-07-16",
+      "fields": {
+        "conversion_price": 35.29
+      },
+      "note": "转股价 32.3->35.29 | https://static.cninfo.com.cn/finalpage/2026-07-16/1225427016.PDF",
+      "raw_title": "路维光电关于因向特定对象发行股票调整“路维转债”转股价格暨转股停复牌的公告",
+      "source": "cninfo",
+      "source_event_key": "118056.SH|2026-07-16|conversion_price_adjusted|路维光电关于因向特定对象发行股票调整“路维转债”转股价格暨转股停复牌的公告"
     },
     {
       "before_fields": {
@@ -322328,6 +322885,62 @@
       "source_event_key": "123088.SZ|2026-08-03|conversion_price_adjusted|关于回购股份注销完成调整可转债转股价格的公告"
     },
     {
+      "bond_code": "110030.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-04",
+      "event_date": "2026-08-04",
+      "fields": {
+        "credit_rating": "AA-",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-08-04/1225454509.PDF",
+      "raw_title": "南京迪威尔高端制造股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "110030.SH|2026-08-04|rating_change|南京迪威尔高端制造股份有限公司2026年度跟踪评级报告"
+    },
+    {
+      "bond_code": "110031.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-04",
+      "event_date": "2026-08-04",
+      "fields": {
+        "credit_rating": "AA-",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-08-04/1225454509.PDF",
+      "raw_title": "南京迪威尔高端制造股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "110031.SH|2026-08-04|rating_change|南京迪威尔高端制造股份有限公司2026年度跟踪评级报告"
+    },
+    {
+      "bond_code": "110032.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-04",
+      "event_date": "2026-08-04",
+      "fields": {
+        "credit_rating": "AA-",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-08-04/1225454509.PDF",
+      "raw_title": "南京迪威尔高端制造股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "110032.SH|2026-08-04|rating_change|南京迪威尔高端制造股份有限公司2026年度跟踪评级报告"
+    },
+    {
+      "bond_code": "110033.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-08-04",
+      "event_date": "2026-08-04",
+      "fields": {
+        "credit_rating": "AA-",
+        "credit_rating_outlook": "稳定"
+      },
+      "note": "https://static.cninfo.com.cn/finalpage/2026-08-04/1225454509.PDF",
+      "raw_title": "南京迪威尔高端制造股份有限公司2026年度跟踪评级报告",
+      "source": "cninfo",
+      "source_event_key": "110033.SH|2026-08-04|rating_change|南京迪威尔高端制造股份有限公司2026年度跟踪评级报告"
+    },
+    {
       "bond_code": "110038.SH",
       "confidence": "parsed",
       "effective_date": "2026-08-04",
@@ -323918,6 +324531,19 @@
       "source_event_key": "111018.SH|2026-08-25|conversion_price_adjusted|华康股份关于部分限制性股票回购注销实施完成暨调整“华康转债”转股价格的公告"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-26",
+      "event_date": "2026-08-26",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-26/1225506611.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第六次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-26|call_redemption|关于提前赎回“恒逸转2”的第六次提示性公告"
+    },
+    {
       "bond_code": "123112.SZ",
       "confidence": "parsed",
       "effective_date": "2026-08-27",
@@ -323957,6 +324583,19 @@
       "source_event_key": "123112.SZ|2026-08-27|call_redemption|关于提前赎回万讯转债的公告"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-27",
+      "event_date": "2026-08-27",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-27/1225507988.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-27|call_redemption|关于提前赎回“恒逸转2”的第七次提示性公告"
+    },
+    {
       "bond_code": "123112.SZ",
       "confidence": "parsed",
       "effective_date": "2026-08-28",
@@ -323968,6 +324607,32 @@
       "raw_title": "关于提前赎回万讯转债的第二次提示性公告",
       "source": "cninfo",
       "source_event_key": "123112.SZ|2026-08-28|call_redemption|关于提前赎回万讯转债的第二次提示性公告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-28",
+      "event_date": "2026-08-28",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-28/1225516060.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-28|call_redemption|关于提前赎回“恒逸转2”的第八次提示性公告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-08-29",
+      "event_date": "2026-08-29",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-08-29/1225531250.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第九次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-08-29|call_redemption|关于提前赎回“恒逸转2”的第九次提示性公告"
     },
     {
       "bond_code": "123112.SZ",
@@ -324026,6 +324691,19 @@
       "source_event_key": "123112.SZ|2026-09-01|call_redemption|关于提前赎回万讯转债的第四次提示性公告"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-01",
+      "event_date": "2026-09-01",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-09-01/1225537785.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”的第十次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-09-01|call_redemption|关于提前赎回“恒逸转2”的第十次提示性公告"
+    },
+    {
       "bond_code": "123112.SZ",
       "confidence": "parsed",
       "effective_date": "2026-09-02",
@@ -324037,6 +324715,19 @@
       "raw_title": "关于提前赎回万讯转债的第五次提示性公告",
       "source": "cninfo",
       "source_event_key": "123112.SZ|2026-09-02|call_redemption|关于提前赎回万讯转债的第五次提示性公告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-02",
+      "event_date": "2026-09-02",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-09-02/1225540814.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”暨即将停止交易的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-09-02|call_redemption|关于提前赎回“恒逸转2”暨即将停止交易的重要提示性公告"
     },
     {
       "before_fields": {
@@ -324084,6 +324775,74 @@
       "source_event_key": "123112.SZ|2026-09-03|call_redemption|关于提前赎回万讯转债的第六次提示性公告"
     },
     {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-03",
+      "event_date": "2026-09-03",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-09-03/1225543245.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”暨即将停止交易的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-09-03|call_redemption|关于提前赎回“恒逸转2”暨即将停止交易的重要提示性公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 33.8
+      },
+      "bond_code": "123275.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-04",
+      "event_date": "2026-09-02",
+      "fields": {
+        "conversion_price": 33.76
+      },
+      "note": "转股价 33.8->33.76 | https://static.cninfo.com.cn/finalpage/2026-09-02/1225543731.PDF",
+      "raw_title": "关于可转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "123275.SZ|2026-09-02|conversion_price_adjusted|关于可转债转股价格调整的公告"
+    },
+    {
+      "bond_code": "123112.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-04",
+      "event_date": "2026-09-04",
+      "fields": {
+        "call_redemption_price": 101.332
+      },
+      "note": "赎回价 101.332 | https://static.cninfo.com.cn/finalpage/2026-09-04/1225545506.PDF",
+      "raw_title": "关于提前赎回万讯转债的第七次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123112.SZ|2026-09-04|call_redemption|关于提前赎回万讯转债的第七次提示性公告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-04",
+      "event_date": "2026-09-04",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-09-04/1225545611.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”暨即将停止转股的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-09-04|call_redemption|关于提前赎回“恒逸转2”暨即将停止转股的重要提示性公告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-05",
+      "event_date": "2026-09-05",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-09-05/1225547849.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”暨即将停止转股的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-09-05|call_redemption|关于提前赎回“恒逸转2”暨即将停止转股的重要提示性公告"
+    },
+    {
       "before_fields": {
         "conversion_price": 56.2
       },
@@ -324098,6 +324857,35 @@
       "raw_title": "关于“统联转债”转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "118066.SH|2026-09-01|conversion_price_adjusted|关于“统联转债”转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 6.35
+      },
+      "bond_code": "118034.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-09-07",
+      "event_date": "2026-09-04",
+      "fields": {
+        "conversion_price": 4.36
+      },
+      "note": "转股价 6.35->4.36 | https://static.cninfo.com.cn/finalpage/2026-09-04/1225547209.PDF",
+      "raw_title": "晶科能源关于向下修正“晶能转债”转股价格暨转股停牌的公告",
+      "source": "cninfo",
+      "source_event_key": "118034.SH|2026-09-04|down_reset_approved|晶科能源关于向下修正“晶能转债”转股价格暨转股停牌的公告"
+    },
+    {
+      "bond_code": "123112.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-07",
+      "event_date": "2026-09-07",
+      "fields": {
+        "call_redemption_price": 101.332
+      },
+      "note": "赎回价 101.332 | https://static.cninfo.com.cn/finalpage/2026-09-07/1225548904.PDF",
+      "raw_title": "关于提前赎回万讯转债的第八次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123112.SZ|2026-09-07|call_redemption|关于提前赎回万讯转债的第八次提示性公告"
     },
     {
       "before_fields": {
@@ -324132,6 +324920,32 @@
       "source_event_key": "123265.SZ|2026-09-02|conversion_price_adjusted|关于调整“耐普转02”转股价格的公告"
     },
     {
+      "bond_code": "123112.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-08",
+      "event_date": "2026-09-08",
+      "fields": {
+        "call_redemption_price": 101.332
+      },
+      "note": "赎回价 101.332 | https://static.cninfo.com.cn/finalpage/2026-09-08/1225551310.PDF",
+      "raw_title": "关于提前赎回万讯转债的第九次提示性公告",
+      "source": "cninfo",
+      "source_event_key": "123112.SZ|2026-09-08|call_redemption|关于提前赎回万讯转债的第九次提示性公告"
+    },
+    {
+      "bond_code": "127067.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-08",
+      "event_date": "2026-09-08",
+      "fields": {
+        "call_redemption_price": 100.25
+      },
+      "note": "赎回价 100.25 | https://static.cninfo.com.cn/finalpage/2026-09-08/1225550730.PDF",
+      "raw_title": "关于提前赎回“恒逸转2”暨最后一个转股日的重要提示性公告",
+      "source": "cninfo",
+      "source_event_key": "127067.SZ|2026-09-08|call_redemption|关于提前赎回“恒逸转2”暨最后一个转股日的重要提示性公告"
+    },
+    {
       "before_fields": {
         "conversion_price": 21.54
       },
@@ -324162,6 +324976,70 @@
       "raw_title": "关于可转换公司债券转股价格调整的公告",
       "source": "cninfo",
       "source_event_key": "123091.SZ|2026-09-02|conversion_price_adjusted|关于可转换公司债券转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 150.03
+      },
+      "bond_code": "118075.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-09-10",
+      "event_date": "2026-09-04",
+      "fields": {
+        "conversion_price": 149.83
+      },
+      "note": "转股价 150.03->149.83 | https://static.cninfo.com.cn/finalpage/2026-09-04/1225546540.PDF",
+      "raw_title": "关于实施2026年半年度权益分派调整“奥普转债”转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "118075.SH|2026-09-04|conversion_price_adjusted|关于实施2026年半年度权益分派调整“奥普转债”转股价格的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 3.33
+      },
+      "bond_code": "113051.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-09-11",
+      "event_date": "2026-09-05",
+      "fields": {
+        "conversion_price": 3.32
+      },
+      "note": "转股价 3.33->3.32 | https://static.cninfo.com.cn/finalpage/2026-09-05/1225548911.PDF",
+      "raw_title": "中节能风力发电股份有限公司关于权益分派引起“节能转债”转股价格调整暨转股复牌的公告",
+      "source": "cninfo",
+      "source_event_key": "113051.SH|2026-09-05|conversion_price_adjusted|中节能风力发电股份有限公司关于权益分派引起“节能转债”转股价格调整暨转股复牌的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 19.58
+      },
+      "bond_code": "127104.SZ",
+      "confidence": "parsed",
+      "effective_date": "2026-09-14",
+      "event_date": "2026-09-05",
+      "fields": {
+        "conversion_price": 19.38
+      },
+      "note": "转股价 19.58->19.38 | https://static.cninfo.com.cn/finalpage/2026-09-05/1225550081.PDF",
+      "raw_title": "关于可转债转股价格调整的公告",
+      "source": "cninfo",
+      "source_event_key": "127104.SZ|2026-09-05|conversion_price_adjusted|关于可转债转股价格调整的公告"
+    },
+    {
+      "before_fields": {
+        "conversion_price": 28.53
+      },
+      "bond_code": "118069.SH",
+      "confidence": "parsed",
+      "effective_date": "2026-09-14",
+      "event_date": "2026-09-08",
+      "fields": {
+        "conversion_price": 28.49
+      },
+      "note": "转股价 28.53->28.49 | https://static.cninfo.com.cn/finalpage/2026-09-08/1225551081.PDF",
+      "raw_title": "杭州爱科科技股份有限公司关于实施2026年半年度权益分派调整可转债转股价格的公告",
+      "source": "cninfo",
+      "source_event_key": "118069.SH|2026-09-08|conversion_price_adjusted|杭州爱科科技股份有限公司关于实施2026年半年度权益分派调整可转债转股价格的公告"
     }
   ]
 }
