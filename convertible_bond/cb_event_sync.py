@@ -111,6 +111,50 @@ def _bond_name_resolver(bond_names: dict[str, str] | None):
     return resolve
 
 
+def market_exit_date(terms) -> date | None:
+    """这只债**真正离场**的日子; 还在市 (或无从判断) 返回 None 之外的未来日期或 None.
+
+    判据只认**既成事实** —— 摘牌日 / 最后交易日; ``maturity_date`` 是**排期**不是事实:
+    强赎债提前退市, 摘牌日早已过去而名义到期日还在未来 (实测全库 **222 只**是这个形状,
+    例 110080.SH 摘牌 2023-12-06 / 到期 2027-04-12)。拿"所有终止日取最晚"来判会把这
+    222 只死债全部当成在市。只有一个终止日都没有时才退回 ``maturity_date`` —— 那一档
+    是自然到期, 没有别的证据可用。
+    """
+    actual = [d for d in (getattr(terms, "delisting_date", None),
+                          getattr(terms, "last_trading_date", None)) if d]
+    if actual:
+        return max(actual)
+    return getattr(terms, "maturity_date", None)
+
+
+def split_event_sync_codes(bundle, codes, *, start: date) -> tuple[list[str], list[str]]:
+    """按"公告窗口里还可能有它的公告"把代码分成 ``(要同步, 可跳过)``.
+
+    全库一轮的请求量是 cninfo 限流的触发器本身 (见 AGENTS 里那条), 而**在窗口开始前
+    就已经离场**的债在这个窗口里不可能有新公告 —— 实测回看 180 天时全库 1060 只里
+    **623 只**是这一档, 占请求量约 72%。
+
+    判据**与回看窗口绑定**而不是"是不是死债": ``--lookback-days`` 放大时跳过的自然
+    变少 (365 天 → 519 只), 不需要另一个开关去描述同一件事。
+
+    保守方向与准入层一致 (**字段明确才剔除**): 读不出条款、或一个终止日都没有的,
+    一律保留 —— 跳过一只本该同步的债是静默丢公告, 而多同步一只只是多花几次请求。
+    """
+    kept: list[str] = []
+    skipped: list[str] = []
+    for code in codes:
+        try:
+            exit_at = market_exit_date(bundle.get(code))
+        except Exception:
+            kept.append(code)
+            continue
+        if exit_at is not None and exit_at < start:
+            skipped.append(code)
+        else:
+            kept.append(code)
+    return kept, skipped
+
+
 def sync_cb_events(
     provider: DataProvider,
     bond_codes: Iterable[str],

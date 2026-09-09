@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 from ._console import configure_utf8_stdio
@@ -19,7 +20,11 @@ if __name__ == "__main__":
     configure_utf8_stdio()
 
 from ..cache import TermsBundle, project_bundle_path
-from ..cb_event_sync import apply_events_to_bundle, sync_cb_events
+from ..cb_event_sync import (
+    apply_events_to_bundle,
+    split_event_sync_codes,
+    sync_cb_events,
+)
 from ..cb_events import CBEventStore, project_events_path
 from ..historical_terms import TermsPatchStore, project_terms_patches_path
 from ..data_providers import DataProvider, WindDataProvider
@@ -58,12 +63,23 @@ def main() -> int:
                         help="同步后把事件应用回 cb_data 状态字段")
     parser.add_argument("--no-pdf", action="store_true",
                         help="跳过 PDF 下载, 仅用标题解析事件 (更快)")
+    parser.add_argument("--all", dest="all_bonds", action="store_true",
+                        help="不缩范围: 连回看窗口开始前就已摘牌/到期的债也一起同步")
     args = parser.parse_args()
 
     bundle = TermsBundle(Path(args.bundle) if args.bundle else project_bundle_path())
     store = CBEventStore(Path(args.events) if args.events else project_events_path())
     patch_store = TermsPatchStore(project_terms_patches_path())
-    codes = list(args.codes) if args.codes else bundle.list_bonds()
+    explicit_codes = bool(args.codes)
+    codes = list(args.codes) if explicit_codes else bundle.list_bonds()
+    skipped_codes: list[str] = []
+    # 只对"整库"这条路缩范围 —— 显式 `--codes` 是用户点名要的那几只, 已离场也照同步。
+    # 全库一轮的请求量本身就是 cninfo 限流的触发器 (见 AGENTS), 而窗口开始前就已经
+    # 离场的债在这个窗口里不可能有新公告。
+    if not explicit_codes and not args.all_bonds:
+        window_start = market_today() - timedelta(days=max(1, args.lookback_days))
+        codes, skipped_codes = split_event_sync_codes(
+            bundle, codes, start=window_start)
     if args.limit > 0:
         codes = codes[:args.limit]
     if not codes:
@@ -78,6 +94,8 @@ def main() -> int:
     download_pdf = not args.no_pdf
     pdf_label = "✅ PDF 正文提取" if download_pdf else "⏭️  仅标题解析"
     print(f"开始同步公告事件: {len(codes)} 只, 回看 {args.lookback_days} 天")
+    if skipped_codes:
+        print(f"已跳过 {len(skipped_codes)} 只 (回看窗口开始前就已摘牌/到期; --all 可关掉)")
     print(f"数据源: {args.source}  |  {pdf_label}")
     print(f"事件表: {store.path}")
     start_ts = time.time()

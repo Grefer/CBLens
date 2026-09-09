@@ -1193,3 +1193,64 @@ def test_cooldown_stops_the_run_early_and_only_advances_the_watermark_it_earned(
     reloaded = CBEventStore(store.path)
     assert {e.bond_code for e in reloaded.list_events()} == set(codes[:2])
     assert set(reloaded._meta.get("synced_at_by_code", {})) == set(codes[:2])
+
+
+# ── 全库同步缩范围 (2026-09-08) ──────────────────────────────────
+
+
+class _Terms:
+    def __init__(self, dl=None, lt=None, mt=None):
+        self.delisting_date = dl
+        self.last_trading_date = lt
+        self.maturity_date = mt
+
+
+def test_market_exit_date_uses_actual_exit_not_scheduled_maturity():
+    """强赎债的名义到期日还在未来, 不能拿它当"这只债还在市"的证据.
+
+    实测全库 **222 只**是这个形状 (110080.SH 摘牌 2023-12-06 / 到期 2027-04-12)。
+    用"所有终止日取最晚"来判会把这 222 只早已退市的债全部判成在市 —— 缩范围于是
+    恰好在最该起作用的那一批上失效, 而且不报错。
+    """
+    from convertible_bond.cb_event_sync import market_exit_date
+
+    # 强赎: 摘牌是既成事实, 到期日只是排期
+    assert market_exit_date(_Terms(dl=date(2023, 12, 6), lt=date(2023, 11, 30),
+                                   mt=date(2027, 4, 12))) == date(2023, 12, 6)
+    # 自然到期: 没有既成事实时才退回排期
+    assert market_exit_date(_Terms(mt=date(2027, 4, 12))) == date(2027, 4, 12)
+    assert market_exit_date(_Terms(lt=date(2024, 1, 5))) == date(2024, 1, 5)
+    assert market_exit_date(_Terms()) is None
+
+
+def test_split_event_sync_codes_keeps_everything_it_cannot_rule_out():
+    """只跳"窗口开始前就已离场"的债; 边界与缺值一律往**保留**那边倒.
+
+    跳错一只是静默丢公告 (水位那头不会有任何提示), 多留一只只是多花几次请求 ——
+    与准入层"字段明确才剔除"同向。
+    """
+    from convertible_bond.cb_event_sync import split_event_sync_codes
+
+    window = date(2026, 3, 13)
+    rows = {
+        "OLD.SH": _Terms(dl=date(2019, 12, 25), lt=date(2019, 12, 10),
+                         mt=date(2019, 12, 25)),
+        "CALLED.SH": _Terms(dl=date(2023, 12, 6), lt=date(2023, 11, 30),
+                            mt=date(2027, 4, 12)),          # 强赎, 到期日在未来
+        "EDGE.SH": _Terms(dl=window),                        # 恰好等于窗口起点 → 留
+        "INWINDOW.SH": _Terms(dl=date(2026, 5, 1)),
+        "LIVE.SH": _Terms(mt=date(2030, 1, 1)),
+        "NODATE.SH": _Terms(),                               # 一个日期都没有 → 留
+    }
+
+    class _Bundle:
+        def get(self, code):
+            if code == "BOOM.SH":
+                raise KeyError(code)                         # 读不出条款 → 留
+            return rows[code]
+
+    codes = [*rows, "BOOM.SH"]
+    kept, skipped = split_event_sync_codes(_Bundle(), codes, start=window)
+
+    assert skipped == ["OLD.SH", "CALLED.SH"]
+    assert kept == ["EDGE.SH", "INWINDOW.SH", "LIVE.SH", "NODATE.SH", "BOOM.SH"]
