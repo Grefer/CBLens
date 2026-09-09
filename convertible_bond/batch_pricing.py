@@ -402,6 +402,12 @@ _RATING_SCORES = {
     "AA+": 17,
     "AAA": 18,
 }
+#: 评级档位, **由高到低**。GUI 的「评级下限」下拉用它。
+#: 由 ``_RATING_SCORES`` 派生而不是另抄一份 —— 那个字典特意是私有的
+#: (见 ``average_rating_label`` 的 docstring), 就是为了不让外部模块各自复制一份
+#: 会漂的档位表; 抄一份的失败形态是下拉里少一档而没有任何东西报错。
+CREDIT_RATING_SCALE: tuple[str, ...] = tuple(
+    sorted(_RATING_SCORES, key=_RATING_SCORES.__getitem__, reverse=True))
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from ..constants import (
     STRATEGY_POOL_MODES,
     STRATEGY_STAT_TOOLTIPS,
 )
+from ..controllers.strategy_common import STRATEGY_RATING_FLOOR_CHOICES
 from ..theme import (
     BG_CARD, BG_INPUT, BORDER, TEXT, TEXT_DIM,
     ACCENT, ACCENT_HOVER, BTN_HOVER, ORANGE, RED,
@@ -314,8 +315,9 @@ def build(app, tab):
     adv_panel.grid_columnconfigure(0, weight=1, uniform="adv-panel")
     adv_panel.grid_columnconfigure(1, weight=1, uniform="adv-panel")
 
-    # 左: 标的范围
-    _, c0 = _adv_card(adv_panel, 0, "标的范围", col=0)
+    # 标的范围 (整行): 只有一个控件, 但和下面两张卡一样占满宽度 —— 选债限制从
+    # 2×2 涨到 3×4 之后, 左右分栏会让左半边空掉一大块。
+    _, c0 = _adv_card(adv_panel, 0, "标的范围", col=0, columnspan=2)
     scope_grid = ctk.CTkFrame(c0, fg_color="transparent")
     scope_grid.pack(fill="x")
     scope_grid.grid_columnconfigure(0, weight=1)
@@ -325,27 +327,83 @@ def build(app, tab):
         lambda: STRATEGY_POOL_DESCRIPTIONS.get(app.v_st_pool_mode.get(), ""),
         command=lambda _v: app._refresh_strategy_setup_summary(),
         control_width=160, label_width=64, cell_pady=2)
-    # 右: 选债条件 — 4 个范围 (2×2 网格)
-    _, c1 = _adv_card(adv_panel, 0, "选债限制", col=1)
+
+    # 选债限制 (整行, 3×4): 上一行是四个**区间**过滤 (缺值即拒), 下两行是八条
+    # **主口径阈值** (缺值放行)。两种读法相反, 所以每格的 tooltip 都写明。
+    sel_card, c1 = _adv_card(
+        adv_panel, 1, "选债限制",
+        "决定哪些债进候选池; 留空 = 不设这道闸",
+        col=0, columnspan=2)
+    sel_card.grid_configure(pady=(8, 0))
     range_grid = ctk.CTkFrame(c1, fg_color="transparent")
     range_grid.pack(fill="x")
-    range_grid.grid_columnconfigure(0, weight=1, uniform="rng")
-    range_grid.grid_columnconfigure(1, weight=1, uniform="rng")
+    for _c in range(4):
+        range_grid.grid_columnconfigure(_c, weight=1, uniform="rng")
     _range_grid_cell(
         range_grid, 0, 0, "价格", app.v_st_min_price, app.v_st_max_price,
-        tooltip="转债市价区间 (元)\n留空 = 不限制")
+        tooltip="转债市价区间 (元)\n留空 = 不限制", width=60)
     _range_grid_cell(
         range_grid, 0, 1, "溢价%", app.v_st_min_premium, app.v_st_max_premium,
-        tooltip="转股溢价率 = 市价 / 转股价值 − 1\n负值 = 转股折价")
+        tooltip="转股溢价率 = 市价 / 转股价值 − 1\n负值 = 转股折价", width=60)
     _range_grid_cell(
-        range_grid, 1, 0, "偏差%", app.v_st_min_deviation, app.v_st_max_deviation,
-        tooltip="模型偏差 = (市价 − 理论价) / 理论价\n负 = 市价低于理论价 (越负越便宜)")
+        range_grid, 0, 2, "偏差%", app.v_st_min_deviation, app.v_st_max_deviation,
+        tooltip="模型偏差 = (市价 − 理论价) / 理论价\n负 = 市价低于理论价 (越负越便宜)\n"
+                "这是**绝对**口径; 便宜度请用下面的「便宜度下限」", width=60)
     _range_grid_cell(
-        range_grid, 1, 1, "HV%", app.v_st_min_sigma, app.v_st_max_sigma,
-        tooltip="正股历史波动率\n窗口跟随顶部 σ 设置")
+        range_grid, 0, 3, "HV%", app.v_st_min_sigma, app.v_st_max_sigma,
+        tooltip="正股历史波动率\n窗口跟随顶部 σ 设置\n"
+                "上限留空 = 沿用默认 80% (不是不限)", width=60,
+        max_placeholder="80")
+
+    # 主口径八条。缺值放行 (与被它们取代的标签同口径: 缺 σ/评级/余额/偏差时旧口径
+    # 打的是「无HV」「无评级」…, 那几个都不在排除集里)。
+    thr_grid = ctk.CTkFrame(c1, fg_color="transparent")
+    thr_grid.pack(fill="x", pady=(6, 0))
+    for _c in range(4):
+        thr_grid.grid_columnconfigure(_c, weight=1, uniform="thr")
+    _grid_cell(
+        thr_grid, "便宜度≥", app.v_st_min_relative_cheapness, 0, 0, "entry", None,
+        "比当期全市场中位便宜至少这么多 (百分点)\n"
+        "只有它能表达「今天真没便宜货」—— 候选会诚实归零\n"
+        "留空 = 不限; 缺相对偏差的行照常放行",
+        control_width=64, label_width=62)
+    _grid_cell(
+        thr_grid, "相对偏差≤", app.v_st_max_relative_deviation, 0, 1, "entry", None,
+        "相对全市场中位贵过这么多就不买 (百分点)\n"
+        "与「便宜度≥」同轴反向; 池子太小拿不到全市场中位时两条一起让开\n"
+        "留空 = 不限",
+        control_width=64, label_width=72)
+    _grid_cell(
+        thr_grid, "模型溢价≤", app.v_st_max_model_premium, 0, 2, "entry", None,
+        "理论价 / 转股价值 − 1 的上限 (%)\n模型给的期权价值相对转股价值太高就不买\n"
+        "留空 = 不限; 缺值放行",
+        control_width=64, label_width=72)
+    _grid_cell(
+        thr_grid, "剩余年限≥", app.v_st_min_years, 0, 3, "entry", None,
+        "到期剩余年限下限 (年)\n太短的债期权价值所剩无几, 且临近摘牌\n"
+        "留空 = 不限; 缺值放行",
+        control_width=64, label_width=72)
+    _grid_cell(
+        thr_grid, "评级≥", app.v_st_min_credit_rating, 1, 0, "optmenu",
+        list(STRATEGY_RATING_FLOOR_CHOICES),
+        "债项信用评级下限\n选「不限」= 关掉这道闸 (低评级债照样进候选)\n"
+        "无评级的行放行",
+        control_width=76, label_width=62)
+    _grid_cell(
+        thr_grid, "余额≥", app.v_st_min_outstanding_balance, 1, 1, "entry", None,
+        "未转股余额下限 (亿元)\n流动性代理\n留空 = 不限; 缺值放行",
+        control_width=64, label_width=72)
+    _grid_cell(
+        thr_grid, "正股ST", app.v_st_exclude_st, 1, 2, "checkbox", None,
+        "正股被 ST / 退市风险警示时排除", checkbox_text="排除",
+        label_width=72)
+    _grid_cell(
+        thr_grid, "正股跌停", app.v_st_exclude_limit_down, 1, 3, "checkbox", None,
+        "正股当日跌停时排除 —— S0 钉在跌停板上, 理论价不可信",
+        checkbox_text="排除", label_width=72)
 
     tune_card, c2 = _adv_card(
-        adv_panel, 1, "模型与交易",
+        adv_panel, 2, "模型与交易",
         "定价模型入参与交易成本",
         col=0, columnspan=2)
     tune_card.grid_configure(pady=(8, 0))
@@ -616,8 +674,14 @@ def _adv_card(parent, row, title, subtitle=None, *, col=0, columnspan=1):
     return card, body
 
 
-def _range_grid_cell(parent, row, col, label, min_var, max_var, *, width=70, tooltip=None):
-    """微调后的范围过滤单元：增加灰色“不限”占位符"""
+def _range_grid_cell(parent, row, col, label, min_var, max_var, *, width=70, tooltip=None,
+                     min_placeholder="不限", max_placeholder="不限"):
+    """微调后的范围过滤单元：增加灰色“不限”占位符
+
+    两侧占位符可分别指定, 因为它们**不一定同义**: HV 上限留空时 `strategy_run`
+    读的是"沿用默认 80%"而不是"不限" (见那里的注释), 而占位符一直写着「不限」——
+    页面上一句实打实的假话。行为不动, 只把它说对。
+    """
     cell = ctk.CTkFrame(parent, fg_color="transparent")
     cell.grid(row=row, column=col, sticky="w", pady=2, padx=6)
 
@@ -627,7 +691,7 @@ def _range_grid_cell(parent, row, col, label, min_var, max_var, *, width=70, too
 
     ent_min = ctk.CTkEntry(cell, textvariable=min_var, width=width, font=(FONT_MONO, 13),
                            fg_color=BG_INPUT, border_width=1, border_color=BORDER, corner_radius=6,
-                           text_color=TEXT, height=28, placeholder_text="不限")
+                           text_color=TEXT, height=28, placeholder_text=min_placeholder)
     ent_min.pack(side="left")
 
     ctk.CTkLabel(cell, text="~", text_color=TEXT_DIM,
@@ -635,7 +699,7 @@ def _range_grid_cell(parent, row, col, label, min_var, max_var, *, width=70, too
 
     ent_max = ctk.CTkEntry(cell, textvariable=max_var, width=width, font=(FONT_MONO, 13),
                            fg_color=BG_INPUT, border_width=1, border_color=BORDER, corner_radius=6,
-                           text_color=TEXT, height=28, placeholder_text="不限")
+                           text_color=TEXT, height=28, placeholder_text=max_placeholder)
     ent_max.pack(side="left")
     if tooltip:
         Tooltip(lbl, tooltip)

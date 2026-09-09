@@ -30,6 +30,7 @@ from ..constants import normalize_pde_rank_signal_label, normalize_strategy_hist
 from ..error_dialogs import prepare_error, show_error
 
 from .strategy_common import (
+    RATING_FLOOR_NONE,
     STRATEGY_BACKTEST_PRO_FEATURE,
     STRATEGY_BACKTEST_PRO_PREVIEW,
     STRATEGY_VIEW_POLICY,
@@ -44,6 +45,87 @@ from .strategy_common import (
 
 class StrategyRunMixin:
     """策略回测 — 运行执行 (启动/取消/worker/进度/provider 构建)."""
+
+    def _strategy_selection_config(self, *, engine_pool_mode):
+        """从表单读出这一次回测的 ``PDEStrategyConfig``。
+
+        单独抽出来是为了**可测** (与 CLI 的 ``_risk_threshold_kwargs`` 同理由):
+        它此前长在 ``_run_strategy_backtest`` 中段, 前后是 messagebox、预检与
+        线程启动, 于是"GUI 默认配置到底等不等于 dataclass 默认"这个问题在测试
+        里只能靠扫源码文本回答 —— 而那种断言认的是字面量, 换个别名读取就静默
+        失效 (同一个教训在 ``_strategy_config_summary`` 那条守护上已经吃过一次)。
+
+        取值口径写在各字段旁边; 跨字段的约定只有一条 —— **留空 = 不设这道闸**,
+        ``max_sigma`` 是刻意的例外 (理由见那一行)。
+        解析失败按 ``ValueError`` 抛出, 由调用方转成「参数错误」弹窗。
+        """
+        freq_map = {"周": "W", "月": "M", "季": "Q"}
+        policy = STRATEGY_VIEW_POLICY.get("综合机会", _DEFAULT_VIEW_POLICY)
+        cash_yield_pct = (
+            self._optional_float(self.v_st_cash_yield)
+            if hasattr(self, "v_st_cash_yield") else None)
+        exposure_raw = (getattr(self, "v_st_exposure", None).get()
+                        if getattr(self, "v_st_exposure", None) is not None else "恒定满仓")
+        exposure_mode = "valuation" if "估值" in str(exposure_raw) else "full"
+        rank_label = normalize_pde_rank_signal_label(
+            getattr(self, "v_st_rank_signal", None).get()
+            if getattr(self, "v_st_rank_signal", None) is not None
+            else "估值偏差"
+        )
+        rank_signal = {"估值偏差": "deviation"}[rank_label]
+        event_exit = (
+            bool(self.v_st_event_exit.get())
+            if hasattr(self, "v_st_event_exit") else False
+        )
+        config = PDEStrategyConfig(
+            top_n=max(1, int(float(self.v_st_top_n.get()))),
+            holding_mode="top_score",
+            rank_signal=rank_signal,
+            down_reset_event_exit=event_exit,
+            funding_mode="reserve_cash",
+            cash_yield_rate=max(0.0, (cash_yield_pct or 0.0) / 100.0),
+            exposure_mode=exposure_mode,
+            rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
+            selection_view="综合机会",
+            min_confidence=policy["min_confidence"],
+            # `exclude_risk_tags` 不再由这里设: 两个分支同值 —— dataclass 默认
+            # 已经是 `()`, 而 `policy["exclude_review_risks"]` 因 selection_view
+            # 写死也恒为 True。留着就是一个看着在做事、实则恒等的静默 no-op
+            # (CLI 的 `_risk_threshold_kwargs` docstring 点名要避免的正是这个)。
+            # 风险闸现在由下面那八条显式阈值承担。
+            min_market_price=self._optional_float(self.v_st_min_price),
+            max_market_price=self._optional_float(self.v_st_max_price),
+            min_conversion_premium=self._optional_pct(self.v_st_min_premium),
+            max_conversion_premium=self._optional_pct(self.v_st_max_premium),
+            min_deviation=self._optional_pct(self.v_st_min_deviation),
+            max_deviation=self._optional_pct(self.v_st_max_deviation),
+            min_sigma=self._optional_pct(self.v_st_min_sigma),
+            # 留空 = 沿用默认上限 (旧「高HV」判据), 不是关掉风险闸 —— 见 CLI 同处注释
+            max_sigma=(self._optional_pct(self.v_st_max_sigma)
+                       if self._optional_pct(self.v_st_max_sigma) is not None
+                       else PDEStrategyConfig.max_sigma),
+            # ── 候选层主口径八条 ───────────────────────────────────────
+            # 此前一条都没传, 全走 dataclass 默认 —— 页面上四个"不限"占位符,
+            # 而实测它们联合剔掉主池 54%。**留空 = 不限**: 这批控件开箱就预填
+            # 了默认值 (STRATEGY_THRESHOLD_VAR_DEFAULTS), 空下来只可能是用户
+            # 自己清的; 照 max_sigma 那样读成"沿用默认"就等于没有关闭入口,
+            # 而"放开评级看看策略在低评级债上成不成立"正是这批控件的用途。
+            max_model_premium=self._optional_pct(self.v_st_max_model_premium),
+            max_relative_deviation=self._optional_pct(self.v_st_max_relative_deviation),
+            min_relative_cheapness=self._optional_pct(self.v_st_min_relative_cheapness),
+            min_years_to_maturity=self._optional_float(self.v_st_min_years),
+            min_credit_rating=self._rating_floor(self.v_st_min_credit_rating),
+            min_outstanding_balance=self._optional_float(self.v_st_min_outstanding_balance),
+            exclude_underlying_st=bool(self.v_st_exclude_st.get()),
+            exclude_underlying_limit_down=bool(self.v_st_exclude_limit_down.get()),
+            transaction_cost=max(0.0, self._optional_float(self.v_st_cost) or 0.0) / 10000.0,
+            # 基准是回测解释口径的一部分，GUI 固定计算全池等权基准，
+            # 并在数据源支持时叠加中证转债指数。
+            compute_benchmark=True,
+            benchmark_index_code="000832.CSI",
+            pool_mode=engine_pool_mode,
+        )
+        return config
 
     def _run_strategy_backtest(self):
         if not self._strategy_backtest_pro_available():
@@ -74,63 +156,14 @@ class StrategyRunMixin:
                 messagebox.showwarning("提示", "本地条款库为空, 请先同步转债池")
             return
 
-        freq_map = {"周": "W", "月": "M", "季": "Q"}
-        policy = STRATEGY_VIEW_POLICY.get("综合机会", _DEFAULT_VIEW_POLICY)
         # 本地全市场池含大量退市/已到期/定向债, 静态全量送 Wind 会大面积取数失败。
         # 改用动态时点池: 每期先按 list_tradable_cbs(当期) 取存活券再筛选定价,
         # 无幸存者偏差且从源头避开死债的 Wind 请求。自选/当前筛选池保持静态。
         gui_pool_mode = self.v_st_pool_mode.get() if hasattr(self, "v_st_pool_mode") else "本地全市场"
         engine_pool_mode = "dynamic" if gui_pool_mode == "本地全市场" else "static"
         try:
-            cash_yield_pct = (
-                self._optional_float(self.v_st_cash_yield)
-                if hasattr(self, "v_st_cash_yield") else None)
-            exposure_raw = (getattr(self, "v_st_exposure", None).get()
-                            if getattr(self, "v_st_exposure", None) is not None else "恒定满仓")
-            exposure_mode = "valuation" if "估值" in str(exposure_raw) else "full"
-            rank_label = normalize_pde_rank_signal_label(
-                getattr(self, "v_st_rank_signal", None).get()
-                if getattr(self, "v_st_rank_signal", None) is not None
-                else "估值偏差"
-            )
-            rank_signal = {"估值偏差": "deviation"}[rank_label]
-            event_exit = (
-                bool(self.v_st_event_exit.get())
-                if hasattr(self, "v_st_event_exit") else False
-            )
-            config = PDEStrategyConfig(
-                top_n=max(1, int(float(self.v_st_top_n.get()))),
-                holding_mode="top_score",
-                rank_signal=rank_signal,
-                down_reset_event_exit=event_exit,
-                funding_mode="reserve_cash",
-                cash_yield_rate=max(0.0, (cash_yield_pct or 0.0) / 100.0),
-                exposure_mode=exposure_mode,
-                rebalance_freq=freq_map.get(self.v_st_freq.get(), "M"),
-                selection_view="综合机会",
-                min_confidence=policy["min_confidence"],
-                exclude_risk_tags=(
-                    PDEStrategyConfig().exclude_risk_tags
-                    if policy["exclude_review_risks"] else ()
-                ),
-                min_market_price=self._optional_float(self.v_st_min_price),
-                max_market_price=self._optional_float(self.v_st_max_price),
-                min_conversion_premium=self._optional_pct(self.v_st_min_premium),
-                max_conversion_premium=self._optional_pct(self.v_st_max_premium),
-                min_deviation=self._optional_pct(self.v_st_min_deviation),
-                max_deviation=self._optional_pct(self.v_st_max_deviation),
-                min_sigma=self._optional_pct(self.v_st_min_sigma),
-                # 留空 = 沿用默认上限 (旧「高HV」判据), 不是关掉风险闸 —— 见 CLI 同处注释
-                max_sigma=(self._optional_pct(self.v_st_max_sigma)
-                           if self._optional_pct(self.v_st_max_sigma) is not None
-                           else PDEStrategyConfig.max_sigma),
-                transaction_cost=max(0.0, self._optional_float(self.v_st_cost) or 0.0) / 10000.0,
-                # 基准是回测解释口径的一部分，GUI 固定计算全池等权基准，
-                # 并在数据源支持时叠加中证转债指数。
-                compute_benchmark=True,
-                benchmark_index_code="000832.CSI",
-                pool_mode=engine_pool_mode,
-            )
+            config = self._strategy_selection_config(
+                engine_pool_mode=engine_pool_mode)
             admission_config = AdmissionFilterConfig(
                 min_outstanding_balance=self._optional_float(self.v_st_min_balance),
                 min_credit_rating=self.v_st_min_rating.get().strip() or None,
@@ -416,6 +449,12 @@ class StrategyRunMixin:
     def _optional_pct(var):
         raw = var.get().strip()
         return float(raw) / 100.0 if raw else None
+
+    @staticmethod
+    def _rating_floor(var):
+        """评级下限下拉 → config 值。下拉选不出空串, 所以"不设这道闸"要一个显式哨兵。"""
+        raw = var.get().strip()
+        return None if (not raw or raw == RATING_FLOOR_NONE) else raw
 
     def _strategy_pricing_params(self):
         """仅从策略页取 PDE 参数，不读取单债定价页状态。"""

@@ -10,10 +10,12 @@ from datetime import date
 import numpy as np
 
 from ...batch_pricing import (
+    CREDIT_RATING_SCALE,
     DEFAULT_MIN_CREDIT_RATING,
     DEFAULT_MIN_OUTSTANDING_BALANCE,
     batch_view_label,
 )
+from ...strategy_backtest import PDEStrategyConfig
 from ..constants import DEFAULT_P_DOWN_PCT
 
 
@@ -185,9 +187,47 @@ STRATEGY_VIEW_POLICY = {
     "转股折价": {"min_confidence": ("高", "中"), "exclude_review_risks": True},
 }
 
+#: 「评级下限」下拉里表示"不设这道闸"的那一项。下拉选不出空串, 所以要一个显式哨兵;
+#: 其余七条走输入框, 留空即不限。
+RATING_FLOOR_NONE = "不限"
+#: 评级下限下拉的取值, 由 batch_pricing 的档位表派生 (不另抄一份会漂的列表)。
+STRATEGY_RATING_FLOOR_CHOICES: tuple[str, ...] = (RATING_FLOOR_NONE, *CREDIT_RATING_SCALE)
+
+
+def _threshold_var_defaults() -> dict[str, object]:
+    """候选层八条主口径阈值的 Tk 变量初值, **从 dataclass 默认派生**。
+
+    ``app._build_vars`` 的初值与 ``_STRATEGY_TEMPLATE_BASE`` 的归位值都读这一份 ——
+    两处各写一遍字面量的失败形态是: 切一次策略模板就把某条闸悄悄换了值, 而页面上
+    只是那个输入框的数字变了一下, 没有任何东西报错。派生还顺带保证"改了 dataclass
+    默认忘了改 GUI"不会发生。
+    """
+    cfg = PDEStrategyConfig()
+
+    def pct(value):     # 0.45 → "45"
+        return "" if value is None else f"{value * 100:g}"
+
+    def num(value):     # 0.5 → "0.5"
+        return "" if value is None else f"{value:g}"
+
+    return {
+        "v_st_max_model_premium": pct(cfg.max_model_premium),
+        "v_st_max_relative_deviation": pct(cfg.max_relative_deviation),
+        "v_st_min_relative_cheapness": pct(cfg.min_relative_cheapness),
+        "v_st_min_years": num(cfg.min_years_to_maturity),
+        "v_st_min_credit_rating": cfg.min_credit_rating or RATING_FLOOR_NONE,
+        "v_st_min_outstanding_balance": num(cfg.min_outstanding_balance),
+        "v_st_exclude_st": bool(cfg.exclude_underlying_st),
+        "v_st_exclude_limit_down": bool(cfg.exclude_underlying_limit_down),
+    }
+
+
+STRATEGY_THRESHOLD_VAR_DEFAULTS = _threshold_var_defaults()
+
 # 策略方案基线: 选择方案时先重置这些"选债逻辑"字段, 避免上个方案残留;
 # 数据源 / 区间 / 代码池属环境配置, 不在策略方案范围内。
 _STRATEGY_TEMPLATE_BASE = {
+    **STRATEGY_THRESHOLD_VAR_DEFAULTS,
     "v_st_freq": "月", "v_st_top_n": "10", "v_st_view": "综合机会",
     "v_st_min_price": "", "v_st_max_price": "",
     "v_st_min_premium": "", "v_st_max_premium": "",

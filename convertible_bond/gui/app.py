@@ -52,6 +52,7 @@ from .controllers import (
     SensitivityMixin,
     WindSyncMixin,
 )
+from .controllers.strategy_common import STRATEGY_THRESHOLD_VAR_DEFAULTS
 from .controllers.wind_sync import REFRESH_TERMS_LABEL
 from .tabs import backtest as backtest_tab
 from .tabs import batch as batch_tab
@@ -313,6 +314,28 @@ class CBPricerApp(
         self.v_st_max_deviation = ctk.StringVar(value="")
         self.v_st_min_sigma = ctk.StringVar(value="")
         self.v_st_max_sigma = ctk.StringVar(value="")
+        # ── 候选层主口径阈值 (2026-08-31 标签→阈值重构的那八条) ────────────────
+        # 预填 PDEStrategyConfig 的默认值, 让"到底在筛什么"看得见: 此前它们**一个
+        # 控件都没有、一个都没往 config 里传**, 全走 dataclass 默认, 而实测这几条
+        # 联合把主池候选从 291 砍到 123 (剔掉 54%) —— 页面上却是四个写着"不限"的
+        # 灰色占位符。想做"放开评级看看策略在低评级债上成不成立"这种最基本的敏感性
+        # 研究, 在 GUI 里做不到, 而且用户不会意识到自己没做到。
+        #
+        # **留空 = 不限**, 与旁边四个区间框一致, 而与 v_st_max_sigma 的"留空 = 沿用
+        # 默认上限"相反。那条特例是为了兼容一个**本来就空**的旧输入框 (重构前留空时
+        # 那道闸由「高HV」标签照常生效); 这八个是新建的、开箱就带着默认值, 空下来
+        # 只可能是用户自己清的 —— 再把它读成"沿用默认"就等于没有关闭入口。
+        #
+        # ⚠ 与下面 v_st_min_rating / v_st_min_balance / v_st_min_turnover 三个**不是
+        # 一回事**: 那三个喂**准入层** AdmissionFilterConfig (默认全 None, 页面上也
+        # 没有控件), 这八个喂**候选层** ScoreStrategyConfig。名字像、层不同, 别接错。
+        # 初值与模板归位值读**同一份** STRATEGY_THRESHOLD_VAR_DEFAULTS (它自己又是
+        # 从 PDEStrategyConfig 派生的), 所以"开箱值 = 模板值 = dataclass 默认"是
+        # 结构上成立的, 不靠三处字面量对齐。
+        for _name, _default in STRATEGY_THRESHOLD_VAR_DEFAULTS.items():
+            _var = (ctk.BooleanVar if isinstance(_default, bool) else ctk.StringVar)
+            setattr(self, _name, _var(value=_default))
+        # 准入层 (不是候选层, 见上面那段): 今天没有控件, 默认值恒为 None/""。
         self.v_st_min_balance = ctk.StringVar(
             value="" if DEFAULT_MIN_OUTSTANDING_BALANCE is None else str(DEFAULT_MIN_OUTSTANDING_BALANCE)
         )
@@ -1143,6 +1166,14 @@ class CBPricerApp(
         "v_st_min_premium", "v_st_max_premium", "v_st_min_deviation", "v_st_max_deviation",
         "v_st_min_sigma", "v_st_max_sigma", "v_st_min_rating", "v_st_min_balance",
         "v_st_min_turnover", "v_st_cost", "v_st_benchmark",
+        # 候选层主口径八条。**用的是新名字**, 与上一行那批准入层的旧名刻意不撞车:
+        # 旧预设文件里没有这些键, `_load_preset` 的 `if name in data` 会原样保留
+        # 表单里预填的默认值 —— 而复用旧名 (它们的存值是空串) 会让加载一次旧预设
+        # 就静默关掉评级与余额两道闸, 状态栏还照说「已加载预设」。
+        "v_st_max_model_premium", "v_st_max_relative_deviation",
+        "v_st_min_relative_cheapness", "v_st_min_years",
+        "v_st_min_credit_rating", "v_st_min_outstanding_balance",
+        "v_st_exclude_st", "v_st_exclude_limit_down",
     )
 
     def _save_preset(self):

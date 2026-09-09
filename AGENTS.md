@@ -868,6 +868,46 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
      等价声明 —— 在基类上打开会让那条用例按构造必红, 且红的是一个与本次改动无关的
      历史结论。
 
+- **候选层八条阈值接进 GUI, 且"留空"在这一批里读作"不限" (2026-09-08)**。
+  `strategy_run` 构造 `PDEStrategyConfig` 时**一条主口径都没传**, 全走 dataclass 默认,
+  而「选债限制」卡片上只有四个写着「不限」的区间框 —— 实测这八条联合把候选从 291 砍到
+  123 (54%), 单评级下限就砍 49 只。"放开评级看看策略在低评级债上成不成立"这种最基本的
+  敏感性研究因此在 GUI 里**做不到, 而且用户不会意识到自己没做到**。现在八个控件预填
+  dataclass 默认: 实测放开评级 39 → 49 / 便宜度下限留空 39 → 123 / 八条全放开 39 → 303,
+  而**不动控件时逐只等于库默认** (两份缓存 39 / 37, Top10 一致)。
+  五条约定:
+  ① **留空 = 不限, 与 `max_sigma` 刻意相反**。那条特例是为了兼容一个**本来就空**的旧
+     输入框 (重构前留空时那道闸由「高HV」标签照常生效, 读成 None 会让候选 116 → 126);
+     这八个是新建的、开箱带默认值, 空下来只可能是用户自己清的 —— 再读成"沿用默认"就
+     等于没有关闭入口, 而关闭入口正是它们存在的理由。评级走下拉, 选不出空串, 所以有
+     一个显式哨兵 `RATING_FLOOR_NONE = "不限"`。
+  ② **初值、模板归位值、dataclass 默认只许有一份**: `STRATEGY_THRESHOLD_VAR_DEFAULTS`
+     从 `PDEStrategyConfig()` 派生, `app._build_vars` 与 `_STRATEGY_TEMPLATE_BASE` 都读它。
+     三处各写一遍字面量的失败形态是"切一次模板就把某条闸悄悄换了值", 页面上只是一个
+     数字变了一下, 不报错。
+  ③ **用新变量名, 不复用 `v_st_min_rating` / `v_st_min_balance`**。那两个喂的是**准入层**
+     `AdmissionFilterConfig` (默认全 None, 页面上也没有控件), 与候选层不是一回事; 更要命
+     的是它们在 `_PRESET_VARS` 里, 而存值是空串 —— 复用即"加载一次旧预设就静默关掉评级
+     与余额两道闸", 状态栏还照说「已加载预设」。新名字不在旧预设里, `_load_preset` 的
+     `if name in data` 会原样保留预填的默认值。
+  ④ **config 构造抽成 `_strategy_selection_config(engine_pool_mode=)`, 理由是可测**
+     (与 CLI 的 `_risk_threshold_kwargs` 同): 它此前长在 `_run_strategy_backtest` 中段,
+     前后是 messagebox / 预检 / 线程启动, 于是"GUI 默认等不等于库默认"只能靠
+     `inspect.getsource` 扫文本回答 —— 那种断言认字面量, 换个别名读取就静默失效, 而且
+     会因一次纯重构变红 (这次就红了两条)。守护测试改成**全字段差集**: 除
+     `_GUI_OVERRIDES` 里登记的三条 (min_confidence / benchmark_index_code / pool_mode),
+     任何与库默认的差异都算回归 —— 逐条列举的写法漏掉哪个字段, 那个字段就永远测不到。
+     浮点要按容差比: GUI 的百分数往返 (2.2 → /100) 留 ULP 噪声 0.022000000000000002。
+  ⑤ **`exclude_risk_tags` 那个分支删掉**: 两边同值 (dataclass 默认已是 `()`, 而
+     `policy["exclude_review_risks"]` 因 `selection_view` 写死恒为 True) —— 看着在做事、
+     实则恒等的静默 no-op。
+  **顺带**: 「HV%」上限的占位符从「不限」改成「80」。那一格留空读的一直是"沿用默认 80%",
+  占位符却写着「不限」—— 页面上一句实打实的假话; 行为不动, 只把它说对
+  (`_range_grid_cell` 因此两侧占位符可分别指定)。
+  **尚未做**: `v_st_min_balance` / `v_st_min_rating` / `v_st_min_turnover` 三个准入层
+  变量仍在, 今天恒为 None/空 且没有控件。删它们会改 `run_settings["admission_filter"]`
+  的形状 (旧快照回读依赖, 有用例钉在归档 payload 上), 是单独一件事。
+
 - **保守过滤**: 准入筛选"字段明确才剔除"，避免因数据源缺字段误杀。**连续量不做硬阈值**:
   余额已从硬过滤降级为风险标签 (`DEFAULT_MIN_OUTSTANDING_BALANCE=None`) —— 硬阈值把
   "值得警惕"错误表达成"不存在", 一个字段解析错就让券无声消失; 而它此前 99% 的实际作用

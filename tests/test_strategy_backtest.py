@@ -694,11 +694,82 @@ def test_strategy_gui_exposes_simplified_workflow_and_no_legacy_rank_controls():
     assert "variable=app.v_st_template_display" in source
     assert 'for name in ("概览", "持仓", "诊断", "对比")' in source
     assert 'app.v_st_benchmark.set(True)' in source
-    run_source = inspect.getsource(strategy_run.StrategyRunMixin._run_strategy_backtest)
-    assert "compute_benchmark=True" in run_source
-    assert 'benchmark_index_code="000832.CSI"' in run_source
+    # 基准那两条 (compute_benchmark / benchmark_index_code) 此前也在这里扫源码文本,
+    # 已改由下面那条**行为**用例断言 —— 扫文本认的是字面量, 换个别名读取就静默失效,
+    # 而且它会因为一次纯重构 (把 config 构造抽成可测方法) 变红, 那是假红。
+    assert strategy_run.StrategyRunMixin._strategy_selection_config is not None
     assert 'text=E("▶ 运行回测")' in source
     assert "运行策略" not in source
+
+
+def test_gui_default_form_reproduces_the_library_default_selection_config():
+    """GUI 开箱表单构造出来的 config, 必须逐字段等于库默认 (+ 几条 GUI 明确的口径)。
+
+    这是「把主口径阈值接进 GUI」那次改动的验收: 八条阈值此前**一条都没往 config 里传**,
+    全走 dataclass 默认, 而页面上是四个写着「不限」的灰色占位符。接上控件之后, "默认
+    行为不变"必须能跑出来 —— 而不是靠读代码相信。
+
+    断言写成**全字段差集**而不是逐条列举: 只列举的话, 将来 GUI 悄悄改掉某个没被列到的
+    字段 (比如把 funding_mode 换掉) 照样全绿。这里反过来 —— 除了 ``_GUI_OVERRIDES``
+    里显式登记的那几条, 任何与库默认的差异都算回归。
+
+    表单初值取 ``_STRATEGY_TEMPLATE_BASE``, 那正是"切一次策略模板"之后的状态, 也与
+    ``app._build_vars`` 共用同一份 ``STRATEGY_THRESHOLD_VAR_DEFAULTS``。
+    """
+    import dataclasses
+    import math
+
+    from convertible_bond.strategy_backtest import PDEStrategyConfig
+    from convertible_bond.gui.controllers.strategy_backtest import (
+        StrategyBacktestMixin, _STRATEGY_TEMPLATE_BASE)
+
+    class Var:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    class DummyApp(StrategyBacktestMixin):
+        def __init__(self):
+            for name, value in _STRATEGY_TEMPLATE_BASE.items():
+                setattr(self, name, Var(value))
+
+    cfg = DummyApp()._strategy_selection_config(engine_pool_mode="dynamic")
+
+    #: GUI 相对库默认**刻意**不同的那几条, 每条都有出处。
+    _GUI_OVERRIDES = {
+        # 视图 + 置信度: STRATEGY_VIEW_POLICY["综合机会"] 的既定口径
+        "min_confidence": ("高", "中"),
+        # 基准是回测解释口径的一部分: GUI 固定算全池等权基准, 并叠加中证转债指数
+        "benchmark_index_code": "000832.CSI",
+        # 本地全市场池走动态时点池 (避开死债的取数, 且无幸存者偏差)
+        "pool_mode": "dynamic",
+    }
+    expected = dataclasses.replace(PDEStrategyConfig(), **_GUI_OVERRIDES)
+
+    def _same(a, b):
+        # 浮点按容差比: GUI 的百分数往返 (2.2 → /100) 会留 ULP 噪声
+        # (0.022000000000000002 vs 0.022), 那不是口径差异。
+        if isinstance(a, float) and isinstance(b, float):
+            return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-12)
+        return a == b
+
+    diff = {f.name: (getattr(cfg, f.name), getattr(expected, f.name))
+            for f in dataclasses.fields(PDEStrategyConfig)
+            if not _same(getattr(cfg, f.name), getattr(expected, f.name))}
+    assert not diff, f"GUI 默认配置与库默认有未登记的差异 (字段: 实际 vs 期望): {diff}"
+
+    # 八条主口径确实是**从表单读出来的**, 不是"没传所以恰好等于默认"。改一个控件,
+    # config 必须跟着变 —— 没有这一条, 把整段读取删掉上面那个断言照样绿。
+    app = DummyApp()
+    app.v_st_min_credit_rating = Var("不限")
+    app.v_st_min_relative_cheapness = Var("")
+    app.v_st_exclude_st = Var(False)
+    relaxed = app._strategy_selection_config(engine_pool_mode="dynamic")
+    assert relaxed.min_credit_rating is None      # 下拉的「不限」= 关掉这道闸
+    assert relaxed.min_relative_cheapness is None  # 输入框留空 = 不限
+    assert relaxed.exclude_underlying_st is False
 
 
 def test_strategy_pricing_params_are_independent_from_single_bond_page():
