@@ -41,7 +41,7 @@ from .base import (
     to_date,
     _add_months,
 )
-from ._helpers import _retry
+from ._helpers import EndpointCooldownError, _retry, endpoint_is_tripped
 from .wind import WindDataProvider, wind_is_ready
 from .akshare import AkshareDataProvider
 from .csv_provider import CSVDataProvider
@@ -69,6 +69,8 @@ __all__ = [
     "safe_date",
     "to_date",
     # 包内跨模块助手 (cb_events/down_reset_overrides/cninfo 经此 facade 导入)
+    "EndpointCooldownError",
+    "endpoint_is_tripped",
     "_add_months",
     "_retry",
 ]

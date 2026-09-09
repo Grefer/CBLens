@@ -20,13 +20,20 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import time
 from datetime import date, datetime
 
 import requests
 
-from .data_providers import DataProvider, BondTerms, _retry
+from .data_providers import (
+    BondTerms,
+    DataProvider,
+    EndpointCooldownError,
+    _retry,
+    endpoint_is_tripped,
+)
 from .market_time import EXCHANGE_TZ
 
 logger = logging.getLogger(__name__)
@@ -55,6 +62,17 @@ _CB_CATEGORIES = (
     "category_cb_szsh",        # 可转债专项 (优先)
     "",                        # 全部分类 (兜底)
 )
+
+#: 熔断键。cninfo 的限流是**按出口 IP** 的, 不是按接口: 实测同一时刻
+#: ``www.cninfo.com.cn`` 与 ``static.cninfo.com.cn`` 一起被掐 (443 全部读超时,
+#: 而 80 端口秒回)。所以公告查询与 PDF 下载**共用一个键** —— 查询已经被判拒绝之后,
+#: PDF 下载不该再去试一遍。
+CNINFO_ENDPOINT = "cninfo"
+
+#: cninfo 的冷却比东财那档长。实测被封之后连续探测 13 分钟仍全部超时, 而且
+#: **继续敲会升级** (80 端口跟着返回 502) —— 探测频率低一点严格更好。
+#: 用 ``CBLENS_CNINFO_COOLDOWN_SEC`` 覆盖; 设 0 关闭熔断。
+CNINFO_COOLDOWN_SEC = float(os.environ.get("CBLENS_CNINFO_COOLDOWN_SEC", "900") or 0)
 
 # Wind code → plain 6-digit code
 _CODE_RE = re.compile(r"^(\d{6})")
@@ -132,6 +150,14 @@ class CninfoAnnouncementProvider(DataProvider):
         返回 ``[{"title": ..., "date": ..., "url": ..., "pdf_url": ...}, ...]``.
         ``url`` 是完整 PDF 下载地址, ``pdf_url`` 是同义别名.
         """
+        # 入口守卫: 熔断期内**一次请求都不发**。守卫必须在这里而不是只在 _query_pages ——
+        # 下面 ``_resolve_stock_param`` → ``_fetch_org_id`` 是条裸 session.get, 它自己
+        # 吞掉所有异常, 被封时每只债照样白等满一个 timeout (实测 15s)。
+        if endpoint_is_tripped(CNINFO_ENDPOINT):
+            raise EndpointCooldownError(
+                f"cninfo 处于源站限流冷却期 ({CNINFO_COOLDOWN_SEC:.0f}s), "
+                f"跳过 {bond_code} — 本次没有发起任何请求")
+
         plain_code = _wind_code_to_plain(bond_code)
         se_date = f"{start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}"
         column = _infer_column(bond_code)
@@ -185,7 +211,17 @@ class CninfoAnnouncementProvider(DataProvider):
     # ── PDF 下载与文本提取 ──
 
     def download_pdf_bytes(self, pdf_url: str) -> bytes | None:
-        """下载公告 PDF, 返回原始字节."""
+        """下载公告 PDF, 返回原始字节.
+
+        **尊重熔断但不制造熔断**: 传了 ``endpoint`` 所以冷却期内直接跳过 (0 秒),
+        但不传 ``exhausted_is_rejection`` —— 公告 PDF 有几十 MB 的, 单份下载超时
+        是它自己慢, 拿它去掐掉整个 cninfo 会让一份大附件毁掉一整轮同步。
+        判限流的权力只给公告查询那条路。
+        """
+        # 冷却检查放在 _throttle 之前: 否则每只债还要先白睡一个限速间隔。
+        if endpoint_is_tripped(CNINFO_ENDPOINT):
+            logger.debug("cninfo 熔断冷却期, 跳过 PDF 下载: %s", pdf_url)
+            return None
         self._throttle()
         try:
             resp = _retry(
@@ -193,6 +229,8 @@ class CninfoAnnouncementProvider(DataProvider):
                 attempts=3,
                 delay=2.0,
                 label="cninfo_pdf_download",
+                endpoint=CNINFO_ENDPOINT,
+                cooldown_sec=CNINFO_COOLDOWN_SEC,
             )
             if resp.status_code == 200 and len(resp.content) > 500:
                 return resp.content
@@ -310,7 +348,18 @@ class CninfoAnnouncementProvider(DataProvider):
                     attempts=3,
                     delay=2.0,
                     label="cninfo_query",
+                    endpoint=CNINFO_ENDPOINT,
+                    cooldown_sec=CNINFO_COOLDOWN_SEC,
+                    # cninfo 的限流表现为**读超时**而不是 RemoteDisconnected, 所以
+                    # 全局的 _REJECTION_MARKERS 抓不到它; 判据放在"重试打光了还是超时"上。
+                    exhausted_is_rejection=True,
                 )
+            except EndpointCooldownError as exc:
+                # 熔断期跳过, 一次请求都没发。手里已经有半份就当"没取全"保住它
+                # (水位照样不推进), 下一只债会在入口守卫处 0 秒中止整轮。
+                if all_rows:
+                    raise IncompleteAnnouncementList(str(exc), rows=all_rows) from exc
+                raise
             except Exception as exc:
                 msg = f"cninfo 公告查询失败 (stock={stock}, page={page_num}): {exc}"
                 logger.warning(msg)

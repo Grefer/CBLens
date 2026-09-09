@@ -37,14 +37,19 @@ _REJECTION_MARKERS = ("remotedisconnected", "connection aborted")
 #: 常把底层 cause 一起带上, 两边都能命中。
 _TRANSIENT_MARKERS = ("connection reset", "timeout", "timed out", "max retries")
 
-#: 某个端点被源站拒绝后的熔断冷却时长 (秒)。用
+#: 某个端点被源站拒绝后的**默认**熔断冷却时长 (秒)。用
 #: ``CBLENS_AKSHARE_ENDPOINT_COOLDOWN_SEC`` 覆盖; 设 0 关闭熔断 (每次都真的去打)。
 #: 与 ``WIND_CONNECT_COOLDOWN_SEC`` 是同一个形状的负缓存。
+#: 调用方可以按端点传自己的冷却 (见 :func:`trip_endpoint` 的 ``cooldown_sec``)。
 AKSHARE_ENDPOINT_COOLDOWN_SEC = float(
     os.environ.get("CBLENS_AKSHARE_ENDPOINT_COOLDOWN_SEC", "300") or 0)
 
 _ENDPOINT_LOCK = threading.Lock()
-_endpoint_tripped_at: dict[str, float] = {}
+#: endpoint → (起算时刻, **该端点自己的**冷却时长)。冷却随 trip 一起记下来而不是
+#: 每次去读一个全局常量: 各源站的封禁长度差一个量级 (实测 cninfo 被封后连探 13 分钟
+#: 仍全部超时, 而且继续敲会升级到 80 端口也 502), 而冷却本质上是"多久去试一次"的
+#: 探测节奏 —— 一个数配不了两个源站。
+_endpoint_tripped_at: dict[str, tuple[float, float]] = {}
 
 
 class EndpointCooldownError(RuntimeError):
@@ -57,17 +62,27 @@ class EndpointCooldownError(RuntimeError):
 
 def endpoint_is_tripped(endpoint: str) -> bool:
     """该端点是否仍在拒绝冷却期内."""
-    if AKSHARE_ENDPOINT_COOLDOWN_SEC <= 0:
+    with _ENDPOINT_LOCK:
+        entry = _endpoint_tripped_at.get(endpoint)
+    if entry is None:
         return False
-    with _ENDPOINT_LOCK:
-        at = _endpoint_tripped_at.get(endpoint)
-    return at is not None and (time.monotonic() - at) < AKSHARE_ENDPOINT_COOLDOWN_SEC
+    tripped_at, cooldown = entry
+    return (time.monotonic() - tripped_at) < cooldown
 
 
-def trip_endpoint(endpoint: str) -> None:
-    """把端点标记为被源站拒绝, 起算冷却."""
+def trip_endpoint(endpoint: str, cooldown_sec: float | None = None) -> None:
+    """把端点标记为被源站拒绝, 起算冷却.
+
+    *cooldown_sec* 省略时用 :data:`AKSHARE_ENDPOINT_COOLDOWN_SEC`。冷却 ≤0 表示这一档
+    显式关掉了熔断, 此时**不记录** —— 于是 :func:`endpoint_is_tripped` 恒为 False,
+    与旧实现在全局常量为 0 时的行为一致。
+    """
+    cooldown = (AKSHARE_ENDPOINT_COOLDOWN_SEC if cooldown_sec is None
+                else float(cooldown_sec))
+    if cooldown <= 0:
+        return
     with _ENDPOINT_LOCK:
-        _endpoint_tripped_at[endpoint] = time.monotonic()
+        _endpoint_tripped_at[endpoint] = (time.monotonic(), cooldown)
 
 
 def reset_endpoint_breaker(endpoint: str | None = None) -> None:
@@ -85,6 +100,8 @@ def _retry(
     delay: float = 0.8,
     label: str = "akshare",
     endpoint: str | None = None,
+    cooldown_sec: float | None = None,
+    exhausted_is_rejection: bool = False,
 ):
     """瞬态网络错误重试 attempts 次; **限流拒绝立即抛出, 不重试**.
 
@@ -93,11 +110,19 @@ def _retry(
     传了 ``endpoint`` 时额外启用熔断: 该端点一旦被判为拒绝就进负缓存,
     冷却期内后续调用直接抛 ``EndpointCooldownError`` 而**不发起请求** ——
     否则被封的那几个小时里, 每只债都要为一个注定失败的调用等满连接超时
-    (实测 ``stock_zh_a_spot_em`` 单次失败就要 5.4s)。
+    (实测 ``stock_zh_a_spot_em`` 单次失败就要 5.4s)。``cooldown_sec`` 按端点
+    覆盖冷却时长。
+
+    ``exhausted_is_rejection`` 给**把限流表现成读超时**的源站用 (cninfo): 那一档
+    命中的是 ``_TRANSIENT_MARKERS``, 单看一次确实分不出"慢"与"被封", 所以判据放到
+    **重试打光了还是同一类错**上 —— 一次偶发慢照常靠重试救回来, 而连着 attempts 次
+    超时就当拒绝处理。默认 False: 不改动既有调用方 (akshare) 的行为。
     """
+    cooldown = (AKSHARE_ENDPOINT_COOLDOWN_SEC if cooldown_sec is None
+                else float(cooldown_sec))
     if endpoint is not None and endpoint_is_tripped(endpoint):
         raise EndpointCooldownError(
-            f"{endpoint} 处于源站限流冷却期 ({AKSHARE_ENDPOINT_COOLDOWN_SEC:.0f}s), 跳过本次调用")
+            f"{endpoint} 处于源站限流冷却期 ({cooldown:.0f}s), 跳过本次调用")
 
     last_exc: BaseException | None = None
     for i in range(attempts):
@@ -108,13 +133,20 @@ def _retry(
             msg = str(e).lower()
             if any(m in msg for m in _REJECTION_MARKERS):
                 if endpoint is not None:
-                    trip_endpoint(endpoint)
+                    trip_endpoint(endpoint, cooldown)
                 logger.warning(
                     "%s 被源站拒绝 (%s) — 判为按 IP 限流, 不重试%s",
                     label, type(e).__name__,
-                    f", 该端点冷却 {AKSHARE_ENDPOINT_COOLDOWN_SEC:.0f}s" if endpoint else "")
+                    f", 该端点冷却 {cooldown:.0f}s" if endpoint else "")
                 raise
-            if not any(m in msg for m in _TRANSIENT_MARKERS) or i == attempts - 1:
+            if not any(m in msg for m in _TRANSIENT_MARKERS):
+                raise
+            if i == attempts - 1:
+                if exhausted_is_rejection and endpoint is not None:
+                    trip_endpoint(endpoint, cooldown)
+                    logger.warning(
+                        "%s 连续 %d 次 %s — 判为源站限流, 该端点冷却 %.0fs",
+                        label, attempts, type(e).__name__, cooldown)
                 raise
             logger.warning(
                 "%s 调用失败 (第 %d/%d 次, %s), %.1fs 后重试",

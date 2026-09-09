@@ -19,10 +19,18 @@ from convertible_bond.cb_event_sync import (
 from convertible_bond.cb_events import CBEventStore
 from convertible_bond.historical_terms import TermsPatchStore
 from convertible_bond.cninfo_provider import (
+    CNINFO_ENDPOINT,
     CninfoAnnouncementProvider,
     _parse_announcement_item,
     _wind_code_to_plain,
     _infer_column,
+)
+from convertible_bond.data_providers import _helpers
+from convertible_bond.data_providers._helpers import (
+    EndpointCooldownError,
+    endpoint_is_tripped,
+    reset_endpoint_breaker,
+    trip_endpoint,
 )
 
 
@@ -1022,3 +1030,166 @@ def test_sync_cb_events_tests_pass_bond_names():
         "以下 sync_cb_events 调用没传 bond_names, 会去读真实 data/cb_data.json, "
         "用例过不过将取决于那只债当天在库里叫什么:\n  " + "\n  ".join(offenders)
     )
+
+
+# ── 源站限流熔断 + 分批落盘 (2026-09-08) ────────────────────────────
+
+
+@pytest.fixture
+def clean_breaker():
+    """熔断状态是**进程级**的, 用例之间必须清干净, 否则先跑的那条会污染后面."""
+    reset_endpoint_breaker()
+    yield
+    reset_endpoint_breaker()
+
+
+def _timeout_provider(monkeypatch):
+    """所有 HTTP 都读超时的 provider, 外加"真的发出去了几次请求"的计数器."""
+    import requests as _rq
+
+    provider = CninfoAnnouncementProvider(request_interval=0.0)
+    calls = {"n": 0}
+
+    def boom(*_args, **_kwargs):
+        calls["n"] += 1
+        raise _rq.exceptions.ReadTimeout(
+            "HTTPSConnectionPool(host='www.cninfo.com.cn', port=443): "
+            "Read timed out. (read timeout=15)")
+
+    monkeypatch.setattr(provider._session, "post", boom)
+    monkeypatch.setattr(provider._session, "get", boom)
+    # _retry 的重试间隔是 2s, 用例里不真睡
+    monkeypatch.setattr(_helpers.time, "sleep", lambda *_a, **_k: None)
+    return provider, calls
+
+
+def test_read_timeouts_trip_the_breaker_and_the_next_bond_costs_zero_requests(
+        monkeypatch, clean_breaker):
+    """cninfo 的限流表现为**读超时**, 重试打光之后必须判成拒绝并熔断.
+
+    这是"全库同步 18.8 小时"那个坑的守卫: 超时命中的是 ``_TRANSIENT_MARKERS``,
+    旧实现于是对每只债都重试 3 × 15s (实测单只 64.0s), 1060 只 ≈ 18.8 小时 ——
+    而且那是在以三倍力度继续敲同一个限流器, 自己给自己续封。
+
+    判据必须落在**第二只债花了几次请求**上, 而不是"有没有抛异常": 没有熔断时它
+    照样抛异常, 只是每只债先烧掉一分钟。
+    """
+    provider, calls = _timeout_provider(monkeypatch)
+
+    with pytest.raises(RuntimeError):
+        provider.list_bond_announcements("110030.SH", date(2026, 3, 1), date(2026, 9, 1))
+    first_round = calls["n"]
+    assert first_round > 0
+    assert endpoint_is_tripped(CNINFO_ENDPOINT), "重试打光还是超时 = 拒绝信号, 必须熔断"
+
+    with pytest.raises(EndpointCooldownError):
+        provider.list_bond_announcements("110031.SH", date(2026, 3, 1), date(2026, 9, 1))
+    assert calls["n"] == first_round, "熔断期内一个请求都不许发 (包括 orgId 那条裸 get)"
+
+
+def test_pdf_download_respects_the_breaker_but_never_trips_it(monkeypatch, clean_breaker):
+    """PDF 只尊重熔断, 不制造熔断.
+
+    公告附件有几十 MB 的, 单份下载超时是它自己慢 —— 让它掐掉整个 cninfo, 一份大附件
+    就能毁掉一整轮同步。判限流的权力只给公告查询那条路。
+    """
+    provider, calls = _timeout_provider(monkeypatch)
+
+    assert provider.download_pdf_bytes("http://static.cninfo.com.cn/x.PDF") is None
+    assert not endpoint_is_tripped(CNINFO_ENDPOINT), "一份附件慢不等于被限流"
+
+    # 反向: 查询那边已经判了限流之后, PDF 要认这个冷却 —— 0 请求, 而且**连限速那一觉
+    # 都不许睡**: 每份附件 1.5s, 而冷却期内它注定返回 None。
+    # 请求数那一条其实由 _retry 自己的冷却检查兜住了 (拿掉 download_pdf_bytes 里的
+    # 守卫也照样是 0), 所以必须同时钉住 _throttle 没被调用 —— 否则这条断言测的是别人
+    # 的保证, 守卫删掉了它也不会红。
+    trip_endpoint(CNINFO_ENDPOINT, 300)
+    throttled = {"n": 0}
+    monkeypatch.setattr(
+        provider, "_throttle", lambda: throttled.__setitem__("n", throttled["n"] + 1))
+    before = calls["n"]
+    assert provider.download_pdf_bytes("http://static.cninfo.com.cn/x.PDF") is None
+    assert calls["n"] == before, "冷却期内不许真的发请求"
+    assert throttled["n"] == 0, "冷却期内不该为一次注定跳过的下载睡满限速间隔"
+
+
+def _one_announcement(bond_code, start, end):
+    return [{
+        "title": "关于不向下修正转股价格的公告",
+        "date": date(2026, 4, 15),
+        "url": None,
+        "pdf_url": None,
+    }]
+
+
+def test_events_are_flushed_in_batches_so_a_crash_keeps_what_was_synced(tmp_path):
+    """跑到一半被掐断时, 已同步的那部分必须**已经在盘上**.
+
+    全库一轮健康时也要两三个小时, 而 cninfo 会按 IP 限流 —— "跑到一半再也取不到数"
+    是这条路的常态而不是意外。旧实现跑完才 ``add_many`` 一次, 中途 Ctrl-C 这几个
+    小时一条都存不下来。
+    """
+    codes = [f"12800{i}.SZ" for i in range(6)]
+
+    class CrashingProvider:
+        name = "fake"
+
+        def __init__(self):
+            self.seen = []
+
+        def list_bond_announcements(self, bond_code, start, end):
+            self.seen.append(bond_code)
+            if len(self.seen) > 4:
+                raise KeyboardInterrupt("用户 Ctrl-C")
+            return _one_announcement(bond_code, start, end)
+
+    store = CBEventStore(tmp_path / "events.json")
+    with pytest.raises(KeyboardInterrupt):
+        sync_cb_events(
+            CrashingProvider(), codes, store,
+            start=date(2026, 1, 1), end=date(2026, 4, 28),
+            download_pdf=False, flush_every=2,
+            bond_names={code: "测试转债" for code in codes},
+        )
+
+    # 必须用**全新的 store** 读盘 —— 内存里那份不算数
+    saved = {e.bond_code for e in CBEventStore(store.path).list_events()}
+    assert saved == set(codes[:4]), f"崩溃前那 4 只应该已落盘, 实际 {saved}"
+
+
+def test_cooldown_stops_the_run_early_and_only_advances_the_watermark_it_earned(tmp_path):
+    """熔断中止: 停手 + 落盘 + 水位只推到真取全的那几只.
+
+    水位一旦推过某只债, 它这一段公告以后永远不会再被拉取, 而且是静默的 —— 所以
+    中止时"已落盘"和"没推水位"必须同时成立。
+    """
+    codes = [f"12800{i}.SZ" for i in range(5)]
+
+    class CoolingProvider:
+        name = "fake"
+
+        def __init__(self):
+            self.seen = []
+
+        def list_bond_announcements(self, bond_code, start, end):
+            self.seen.append(bond_code)
+            if len(self.seen) > 2:
+                raise EndpointCooldownError("cninfo 处于源站限流冷却期 (900s), 跳过")
+            return _one_announcement(bond_code, start, end)
+
+    store = CBEventStore(tmp_path / "events.json")
+    provider = CoolingProvider()
+    result = sync_cb_events(
+        provider, codes, store,
+        start=date(2026, 1, 1), end=date(2026, 4, 28),
+        download_pdf=False, flush_every=25,   # 一次都到不了, 靠收尾那次 _flush
+        bond_names={code: "测试转债" for code in codes},
+    )
+
+    assert result["stopped_early"], "被限流掐断不能报成「跑完了」"
+    assert result["skipped"] == codes[2:]
+    assert provider.seen == codes[:3], "中止之后不许再去敲剩下的债"
+
+    reloaded = CBEventStore(store.path)
+    assert {e.bond_code for e in reloaded.list_events()} == set(codes[:2])
+    assert set(reloaded._meta.get("synced_at_by_code", {})) == set(codes[:2])

@@ -52,12 +52,16 @@ def _sync_caveats(result) -> str:
     `partial`: 翻页中途断了, 只取回一部分 —— 水位对这些债不推进, 但不报出来的话
     "取了一半"与"全取到了"在界面上长得一模一样, 而那正是这个键存在的理由。
     `upgraded`: `新增 0 条` 有歧义 —— 可能没有新公告, 也可能是旧事件被就地升级了。
+    `stopped_early`: 被源站限流掐断, 这一轮没跑完 —— 不说的话它和"跑完了"没区别。
 
     两个键此前**没有任何消费者** (CLI 与 GUI 三处都只读 scanned/added/patches/pdf)。
     """
     if not result:
         return ""
     parts = []
+    # 被限流掐断排在最前: 它意味着"这一轮根本没跑完", 比后面两条都重。
+    if result.get("stopped_early"):
+        parts.append("⛔ 源站限流, 已中止")
     partial = result.get("partial") or []
     if partial:
         parts.append(f"⚠ {len(partial)} 只公告未取全(水位不推进)")

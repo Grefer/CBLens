@@ -1061,6 +1061,44 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   (带着已取到的 rows): 那部分照常解析 (它们是真公告), 但这只债进 `partial` 而不进
   `synced_codes`。**`partial` 与 `failed` 要分开报** —— 一句"失败 N 只"会把"一条都没取到"
   和"取了一半"混成同一件事。
+- **cninfo 也按出口 IP 限流, 但它表现成*读超时*, 而且全库同步的请求量是自找的
+  (2026-09-08)**。判据逐层排除过: TCP 443 连上 0.01s、TLS 握手 0.01s 且拿到真的
+  GlobalSign 证书 (没有中间盒), 请求**发完之后**不给响应 → ReadTimeout; 同一个查询走
+  **80 端口 200/0.11s**; 同一时刻 baidu/pypi/sse.com.cn 全正常 (排除本机网络)。
+  **按量触发**: 当天第一次 HTTPS 请求还是 0.37s 成功的, 几次之后 8/8 全超时; 继续敲会
+  **升级到 80 端口也 502**。形状与东财那条同源, 但**东财是 RemoteDisconnected 而 cninfo
+  是 timeout** —— `_REJECTION_MARKERS` 抓不到它, 于是它命中 `_TRANSIENT_MARKERS` 被当成
+  瞬态重试 3 × 15s。实测 110030.SH 单只 **64.0s**, 全库 1060 只 ≈ **18.8 小时**, 而且
+  那是在以三倍力度继续敲同一个限流器。
+  **请求量被两个 bug 放大**: ① `_fetch_org_id` 用 **GET** 而 `topSearch/query` 只认
+  **POST** —— GET 恒返回 `500 {"error":"系统异常"}`, 被 `status_code != 200 → return None`
+  加 `logger.debug` 静默吞掉, **orgId 对每只债都是 None**; ② 没有 orgId 时
+  `stock=<纯代码>` 查询**恒返回 0 条** (实测 6 只在市债两档 category 全是 `(0,0)`),
+  于是每只债都掉进 `searchkey` **全市场全文检索**兜底 —— 那条路返回的是**发行人**的全量
+  公告, 实测每只 68~166 条要翻 4~6 页。无公告的债固定 5 次请求 (含 2 次全市场检索),
+  全库一轮 ≥4300 次、纯限速等待约 2.7h。⚠ **①② 尚未修**: "改 POST 拿到 orgId 后 stock
+  查询就能返回本债公告"**没验成** (验的时候 cninfo 已把 80 端口也封了), 改之前先验。
+  **已修的是止血那两条**: `_retry` 加 `exhausted_is_rejection=` —— 判据放在"**重试打光了
+  还是同一类瞬态错**"上 (一次偶发慢照常靠重试救回来), 默认 False 不动 akshare;
+  熔断改成**按端点带自己的冷却** (`trip_endpoint(endpoint, cooldown_sec)`), cninfo 走
+  `CNINFO_COOLDOWN_SEC` 默认 900s 而不是 akshare 那档 300s (实测被封后连探 13 分钟仍全
+  超时, 且继续敲会升级, 探测频率低一点严格更好)。**PDF 下载只尊重熔断不制造熔断** ——
+  公告附件有几十 MB 的, 单份超时是它自己慢, 让它掐掉整个 cninfo 就是一份大附件毁掉一轮
+  同步。入口守卫放在 `list_bond_announcements` 而不是只在 `_query_pages`: `_fetch_org_id`
+  是条裸 `session.get` 且自己吞掉所有异常, 被封时每只债照样白等满 15s。
+  模拟全库实测: **400 次请求 / 107 分钟 (100 只) → 4 次 / 1.1 分钟**, 折合全库
+  18.9 小时 → 约 1 分钟。
+- **公告事件分批落盘, 且必须"先落盘再推水位"(2026-09-08)**。事件此前是跑完才
+  `add_many` **一次** —— 而全库一轮健康时也要两三个小时, 加上 cninfo 会限流, "跑到一半
+  再也取不到数"是这条路的**常态不是意外**, 中途 Ctrl-C 这几个小时一条都存不下来。
+  `sync_cb_events(flush_every=25)` 每 25 只落一次 (事件 → patch → 水位)。
+  **顺序不能反**: 水位一旦推过某只债, 它这一段公告以后永远不会再被拉取且是静默的 ——
+  先推水位再落盘, 中途崩掉就是丢公告; 反过来 (落了盘没来得及推水位) 只是下一轮白取一次,
+  幂等无损。25 这个数是按落盘代价定的: `cb_events.json` / `cb_terms_patches.json` 是
+  4MB / 9MB 的**全量重写**, 每只一落太贵, 而丢最多 25 只的解析结果可以接受。
+  熔断触发时 `sync_cb_events` **提前中止**并返回 `stopped_early` / `skipped`, CLI 与 GUI
+  都要报出来 —— 否则"只同步了 30 只"与"完整跑完全库"在输出里长得一模一样 (与 `partial`
+  那条同源)。CLI 此时返回 **1**: 提前中止不是成功。
 - **半开区间票息**: `(start, end]` 避免边界双计
 - **年化强度**: p_down 解释为年化事件强度，每步 `1-exp(-p·dt)`
 - **原子写走 `atomic_io.atomic_write_json` / `atomic_write_text`, 不要自己写一遍**。

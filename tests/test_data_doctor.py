@@ -720,22 +720,49 @@ def test_cninfo_pagination_truncation_is_loud():
     assert not isinstance(exc.value, IncompleteAnnouncementList)
 
 
-def test_partial_fetch_does_not_advance_the_sync_watermark():
-    """部分取到的债不许进 ``synced_codes``。
+def test_partial_fetch_does_not_advance_the_sync_watermark(tmp_path):
+    """部分取到的债不许推同步水位。
 
     水位一旦推过去, 没看见的公告之后**永远不会再被拉取**, 而这是静默的。
     但已取到的部分照常解析 —— 它们是真的公告。
+
+    这条以前是扫 ``sync_cb_events`` 的**源码文本** (钉 ``incomplete_codes`` 这个变量名),
+    于是同步侧一改内部结构它就红, 而不变量本身一直成立 —— 那种红是假红, 只会训练人
+    去改测试。现在直接跑一遍看结果。
     """
-    import inspect
+    from datetime import date
 
-    from convertible_bond import cb_event_sync
+    from convertible_bond.cb_event_sync import sync_cb_events
+    from convertible_bond.cb_events import CBEventStore
+    from convertible_bond.cninfo_provider import IncompleteAnnouncementList
 
-    src = inspect.getsource(cb_event_sync.sync_cb_events)
-    assert "IncompleteAnnouncementList" in src, "同步侧没有区分部分取到"
-    assert "incomplete_codes" in src
-    assert "code not in incomplete_codes" in src, "部分取到的债仍在推水位"
-    # 部分与彻底失败要分开报, 否则日志把两种状况混在一起
-    assert '"partial": partial' in src
+    rows = [{"title": "关于不向下修正转股价格的公告", "date": date(2026, 4, 15),
+             "url": None, "pdf_url": None}]
+
+    class HalfProvider:
+        name = "fake"
+
+        def list_bond_announcements(self, bond_code, start, end):
+            if bond_code == "128001.SZ":      # 翻页中途断了, 手里有半份
+                raise IncompleteAnnouncementList("第 3 页失败", rows=rows)
+            return rows
+
+    codes = ["128000.SZ", "128001.SZ", "128002.SZ"]
+    store = CBEventStore(tmp_path / "events.json")
+    result = sync_cb_events(
+        HalfProvider(), codes, store,
+        start=date(2026, 1, 1), end=date(2026, 4, 28),
+        download_pdf=False, bond_names={c: "测试转债" for c in codes},
+    )
+
+    # 部分与彻底失败分开报 —— 混成一句"失败 N 只"就看不出"取了一半"
+    assert [c for c, _ in result["partial"]] == ["128001.SZ"]
+    assert result["failed"] == []
+    # 半份公告照常解析入库 (它们是真的公告)
+    assert {e.bond_code for e in store.list_events()} == set(codes)
+    # 但水位只推给**取全**的那两只
+    synced = set(CBEventStore(store.path)._meta.get("synced_at_by_code", {}))
+    assert synced == {"128000.SZ", "128002.SZ"}
 
 
 def test_impossible_clause_ratio_check_fires_only_when_one_reaches_the_pool():

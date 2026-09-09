@@ -16,7 +16,7 @@ from .cb_events import (
     parse_call_redemption_dates,
     parse_event_from_announcement,
 )
-from .data_providers import DataProvider, to_date
+from .data_providers import DataProvider, EndpointCooldownError, to_date
 from .historical_terms import TermsPatch, TermsPatchStore
 from .market_time import market_today
 
@@ -123,6 +123,7 @@ def sync_cb_events(
     on_progress=None,
     download_pdf: bool = True,
     bond_names: dict[str, str] | None = None,
+    flush_every: int = 25,
 ) -> dict:
     """从 provider 同步公告并解析为事件表.
 
@@ -131,6 +132,14 @@ def sync_cb_events(
     download_pdf : bool
         是否对 "不下修/不强赎" 公告下载 PDF 并提取正文以解析承诺期.
         默认 True; 设 False 可跳过 PDF 下载 (仅解析标题).
+    flush_every : int
+        每同步 N 只债落一次盘 (事件 → patch → 同步水位)。设 ≤0 表示只在跑完后落一次。
+
+        **为什么要分批**: 全库一轮 1060 只、健康时也要两三个小时, 而 cninfo 会按出口
+        IP 限流 —— 也就是说"跑到一半再也取不到数"是这条路的**常态**而不是意外。
+        原先事件是跑完才 ``add_many`` 一次, 中途 Ctrl-C 或掐断, 这几个小时一条都存不下来。
+        25 只约合几分钟一次: ``cb_events.json`` / ``cb_terms_patches.json`` 是 4MB / 9MB
+        的全量重写, 每只一落盘代价太高, 而丢最多 25 只的解析结果是可以接受的。
     """
     store = event_store or CBEventStore()
     end_date = end or market_today()
@@ -145,18 +154,65 @@ def sync_cb_events(
     scanned = 0
     pdf_downloaded = 0
     pdf_failed = 0
+    added = 0
+    upgraded = 0
+    patches_added = 0
+    #: 已落盘到 parsed_events / parsed_patches 的哪一位 (分批 flush 的游标)
+    flushed_events = 0
+    flushed_patches = 0
+    #: 这一批里取全了的债 —— 落盘成功之后才允许推它们的水位
+    pending_synced: list[str] = []
+    #: 源站限流导致提前中止时的原因 (None = 跑完了)
+    stopped_early: str | None = None
+    skipped: list[str] = []
+
+    def _flush() -> None:
+        """把攒下的事件/patch 落盘, **然后才**推同步水位.
+
+        顺序不能反: 水位一旦推过某只债, 它这一段公告以后永远不会再被拉取
+        (见 ``mark_synced`` 与 ``IncompleteAnnouncementList`` 各自的说明) ——
+        先推水位再落盘, 中途崩掉就是静默丢公告。反过来 (落了盘没来得及推水位)
+        只是下一轮白取一次, 幂等且无损。
+        """
+        nonlocal added, upgraded, patches_added, flushed_events, flushed_patches
+        fresh_events = parsed_events[flushed_events:]
+        if fresh_events:
+            added += store.add_many(fresh_events)
+            upgraded += int(getattr(store, "last_upgraded", 0) or 0)
+            flushed_events = len(parsed_events)
+        fresh_patches = parsed_patches[flushed_patches:]
+        if fresh_patches:
+            if term_patch_store is not None:
+                patches_added += term_patch_store.add_many(fresh_patches)
+            flushed_patches = len(parsed_patches)
+        if pending_synced:
+            mark_synced = getattr(store, "mark_synced", None)
+            if callable(mark_synced):
+                mark_synced(pending_synced)
+            pending_synced.clear()
 
     for i, code in enumerate(codes):
         if on_progress:
             on_progress(i, len(codes), code)
+        complete = True
         try:
             rows = provider.list_bond_announcements(code, start_date, end_date)
+        except EndpointCooldownError as exc:
+            # 源站在限流冷却期, 这一次**一个请求都没发出去**。接着往下跑只会把剩下
+            # 每一只债都记成一条一模一样的失败 (全库就是一千多条噪声), 而且冷却一到期
+            # 就又开始敲同一个限流器。停在这里: 已攒下的结果由下面的 _flush 落盘,
+            # 没轮到的代码原样留给下一轮 —— 水位没推进, 一条公告都不会漏。
+            stopped_early = str(exc)
+            skipped = codes[i:]
+            logger.warning("公告同步提前中止 (%s), 未处理 %d 只", exc, len(skipped))
+            break
         except IncompleteAnnouncementList as exc:
             # **部分取到**: 手里的公告照常解析 (它们是真的), 但这只债不进 synced_codes ——
             # 水位一旦推过去, 没看见的那些公告之后**永远不会再被拉取**, 而这是静默的。
             # 与"一条都没取到"分开记, 否则日志里"失败 N 只"会把两种完全不同的状况混在一起。
             partial.append((code, str(exc)))
             rows = exc.rows
+            complete = False
         except Exception as exc:
             failed.append((code, str(exc)))
             continue
@@ -215,23 +271,16 @@ def sync_cb_events(
                 if patch:
                     parsed_patches.append(patch)
 
-    added = store.add_many(parsed_events)
+        # 取全了才允许推水位; 失败的那一档在上面 continue 掉了, 部分取到的 complete=False。
+        if complete:
+            pending_synced.append(code)
+        if flush_every > 0 and (i + 1) % flush_every == 0:
+            _flush()
+
+    # 收尾: 最后一批 (以及 flush_every<=0 时的全部) 落盘。
     # 升级数与新增数分开报: 「added 0」在没有新公告与"重跑一遍什么都没变好"之间是歧义的,
     # 而修完解析器重跑一次恰恰是要看后者 (见 CBEventStore.add_many 的说明)。
-    upgraded = int(getattr(store, "last_upgraded", 0) or 0)
-    patches_added = 0
-    if term_patch_store is not None and parsed_patches:
-        patches_added = term_patch_store.add_many(parsed_patches)
-    failed_codes = {code for code, _err in failed}
-    # 部分取到的也不许推水位 —— 见上面 IncompleteAnnouncementList 那一段
-    incomplete_codes = {code for code, _err in partial}
-    synced_codes = [
-        code for code in codes
-        if code not in failed_codes and code not in incomplete_codes
-    ]
-    mark_synced = getattr(store, "mark_synced", None)
-    if callable(mark_synced):
-        mark_synced(synced_codes)
+    _flush()
     return {
         "scanned_announcements": scanned,
         "parsed_events": parsed_events,
@@ -241,6 +290,9 @@ def sync_cb_events(
         "patches_added": patches_added,
         "failed": failed,
         "partial": partial,
+        #: 非 None = 被源站限流掐断, 提前中止; skipped 是没轮到的代码 (下一轮直接重跑即可)
+        "stopped_early": stopped_early,
+        "skipped": skipped,
         "store_path": str(store.path),
         "pdf_downloaded": pdf_downloaded,
         "pdf_failed": pdf_failed,

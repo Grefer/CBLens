@@ -107,6 +107,14 @@ def main() -> int:
         f"条款影响新增 {result.get('patches_added', 0)} 条, "
         f"失败 {len(result['failed'])} 只  ({elapsed:.1f}s)"
     )
+    # 被源站限流掐断时**必须说清楚这不是"跑完了"** —— 否则一次只同步了 30 只的运行
+    # 与一次完整的全库运行, 在输出里长得一模一样。
+    stopped_early = result.get("stopped_early")
+    if stopped_early:
+        skipped = result.get("skipped") or []
+        print(f"\n⛔ 提前中止: {stopped_early}")
+        print(f"   未处理 {len(skipped)} 只。已取到的结果都已落盘、同步水位没有推进 —— "
+              "冷却过后重跑同一条命令即可从断点继续。")
     # `partial` 与 `failed` 是**两件事**: 前者取到了一部分公告 (翻页中途断了),
     # 后者一条都没取到。水位只对 partial 的债不推进 —— 不报出来的话, "取了一半"
     # 与"全取到了"在输出里长得一模一样, 而这正是加这个键的理由。
@@ -163,7 +171,8 @@ def main() -> int:
         for code, err in result["failed"][:20]:
             print(f"  {code}: {err}")
         return 1
-    return 0
+    # 提前中止也不是成功: 这一轮没有覆盖到全部代码。
+    return 1 if stopped_early else 0
 
 
 if __name__ == "__main__":
