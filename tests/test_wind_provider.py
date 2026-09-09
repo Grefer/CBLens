@@ -115,10 +115,18 @@ def test_get_bond_terms_reads_wind_reset_trigger_ratio(monkeypatch):
 
 
 def test_wss_candidate_invalid_indicator_is_cached(monkeypatch):
+    """失效字段只探一次, 之后整个进程都跳过它。
+
+    此前这条测的是逐字段的 ``_wss_first_available``, 而那个函数已随
+    ``get_stock_dividend_yield`` 迁到 ``_wss_candidates`` 一并删掉 (最后一个调用点走了
+    之后它就没有消费者了)。守的行为不变: ``_bad_wss_fields`` 这个负缓存必须真的生效,
+    否则每只代码都要为同一个失效字段再付一次探测。
+    """
     class Result:
-        def __init__(self, error_code, data):
+        def __init__(self, error_code, data, fields=None):
             self.ErrorCode = error_code
             self.Data = data
+            self.Fields = fields or []
 
     class FakeWind:
         def __init__(self):
@@ -126,18 +134,76 @@ def test_wss_candidate_invalid_indicator_is_cached(monkeypatch):
 
         def wss(self, code, field, options):
             self.calls.append(field)
-            if field == "bad_field":
+            names = [f.strip() for f in field.split(",")]
+            if "bad_field" in names:
                 return Result(-40522006, [["CWSSService: invalid indicators."]])
-            return Result(0, [[42]])
+            return Result(0, [[42] for _ in names], names)
 
     fake_wind = FakeWind()
     provider = WindDataProvider()
     monkeypatch.setattr(provider, "_ensure", lambda: fake_wind)
 
-    assert provider._wss_first_available("113001.SH", ("bad_field", "good_field"), date(2026, 5, 25)) == 42
-    assert provider._wss_first_available("113002.SH", ("bad_field", "good_field"), date(2026, 5, 25)) == 42
+    candidates = {"v": ("bad_field", "good_field")}
+    assert provider._wss_candidates("113001.SH", candidates, date(2026, 5, 25))["v"] == 42
+    assert provider._wss_candidates("113002.SH", candidates, date(2026, 5, 25))["v"] == 42
 
-    assert fake_wind.calls == ["bad_field", "good_field", "good_field"]
+    # 第一只: 合并批量失败 → 逐字段探测 → 记下 bad_field → 用剩下的重试。
+    # 第二只: bad_field 已在负缓存里, 直接一发。
+    assert fake_wind.calls == [
+        "bad_field,good_field", "bad_field", "good_field", "good_field", "good_field"]
+    assert "bad_field" in provider._bad_wss_fields
+
+
+def test_dividend_yield_sends_one_wss_per_call_not_one_per_candidate():
+    """股息率的四个候选合并成一次 wss —— 它是回测里最贵的那一次取数。
+
+    ``_wss_value`` 的负缓存只认 "invalid indicators", 而股息率最常见的失败形态是
+    **字段存在但这只股没值 / 没权限 / 空串** —— 那几档一次都不进负缓存。逐字段版本
+    因此每次调用都把 4 个候选从头试一遍: 桩上实测连叫 3 次, 正常 3 发而这三档各 12 发。
+    而这条路恰好逐只债、逐期联网, 且不进回测磁盘缓存 (AGENTS deferred #3)。
+
+    断言写成"发数 == 调用次数"而不是"<= 某个数": 松判据会让改回逐字段照样绿。
+    """
+    class _Res:
+        def __init__(self, code=0, data=None, fields=None):
+            self.ErrorCode = code
+            self.Data = data
+            self.Fields = fields or []
+
+    def _probe(responder):
+        provider = WindDataProvider.__new__(WindDataProvider)   # 不连 Wind
+        provider._bad_wss_fields = set()
+        sent = []
+
+        def _call_wss(code, fields, options):
+            sent.append(fields)
+            return responder(fields)
+
+        provider._call_wss = _call_wss
+        values = [provider.get_stock_dividend_yield("000001.SZ", date(2025, 1, 6))
+                  for _ in range(3)]
+        return values, sent
+
+    names = lambda f: [x.strip() for x in f.split(",")]
+    ok_values, ok_sent = _probe(lambda f: _Res(0, [[1.5]] + [[None]] * (len(names(f)) - 1),
+                                               names(f)))
+    assert ok_values == [1.5, 1.5, 1.5]
+    assert len(ok_sent) == 3, ok_sent
+
+    # 三种"不进负缓存"的失败形态: 逐字段版本在这里是 12 发
+    for label, responder in (
+        ("没值", lambda f: _Res(0, [[None]] * len(names(f)), names(f))),
+        ("空串", lambda f: _Res(0, [[""]] * len(names(f)), names(f))),
+        ("无权限", lambda f: _Res(-40521010, None)),
+    ):
+        values, sent = _probe(responder)
+        assert values == [None, None, None], label
+        assert len(sent) == 3, f"{label}: 发了 {len(sent)} 次, 候选没有合并成一次"
+
+    # 候选顺序是"谁权威"的唯一事实源, 不许被取数方式改掉
+    _, sent = _probe(lambda f: _Res(0, [[2.5]] * len(names(f)), names(f)))
+    assert names(sent[0]) == [
+        "dividendyield2", "dividendyield", "dividendyield_ttm", "dividend_yield"]
 
 
 def test_get_bond_terms_error_includes_wind_error_code(monkeypatch):

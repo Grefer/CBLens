@@ -1058,6 +1058,23 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   CSV 里**一条「筛选」都没有** —— 排查"策略为什么 100% 现金"时, 唯一能用的证据恰好是被
   截掉的那段, 而"没有落选解释"和"根本没有落选"长得一模一样。现在先填「筛选」, 准入段拿
   剩下的。守护测试只断言成员资格不断言顺序, 所以调换是安全的。
+- **`_wss_value` 的负缓存只认 "invalid indicators", 所以候选字段一定要合并成一次 wss
+  (2026-09-08)**。`get_stock_dividend_yield` 是全仓最后一个用逐字段 `_wss_first_available`
+  的调用点。而股息率最常见的失败形态不是"字段无效"而是**字段存在但这只股没值 / 没权限 /
+  空串** —— 那三档一次都不进 `_bad_wss_fields`, 于是每只股、每期都把 4 个候选从头试一遍。
+  桩上实测连叫 3 次: 正常 **3 发**, 而那三档各 **12 发** (4×); 只有 "invalid indicators"
+  那一档是 4 发 (负缓存生效)。而这条路恰好是回测里最贵的一次取数 (逐只债逐期联网, 且不进
+  磁盘缓存, 见 deferred #3)。
+  改走 `_wss_candidates` (条款链早就迁过去了)。**取值口径一个字节不动**: 12 种响应形态
+  (首个有值 / 首空次有 / 全 None / 空串 / `--` / 字符串数字 / 非数字 / 零 / ErrorCode≠0 /
+  invalid indicators / 抛异常 …) 逐一比对, 返回值全部相同。
+  **候选顺序不许因为换了取数方式而动**: `dividendyield2` / `dividendyield` /
+  `dividendyield_ttm` 是**三种不同口径** (近 12 个月 / 最近年度 / TTM), 那个顺序就是
+  "谁权威"的唯一事实源。
+  `_wss_first_available` 随之删除 (零消费者)。**留着它的代价不是几行代码, 是下一个人会
+  照着它写** —— 守护测试因此断言的是"发数 == 调用次数"而不是"≤ 某个数": 松判据会让改回
+  逐字段照样绿。
+
 - **投影层的 `close` 改用一次宽窗口取数 (2026-09-08)**。
   `HistoricalBondDataProvider.get_bond_terms` **每次都无条件重取 `close`** (理由见那里
   的注释, 是防"把别的日期的价带进这个估值日"), 而它打的是 `[估值日−15天, 估值日]` 这么

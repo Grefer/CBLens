@@ -673,8 +673,14 @@ class WindDataProvider(DataProvider):
     def _wss_candidates(self, code, candidates, valuation_date):
         """把所有候选字段合并成一次多字段 wss, 再按原顺序为每个 key 取第一个非空候选.
 
-        语义与逐字段 ``_wss_first_available`` 完全一致 (每个 key 取候选列表中第一个
-        非空值), 但单只代码只发 1 次 wss (失败时降级逐字段探测), 而不是十几次。
+        语义是"每个 key 取候选列表里第一个非空值", 但单只代码只发 1 次 wss
+        (失败时降级逐字段探测), 而不是每个候选各发一次。
+
+        逐字段的那个版本 (``_wss_first_available``) 已删 —— 最后一个调用点
+        ``get_stock_dividend_yield`` 于 2026-09-08 迁过来之后它就没有消费者了。
+        留着它的代价不是几行代码, 是**下一个人会照着它写**: ``_wss_value`` 的负缓存
+        只认 "invalid indicators", 而"字段存在但没值 / 没权限 / 空串"三档一次都不进,
+        于是每次调用都把全部候选从头试一遍 (桩上实测 4 倍)。
         """
         all_fields: list[str] = []
         seen: set[str] = set()
@@ -740,13 +746,6 @@ class WindDataProvider(DataProvider):
                 value = None
             out[fname] = value
         return out
-
-    def _wss_first_available(self, code, fields, valuation_date):
-        for field_name in fields:
-            value = self._wss_value(code, field_name, valuation_date)
-            if value is not None:
-                return value
-        return None
 
     def _wss_value(self, code, field_name, valuation_date):
         if field_name in self._bad_wss_fields:
@@ -830,16 +829,27 @@ class WindDataProvider(DataProvider):
         Wind 不同终端的字段名存在差异, 这里沿用候选字段模式; 拿不到则返回 None,
         上层定价会退回 q=0。
         """
-        value = self._wss_first_available(
+        # 走 ``_wss_candidates`` 而不是逐字段 ``_wss_first_available``: 语义完全一致
+        # (仍是"取候选里第一个非空"), 但单只代码只发 **1 次** wss 而不是 4 次。
+        #
+        # 为什么这一处特别值得改: ``_wss_value`` 的负缓存只认 "invalid indicators",
+        # 而股息率最常见的失败形态是**字段存在但这只股没值 / 没权限 / 空串** —— 那几档
+        # 一次都不进负缓存, 于是每只股、每期都把 4 个候选**从头试一遍**。桩上实测连叫
+        # 3 次: 正常 3 发, 而"没值 / 无权限 / 空串"三档各 **12 发** (4×)。而这条路恰好是
+        # 回测里最贵的一次取数 (逐只债逐期联网, 且不进磁盘缓存, 见 AGENTS deferred #3)。
+        #
+        # 这四个候选是**三种不同口径** (近12个月/最近年度/TTM), 顺序就是"谁权威"的唯一
+        # 事实源 —— 所以只换取数方式, 顺序一个字节不动。
+        value = self._wss_candidates(
             stock_code,
-            (
+            {"dividend_yield": (
                 "dividendyield2",
                 "dividendyield",
                 "dividendyield_ttm",
                 "dividend_yield",
-            ),
+            )},
             on_date,
-        )
+        ).get("dividend_yield")
         return _float_or_none(value)
 
     def get_bond_history(self, bond_code, start, end):
