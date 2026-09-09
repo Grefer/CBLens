@@ -182,6 +182,72 @@ def summarize_stability(roll: list[float]) -> dict | None:
     }
 
 
+# ── 展示: 稳健性三段的**唯一**一份措辞 ────────────────────────────────────
+#
+# CLI 的 `_print_stability`、策略页的稳健性区块、CSV 的 `# stability` 段都读这里。
+# 各写一份的失败形态在本项目里翻过好几次 (事件短标签 / 风险标签展示名 / 行色图例):
+# 改了口径之后某个出口还在说旧话, 同一个数在两个地方读起来不一样, 而且不报错。
+#
+# 放在 backtest_stats 而不是 GUI: 这里是产出这三个 dict 的地方, 也是唯一同时被
+# CLI 与 GUI 依赖的那一层; 本模块"只依赖 numpy、可离线单测"的约束不受影响
+# (下面全是字符串拼接)。
+
+
+def _pct_text(value) -> str:
+    return "—" if value is None else f"{float(value) * 100:.2f}%"
+
+
+def format_stability_rows(stability) -> list[tuple[str, str]]:
+    """稳健性三段 → ``[(标签, 一行文本), ...]``; 一段都没有时返回空表。
+
+    每段都把**样本量**带出来 (block/n_boot/n_obs/窗数): 块自助的 CI 宽窄几乎全由
+    期数决定, 不写出来读者没法判断"CI 含 0"是策略不行还是样本太短。
+    """
+    rows: list[tuple[str, str]] = []
+    if not stability:
+        return rows
+    sb = stability.get("sharpe_bootstrap")
+    if sb:
+        rows.append((
+            "Sharpe",
+            f"{sb['point']:.2f}  {int(sb['ci_level'] * 100)}%CI"
+            f"[{sb['ci_low']:.2f}, {sb['ci_high']:.2f}]  "
+            f"P(>0)={sb['prob_positive'] * 100:.0f}%  "
+            f"(block={sb['block']}, n={sb['n_boot']})",
+        ))
+    eb = stability.get("excess_bootstrap")
+    if eb:
+        rows.append((
+            "超额",
+            f"{_pct_text(eb['point_excess'])}  {int(eb['ci_level'] * 100)}%CI"
+            f"[{_pct_text(eb['excess_ci_low'])}, {_pct_text(eb['excess_ci_high'])}]  "
+            f"跑赢基准概率={eb['prob_beat_benchmark'] * 100:.0f}%  "
+            f"(配对 {eb.get('n_obs', '—')} 期)",
+        ))
+    rs = stability.get("rolling_summary")
+    if rs:
+        rows.append((
+            "滚动 Sharpe(1年窗)",
+            f"均值 {rs['rolling_sharpe_mean']:.2f}  "
+            f"最差 {rs['rolling_sharpe_min']:.2f}  "
+            f"为正窗占比 {rs['rolling_sharpe_pct_positive'] * 100:.0f}%  "
+            f"({rs['n_windows']} 窗)",
+        ))
+    return rows
+
+
+def stability_unavailable_note(stability, *, key_present: bool) -> str:
+    """算不出来时**说清为什么**, 而不是一个光秃秃的「—」。
+
+    两种缺席长得一样但要做的事相反: 旧快照缺这个键 → 重跑一次就有; 期数不够 →
+    重跑也没有, 得把区间拉长或调仓调密。判据取"键在不在"而不是"值空不空" ——
+    `_stability_stats` 永远返回一个三键 dict, 样本不足时三个值各自为 None。
+    """
+    if not key_present:
+        return "该快照早于本功能, 重跑一次即可得到"
+    return "期数不足, 块自助至少要 4 期 (拉长区间或调密调仓频率)"
+
+
 # ── 多重检验校正: PSR / Deflated Sharpe (Bailey & López de Prado) ──────────
 #
 # 参数扫描便宜之后, 几十组变体里"总有一组好看"——最优变体的 Sharpe 必须为

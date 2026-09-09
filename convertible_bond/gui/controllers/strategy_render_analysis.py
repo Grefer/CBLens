@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import LinearSegmentedColormap
 
+from ... import backtest_stats
 from ..theme import (
     ACCENT,
     BG_CARD,
@@ -320,8 +321,8 @@ class StrategyAnalysisRenderMixin:
 
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_columnconfigure(1, weight=1)
-        frame.grid_rowconfigure(2, minsize=240)
-        frame.grid_rowconfigure(4, minsize=300)
+        frame.grid_rowconfigure(4, minsize=240)
+        frame.grid_rowconfigure(6, minsize=300)
 
         # ── Row 0: 稳健性指标条 ──────────────────────────────────
         returns = [
@@ -426,14 +427,45 @@ class StrategyAnalysisRenderMixin:
                          font=(FONT_FAMILY, 11), justify="left",
                          wraplength=460).pack(anchor="w", pady=(3, 0))
 
-        # ── Row 2: 滚动风险图 ──────────────────────────────────
-        self._render_rolling_risk_chart(frame, 2, periods, result.get("equity_curve") or [])
+        # ── Row 2/3: 统计稳健性 (块自助) ───────────────────────
+        # USAGE.md 的「结果怎么读四条铁律」第 ② 条早就承诺了这一段 ("再看「诊断」:
+        # 块自助给 Sharpe 置信区间与跑赢基准概率 —— CI 含 0 = 差异可能只是运气"),
+        # 而在此之前它**只存在于 CLI stdout**: 引擎每次都算好放在 summary["stability"]
+        # 里, GUI 全目录 grep 零命中, 摘要卡只读点估计。这不是增强项, 是文档已承诺
+        # 而实现缺席。措辞走 backtest_stats 那一份, 不在这里另拼一遍。
+        self._strategy_section_title(frame, "统计稳健性 (块自助)", 2, 0, columnspan=2)
+        stability_box = ctk.CTkFrame(frame, fg_color="transparent")
+        stability_box.grid(row=3, column=0, columnspan=2, sticky="ew",
+                           padx=12, pady=(0, 6))
+        stability = summary.get("stability")
+        stability_rows = backtest_stats.format_stability_rows(stability)
+        if stability_rows:
+            for label, text in stability_rows:
+                row_w = ctk.CTkFrame(stability_box, fg_color="transparent")
+                row_w.pack(fill="x", pady=(2, 0))
+                ctk.CTkLabel(row_w, text=label, text_color=TEXT_DIM,
+                             font=(FONT_FAMILY, 11), width=132,
+                             anchor="w").pack(side="left")
+                ctk.CTkLabel(row_w, text=text, text_color=TEXT,
+                             font=(FONT_MONO, 11), anchor="w").pack(side="left")
+        else:
+            # 「算不出来」与「这一段没实现」不许长得一样, 而且两种缺席要做的事相反:
+            # 旧快照重跑一次就有, 期数不足重跑也没有。
+            ctk.CTkLabel(
+                stability_box,
+                text=backtest_stats.stability_unavailable_note(
+                    stability, key_present="stability" in summary),
+                text_color=TEXT_DIM, font=(FONT_FAMILY, 11),
+                justify="left", wraplength=900).pack(anchor="w", pady=(2, 0))
 
-        # ── Row 3: 收益分布 + 最差区间复盘 ──────────────────────
-        self._strategy_section_title(frame, "收益分布 / 最差区间", 3, 0, columnspan=2)
+        # ── Row 4: 滚动风险图 ──────────────────────────────────
+        self._render_rolling_risk_chart(frame, 4, periods, result.get("equity_curve") or [])
+
+        # ── Row 5/6: 收益分布 + 最差区间复盘 ────────────────────
+        self._strategy_section_title(frame, "收益分布 / 最差区间", 5, 0, columnspan=2)
         dist_and_worst = ctk.CTkFrame(
             frame, fg_color="transparent", height=STRATEGY_SECONDARY_CHART_HEIGHT)
-        dist_and_worst.grid(row=4, column=0, columnspan=2, sticky="ew", padx=4, pady=(0, 8))
+        dist_and_worst.grid(row=6, column=0, columnspan=2, sticky="ew", padx=4, pady=(0, 8))
         dist_and_worst.grid_columnconfigure(0, weight=4, minsize=520)
         dist_and_worst.grid_columnconfigure(1, weight=5, minsize=620)
         dist_and_worst.grid_rowconfigure(0, weight=1)

@@ -30,6 +30,7 @@ from ..historical_terms import (
     TermsPatchStore,
     project_terms_patches_path,
 )
+from .. import backtest_stats
 from ..strategy_backtest import (
     PDEStrategyConfig,
     _normalize_rank_signal,
@@ -51,26 +52,22 @@ def _fmt_pct(value) -> str:
     return f"{float(value) * 100:.2f}%"
 
 
-def _print_stability(stability) -> None:
-    """打印统计稳健性: Sharpe 块自助 CI、跑赢基准概率、滚动 Sharpe 子区间。"""
-    if not stability:
-        return
+def _print_stability(stability, *, key_present: bool = True) -> None:
+    """打印统计稳健性: Sharpe 块自助 CI、跑赢基准概率、滚动 Sharpe 子区间。
+
+    措辞不在这里拼 —— 走 ``backtest_stats.format_stability_rows``, 与策略页和 CSV
+    共用同一份 (见那里的注释)。这里只负责 stdout 的排版。
+    """
     print("── 统计稳健性 (块自助, 判断差异是否为噪声) ──")
-    sb = stability.get("sharpe_bootstrap")
-    if sb:
-        print(f"Sharpe: {sb['point']:.2f}  "
-              f"{int(sb['ci_level']*100)}%CI[{sb['ci_low']:.2f}, {sb['ci_high']:.2f}]  "
-              f"P(>0)={sb['prob_positive']*100:.0f}%  (block={sb['block']}, n={sb['n_boot']})")
-    eb = stability.get("excess_bootstrap")
-    if eb:
-        print(f"超额: {_fmt_pct(eb['point_excess'])}  "
-              f"{int(eb['ci_level']*100)}%CI[{_fmt_pct(eb['excess_ci_low'])}, "
-              f"{_fmt_pct(eb['excess_ci_high'])}]  跑赢基准概率={eb['prob_beat_benchmark']*100:.0f}%")
-    rs = stability.get("rolling_summary")
-    if rs:
-        print(f"滚动 Sharpe(1年窗): 均值 {rs['rolling_sharpe_mean']:.2f}  "
-              f"最差 {rs['rolling_sharpe_min']:.2f}  "
-              f"为正窗占比 {rs['rolling_sharpe_pct_positive']*100:.0f}%  ({rs['n_windows']} 窗)")
+    rows = backtest_stats.format_stability_rows(stability)
+    if not rows:
+        # 此前是 `if not stability: return` —— 静默不打印, 而"算不出来"与"这一段还没
+        # 实现"在输出里长得一模一样。
+        print(backtest_stats.stability_unavailable_note(
+            stability, key_present=key_present))
+        return
+    for label, text in rows:
+        print(f"{label}: {text}")
 
 
 def _cheapness_floor(args) -> float | None:
@@ -475,7 +472,8 @@ def main() -> int:
     if summary.get("index_benchmark_total_return") is not None:
         print(f"指数基准({args.benchmark_index}): {_fmt_pct(summary['index_benchmark_total_return'])}"
               f" | 超额 {_fmt_pct(summary['excess_vs_index'])}")
-    _print_stability(summary.get("stability"))
+    _print_stability(summary.get("stability"),
+                     key_present="stability" in summary)
     diagnostics = result.get("diagnostics") or {}
     performance = diagnostics.get("performance") or {}
     if performance:

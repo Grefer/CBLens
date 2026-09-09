@@ -1058,6 +1058,33 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   CSV 里**一条「筛选」都没有** —— 排查"策略为什么 100% 现金"时, 唯一能用的证据恰好是被
   截掉的那段, 而"没有落选解释"和"根本没有落选"长得一模一样。现在先填「筛选」, 准入段拿
   剩下的。守护测试只断言成员资格不断言顺序, 所以调换是安全的。
+- **统计稳健性三段的措辞只许有一份, 而且它是文档已承诺的实现 (2026-09-08)**。
+  `summary["stability"]` (块自助 Sharpe CI / 跑赢基准概率 / 滚动 Sharpe) 由引擎**每次都
+  算**, 而消费者只有 CLI 的 `_print_stability` —— `rg stability convertible_bond/gui/`
+  零命中, `_SUMMARY_CSV_KEYS` 24 键无一相关。而 `docs/USAGE.md` 的「结果怎么读四条铁律」
+  第 ② 条明写"再看**「诊断」**: 块自助给 Sharpe 置信区间与跑赢基准概率 —— CI 含 0 =
+  差异可能只是运气"; `tabs/strategy.py` 也把「稳健性」列为该页职责。**所以这不是增强项,
+  是文档承诺而实现缺席** —— GUI 用户看到的是一个裸 Sharpe 和一个裸超额, 而判断"这个策略
+  行不行"所需的数就躺在内存里。
+  四条约定:
+  ① **措辞收在 `backtest_stats.format_stability_rows`**, CLI / 策略页「诊断」/ CSV 三个
+     出口都读它。各写一份的失败形态本项目翻过好几次 (事件短标签 / 风险标签展示名 /
+     行色图例): 改了口径之后某个出口还在说旧话, 同一个数两处读起来不一样, 不报错。
+     放 `backtest_stats` 而不是 GUI —— 它是产出这三个 dict 的地方, 也是唯一同时被 CLI
+     与 GUI 依赖的那层; 那个模块"只依赖 numpy、可离线单测"的约束不受影响 (纯字符串拼接)。
+  ② **每段都要带样本量** (block / n_boot / n_obs / n_windows): CI 宽窄几乎全由期数决定,
+     不写出来读者判不出"CI 含 0"是策略不行还是样本太短。`n_obs` 尤其要写 —— 它是**配对
+     之后**真正参与比较的期数, 与传进去的长度可以不同。
+  ③ **算不出来要说清是哪一种缺席**, 不是一个光秃秃的「—」: 旧快照缺键 → 重跑一次就有;
+     期数不足 → 重跑也没有, 得拉长区间或调密调仓。两者要做的事**相反**, 所以判据取
+     "键在不在"而不是"值空不空" —— `_stability_stats` 永远返回三键 dict, 样本不足时三个
+     值各自为 None, 拿值判会把两种缺席混成一种。CLI 那边同样不再静默 return。
+  ④ **CSV 单独成 `# stability` 段**, 不并进 `# summary` (那是一行一个标量的平表, 而这里
+     是三个子 dict), 与 `# top_contributors` / `# yearly_returns` 同形。
+  **守护测试扫 GUI 那半边时必须走 `ast` 只看字面量** —— 直接 `in inspect.getsource(...)`
+  会连**注释**一起匹配, 而那段代码的注释里就写着「跑赢基准概率」这些词, 于是必然误报
+  (第一版就是这么红的, 与 `test_strategy_gui_exposes_simplified_workflow...` 同一个坑)。
+
 - **回测的股息率取数没有磁盘缓存**: `backtest_disk_cache.py` 对 `bond_history` /
   `stock_history` / `terms` 都做了跨运行缓存, 唯独 `get_stock_dividend_yield` 是**直接
   透传**, 而且拉的是**实时**快照拿去给历史估值日用。实测一次 3 期回测卡 55 分钟 0 进度,

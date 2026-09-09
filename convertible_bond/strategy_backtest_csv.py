@@ -239,6 +239,29 @@ def _write_csv_summary(writer, summary: dict[str, Any]) -> None:
         writer.writerow([key, _csv_value(summary.get(key))])
 
 
+def _write_csv_stability(writer, summary: dict[str, Any]) -> None:
+    """块自助的统计稳健性。**单独成段, 不并进 `# summary`**。
+
+    `# summary` 是一行一个标量的平表, 而这里是三个子 dict; 塞进去要么把键名压成
+    `stability.sharpe_bootstrap.ci_low` 这种长串混在标量里, 要么丢掉一半字段。
+    分段写法与 `# top_contributors` / `# yearly_returns` 同形。
+
+    **必须带上样本量** (block / n_boot / n_obs / n_windows): 块自助的 CI 宽窄几乎全由
+    期数决定, 事后拿 CSV 做分析时没有它就判不出"CI 含 0"是策略不行还是样本太短。
+    子 dict 里本来就有这几个键, 所以整个拍平即可, 不必挑。
+    """
+    stability = summary.get("stability") or {}
+    rows = [(f"{section}.{key}", value)
+            for section in ("sharpe_bootstrap", "excess_bootstrap", "rolling_summary")
+            for key, value in (stability.get(section) or {}).items()]
+    if not rows:
+        return
+    writer.writerow([])
+    writer.writerow(["# stability"])
+    for key, value in rows:
+        writer.writerow([key, _csv_value(value)])
+
+
 def _write_csv_diagnostics(writer, diagnostics: dict[str, Any]) -> None:
     if not diagnostics:
         return
@@ -277,7 +300,7 @@ def write_strategy_backtest_csv(path: str | Path, result: dict[str, Any]) -> Non
 
     各区块由独立的 ``_write_csv_*`` 辅助函数写出 (有数据才写空行+标题), 顺序:
     config / 逐期摘要 / equity_curve / positions / skipped_positions /
-    candidate_rows / rejection_rows / summary / diagnostics。
+    candidate_rows / rejection_rows / summary / stability / diagnostics。
     """
     periods = result.get("periods", [])
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
@@ -290,4 +313,5 @@ def write_strategy_backtest_csv(path: str | Path, result: dict[str, Any]) -> Non
         _write_csv_candidate_rows(writer, periods)
         _write_csv_rejection_rows(writer, periods)
         _write_csv_summary(writer, result.get("summary") or {})
+        _write_csv_stability(writer, result.get("summary") or {})
         _write_csv_diagnostics(writer, result.get("diagnostics") or {})

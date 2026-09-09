@@ -3072,6 +3072,108 @@ def test_relative_deviation_gate_only_applies_to_a_market_wide_anchor():
         cfg) is None, "假锚下仍按绝对阈值要求便宜度"
 
 
+_STABILITY_FIXTURE = {
+    "sharpe_bootstrap": {"point": 0.60, "ci_low": -0.12, "ci_high": 1.31,
+                         "prob_positive": 0.88, "ci_level": 0.90,
+                         "block": 4, "n_boot": 1000},
+    "excess_bootstrap": {"point_excess": -0.0546, "excess_ci_low": -0.1230,
+                         "excess_ci_high": 0.0120, "prob_beat_benchmark": 0.31,
+                         "ci_level": 0.90, "block": 4, "n_boot": 1000, "n_obs": 24},
+    "rolling_summary": {"rolling_sharpe_mean": 0.40, "rolling_sharpe_min": -0.90,
+                        "rolling_sharpe_pct_positive": 0.62, "n_windows": 13},
+}
+
+
+def test_stability_reaches_every_outlet_through_one_wording():
+    """块自助的三段必须**三个出口都到得了**, 而且措辞只有一份。
+
+    此前它只到 CLI stdout: 引擎每次都算好放进 ``summary["stability"]``,
+    而 `rg stability convertible_bond/gui/` 零命中、`_SUMMARY_CSV_KEYS` 24 键无一相关。
+    这不是增强项 —— ``docs/USAGE.md`` 的「结果怎么读四条铁律」第 ② 条明写"再看「诊断」:
+    块自助给 Sharpe 置信区间与跑赢基准概率", 也就是文档已承诺而实现缺席。
+
+    断言的是**同一份措辞**流到三处, 不是三处各自长什么样: 各写一份的失败形态在本项目
+    里翻过好几次 (事件短标签 / 风险标签展示名 / 行色图例) —— 改了口径之后某个出口还在
+    说旧话, 同一个数在两个地方读起来不一样, 而且不报错。
+    """
+    import csv as _csv
+    import inspect
+    import io
+    import tempfile
+    from pathlib import Path as _Path
+
+    from convertible_bond import backtest_stats
+    from convertible_bond.cli import strategy_backtest as cli
+    from convertible_bond.gui.controllers import strategy_render_analysis as render
+
+    rows = backtest_stats.format_stability_rows(_STABILITY_FIXTURE)
+    assert [label for label, _ in rows] == ["Sharpe", "超额", "滚动 Sharpe(1年窗)"]
+    text = dict(rows)
+    # 每段都要带**样本量** —— CI 宽窄几乎全由期数决定, 没有它读者判不出"CI 含 0"
+    # 是策略不行还是样本太短。
+    assert "block=4" in text["Sharpe"] and "n=1000" in text["Sharpe"]
+    assert "配对 24 期" in text["超额"], text["超额"]
+    assert "13 窗" in text["滚动 Sharpe(1年窗)"]
+    assert "跑赢基准概率=31%" in text["超额"]
+    assert "90%CI[-0.12, 1.31]" in text["Sharpe"]
+
+    # ① CLI: 打印的必须是这几行, 而不是自己再拼一遍
+    buf = io.StringIO()
+    with __import__("contextlib").redirect_stdout(buf):
+        cli._print_stability(_STABILITY_FIXTURE)
+    printed = buf.getvalue()
+    for label, value in rows:
+        assert f"{label}: {value}" in printed, printed
+
+    # ② GUI: 稳健性区块走同一个函数 (GUI 在测试环境起不来, 所以断言的是"没有第二份
+    #    实现")。**扫字面量而不是扫源码文本** —— 直接 `in src` 会连注释一起匹配, 而这
+    #    段代码的注释里就写着「跑赢基准概率」之类的词, 于是那种写法必然误报
+    #    (`test_strategy_gui_exposes_simplified_workflow...` 上已经吃过这一次)。
+    src = inspect.getsource(render.StrategyAnalysisRenderMixin._render_strategy_risk_panel)
+    assert "backtest_stats.format_stability_rows" in src
+    assert "backtest_stats.stability_unavailable_note" in src
+    import ast as _ast
+    import textwrap as _textwrap
+    literals = [node.value for node in _ast.walk(_ast.parse(_textwrap.dedent(src)))
+                if isinstance(node, _ast.Constant) and isinstance(node.value, str)]
+    for hand_written in ("跑赢基准概率", "为正窗占比", "%CI["):
+        assert not any(hand_written in text for text in literals), (
+            f"策略页又自己拼了一份措辞: {hand_written}")
+
+    # ③ CSV: 单独一段, 且样本量字段一并落盘
+    with tempfile.TemporaryDirectory() as tmp:
+        out = _Path(tmp) / "s.csv"
+        write_strategy_backtest_csv(out, {
+            "periods": [], "summary": {"sharpe": 0.6, "stability": _STABILITY_FIXTURE}})
+        cells = list(_csv.reader(out.read_text(encoding="utf-8-sig").splitlines()))
+    assert ["# stability"] in cells, cells
+    keys = {row[0] for row in cells if row}
+    assert "sharpe_bootstrap.ci_low" in keys
+    assert "excess_bootstrap.prob_beat_benchmark" in keys
+    assert "excess_bootstrap.n_obs" in keys, "样本量没落盘, 事后没法判 CI 宽窄从哪来"
+    assert "rolling_summary.n_windows" in keys
+
+
+def test_stability_says_why_it_is_missing_instead_of_a_bare_dash():
+    """两种缺席长得一样但要做的事**相反**, 所以不能都渲染成「—」。
+
+    旧快照没有这个键 → 重跑一次就有; 期数不足 → 重跑也没有, 得拉长区间或调密调仓。
+    判据取"键在不在"而不是"值空不空": ``_stability_stats`` 永远返回一个三键 dict,
+    样本不足时三个值各自为 None —— 拿值判会把两种缺席混成一种。
+    """
+    from convertible_bond import backtest_stats
+
+    empty = {"sharpe_bootstrap": None, "excess_bootstrap": None, "rolling_summary": None}
+    assert backtest_stats.format_stability_rows(empty) == []
+    assert backtest_stats.format_stability_rows(None) == []
+
+    short = backtest_stats.stability_unavailable_note(empty, key_present=True)
+    legacy = backtest_stats.stability_unavailable_note(None, key_present=False)
+    assert short != legacy
+    assert "期数" in short and "4" in short
+    assert "快照" in legacy and "重跑" in legacy
+
+
 def test_run_cache_does_not_freeze_an_empty_series():
     """**运行内**缓存也不许把取数失败的空序列当权威事实记住。
 
