@@ -47,6 +47,7 @@ from ._helpers import (
     _wind_to_ak_stock,
     _wind_to_ak_stock_prefixed,
 )
+from .dividends import DividendYieldCache, DividendYieldObservation
 from ..market_time import market_today
 
 
@@ -55,6 +56,7 @@ _STALE_STOCK_CLOSE_DAYS = 7
 
 _JS_RUNTIME_LOCK = threading.Lock()
 _js_runtime_warmed = False
+_DIVIDEND_SPOT_INIT_LOCK = threading.Lock()
 
 
 def _warm_up_js_runtime() -> None:
@@ -425,7 +427,7 @@ class AkshareDataProvider(DataProvider):
             return None
         text = str(value).replace("%", "").strip()
         pct = _float_or_none(text)
-        if pct is None or pct < 0:
+        if pct is None or not np.isfinite(pct) or pct < 0:
             return None
         return pct
 
@@ -452,15 +454,42 @@ class AkshareDataProvider(DataProvider):
             return None
 
     def get_stock_dividend_yield(self, stock_code, on_date):
-        """取正股股息率 (%), 优先使用乐咕估值指标, 失败时尝试实时快照字段.
+        """兼容标量接口，完整来源由 observation 方法保留。"""
+        return self.get_stock_dividend_yield_observation(stock_code, on_date).value_pct
 
-        ⚠️ 两条路当前都可能不通, 于是 ``q`` 静默落到 0 (见 ``pricing_api`` 的回退):
-        ``stock_a_indicator_lg`` 已被 **akshare 上游删除** (实测 1.18.58 起
-        ``AttributeError``, 所以下面那道 ``hasattr`` 现在恒为 False), 而兜底的
-        ``stock_zh_a_spot_em`` 属于东财被限流封禁的那个集群。这不是本项目的 bug,
-        但**别把"q=0"读成"这只股不分红"** —— 要区分, 看有没有
-        "正股实时股息率取 … 失败" 的告警。
-        """
+    def _dividend_spot_snapshot(self):
+        """全市场实时表只取一次；没有股息率列也须短期记住，防逐股重拉整表。"""
+        with _DIVIDEND_SPOT_INIT_LOCK:
+            if not hasattr(self, "_dividend_spot_lock"):
+                self._dividend_spot_lock = threading.Lock()
+                self._dividend_spot = None
+        with self._dividend_spot_lock:
+            now, today = time.monotonic(), market_today()
+            cached = self._dividend_spot
+            if cached is not None and cached[2] == today and now < cached[4]:
+                return cached[:4]
+            spot, error = None, ""
+            try:
+                spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em",
+                              endpoint="stock_zh_a_spot_em")
+                usable = (spot is not None and len(spot) > 0
+                          and bool(self._dividend_yield_columns(spot)))
+                if not usable:
+                    error = "实时行情未提供股息率字段"
+            except EndpointCooldownError as exc:
+                error = str(exc)
+                logger.debug("akshare 正股实时股息率跳过: %s", exc)
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                logger.warning("akshare 正股实时股息率取数失败: %s", exc)
+            stamp = DividendYieldObservation(None, "unavailable", "akshare.stock_zh_a_spot_em")
+            ttl = (DividendYieldCache.MISSING_TTL_SECONDS if error
+                   else DividendYieldCache.SNAPSHOT_TTL_SECONDS)
+            self._dividend_spot = (spot, stamp.fetched_at, today, error, now + ttl)
+            return self._dividend_spot[:4]
+
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
+        """有日期的乐咕指标按估值日截断；实时兜底明确标记采集日期。"""
         plain = _wind_to_ak_stock(stock_code).zfill(6)
 
         if hasattr(self._ak, "stock_a_indicator_lg"):
@@ -486,13 +515,15 @@ class AkshareDataProvider(DataProvider):
                             for col in cols:
                                 pct = self._dividend_yield_value(row.get(col))
                                 if pct is not None:
-                                    return pct
+                                    return DividendYieldObservation(
+                                        pct, "historical" if date_col is not None else "realtime_snapshot",
+                                        f"akshare.stock_a_indicator_lg.{col}",
+                                        as_of=row["_d"] if date_col is not None else None)
             except Exception as e:
                 logger.warning("akshare 股息率取 %s 失败: %s", stock_code, e)
 
+        spot, fetched_at, fetched_on, error = self._dividend_spot_snapshot()
         try:
-            spot = _retry(self._ak.stock_zh_a_spot_em, label="stock_zh_a_spot_em",
-                          endpoint="stock_zh_a_spot_em")
             if spot is not None and len(spot) > 0:
                 mask = spot["代码"].astype(str).str.zfill(6) == plain
                 if mask.any():
@@ -500,12 +531,14 @@ class AkshareDataProvider(DataProvider):
                     for col in self._dividend_yield_columns(spot):
                         pct = self._dividend_yield_value(row.get(col))
                         if pct is not None:
-                            return pct
-        except EndpointCooldownError as e:
-            logger.debug("akshare 正股实时股息率跳过 %s: %s", stock_code, e)
+                            return DividendYieldObservation(
+                                pct, "realtime_snapshot", f"akshare.stock_zh_a_spot_em.{col}",
+                                as_of=fetched_on, fetched_on=fetched_on, fetched_at=fetched_at)
         except Exception as e:
-            logger.warning("akshare 正股实时股息率取 %s 失败: %s", stock_code, e)
-        return None
+            error = f"{type(e).__name__}: {e}"
+        return DividendYieldObservation(
+            None, "unavailable", "akshare.stock_zh_a_spot_em", fetched_at=fetched_at,
+            fetched_on=fetched_on, reason=error or "该正股没有有效股息率")
 
     def get_bond_history(self, bond_code, start, end):
         ak_code = _wind_to_ak_bond(bond_code)

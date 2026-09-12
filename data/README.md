@@ -1,5 +1,13 @@
 # 项目数据目录
 
+## 策略运行与研究档案
+
+- `strategy_backtest_cache/`：条款、历史行情与股息率观察值缓存。股息率保留来源与观察日期；已结束估值日的历史值持久保存，实时快照当日最多一小时，失败五分钟。缓存命中不改变历史/实时分类。
+- `strategy_research_results/`：邻域对比和选债/仓位对照的完整报告，包括每组实际参数、持仓和统计校正。
+- `strategy_experiments/experiment_*/`：不可变 `manifest.json`、冻结时的 `training_result.json` 与只追加的 `oos_records.json`。保存完整配置、代码池、代码与数据指纹及逐期经济结果；普通快照清理不会删除这些档案。
+
+这些目录属于个人运行态、被 Git 忽略。冻结实验及研究报告应与关注池一同备份。重跑后旧期经济结果不一致会报冲突，不能拿新数据直接覆盖已记录的样本外历史。
+
 ## `cb_data.json`
 
 全市场存续可转债的**静态基础信息快照** (semi-static fields)，由 `TermsBundle` 维护。

@@ -852,6 +852,16 @@ class WindDataProvider(DataProvider):
         ).get("dividend_yield")
         return _float_or_none(value)
 
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
+        """Wind 的 tradeDate 请求给出历史观察值，缺失保持 None。"""
+        from .dividends import DividendYieldObservation, scalar_dividend_observation
+        value = self.get_stock_dividend_yield(stock_code, on_date)
+        checked = scalar_dividend_observation(value, "Wind.wss.dividend_yield_candidates")
+        if checked.value_pct is None:
+            return checked
+        return DividendYieldObservation(checked.value_pct, "historical", checked.source,
+                                        as_of=on_date)
+
     def get_bond_history(self, bond_code, start, end):
         res = self._call_wsd(bond_code, "close", start.isoformat(), end.isoformat())
         if res.ErrorCode != 0:

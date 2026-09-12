@@ -8,6 +8,7 @@ from __future__ import annotations
 from tkinter import filedialog, messagebox
 
 from ...paths import data_dir, data_path
+from ...atomic_io import atomic_write_json
 from ...strategy_backtest import strategy_type_for_rank_signal, write_strategy_backtest_csv
 
 from .strategy_common import _strategy_snapshot_jsonable, _strategy_snapshot_object_hook
@@ -52,12 +53,7 @@ class StrategySnapshotMixin:
 
     @staticmethod
     def _write_strategy_snapshot_json(path, encoded_payload):
-        import json as _json
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            _json.dump(encoded_payload, f, ensure_ascii=False, indent=2)
-        tmp.replace(path)
+        atomic_write_json(path, encoded_payload)
 
     @classmethod
     def _build_strategy_snapshot_payload(cls, result, *, saved_at):

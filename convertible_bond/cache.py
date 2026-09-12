@@ -527,6 +527,10 @@ class CachingDataProvider(DataProvider):
     def get_stock_dividend_yield(self, stock_code, on_date):
         return self.inner.get_stock_dividend_yield(stock_code, on_date)
 
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
+        from .data_providers.dividends import fetch_dividend_observation
+        return fetch_dividend_observation(self.inner, stock_code, on_date)
+
     def get_bond_history(self, bond_code, start, end):
         return self.inner.get_bond_history(bond_code, start, end)
 
@@ -680,6 +684,10 @@ class CachedBondDataProvider(DataProvider):
 
     def get_stock_dividend_yield(self, stock_code, on_date):
         return self.market.get_stock_dividend_yield(stock_code, on_date)
+
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
+        from .data_providers.dividends import fetch_dividend_observation
+        return fetch_dividend_observation(self.market, stock_code, on_date)
 
     def get_bond_history(self, bond_code, start, end):
         return self.market.get_bond_history(bond_code, start, end)

@@ -16,6 +16,8 @@
     TermsBundle 完全一致的口径), 历史价存 ``[[iso, value], ...]``。
   - 命中/未命中均**透传真实数据源结果**, 行为与不加缓存时一致; 缓存仅影响速度。
   - 缓存键带 provider 命名空间, 不同数据源/口径不会串味。
+  - 股息率单独保留来源：历史值按估值日，实时值按采集日且最多一小时；失败五分钟
+    后允许重试。实时值落盘不会变成历史值，缺失也不会落成真实的 0。
 
 默认**不接入任何现有流程**, 由 CLI/调用方显式启用 (``cb-strategy-backtest --cache-dir``)。
 """
@@ -23,7 +25,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections import Counter
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -31,6 +35,7 @@ from typing import Any
 from .atomic_io import atomic_write_json
 from .cache import _json_dict_to_terms, _terms_to_json_dict
 from .data_providers import DataProvider, to_date
+from .data_providers.dividends import DividendYieldCache
 from .market_time import market_today
 
 logger = logging.getLogger(__name__)
@@ -91,6 +96,7 @@ class DiskCacheProvider(DataProvider):
         *,
         today: date | None = None,
         namespace: str | None = None,
+        now: Callable[[], float] | None = None,
     ):
         self.inner = inner
         self.name = f"{getattr(inner, 'name', 'provider')}+disk"
@@ -105,22 +111,26 @@ class DiskCacheProvider(DataProvider):
         self._terms_path = self.cache_dir / "terms.json"
         self._bond_hist_path = self.cache_dir / "bond_history.json"
         self._stock_hist_path = self.cache_dir / "stock_history.json"
+        self._dividends_path = self.cache_dir / "dividend_yields.json"
         self._meta_path = self.cache_dir / "_meta.json"
         stored = _load_json(self._meta_path).get("identity")
         if stored == self._identity:
             self._terms: dict[str, dict] = _load_json(self._terms_path)
             self._bond_hist: dict[str, list] = _load_json(self._bond_hist_path)
             self._stock_hist: dict[str, list] = _load_json(self._stock_hist_path)
+            dividend_records = _load_json(self._dividends_path)
         else:                                    # 身份不符/首次 → 弃用旧缓存, 防陈旧命中
             if stored is not None:
                 logger.info("磁盘缓存身份变更, 弃用旧缓存: %s", self.cache_dir)
             self._terms, self._bond_hist, self._stock_hist = {}, {}, {}
+            dividend_records = {}
             # **失效必须落到盘上, 不能只清内存**。``flush()`` 只重写 dirty 的那几个 store,
             # 却无条件把 ``_meta.json`` 盖成新身份 —— 一次只弄脏了一部分的运行 (比如在
             # 准入阶段就中断, 那时只取过条款、还没碰行情) 会留下旧身份的
             # bond_history.json / stock_history.json 顶着新身份的 meta。下一次启动看到
             # ``stored == identity``, 就把那些文件当成新身份的缓存读回来了。
-            for stale in (self._terms_path, self._bond_hist_path, self._stock_hist_path):
+            for stale in (self._terms_path, self._bond_hist_path, self._stock_hist_path,
+                          self._dividends_path):
                 try:
                     stale.unlink()
                 except FileNotFoundError:
@@ -128,6 +138,9 @@ class DiskCacheProvider(DataProvider):
                 except OSError as e:
                     logger.warning("清理陈旧缓存文件失败 %s: %s", stale, e)
         self._dirty: set[str] = set()
+        self._dividends = DividendYieldCache(
+            dividend_records, today=(lambda: today) if today is not None else market_today,
+            now=now or time.time, on_change=lambda: self._dirty.add("dividends"))
 
     def __getattr__(self, name):  # 透传未显式实现的属性/方法
         return getattr(self.inner, name)
@@ -219,7 +232,11 @@ class DiskCacheProvider(DataProvider):
         return self.inner.get_stock_close(stock_code, on_date)
 
     def get_stock_dividend_yield(self, stock_code, on_date):
-        return self.inner.get_stock_dividend_yield(stock_code, on_date)
+        return self.get_stock_dividend_yield_observation(stock_code, on_date).value_pct
+
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
+        """历史值跨运行复用；实时快照与失败保留来源并定时失效。"""
+        return self._dividends.get(self.inner, stock_code, on_date)
 
     def get_cashflow(self, bond_code):
         return self.inner.get_cashflow(bond_code)
@@ -254,6 +271,8 @@ class DiskCacheProvider(DataProvider):
             _atomic_write(self._bond_hist_path, self._bond_hist)
         if "stock_hist" in self._dirty:
             _atomic_write(self._stock_hist_path, self._stock_hist)
+        if "dividends" in self._dirty:
+            _atomic_write(self._dividends_path, self._dividends.records)
         _atomic_write(self._meta_path, {"identity": self._identity})
         self._dirty.clear()
 

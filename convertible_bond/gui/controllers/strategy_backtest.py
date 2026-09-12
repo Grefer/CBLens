@@ -43,6 +43,7 @@ from .strategy_snapshots import StrategySnapshotMixin
 from .strategy_render import StrategyRenderMixin
 from .strategy_render_analysis import StrategyAnalysisRenderMixin
 from .strategy_compare import StrategyCompareMixin
+from .strategy_research import StrategyResearchMixin
 
 __all__ = [
     "StrategyBacktestMixin",
@@ -52,6 +53,7 @@ __all__ = [
     "StrategyRenderMixin",
     "StrategyAnalysisRenderMixin",
     "StrategyCompareMixin",
+    "StrategyResearchMixin",
     "StrategyBacktestCancelled",
     "STRATEGY_BACKTEST_PRO_FEATURE",
     "STRATEGY_BACKTEST_PRO_PREVIEW",
@@ -83,5 +85,6 @@ class StrategyBacktestMixin(
     StrategyRenderMixin,
     StrategyAnalysisRenderMixin,
     StrategyCompareMixin,
+    StrategyResearchMixin,
 ):
     """选债策略回测 tab 的业务逻辑 (含快照与对比)."""

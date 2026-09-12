@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 from ..market_time import market_today
+from .dividends import DividendYieldObservation, scalar_dividend_observation
 
 
 # ── 数据载体 ──────────────────────────────────────────────
@@ -340,6 +341,13 @@ class DataProvider(ABC):
     def get_stock_dividend_yield(self, stock_code: str, on_date: date) -> float | None:
         """正股股息率参考值 (%). 默认 None, 上层回退到 q=0."""
         return None
+
+    def get_stock_dividend_yield_observation(
+        self, stock_code: str, on_date: date,
+    ) -> DividendYieldObservation:
+        """带来源的股息率；旧标量接口按未声明历史日期的快照兼容。"""
+        return scalar_dividend_observation(
+            self.get_stock_dividend_yield(stock_code, on_date), self.name)
 
     @abstractmethod
     def get_bond_history(self, bond_code: str, start: date, end: date) -> list[tuple[date, float | None]]:

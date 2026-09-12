@@ -715,6 +715,12 @@ class StrategyRenderMixin:
             buys = selected - previous
             sells = previous - selected
             holds = selected & previous
+            if "ledger_entries" in period:
+                trades = period["ledger_entries"]
+                buys = {str(t["bond_code"]) for t in trades if t.get("kind") == "buy"}
+                sells = {str(t["bond_code"]) for t in trades
+                         if t.get("kind") in {"sell", "redemption"}}
+                holds = {str(p["bond_code"]) for p in period.get("ending_holdings", [])} - buys
             benchmark_return = period.get("benchmark_return")
             period_return = period.get("period_return")
             excess = (
@@ -752,19 +758,18 @@ class StrategyRenderMixin:
         for period in periods:
             period_label = f"{period.get('start_date')} → {period.get('end_date')}"
             for pos in period.get("positions") or []:
-                exit_reason = (
-                    "下修事件退出"
-                    if pos.get("exit_reason") == "down_reset_event" else "调仓退出"
-                )
+                state, exit_text = self._strategy_position_exit_text(pos)
                 # 与上面候选表同一个出口: 展示名一律走 risk_tag_label。裸 str(tag) 会让
                 # 同一个标签在批量页读作「市价远低于市场中位」而在这里读作
                 # 「深度低估待核」—— AGENTS 明令"所有消费者都要走 risk_tag_label()"。
                 notes = [risk_tag_label(tag) for tag in pos.get("risk_tags") or []]
                 if pos.get("exit_event_title"):
                     notes.append(str(pos.get("exit_event_title")))
+                if pos.get("valuation_stale"):
+                    notes.append("沿用最近报价估值，尚无当日成交价")
                 detail_rows.append([
                     period_label,
-                    "成交",
+                    state,
                     pos.get("rank", ""),
                     pos.get("bond_code", ""),
                     pos.get("bond_name", ""),
@@ -775,8 +780,7 @@ class StrategyRenderMixin:
                     pos.get("confidence", ""),
                     f"{self._fmt_strategy_date(pos.get('entry_date'))} @ "
                     f"{self._fmt_strategy_price(pos.get('start_price'))}",
-                    f"{self._fmt_strategy_date(pos.get('exit_date'))} @ "
-                    f"{self._fmt_strategy_price(pos.get('end_price'))} · {exit_reason}",
+                    exit_text,
                     " / ".join(notes),
                 ])
             for pos in period.get("skipped_positions") or []:
@@ -808,7 +812,7 @@ class StrategyRenderMixin:
             ["period", "status", "rank", "code", "name", "contrib", "ret",
              "signal", "model_prob", "confidence", "entry", "exit", "note"],
             ["区间", "状态", "排名", "代码", "名称", "贡献(%)", "收益(%)",
-             "策略信号", "模型1Y", "置信", "买入", "卖出/原因", "标签/事件"],
+             "策略信号", "模型1Y", "置信", "买入", "退出 / 期末估值", "标签/事件"],
             [170, 56, 52, 88, 96, 76, 76, 100, 72, 58, 122, 190, 260],
             detail_rows,
             xscroll=True,
@@ -816,6 +820,38 @@ class StrategyRenderMixin:
         )
         self._strategy_bt_tree = tree
         _TREE_ATTRS.add("_strategy_bt_tree")
+        ledger_rows = []
+        labels = {"buy": "买入", "sell": "卖出", "redemption": "兑付到账",
+                  "coupon": "票息到账", "coupon_receivable": "票息应收",
+                  "transaction_cost": "交易费用"}
+        for period in periods:
+            for entry in period.get("ledger_entries") or []:
+                ledger_rows.append([
+                    self._fmt_strategy_date(entry.get("date")),
+                    entry.get("bond_code", "—"), labels.get(entry.get("kind"), entry.get("kind")),
+                    self._fmt_strategy_price(entry.get("price")),
+                    f"{entry.get('amount', 0):.6f}", f"{entry.get('cash_change', 0):+.6f}",
+                ])
+        if ledger_rows:
+            self._strategy_section_title(self.strategy_bt_table_frame, "资金流水（初始资产 = 1）", 4, 0)
+            self._render_strategy_small_tree(
+                self.strategy_bt_table_frame, 5, 0,
+                ["date", "code", "kind", "price", "amount", "cash_change"],
+                ["日期", "代码", "事项", "成交价", "金额", "现金变动"],
+                [110, 110, 130, 90, 110, 110], ledger_rows,
+                xscroll=True, max_height=STRATEGY_DETAIL_TABLE_HEIGHT)
+
+    def _strategy_position_exit_text(self, pos):
+        status = pos.get("position_status")
+        if status in {"open", "blocked"}:
+            label = "待成交" if status == "blocked" else "持有"
+            return label, (f"{self._fmt_strategy_date(pos.get('mark_date'))} @ "
+                           f"{self._fmt_strategy_price(pos.get('end_price'))} · 估值")
+        reason = {"down_reset_event": "下修事件退出", "redemption": "兑付到账",
+                  "no_exit_price": "旧口径缺价估值"}.get(pos.get("exit_reason"), "调仓退出")
+        return "已兑付" if status == "redeemed" else "成交", (
+            f"{self._fmt_strategy_date(pos.get('exit_date'))} @ "
+            f"{self._fmt_strategy_price(pos.get('end_price'))} · {reason}")
 
     def _clear_strategy_panel(self, frame):
         for child in frame.winfo_children():

@@ -201,10 +201,12 @@ def sweep_score_strategy(
     best_row = max(
         rows,
         key=lambda row: (
-            row["sharpe_period"] if row["sharpe_period"] is not None else -float("inf")),
+            finite_float(row["sharpe_period"])
+            if finite_float(row["sharpe_period"]) is not None else -float("inf")),
     )
     trial_sharpes = [
-        row["sharpe_period"] for row in rows if row["sharpe_period"] is not None
+        value for row in rows
+        if (value := finite_float(row["sharpe_period"])) is not None
     ]
     deflated = backtest_stats.deflated_sharpe(
         period_returns_by_name.get(best_row["name"]) or [],

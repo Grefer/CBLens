@@ -760,6 +760,9 @@ def _render_batch_views(
     display_results = sort_batch_results_for_view(
         filter_batch_results_by_view(base_results, view), view)
     app._batch_results = display_results
+    app._batch_results_view = view
+    if hasattr(app, "_on_strategy_batch_scope_changed"):
+        app._on_strategy_batch_scope_changed()
     _refresh_view_menu_labels(app, base_results)
     _update_valuation_banner(app, base_results)
     _render_table(app, display_results, total_results=len(base_results), view=view, cache_path=cache_path,
@@ -852,6 +855,10 @@ def _on_view_menu_select(app, label: str) -> None:
 def _change_batch_view(app):
     """切视图 / 切列预设 —— 纯展示操作, 数据没变, 别去动主页那棵树."""
     if not getattr(app, "_batch_all_results", None):
+        app._batch_results = []
+        app._batch_results_view = _canonical_view_name(app.v_batch_view.get())
+        if hasattr(app, "_on_strategy_batch_scope_changed"):
+            app._on_strategy_batch_scope_changed()
         return
     _render_batch_views(app, refresh_home_table=False)
 

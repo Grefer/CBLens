@@ -53,7 +53,14 @@ _PERIOD_CSV_COLUMNS = [
     "exposure", "median_deviation",
     "eligible_count", "priced_count", "candidate_count", "selected_count",
     "rank_signal", "avg_rank_value", "execution_timing", "selected_codes",
+    "accounting_basis", "available_cash", "receivable_value", "receivable_weight",
+    "coupon_income", "coupon_cash", "redemption_cash", "blocked_count", "blocked_weight",
 ]
+
+_POSITION_ACCOUNTING_COLUMNS = (
+    "position_status", "mark_date", "valuation_stale", "quantity", "coupon_income",
+    "buy_amount", "sale_amount", "q_source", "q_provider", "q_as_of", "q_fetched_at",
+)
 
 
 def _flatten_period_rows(periods: list[dict[str, Any]], key: str) -> list[tuple[dict, dict]]:
@@ -107,6 +114,7 @@ def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
         "price_return", "post_exit_cash_return", "period_return",
         "exit_reason", "exit_signal_date", "exit_event_type", "exit_event_title",
         "confidence", "risk_tags",
+        *_POSITION_ACCOUNTING_COLUMNS,
     ])
     for period, pos in positions:
         writer.writerow([
@@ -134,7 +142,28 @@ def _write_csv_positions(writer, periods: list[dict[str, Any]]) -> None:
             pos.get("exit_event_title", ""),
             pos.get("confidence", ""),
             "|".join(str(tag) for tag in pos.get("risk_tags") or []),
+            *(_csv_value(pos.get(key)) for key in _POSITION_ACCOUNTING_COLUMNS),
         ])
+
+
+def _write_csv_ledger(writer, periods: list[dict[str, Any]]) -> None:
+    entries = _flatten_period_rows(periods, "ledger_entries")
+    if not entries and not any(p.get("cashflow_warnings") for p in periods):
+        return
+    columns = ("date", "bond_code", "kind", "quantity", "price", "amount",
+               "cash_change", "reason", "confirmed")
+    writer.writerow([])
+    writer.writerow(["# ledger_entries"])
+    writer.writerow(["period_start", "period_end", *columns])
+    for period, entry in entries:
+        writer.writerow([_csv_value(period.get("start_date")), _csv_value(period.get("end_date")),
+                         *(_csv_value(entry.get(key)) for key in columns)])
+    writer.writerow([])
+    writer.writerow(["# cashflow_warnings"])
+    writer.writerow(["period_start", "warning"])
+    for period in periods:
+        for warning in period.get("cashflow_warnings") or []:
+            writer.writerow([_csv_value(period.get("start_date")), str(warning)])
 
 
 def _write_csv_skipped_positions(writer, periods: list[dict[str, Any]]) -> None:
@@ -309,6 +338,7 @@ def write_strategy_backtest_csv(path: str | Path, result: dict[str, Any]) -> Non
         _write_csv_periods(writer, periods)
         _write_csv_equity_curve(writer, result.get("equity_curve") or [])
         _write_csv_positions(writer, periods)
+        _write_csv_ledger(writer, periods)
         _write_csv_skipped_positions(writer, periods)
         _write_csv_candidate_rows(writer, periods)
         _write_csv_rejection_rows(writer, periods)

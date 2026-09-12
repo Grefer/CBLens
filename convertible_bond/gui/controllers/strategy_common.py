@@ -33,6 +33,21 @@ WIND_HIGH_FIDELITY_PRICING_WARN_LIMIT = 1000
 WIND_HIGH_FIDELITY_REQUEST_MULTIPLIER = 10
 
 
+def strategy_selection_description(config: dict) -> str:
+    """用实际门槛解释选债规则，表头与运行摘要共用。"""
+    parts = ["按估值偏差从低到高排序"]
+    cheapness = config.get("min_relative_cheapness")
+    if cheapness is not None:
+        parts.append(f"比市场中位便宜至少 {float(cheapness) * 100:g}pp")
+    minimum = config.get("min_deviation")
+    maximum = config.get("max_deviation")
+    if minimum is not None:
+        parts.append(f"绝对偏差≥{float(minimum) * 100:g}%")
+    if maximum is not None:
+        parts.append(f"绝对偏差≤{float(maximum) * 100:g}%")
+    return " · ".join(parts)
+
+
 #: ``rank_signal`` → 展示名。下修两档只出现在**旧快照**里 (信号已删), 保留映射,
 #: 否则它们会掉进「旧机会分」。
 STRATEGY_RANK_SIGNAL_LABEL = {
@@ -143,6 +158,9 @@ def _strategy_snapshot_jsonable(obj):
     也可直接调用 _strategy_snapshot_jsonable(whole_dict) 做完整转换.
     """
     from datetime import datetime as _datetime
+    from dataclasses import asdict, is_dataclass
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return _strategy_snapshot_jsonable(asdict(obj))
     if isinstance(obj, date):
         tag = "datetime" if isinstance(obj, _datetime) else "date"
         return {"__cblens_type__": tag, "value": obj.isoformat()}

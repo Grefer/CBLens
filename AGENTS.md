@@ -84,7 +84,6 @@ CBLens/
 | :-: | --- | --- | --- |
 | 1 | 「值本身不许费解」 | 回测页的「偏差」与批量页**符号相反** (`(理论−市价)/市价` vs `(市价−理论)/理论`); 同一只债一页 −5.03 一页 +5.30 | 统一符号是口径变更, 要动所有历史快照 |
 | 2 | 「同一段口径不许有第二份实现」 | 历史投影层用公告评级盖掉 `cb-sync-ratings` 的第三方当前值 (实测 110081.SH BBB+→A, 利差下限 0.10→0.06), 而体检 17 条分歧里 15 条是公告 patch 错 | 投影层既有属性 (策略页一直如此); 改它是默认选债行为变更 |
-| 3 | 「回测的股息率取数」 | `get_stock_dividend_yield` 无磁盘缓存且拉的是实时快照; 实测一次 3 期回测卡 55 分钟 0 进度 | 同构改动, 但要单独立项 |
 | 4 | 「已知边界: 冻结的下修价下限」 | ≈1.02·S0 处的折点让 39/311 只 Γ(S0)<0 | 改成随 S 走会让价格中位 +0.89 元、最大 +11.13 元 —— 与下修价值同量级的口径变更 |
 | 5 | 同上 (2026-09-03 补) | 同一张面让 Γ 对网格步长不收敛: 242 只里 11 只漂移 >10%, 最大 111020.SH **77.3%** | 与 4 同源 (`p_down=0` 让漂移全部归零) |
 | 6 | 「回售期内处处给底」 | 回售条款形态的普适性未验: 990 只有 `put_trigger_pct`, 而正文缓存里含「连续三十个交易日」的只有 305 份 | 要验就得给条款形态建字段 |
@@ -93,6 +92,9 @@ CBLens/
 | 9 | 「cninfo 也按出口 IP 限流」那一段 (2026-09-08 补) | cninfo 每只债的请求放大: `_fetch_org_id` 用 GET 而接口只认 POST (GET 恒 500 被静默吞掉 → orgId 恒为 None), 没有 orgId 时 stock 查询恒返回 0 条, 于是每只债都掉进 searchkey **全市场全文检索**兜底 (每只 7~9 次请求而不是 2 次) | **这条与上面 8 条性质不同: 不是"决定不改", 是"还验不了"**。改它会变动同步到的公告集合, 而"拿到 orgId 后 stock 查询返回什么"必须先实测 —— 两次尝试时 cninfo 都在限流。等能连上再验再改 |
 
 ### 五层架构
+
+原 deferred #3 已处理：股息率观察值穿透装饰器链，历史/实时/失败按不同期限缓存，
+并保留来源。实时兜底仍不是历史信息；后文旧实测作为决策证据保留。
 
 1. **基础信息层**: WindPy → `data/cb_data.json` (TermsBundle)
 2. **事件状态层**: `cb_events.json` + admission_status 刷新
@@ -143,6 +145,10 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   理论价随视图开关忽有忽无; 更隐蔽的是 `_watchlist_pricing_worker` **回填的也是**
   `_batch_all_results`, 所以「⚡ 关注池重算」对这些行永远无效 —— 状态栏照常报
   "主表 3 / 关注 3", 而表里只有走 `_batch_upcoming_results` 的那 3 只出得来价。
+  **策略跟随名单是明确的例外（2026-09-11）**：「跟随批量页筛选」有意从
+  `_batch_results` 只取代码；批量页在列表和 `_batch_results_view` 更新完成后通知策略页，
+  不许只监听视图变量而读到旧名单。预设仍保存「当前筛选结果」内部 key，展示走单独映射。
+  运行中名单与进度分母保持冻结，批量变动只更新下次回测说明；历史结果、冻结实验不跟随。
 - **关注池的取价是三级兜底, 且必须能自愈**。`_priced_rows_by_code` 的优先级由低到高:
   ① 磁盘热缓存 `watchlist_pricing_cache.json` → ② `_batch_upcoming_results` →
   ③ `_batch_all_results` (**全池**, 不是视图子集 `_batch_results`)。第 ① 层是"开页即有数"
@@ -1171,6 +1177,19 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   (`_strategy_pricing_params` 的 `"q"`), 留空 = 照旧按数据源取, 填值 = 整段跳过
   (`price_from_provider` 只在 `q is None` 时才问 provider)。此前这条绕法**只存在于 CLI**,
   而 README 把 GUI 策略页列为主要研究界面。deferred #3 那条账还欠着, 欠的是缓存。
+  **2026-09-10 完成**：`DividendYieldObservation` 区分 historical / realtime_snapshot /
+  unavailable，定价结果另标 fixed / fallback_zero；真实 0 不能当失败。运行内与磁盘层
+  使用同一 `DividendYieldCache`，历史已结束日期持久缓存、实时当日最多一小时、失败
+  五分钟，嵌套缓存不能重新延长原观察值期限。akshare 的全市场实时快照按整表复用。
+  `q_*` 来源字段进入候选/持仓/快照，诊断把它与条款回退分开统计；固定 q 仍显式由用户选。
+- **策略资金账本与研究记录（2026-09-10）**：主策略及等权基准共用 `StrategyLedger`。
+  估值不是成交证据：缺价退出继续占用资金，下一可得收盘成交前不释放旧仓；单边费用
+  分别作用于实际买卖金额。合同应收与已确认支付分开，含混的 Wind tuple 或强赎登记日
+  不足以确认兑付。`accounting_basis=cash_ledger_v1` 随结果落盘，旧快照仍按原结果读取。
+  研究入口复用定价面板，不把候选等权对照重新加进正常策略下拉。
+  冻结配置来自实际结果的完整 `run_settings.strategy_config`，不能读尚未运行的表单。
+  样本外从冻结后的固定调仓边界完整重跑、核对旧期后只追加新期；实时股息率、当前
+  条款回退及未知历史输入不能伪装严格样本外。实验目录不参与最近八份快照清理。
 - **运行内缓存不许把取数失败的空序列当权威事实记住 (2026-09-08)**。
   `_BacktestCacheProvider` 的四个写入点 (stock/bond × 宽窗口/精确窗口) 都是无条件
   `store[key] = inner.get(...)`, 而彻底失败与"这个窗口本来就没有行情"在 provider 层

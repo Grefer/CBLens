@@ -48,6 +48,8 @@ data/*.bak-*.json
 data/cb_terms_patches.json.bak-*
 data/strategy_backtest_snapshots/
 data/strategy_backtest_cache/
+data/strategy_experiments/
+data/strategy_research_results/
 
 # 个人本地 agent 备忘 (仅本机, 不入版本库)
 CLAUDE.local.md

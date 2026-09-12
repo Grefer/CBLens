@@ -2,9 +2,9 @@
 
 策略保持可解释且分层:
   - 每个调仓日对候选池做批量定价, 按 PDE 估值偏差排序
-  - 选出前 N 只转债, 按等权持有到下一调仓边界
+  - 选出前 N 只转债, 以等权为调仓目标，持仓数量持续跨期记账
   - 下修策略遇到提议/通过/拒绝公告时提前退出, 其余持有到调仓边界
-  - 收益用信号日或下一可得收盘价计算
+  - 收益来自逐日持仓估值与现金账本，缺价不能虚构退出或释放资金
 
 注意: 若使用当前 ``cb_data`` 作为历史条款快照, 下修、强赎和退市状态可能带有
 当前信息偏差。该模块负责把口径固定下来; 更严格的历史点位数据可通过 provider
@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
@@ -52,6 +52,8 @@ from .strategy_backtest_csv import write_strategy_backtest_csv  # noqa: F401
 from .historical_terms import _CLOSE_LOOKBACK_DAYS
 from .terms_diagnostics import terms_source_diagnostic
 from .pricing_api import batch_price_from_provider_threaded
+from .strategy_ledger import ACCOUNTING_BASIS, StrategyLedger
+from .data_providers.dividends import DividendYieldCache
 
 
 _DOWN_RESET_EXIT_EVENT_TYPES = frozenset({
@@ -275,6 +277,8 @@ class _BacktestCacheProvider(DataProvider):
         self._terms: dict[tuple[str, date], Any] = {}
         self._diagnostics: dict[tuple[str, date], dict[str, Any]] = {}
         self._stock_close: dict[tuple[str, date], float] = {}
+        self._dividend_cache = DividendYieldCache()
+        self._cashflows: dict[str, Any] = {}
         self.stats: Counter = Counter()
 
     def __getattr__(self, name):
@@ -351,7 +355,10 @@ class _BacktestCacheProvider(DataProvider):
         return history
 
     def get_stock_dividend_yield(self, stock_code, on_date):
-        return self.inner.get_stock_dividend_yield(stock_code, on_date)
+        return self.get_stock_dividend_yield_observation(stock_code, on_date).value_pct
+
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
+        return self._dividend_cache.get(self.inner, stock_code, on_date)
 
     def get_bond_history(self, bond_code: str, start: date, end: date):
         if start >= self._history_start and end <= self._history_end:
@@ -378,7 +385,9 @@ class _BacktestCacheProvider(DataProvider):
         return history
 
     def get_cashflow(self, bond_code):
-        return self.inner.get_cashflow(bond_code)
+        if bond_code not in self._cashflows:
+            self._cashflows[bond_code] = self.inner.get_cashflow(bond_code)
+        return self._cashflows[bond_code]
 
     def get_risk_free_rate(self, on_date):
         return self.inner.get_risk_free_rate(on_date)
@@ -476,6 +485,8 @@ class _RebalanceContext:
     N: int
     max_workers: int | None
     pricer_overrides: dict[str, Any]
+    ledger: StrategyLedger = field(default_factory=StrategyLedger)
+    benchmark_ledger: StrategyLedger = field(default_factory=StrategyLedger)
 
 
 @dataclass
@@ -501,6 +512,9 @@ def validate_strategy_config(cfg: ScoreStrategyConfig) -> None:
     """
     if cfg.top_n <= 0:
         raise ValueError("top_n 必须为正整数")
+    cost = finite_float(cfg.transaction_cost)
+    if cost is None or not 0 <= cost < 1:
+        raise ValueError("transaction_cost 必须为 [0, 1) 的有限单边费率")
     _normalize_holding_mode(cfg.holding_mode)
     _normalize_rank_signal(cfg.rank_signal)
     _normalize_funding_mode(cfg.funding_mode)
@@ -522,6 +536,10 @@ def _strategy_config_summary(cfg: ScoreStrategyConfig) -> dict[str, Any]:
     funding_mode = _normalize_funding_mode(cfg.funding_mode)
     rank_signal = _normalize_rank_signal(cfg.rank_signal)
     return {
+        "accounting_basis": ACCOUNTING_BASIS,
+        "cashflow_policy": "confirmed_payments_with_contractual_coupon_receivables",
+        "price_basis": "unadjusted_dirty_close",
+        "cash_interest_basis": "ACT/365_daily_compounding",
         "strategy_type": strategy_type_for_rank_signal(rank_signal),
         "top_n": cfg.top_n,
         "holding_mode": holding_mode,
@@ -702,114 +720,42 @@ def _run_rebalance_period(
     event_exit_store = (
         _event_store_from_provider(provider) if cfg.down_reset_event_exit else None
     )
-    positions, skipped_positions = _position_returns(
-        provider,
-        selected,
-        period_start,
-        period_end,
-        lookback_days=cfg.price_lookback_days,
-        max_staleness_days=cfg.max_price_staleness_days,
-        execution_timing=cfg.execution_timing,
-        execution_lookahead_days=cfg.execution_lookahead_days,
-        price_cache=price_cache,
-        event_exit_store=event_exit_store,
-        cash_yield_rate=cfg.cash_yield_rate,
-        rank_signal=rank_signal,
-    )
-    _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
-
-    # C 资金层: 等权份数分母 (intended)
     funding_mode = _normalize_funding_mode(cfg.funding_mode)
-    held = len(positions)            # 实际有成交价、能建仓的标的数
-    initial_held_codes = [str(pos.get("bond_code")) for pos in positions]
-    event_exit_positions = [
-        pos for pos in positions if pos.get("exit_reason") == "down_reset_event"
-    ]
-    held_codes = [
-        str(pos.get("bond_code"))
-        for pos in positions
-        if pos.get("exit_reason") != "down_reset_event"
-    ]
-    if funding_mode == "full_invest":
-        # 满仓等权: 分母=实际持仓; 未建仓/缺价权重摊回已持仓 (不留现金)。
-        intended = held
-    else:
-        # reserve_cash: 分母=目标槽位 (top_score→top_n, pool→候选数); 未建仓/缺价槽位留现金。
-        target = cfg.top_n if holding_mode == "top_score" else len(selected)
-        intended = max(0, int(target))
-    # D 仓位层: 按当期已定价池中位 deviation 缩放总仓位 (点时, 自包含)
+    intended = cfg.top_n if holding_mode == "top_score" else len(selected)
     exposure, median_deviation = _resolve_exposure(cfg, priced_rows)
-    # 换手/成本基于**实际持仓码**与各期 gross (非含缺价的 selected); 上期持仓码/分母/
-    # gross 由编排层顺延。reserve_cash 下分母>持仓数, 缺口/缺价自然计入现金、不算换手。
-    rebalance_turnover = _equal_weight_turnover(
-        previous_held_codes,
-        initial_held_codes,
-        previous_denominator=previous_intended,
-        current_denominator=intended,
-        previous_gross=previous_exposure,
-        current_gross=exposure,
+    ledger_rows = []
+    for rank, row in enumerate(selected, start=1):
+        ledger_rows.append({**row, "rank": rank, "rank_signal": rank_signal,
+                            "rank_value": _rank_signal_value(row, rank_signal),
+                            "signal_market_price": finite_float(row.get("market_price"))})
+    ledger_result = ctx.ledger.run_period(
+        provider, ledger_rows, period_start, period_end,
+        intended_count=intended, exposure=exposure, funding_mode=funding_mode,
+        execution_timing=_normalize_execution_timing(cfg.execution_timing),
+        execution_lookahead_days=cfg.execution_lookahead_days,
+        transaction_cost=cfg.transaction_cost, cash_yield_rate=cfg.cash_yield_rate,
+        event_store=event_exit_store, cancel_cb=cancel_cb,
     )
-    event_exit_turnover = (
-        exposure * len(event_exit_positions) / intended
-        if intended > 0 else 0.0
-    )
-    turnover = rebalance_turnover + event_exit_turnover
-
-    # 等权持有 top_n; 缺收盘价无法建仓的标的按现金(0 收益)计入分母; gross 缩放整体仓位。
-    if intended > 0:
-        for pos in positions:
-            pos["weight"] = exposure / intended
-            pos["return_contribution"] = exposure * float(pos["period_return"]) / intended
-        gross_return = exposure * float(sum(p["period_return"] for p in positions) / intended)
-        cash_weight = 1.0 - exposure * (held / intended)
-    else:
-        gross_return = 0.0
-        cash_weight = 1.0
-    event_exit_cash_yield_return = (
-        exposure * sum(
-            float(pos.get("post_exit_cash_return") or 0.0)
-            for pos in event_exit_positions
-        ) / intended
-        if intended > 0 else 0.0
-    )
-    end_cash_weight = min(1.0, cash_weight + event_exit_turnover)
-    period_start_equity = start_equity
-    cost = turnover * cfg.transaction_cost
-    # 闲置现金按年化 cash_yield_rate 计息 (默认 0 = 旧行为)。不计息时, Sharpe 的
-    # rf 门槛会系统性惩罚一切持现金配置 (缺口留现金 / 择时缩放)——内部不一致。
-    period_days = max(0, (period_end - period_start).days)
-    event_exit_time_weighted_cash = (
-        sum(
-            exposure / intended
-            * max(0, (period_end - pos["exit_date"]).days)
-            / period_days
-            for pos in event_exit_positions
-            if isinstance(pos.get("exit_date"), date)
-        )
-        if intended > 0 and period_days > 0 else 0.0
-    )
-    average_cash_weight = min(1.0, cash_weight + event_exit_time_weighted_cash)
-    cash_yield_return = cash_weight * cfg.cash_yield_rate * period_days / 365.0
-    period_return = gross_return + cash_yield_return - cost
-    equity = period_start_equity * (1.0 + period_return)
-    if cfg.mark_to_market:
-        curve_points = _portfolio_mark_to_market_curve(
-            provider,
-            positions,
-            start_equity=period_start_equity,
-            period_start=period_start,
-            period_end=period_end,
-            cost=cost,
-            intended_count=intended,
-            exposure=exposure,
-            cash_weight=cash_weight,
-            cash_yield_rate=cfg.cash_yield_rate,
-        )
-        _upsert_equity_points(equity_curve, curve_points)
-        if curve_points:
-            equity = float(curve_points[-1]["equity"])
-    else:
-        _upsert_equity_points(equity_curve, [{"date": period_end, "equity": equity}])
+    intended = ledger_result["weight_denominator"]
+    positions = ledger_result["positions"]
+    skipped_positions = ledger_result["skipped_positions"]
+    held_codes = [row["bond_code"] for row in ledger_result["ending_holdings"]]
+    event_exit_positions = [pos for pos in positions if pos.get("exit_reason") == "down_reset_event"]
+    rebalance_turnover = ledger_result["rebalance_turnover"]
+    event_exit_turnover = ledger_result["event_exit_turnover"]
+    turnover = ledger_result["turnover"]
+    gross_return = ledger_result["gross_return"]
+    cash_weight = ledger_result["cash_weight"]
+    average_cash_weight = ledger_result["average_cash_weight"]
+    end_cash_weight = ledger_result["end_cash_weight"]
+    event_exit_cash_yield_return = ledger_result["event_exit_cash_yield_return"]
+    cash_yield_return = ledger_result["cash_yield_return"]
+    cost = ledger_result["cost"]
+    period_return = ledger_result["period_return"]
+    equity = ledger_result["equity"]
+    curve_points = ledger_result["curve"] if cfg.mark_to_market else [{"date": period_end, "equity": equity}]
+    _upsert_equity_points(equity_curve, curve_points)
+    _emit_stage_progress(stage_cb, "持仓估值", len(selected), len(selected), idx, total_periods)
 
     benchmark_return = None
     benchmark_point = None
@@ -817,31 +763,20 @@ def _run_rebalance_period(
     new_benchmark_equity = benchmark_equity
     if cfg.compute_benchmark:
         _emit_stage_progress(stage_cb, "基准估值", 0, len(priced_rows), idx, total_periods)
-        # **价格带剔除的债要加回基准**。价格带是 ScoreStrategyConfig 的策略阈值, 而
-        # ``_benchmark_period_return`` 的 docstring 明说"基准刻意不过策略的筛子 —— 唯一
-        # 的闸是 status == ok"。让基准也过一遍价格带, 衡量的就只剩"在同一批候选里排序
-        # 排得好不好", 而"避开了太贵/太便宜的那一段"这个真实决策的贡献被算进基准里抵消掉。
-        # 这些债没有定价结果 (预筛在定价之前), 但基准只用成交价, 不用 PDE 输出 ——
-        # 给一个最小行即可; 取不到成交价的那一档基准自己会跳过。
-        benchmark_rows = list(priced_rows) + [
+        # 基准仍覆盖全部可投池，价格带排除的券加回；资金与成交使用同一账本。
+        benchmark_rows = [row for row in priced_rows if row.get("status") == "ok"] + [
             {"bond_code": code, "status": "ok"} for code in price_band_excluded]
-        benchmark_return, benchmark_codes = _benchmark_period_return(
-            provider,
-            benchmark_rows,
-            period_start,
-            period_end,
-            lookback_days=cfg.price_lookback_days,
-            max_staleness_days=cfg.max_price_staleness_days,
-            execution_timing=cfg.execution_timing,
+        benchmark_result = ctx.benchmark_ledger.run_period(
+            provider, benchmark_rows, period_start, period_end,
+            intended_count=len(benchmark_rows), funding_mode="full_invest",
+            execution_timing=_normalize_execution_timing(cfg.execution_timing),
             execution_lookahead_days=cfg.execution_lookahead_days,
-            price_cache=price_cache,
+            transaction_cost=cfg.transaction_cost, cash_yield_rate=cfg.cash_yield_rate,
+            cancel_cb=cancel_cb,
         )
-        # 基准与策略同口径计成本 (等权满仓的成员变动换手), 消除"策略计费/基准免费"的不对称
-        if benchmark_return is not None and cfg.transaction_cost:
-            bench_turnover = _equal_weight_turnover(
-                previous_benchmark_codes, benchmark_codes)
-            benchmark_return -= bench_turnover * cfg.transaction_cost
-        new_benchmark_equity = benchmark_equity * (1.0 + (benchmark_return or 0.0))
+        benchmark_return = benchmark_result["period_return"]
+        benchmark_codes = [row["bond_code"] for row in benchmark_result["ending_holdings"]]
+        new_benchmark_equity = benchmark_result["equity"]
         benchmark_point = {"date": period_end, "equity": new_benchmark_equity}
         _emit_stage_progress(stage_cb, "基准估值", len(priced_rows), len(priced_rows), idx, total_periods)
 
@@ -866,9 +801,16 @@ def _run_rebalance_period(
         ),
         "candidate_rows": candidate_rows,
         "rejection_rows": rejection_rows,
-        "data_quality": _period_data_quality(source_diagnostics),
+        "data_quality": {
+            **_period_data_quality(source_diagnostics),
+            "bond_sources": [dict(row) for row in source_diagnostics],
+            "dividend_source_counts": dict(Counter(
+                str(row.get("q_source") or "unknown")
+                for row in priced_rows if row.get("status") == "ok")),
+        },
     }
     period = {
+        **{key: value for key, value in ledger_result.items() if key != "curve"},
         "start_date": period_start,
         "end_date": period_end,
         "period_return": period_return,
@@ -952,9 +894,9 @@ def backtest_score_strategy(
       - ``summary``: 总收益、年化、回撤、波动率、胜率、Sharpe、超额等指标
 
     净值口径:
-      - 默认按 ``top_n`` 固定仓位分母等权; 未满 Top N 和缺期初/期末成交价的
-        仓位按现金(0 收益)计入, 避免少数可成交标的把组合静默放大成高集中度。
-      - 区间净收益 = 毛收益 - ``turnover * transaction_cost`` (单边换手 × 成本率)。
+      - 默认按 ``top_n`` 固定目标权重等权；未成交槽位留现金，已有缺价持仓跨期保留。
+      - 信号后只在真实报价日成交；期末只估值，票息应收与确认到账分开记账。
+      - 区间净收益 = 估值及票息收益 + 现金利息 − 实际双向成交额 × 单边费率。
       - 基准为每个调仓日"全部通过准入且已定价"标的的等权收益, 表示买下整个筛选池
         的参照线; 用于衡量当前排序信号带来的超额。
     """
@@ -1592,6 +1534,7 @@ def _candidate_explanation_rows(
         code = str(row.get("bond_code") or "")
         selected = code in selected_set
         rows.append({
+            **{key: value for key, value in row.items() if key.startswith("q_")},
             "rank": rank,
             "bond_code": code,
             "bond_name": row.get("bond_name"),
@@ -2787,44 +2730,33 @@ def _equity_curve_returns(equity_curve: list[dict[str, Any]]) -> list[float]:
 
 
 def _compute_patch_coverage(periods: list[dict[str, Any]]) -> dict[str, Any]:
-    """聚合各期 patch 覆盖信息, 用于诊断 patch 缺口."""
+    """按逐债来源统计覆盖；旧快照的聚合计数不能推断每只持仓都套过 patch。"""
     all_codes: set[str] = set()
     codes_with_patches: set[str] = set()
-    earliest_patch_date: date | None = None
-    latest_patch_date: date | None = None
+    observed: set[str] = set()
+    patch_dates: list[date] = []
     for period in periods:
-        period_start = period.get("start_date")
-        dq = period.get("data_quality") or {}
-        patch_applied = int(dq.get("patch_applied_count") or 0)
-        # 从 excluded_reasons 和 positions 中收集出现过的转债代码
-        for code_reason in period.get("excluded_reasons") or []:
-            if isinstance(code_reason, (list, tuple)) and len(code_reason) >= 1:
-                all_codes.add(str(code_reason[0]))
-        for pos in period.get("positions") or []:
-            code = str(pos.get("bond_code") or "")
-            if code:
-                all_codes.add(code)
-        for pos in period.get("skipped_positions") or []:
-            code = str(pos.get("bond_code") or "")
-            if code:
-                all_codes.add(code)
-        selected = period.get("selected_codes") or []
-        for code in selected:
-            all_codes.add(str(code))
-        if patch_applied > 0 and isinstance(period_start, date):
-            if earliest_patch_date is None or period_start < earliest_patch_date:
-                earliest_patch_date = period_start
-            if latest_patch_date is None or period_start > latest_patch_date:
-                latest_patch_date = period_start
-            # 记录有 patch 的期中出现过的转债
-            for code in selected:
-                codes_with_patches.add(str(code))
-    bonds_without_patches = sorted(all_codes - codes_with_patches)
+        for key in ("positions", "skipped_positions"):
+            all_codes.update(str(row["bond_code"]) for row in period.get(key) or [] if row.get("bond_code"))
+        all_codes.update(str(code) for code in period.get("selected_codes") or [])
+        all_codes.update(str(row[0]) for row in period.get("excluded_reasons") or [] if row)
+        for row in (period.get("data_quality") or {}).get("bond_sources") or []:
+            code = str(row.get("bond_code") or "")
+            if not code:
+                continue
+            all_codes.add(code)
+            observed.add(code)
+            if int(row.get("patch_count") or 0) > 0:
+                codes_with_patches.add(code)
+                on_date = row.get("valuation_date") or period.get("start_date")
+                if isinstance(on_date, date):
+                    patch_dates.append(on_date)
     return {
-        "earliest_patch_date": earliest_patch_date,
-        "latest_patch_date": latest_patch_date,
+        "earliest_patch_date": min(patch_dates) if patch_dates else None,
+        "latest_patch_date": max(patch_dates) if patch_dates else None,
         "bonds_with_patches": len(codes_with_patches),
-        "bonds_without_patches": bonds_without_patches,
+        "bonds_without_patches": sorted(observed - codes_with_patches),
+        "bonds_unknown": sorted(all_codes - observed),
     }
 
 
@@ -2850,6 +2782,7 @@ def _build_strategy_diagnostics(
 
 def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
     source_counts: Counter = Counter()
+    dividend_source_counts: Counter = Counter()
     total = 0
     fallback = 0
     patch_applied = 0
@@ -2858,6 +2791,7 @@ def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
     total_without_snapshot = 0
     for period in periods:
         dq = period.get("data_quality") or {}
+        dividend_source_counts.update(dq.get("dividend_source_counts") or {})
         count = int(dq.get("sample_count") or 0)
         total += count
         fallback += int(dq.get("current_fallback_count") or 0)
@@ -2873,6 +2807,7 @@ def _summarize_data_quality(periods: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "sample_count": total,
         "source_counts": dict(source_counts),
+        "dividend_source_counts": dict(dividend_source_counts),
         "current_fallback_count": fallback,
         "current_fallback_ratio": fallback / total if total else 0.0,
         "patch_applied_count": patch_applied,

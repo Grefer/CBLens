@@ -755,7 +755,7 @@ class StrategyAnalysisRenderMixin:
                          text_color=color or TEXT,
                          font=(FONT_MONO, 15, "bold")).pack(anchor="w", pady=(2, 0))
 
-        _data_tile(0, "数据质量", quality, color=q_color)
+        _data_tile(0, "条款可信度", quality, color=q_color)
         _data_tile(1, "条款样本", f"{sample_count:,}")
         _data_tile(2, "条款回退", self._fmt_strategy_pct(fallback_ratio))
         _data_tile(3, "转股价修正", f"{patch_count:,}")
@@ -903,3 +903,27 @@ class StrategyAnalysisRenderMixin:
             period_rows,
             max_height=STRATEGY_DATA_TABLE_HEIGHT,
         )
+        # 股息率与条款是不同取数链，条款没有回退不能证明 q 为历史值。
+        source_labels = {"historical": "历史取值", "realtime_snapshot": "实时快照",
+                         "fixed": "固定假设", "fallback_zero": "取数失败回退0", "unknown": "未记录"}
+        q_counts = data_quality.get("dividend_source_counts") or {}
+        q_text = " / ".join(f"{source_labels.get(k, k)} {v}" for k, v in q_counts.items())
+        provenance = (result.get("run_settings") or {}).get("provenance") or {}
+        version = (provenance.get("source") or {}).get("git_commit") or "未记录"
+        last = periods[-1] if periods else {}
+        accounting = "现金与持仓逐笔记账" if last.get("accounting_basis") else "旧快照记账口径"
+        notes = [f"正股股息率来源（债券×估值日）：{q_text or '旧快照未记录，请重跑以核对来源'}",
+                 f"{accounting} · 代码版本 {version[:12]}"]
+        if last.get("accounting_basis"):
+            notes.append(
+                f"期末可用现金 {float(last.get('available_cash') or 0):.6f} · "
+                f"待核实应收 {float(last.get('receivable_value') or 0):.6f} · "
+                f"待成交持仓 {last.get('blocked_count', 0)} 只（初始资产 = 1）")
+        warnings = list(dict.fromkeys(str(w) for p in periods for w in p.get("cashflow_warnings", [])))
+        notes.extend(warnings[:6])
+        if len(warnings) > 6:
+            notes.append(f"另有 {len(warnings) - 6} 条现金流说明，完整记录见 CSV。")
+        label = ctk.CTkLabel(frame, text="\n".join(notes), text_color=TEXT_DIM,
+                             font=(FONT_FAMILY, 11), justify="left", anchor="w")
+        label.grid(row=4, column=0, sticky="ew", padx=12, pady=8)
+        label.bind("<Configure>", lambda event: label.configure(wraplength=max(260, event.width - 16)))

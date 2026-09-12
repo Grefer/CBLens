@@ -295,8 +295,8 @@ def test_equal_pool_redistributes_missing_price_positions(monkeypatch):
     # 113003 仅有期初价、无期末价 (staleness 超限) → 无法建仓 → 应被摊回
     # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
     # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
-    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
-    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价估值并跨期持有
+    # (见 test_position_bought_then_halted_is_carried_not_deleted)。
     provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
@@ -321,8 +321,8 @@ def test_pool_with_reserve_cash_leaves_gap_as_cash(monkeypatch):
     provider = StrategyFakeProvider()
     # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
     # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
-    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
-    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价估值并跨期持有
+    # (见 test_position_bought_then_halted_is_carried_not_deleted)。
     provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
@@ -445,8 +445,8 @@ def test_cash_yield_accrues_on_reserved_cash(monkeypatch):
     provider = StrategyFakeProvider()
     # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
     # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
-    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
-    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价估值并跨期持有
+    # (见 test_position_bought_then_halted_is_carried_not_deleted)。
     provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
@@ -460,7 +460,7 @@ def test_cash_yield_accrues_on_reserved_cash(monkeypatch):
             min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
     )
     period = result["periods"][0]
-    accrual = (1 / 3) * 0.0365 * 29 / 365          # 29 天, 现金权重 1/3
+    accrual = (1 / 3) * ((1 + 0.0365 / 365) ** 29 - 1)          # 29 天, 现金权重 1/3
     assert period["cash_yield_return"] == pytest.approx(accrual)
     assert period["period_return"] == pytest.approx(0.10 / 3 + accrual)
 
@@ -478,7 +478,7 @@ def test_cash_yield_accrues_on_exposure_scaled_cash(monkeypatch):
                                      cash_yield_rate=0.0365, mark_to_market=False),
     )
     period = result["periods"][0]
-    accrual = 0.4 * 0.0365 * 29 / 365
+    accrual = 0.4 * ((1 + 0.0365 / 365) ** 29 - 1)
     assert period["cash_yield_return"] == pytest.approx(accrual)
     assert period["period_return"] == pytest.approx(0.6 * 0.10 / 3 + accrual)
 
@@ -488,8 +488,8 @@ def test_cash_yield_reflected_in_mark_to_market_curve(monkeypatch):
     provider = StrategyFakeProvider()
     # 只有**远早于期初**的一口价: 预筛看得见它 (所以照常进候选), 但期初执行价按陈旧
     # 上限判定不可用 → 真的建不了仓。此前这里写的是"只有期初价 90.0 (2025-01-02)",
-    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价平出并留在分母里
-    # (见 test_position_bought_then_halted_is_marked_out_not_deleted)。
+    # 那是**买到了然后停牌**, 不是买不到 —— 现在那一档会按最后可得价估值并跨期持有
+    # (见 test_position_bought_then_halted_is_carried_not_deleted)。
     provider.bond_history["113003.SH"] = [(date(2024, 6, 1), 90.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
@@ -502,7 +502,7 @@ def test_cash_yield_reflected_in_mark_to_market_curve(monkeypatch):
             cash_yield_rate=0.0365, mark_to_market=True,
             min_confidence=None, exclude_risk_tags=(), compute_benchmark=False),
     )
-    accrual = (1 / 3) * 0.0365 * 29 / 365
+    accrual = (1 / 3) * ((1 + 0.0365 / 365) ** 29 - 1)
     assert result["summary"]["final_equity"] == pytest.approx(1 + 0.10 / 3 + accrual)
 
 
@@ -542,7 +542,7 @@ def test_pool_max_holdings_caps_by_balance_not_score(monkeypatch):
 
 
 def test_benchmark_pays_membership_turnover_costs(monkeypatch):
-    """P3b: 基准与策略同口径计成本 (首期建仓换手=1, 次期成员不变换手=0)。"""
+    """基准与策略同口径预留成本；成员不变仍须为漂移权重再平衡付费。"""
     provider = StrategyFakeProvider()
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
@@ -555,10 +555,11 @@ def test_benchmark_pays_membership_turnover_costs(monkeypatch):
             transaction_cost=0.01, min_confidence=None, exclude_risk_tags=()),
     )
     p1, p2 = result["periods"][0], result["periods"][1]
-    # P1: 等权均值 (10%+0+0)/3, 减首期建仓换手 1×1% ；P2: A +9.09%, B -5%, C +1.11%, 换手 0
-    assert p1["benchmark_return"] == pytest.approx(0.10 / 3 - 0.01)
-    mean2 = (120 / 110 - 1 + 190 / 200 - 1 + 91 / 90 - 1) / 3
-    assert p2["benchmark_return"] == pytest.approx(mean2)
+    # 首期先预留买入费用；同样等权全池的策略与基准共用真实资金口径。
+    assert p1["benchmark_return"] == pytest.approx((1 + 0.10 / 3) / 1.01 - 1)
+    assert p1["benchmark_return"] == pytest.approx(p1["period_return"])
+    assert p2["cost"] > 0  # A 涨价后权重漂移，不能因为成员未变就免掉再平衡费用
+    assert p2["benchmark_return"] == pytest.approx(p2["period_return"])
 
 
 def test_index_benchmark_curve_and_excess(monkeypatch):
@@ -859,19 +860,9 @@ def test_backtest_cache_history_end_never_extends_into_future():
 
 
 def test_turnover_cost_uses_actual_holdings_not_phantom_selected(monkeypatch):
-    """换手/成本必须基于实际持仓码, 不能把'选中但缺成交价'的票当真实持仓。
-
-    P1 持 {A,B,C}(各1/3); P2 中 C **建不了仓** (期初无可用价) → 实际持 {A,B}(各1/2)。
-    正确单边换手 = 卖出 C(1/3) = 1/3; 旧实现用 selected_codes(含C) + 分母=held,
-    权重和>1, 会算出错误换手 (0.25)。
-
-    fixture 改过一次: 原来给 C 的最后一口价在 01-31 (P2 期初), 于是 P2 **买得到** C,
-    靠"期末无价 → 整条删掉"才得到 {A,B}。那正是 BT-1 修掉的语义 —— 现在买到了就会按
-    最后可得价平出并留在持仓里。要测换手就得让 C 在 P2 真的建不了仓。
-    """
+    """已成交后停牌的 C 必须跨期留存，不得虚构卖出再把钱分给 A/B。"""
     provider = StrategyFakeProvider()
-    # C 的价只到 01-15: P1 可建仓 (entry 01-02, 期末按最后可得价 01-15 平出);
-    # P2 期初 (01-31) 已无可用价 → 建不了仓
+    # C 的价只到 01-15，之后仍持同样数量并沿用该价估值。
     provider.bond_history["113003.SH"] = [(date(2025, 1, 2), 90.0), (date(2025, 1, 15), 95.0)]
     monkeypatch.setattr(
         "convertible_bond.strategy_backtest.batch_price_from_provider_threaded",
@@ -886,12 +877,14 @@ def test_turnover_cost_uses_actual_holdings_not_phantom_selected(monkeypatch):
     )
     p1, p2 = result["periods"][0], result["periods"][1]
     assert len(p1["positions"]) == 3 and p1["weight_denominator"] == 3   # P1 满仓持 3 只
-    assert len(p2["positions"]) == 2 and p2["weight_denominator"] == 2   # P2 仅持 A,B
-    # 正确单边换手 = 卖出 C(权重 1/3) = 1/3; 任何长仓等权换手都不应 >1
-    assert p2["turnover"] == pytest.approx(1 / 3)
-    assert p2["turnover"] <= 1.0 + 1e-9
-    assert p2["cost"] == pytest.approx(p2["turnover"] * 0.01)
-
+    assert len(p2["positions"]) == 3 and p2["weight_denominator"] == 3
+    c1 = next(row for row in p1["ending_holdings"] if row["bond_code"] == "113003.SH")
+    c2 = next(row for row in p2["ending_holdings"] if row["bond_code"] == "113003.SH")
+    assert c2["quantity"] == pytest.approx(c1["quantity"])
+    assert all(row.get("bond_code") != "113003.SH" for row in p2["ledger_entries"])
+    traded = sum(row["amount"] for row in p2["ledger_entries"] if row["kind"] in {"buy", "sell"})
+    assert p2["cost"] == pytest.approx(traded * 0.01 / p1["equity"])
+    assert p2["available_cash"] >= 0
 
 
 
@@ -1195,11 +1188,11 @@ def test_transaction_cost_reduces_period_return(monkeypatch):
     )
 
     period = res["periods"][0]
-    # 首期从空仓建满 113001, 单边换手 1.0; 成本 = 1.0 * 0.01
-    assert period["gross_return"] == pytest.approx(0.10)
-    assert period["turnover"] == pytest.approx(1.0)
-    assert period["cost"] == pytest.approx(0.01)
-    assert period["period_return"] == pytest.approx(0.09)
+    # 可用本金同时支付买价与单边费用，不能借款买满再从期末收益扣费。
+    assert period["gross_return"] == pytest.approx(0.10 / 1.01)
+    assert period["turnover"] == pytest.approx(1.0 / 1.01)
+    assert period["cost"] == pytest.approx(0.01 / 1.01)
+    assert period["period_return"] == pytest.approx(1.10 / 1.01 - 1.0)
 
 
 def test_mark_to_market_curve_uses_intraperiod_closes_for_drawdown(monkeypatch):
@@ -1267,8 +1260,10 @@ def test_next_close_execution_uses_next_available_close(monkeypatch):
 
     period = result["periods"][0]
     assert period["positions"][0]["entry_date"] == date(2025, 1, 3)
-    assert period["positions"][0]["exit_date"] == date(2025, 2, 3)
-    assert period["period_return"] == pytest.approx(111.0 / 101.0 - 1.0)
+    assert period["positions"][0]["exit_date"] is None  # 期末估值不等于真实卖出
+    assert period["positions"][0]["mark_date"] == date(2025, 1, 31)
+    assert period["period_return"] == pytest.approx(108.0 / 101.0 - 1.0)
+    assert result["equity_curve"][-1]["date"] == date(2025, 1, 31)
 
 
 def test_stale_signal_close_price_is_skipped_as_cash(monkeypatch):
@@ -1300,7 +1295,7 @@ def test_stale_signal_close_price_is_skipped_as_cash(monkeypatch):
 
     period = result["periods"][0]
     assert period["positions"] == []
-    assert period["skipped_positions"][0]["reason"].startswith("缺少期初")
+    assert "未成交" in period["skipped_positions"][0]["reason"]
     assert period["cash_weight"] == pytest.approx(1.0)
     assert period["period_return"] == pytest.approx(0.0)
     assert result["summary"]["avg_cash_weight"] == pytest.approx(1.0)
@@ -2191,7 +2186,8 @@ def test_strategy_logic_summary_text_reflects_pde_signal_and_cash_policy():
     app.v_st_rank_signal = Var("估值偏差")
 
     text = app._strategy_logic_summary_text()
-    assert "估值偏差 < 0" in text
+    assert "按估值偏差从低到高排序" in text
+    assert "比市场中位便宜至少" in text
     assert "Top 10 等权" in text
     assert "缺口留现金（2.2%/年）" in text
     assert "机会分" not in text and "等权全池" not in text
@@ -2205,7 +2201,7 @@ def test_strategy_logic_summary_text_reflects_pde_signal_and_cash_policy():
     for legacy in ("下修优势", "稳健下修优势", ""):
         app.v_st_rank_signal = Var(legacy)
         summary = app._strategy_logic_summary_text()
-        assert "估值偏差 < 0" in summary
+        assert "按估值偏差从低到高排序" in summary
         assert "下修优势" not in summary
 
 
@@ -2403,18 +2399,19 @@ def test_down_reset_strategy_exits_after_resolution_event(monkeypatch, tmp_path)
     assert position["exit_date"] == date(2025, 1, 16)
     assert position["exit_reason"] == "down_reset_event"
     assert position["exit_event_type"] == "down_reset_approved"
-    post_exit_cash = 1.06 * 0.365 * 15 / 365
+    post_exit_cash = 1.06 * ((1 + 0.365 / 365) ** 15 - 1)
     assert position["price_return"] == pytest.approx(0.06)
-    assert position["post_exit_cash_return"] == pytest.approx(post_exit_cash)
+    assert period["cash_yield_return"] == pytest.approx(post_exit_cash)
+    assert position["post_exit_cash_return"] == 0  # 利息归现金账本，不再重复叠入个券
     assert period["period_return"] == pytest.approx(0.06 + post_exit_cash)
     assert result["summary"]["final_equity"] == pytest.approx(1.06 + post_exit_cash)
     jan20_equity = next(
         row["equity"] for row in result["equity_curve"]
         if row["date"] == date(2025, 1, 20)
     )
-    assert jan20_equity == pytest.approx(1.06 * (1.0 + 0.365 * 4 / 365))
+    assert jan20_equity == pytest.approx(1.06 * (1.0 + 0.365 / 365) ** 4)
     assert period["event_exit_count"] == 1
-    assert period["event_exit_turnover"] == pytest.approx(1.0)
+    assert period["event_exit_turnover"] == pytest.approx(1.06)  # 真实退出额 / 期初净值
     assert period["average_cash_weight"] == pytest.approx(15 / 29)
     assert period["end_cash_weight"] == pytest.approx(1.0)
     assert result["summary"]["total_event_exits"] == 1
@@ -2822,8 +2819,8 @@ def test_relative_deviation_cap_is_closed_at_the_tag_boundary():
     assert _candidate_filter_reason(row(0.21), cfg) is not None
 
 
-def test_position_bought_then_halted_is_marked_out_not_deleted(monkeypatch):
-    """建了仓再停牌的持仓, 必须按最后可得价平出, 不能整条删掉。
+def test_position_bought_then_halted_is_carried_not_deleted(monkeypatch):
+    """建了仓再停牌的持仓, 必须按最后可得价估值并跨期持有, 不能整条删掉。
 
     此前 entry/exit 缺任何一个都走同一条 ``continue``, 而两者的经济含义正好相反:
     没有期初价 = 根本没成交 (那个槽位确实是现金); **有期初价、没有期末价 = 买到了,
@@ -2862,12 +2859,14 @@ def test_position_bought_then_halted_is_marked_out_not_deleted(monkeypatch):
         out[halted] = period
 
     normal, halted = out[False], out[True]
-    # 停牌那一跑必须仍然持有 C, 并且认得出它是怎么平的
+    # 停牌那一跑必须仍然持有 C, 并且真实退出日期仍为空
     codes = {p["bond_code"] for p in halted["positions"]}
     assert "113003.SH" in codes, "暴跌后停牌的持仓被整条删掉了"
     c = next(p for p in halted["positions"] if p["bond_code"] == "113003.SH")
-    assert c["exit_reason"] == "no_exit_price"
-    assert c["end_price"] == pytest.approx(45.0), "没有按最后可得价平出"
+    assert c["exit_reason"] == "held"
+    assert c["exit_date"] is None
+    assert c["valuation_stale"] is True
+    assert c["end_price"] == pytest.approx(45.0), "没有按最后可得价估值"
 
     # 两跑的经济事实相同 → 区间收益必须一致 (此前实测差 17.6pp)
     assert halted["gross_return"] == pytest.approx(normal["gross_return"], abs=1e-9)

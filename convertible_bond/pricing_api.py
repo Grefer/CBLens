@@ -32,6 +32,7 @@ from .cb_events import _CONVERSION_SUSPENSION_TTL_DAYS
 from .historical_terms import TermsPatchStore, project_terms
 from .model_defaults import DEFAULT_DOWN_RESET_TRIGGER_PCT, DEFAULT_DOWN_RESET_TRIGGER_RATIO
 from .market_time import market_today
+from .data_providers.dividends import DividendYieldObservation, fetch_dividend_observation
 
 
 #: 评级 → 信用利差下限。表在 ``model_defaults`` —— GUI 的 ``theme.CREDIT_SPREAD_TABLE``
@@ -473,12 +474,21 @@ def price_from_provider(provider: DataProvider, bond_code,
 
     if q is None:
         try:
-            q_pct = finite_float(provider.get_stock_dividend_yield(stock_code, val_date))
-        except Exception:
-            q_pct = None
+            q_observation = fetch_dividend_observation(provider, stock_code, val_date)
+        except Exception as exc:
+            q_observation = DividendYieldObservation(
+                None, "unavailable", getattr(provider, "name", type(provider).__name__),
+                reason=f"{type(exc).__name__}: {exc}")
+        q_pct = q_observation.value_pct
         effective_q = (q_pct / 100.0) if q_pct is not None else 0.0
+        q_source = q_observation.kind if q_pct is not None else "fallback_zero"
+        q_metadata = {"q_source": q_source, "q_provider": q_observation.source,
+                      "q_as_of": q_observation.as_of, "q_fetched_at": q_observation.fetched_at,
+                      "q_observed_pct": q_pct, "q_error": q_observation.reason}
     else:
         effective_q = float(q)
+        q_metadata = {"q_source": "fixed", "q_provider": "user_assumption", "q_as_of": None,
+                      "q_fetched_at": None, "q_observed_pct": None, "q_error": ""}
     market_price, market_price_as_of, market_price_source = (
         _latest_bond_close_with_provenance(provider, bond_code, val_date, terms.close))
     risk_warnings = _risk_warnings(terms, val_date)
@@ -605,6 +615,7 @@ def price_from_provider(provider: DataProvider, bond_code,
         "T": pricer.T,
         "sigma": sigma,
         "q": effective_q,
+        **q_metadata,
         "base_spread": float(base_spread),
         "effective_base_spread": effective_base_spread,
         "rating_base_spread": rating_base_spread,
@@ -719,7 +730,7 @@ class _BatchStockCache(DataProvider):
         self._history_cache: dict[tuple, list] = {}
         self._bond_history_cache: dict[tuple, list] = {}
         self._vol_cache: dict[tuple, float] = {}
-        self._dividend_yield_cache: dict[tuple, float | None] = {}
+        self._dividend_yield_cache: dict[tuple, DividendYieldObservation] = {}
         import threading
         self._lock = threading.Lock()
         self._inflight: dict[tuple, "threading.Event"] = {}
@@ -800,6 +811,9 @@ class _BatchStockCache(DataProvider):
         raise RuntimeError(f"{stock_code} {start}~{end} 正股历史缓存填充失败")
 
     def get_stock_dividend_yield(self, stock_code, on_date):
+        return self.get_stock_dividend_yield_observation(stock_code, on_date).value_pct
+
+    def get_stock_dividend_yield_observation(self, stock_code, on_date):
         cache_key = (stock_code, on_date)
         inflight_key = ("div_yield", stock_code, on_date)
         for _ in range(self._MAX_INFLIGHT_RETRIES + 1):
@@ -814,8 +828,7 @@ class _BatchStockCache(DataProvider):
                         return self._dividend_yield_cache[cache_key]
                 continue
             try:
-                getter = getattr(self._inner, "get_stock_dividend_yield", None)
-                value = getter(stock_code, on_date) if getter is not None else None
+                value = fetch_dividend_observation(self._inner, stock_code, on_date)
                 with self._lock:
                     self._dividend_yield_cache[cache_key] = value
                 return value

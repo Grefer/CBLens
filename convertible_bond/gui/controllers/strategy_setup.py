@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date
 from tkinter import filedialog, messagebox
 
-from ...batch_pricing import parse_bond_codes
+from ...batch_pricing import batch_view_from_label, batch_view_label, parse_bond_codes
 from ...cb_events import CBEventStore, project_events_path
 from ...historical_terms import TermsPatchStore, project_terms_patches_path
 from ...strategy_backtest import build_rebalance_schedule
@@ -19,6 +19,7 @@ from ..constants import (
     normalize_pde_strategy_template,
     normalize_strategy_history_mode,
 )
+from ..theme import E
 
 from .strategy_common import (
     STRATEGY_TEMPLATES,
@@ -28,6 +29,7 @@ from .strategy_common import (
     _STRATEGY_PDE_GRID_M,
     _STRATEGY_PDE_GRID_N,
     _STRATEGY_TEMPLATE_BASE,
+    strategy_selection_description,
 )
 
 
@@ -105,7 +107,11 @@ class StrategySetupMixin:
         if mode == "当前筛选结果":
             rows = list(getattr(self, "_batch_results", []) or [])
             codes = self._dedupe_strategy_codes(row.get("bond_code") for row in rows)
-            return codes, "批量页当前筛选结果"
+            view = getattr(self, "_batch_results_view", None)
+            if view is None:
+                view_var = getattr(self, "v_batch_view", None)
+                view = batch_view_from_label(view_var.get()) if view_var is not None else None
+            return codes, f"批量页「{batch_view_label(view or '综合机会')}」"
         if mode == "自选代码":
             codes, invalid = self._parse_strategy_manual_codes()
             label = "自选代码池"
@@ -153,8 +159,12 @@ class StrategySetupMixin:
                 _, invalid = self._parse_strategy_manual_codes()
                 invalid_text = f" · 无效 {len(invalid)} 个" if invalid else " · 无效 0 个"
             if mode == "当前筛选结果" and not codes:
-                return "批量筛选结果为空, 请先到批量页刷新"
-            return f"{label} · 已选择 {len(codes)} 只{invalid_text}"
+                text = f"{label} · 0只；请到批量页刷新或调整筛选"
+            else:
+                text = f"{label} · {len(codes)}只 → 每期按下方限制选债{invalid_text}"
+            if getattr(self, "_strategy_bt_running", False):
+                text = f"下次回测：{text}"
+            return text
         except Exception as exc:
             return f"读取失败: {exc}"
 
@@ -184,6 +194,29 @@ class StrategySetupMixin:
         logic_var = getattr(self, "v_st_logic_summary", None)
         if logic_var is not None:
             logic_var.set(self._strategy_logic_summary_text())
+        self._refresh_strategy_precheck_preview()
+
+    def _refresh_strategy_precheck_preview(self, *_):
+        """已有的待运行预检随表单更新；不改当前任务的进度分母和启动预检。"""
+        var = getattr(self, "v_st_precheck", None)
+        if var is None or not var.get().strip() or getattr(self, "_strategy_bt_running", False):
+            return
+        try:
+            var.set(self._format_strategy_precheck(self._strategy_precheck_info()))
+        except Exception as exc:
+            var.set(f"待运行：{exc}")
+
+    def _on_strategy_batch_scope_changed(self):
+        """批量页完成名单更新后通知，避免只监听视图变量而读到上一份名单。"""
+        mode = getattr(self, "v_st_pool_mode", None)
+        if mode is not None and mode.get() == "当前筛选结果":
+            self._refresh_strategy_setup_summary()
+
+    def _open_strategy_batch_scope(self):
+        """从代码池来源说明直接打开批量页调整筛选。"""
+        label = E("📦 批量")
+        self.tab_seg.set(label)
+        self._switch_tab(label)
 
     def _strategy_logic_summary_text(self) -> str:
         """实时展示策略信号、Top N、现金和事件退出口径。"""
@@ -208,7 +241,7 @@ class StrategySetupMixin:
             yield_text = f"{float(_get('v_st_cash_yield', '0')):g}%/年"
         except (TypeError, ValueError):
             yield_text = "不计息"
-        signal_text = "估值偏差 < 0"
+        signal_text = self._strategy_rule_description()
         event_exit = bool(_get("v_st_event_exit", False))
         parts = [signal_text, f"Top {n_text} 等权", f"缺口留现金（{yield_text}）"]
         if event_exit:
@@ -216,6 +249,26 @@ class StrategySetupMixin:
         if use_valuation_exposure:
             parts.append("估值缩放")
         return " · ".join(parts)
+
+    def _strategy_rule_description(self) -> str:
+        """摘要只读实际输入；编辑到半个数时显示输入状态。"""
+        from ...strategy_backtest import PDEStrategyConfig
+
+        fields = {
+            "min_relative_cheapness": "v_st_min_relative_cheapness",
+            "min_deviation": "v_st_min_deviation",
+            "max_deviation": "v_st_max_deviation",
+        }
+        values = {}
+        try:
+            for key, name in fields.items():
+                var = getattr(self, name, None)
+                raw = var.get().strip() if var is not None else None
+                values[key] = (getattr(PDEStrategyConfig, key) if raw is None
+                               else float(raw) / 100.0 if raw else None)
+        except (ValueError, TypeError):
+            return "选债参数输入中"
+        return strategy_selection_description(values)
 
     def _clear_strategy_codes(self):
         self.v_st_codes.set("")

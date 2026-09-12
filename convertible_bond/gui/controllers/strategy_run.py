@@ -6,6 +6,7 @@ CBPricerApp, 方法间通过 self.* 跨 mixin 调用不受拆分影响。
 from __future__ import annotations
 
 import threading
+from dataclasses import asdict
 from datetime import date
 from tkinter import messagebox
 
@@ -128,6 +129,8 @@ class StrategyRunMixin:
         return config
 
     def _run_strategy_backtest(self):
+        if getattr(self, "_strategy_bt_running", False):
+            return
         if not self._strategy_backtest_pro_available():
             messagebox.showinfo("Pro 功能", "策略回测将作为 CBLens Pro 功能提供")
             return
@@ -264,7 +267,7 @@ class StrategyRunMixin:
             f"预计定价: ≈{precheck.get('estimated_pricing')} 次\n"
             f"{pde_line}"
             f"Wind请求估算: ≈{precheck.get('estimated_wind_requests')} 次\n\n"
-            "建议改用「快速验证」数据模式, 或切换到「当前筛选结果/自选代码」的小池再跑。"
+            "建议改用「快速验证」数据模式, 或切换到「跟随批量页筛选/自选代码」的小池再跑。"
             "仍要继续时将自动把 Wind 调用设为单线程, 但耗时仍可能很长。",
         )
 
@@ -289,6 +292,8 @@ class StrategyRunMixin:
         run_settings,
     ):
         try:
+            from .strategy_research import strategy_run_provenance
+            run_settings["provenance"] = strategy_run_provenance()
             provider = self._build_strategy_provider(source, history_mode=history_mode)
 
             def cancel_check():
@@ -379,6 +384,7 @@ class StrategyRunMixin:
         )
         if getattr(self, "_last_strategy_bt_result", None):
             self.btn_strategy_bt_csv.configure(state="normal")
+        self._refresh_strategy_setup_summary()
 
     def _handle_strategy_backtest_success(self, result):
         self._last_strategy_bt_result = result
@@ -431,7 +437,7 @@ class StrategyRunMixin:
             csv_root=getattr(self, "_csv_root", None) or None,
             max_age_days=30,
         )
-        return HistoricalBondDataProvider(
+        provider = HistoricalBondDataProvider(
             base_provider,
             history_store=None,
             patch_store=TermsPatchStore(project_terms_patches_path()),
@@ -439,6 +445,8 @@ class StrategyRunMixin:
             strip_fallback_status=False,
             merge_admission_status=True,
         )
+        # 公开源也复用历史取数；不同源分目录，不相互清理缓存。
+        return DiskCacheProvider(provider, data_dir("strategy_backtest_cache", source.lower()))
 
     @staticmethod
     def _optional_float(var):
@@ -466,15 +474,7 @@ class StrategyRunMixin:
             "base_spread": float(self.v_st_spread.get()) / 100.0,
             "p_down": p_down,
             "distress_k": float(self.v_st_distress_k.get()) / 100.0,
-            # 正股股息率。**回测里这是最贵的一次取数**: 逐只债、逐期联网, 而
-            # `backtest_disk_cache` 恰恰不缓存它 (bond_history / stock_history / terms
-            # 三样都缓存了, 只有它直接透传), 拉的还是**实时**快照拿去给历史估值日用。
-            # 实测一次 3 期回测在这一步卡 55 分钟 0 进度, 623 只债全部取失败后回落 0
-            # —— 即与显式传 0 同结果, 只是花了 55 分钟才发现。
-            #
-            # 留空 = None = 照旧按数据源取; 给了值就整段跳过那次取数
-            # (`price_from_provider` 只在 q is None 时才去问 provider)。CLI 早就有
-            # `--q`, GUI 一直没有 —— 而 README 把 GUI 策略页列为主要研究界面。
+            # 留空按源取并保留来源；固定值作为整段情景假设随快照保存。
             "q": self._optional_pct(self.v_st_q),
             "M": _STRATEGY_PDE_GRID_M,
             "N": _STRATEGY_PDE_GRID_N,
@@ -499,6 +499,7 @@ class StrategyRunMixin:
         precheck,
     ):
         return {
+            "strategy_config": asdict(config),
             "data_source": source,
             "requested_data_source": requested_source,
             "start_date": start,

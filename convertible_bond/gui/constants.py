@@ -31,9 +31,15 @@ EVENT_SYNC_STALE_HOURS = 24
 STRATEGY_SELECTION_VIEWS = ("综合机会",)
 STRATEGY_TEMPLATE_NAMES = ("估值偏差",)
 STRATEGY_POOL_MODES = ("本地全市场", "当前筛选结果", "自选代码")
+# 预设与运行记录保留旧 key；控件明确显示来源，避免改名把旧池误读成全市场。
+STRATEGY_POOL_LABELS = {
+    "本地全市场": "本地全市场",
+    "当前筛选结果": "跟随批量页筛选",
+    "自选代码": "自选代码",
+}
 STRATEGY_HISTORY_MODES = ("标准", "Wind高保真")
 STRATEGY_TEMPLATE_DESCRIPTIONS = {
-    "估值偏差": "选择市价低于模型理论价的转债",
+    "估值偏差": "按模型偏差排序，便宜度门槛以当期市场中位为参照",
 }
 STRATEGY_VIEW_DESCRIPTIONS = {
     "综合机会": "全部可交易主池, 不额外筛\n默认稳健视图",
@@ -42,7 +48,7 @@ STRATEGY_VIEW_DESCRIPTIONS = {
 }
 STRATEGY_POOL_DESCRIPTIONS = {
     "本地全市场": "本地条款库里的全部转债\n适合全市场策略回测",
-    "当前筛选结果": "批量页当前视图里的转债\n适合先筛选再回测",
+    "当前筛选结果": "跟随批量页当前视图的名单，再按各历史调仓日应用下方选债限制",
     "自选代码": "手动粘贴或导入一组转债代码\n适合小组合复盘",
 }
 STRATEGY_HISTORY_DESCRIPTIONS = {
@@ -85,6 +91,19 @@ STRATEGY_PDE_RANK_SIGNAL_LEGACY_ALIASES = {
     "down_reset_edge": "估值偏差",
     "deviation": "估值偏差",
 }
+
+
+def strategy_pool_label(mode: str) -> str:
+    """代码池的展示名；预设仍保存稳定的内部 key。"""
+    return STRATEGY_POOL_LABELS.get(mode, mode)
+
+
+def strategy_pool_from_label(label: str) -> str:
+    """展示名回读；也接受旧预设的内部 key。"""
+    for mode, shown in STRATEGY_POOL_LABELS.items():
+        if label in (mode, shown):
+            return mode
+    raise ValueError(f"未知回测代码池：{label}")
 
 
 def normalize_pde_strategy_template(value: str | None) -> str:

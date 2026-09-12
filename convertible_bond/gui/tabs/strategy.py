@@ -11,6 +11,8 @@ from ..constants import (
     STRATEGY_POOL_DESCRIPTIONS,
     STRATEGY_POOL_MODES,
     STRATEGY_STAT_TOOLTIPS,
+    strategy_pool_from_label,
+    strategy_pool_label,
 )
 from ..controllers.strategy_common import STRATEGY_RATING_FLOOR_CHOICES
 from ..theme import (
@@ -59,14 +61,14 @@ def build(app, tab):
     # 的开关会让人一直找另一个选项。
     app.v_st_template_display = ctk.StringVar(value="估值偏差")
     app.v_st_params_state = ctk.StringVar(value="")
-    strategy_description = ctk.StringVar(value="优先选择市价低于模型理论价的转债")
+    strategy_description = ctk.StringVar(value=app._strategy_rule_description())
 
     def _strategy_display_name():
         return "估值偏差"
 
     def _sync_strategy_display(*_):
         app.v_st_template_display.set("估值偏差")
-        strategy_description.set("优先选择市价低于模型理论价的转债")
+        strategy_description.set(app._strategy_rule_description())
 
     def _select_strategy(_display=None):
         app._apply_strategy_template("估值偏差")
@@ -77,10 +79,13 @@ def build(app, tab):
         strategy_bar, textvariable=app.v_st_template_display,
         font=(FONT_FAMILY, 12, "bold"), text_color=TEXT, anchor="w",
     ).grid(row=0, column=1, sticky="w", padx=(8, 14))
-    ctk.CTkLabel(
+    rule_label = ctk.CTkLabel(
         strategy_bar, textvariable=strategy_description,
-        text_color=TEXT_DIM, font=(FONT_FAMILY, 12), anchor="w",
-    ).grid(row=0, column=2, sticky="ew")
+        text_color=TEXT_DIM, font=(FONT_FAMILY, 12), anchor="w", justify="left",
+    )
+    rule_label.grid(row=0, column=2, sticky="ew")
+    rule_label.bind("<Configure>", lambda event: rule_label.configure(
+        wraplength=max(180, event.width - 12)))
     ctk.CTkLabel(
         strategy_bar, textvariable=app.v_st_params_state,
         text_color=ORANGE, font=(FONT_FAMILY, 11, "bold"),
@@ -220,12 +225,17 @@ def build(app, tab):
         app.v_st_min_premium, app.v_st_max_premium,
         app.v_st_min_deviation, app.v_st_max_deviation,
         app.v_st_min_sigma, app.v_st_max_sigma,
+        app.v_st_min_relative_cheapness, app.v_st_max_relative_deviation,
+        app.v_st_max_model_premium, app.v_st_min_years, app.v_st_min_credit_rating,
+        app.v_st_min_outstanding_balance, app.v_st_exclude_st,
+        app.v_st_exclude_limit_down, app.v_st_q,
     )
     for var in editable_strategy_vars:
         var.trace_add("write", _on_param_change)
 
     def _sync_selection_logic(*_):
         app.v_st_logic_summary.set(app._strategy_logic_summary_text())
+        _sync_strategy_display()
 
     for var in editable_strategy_vars:
         var.trace_add("write", _sync_selection_logic)
@@ -234,8 +244,8 @@ def build(app, tab):
     # 基准是回测解释的一部分，固定计算并从主界面移除。
     app.v_st_benchmark.set(True)
 
-    # 标的范围/数据模式状态变量 (仅标的范围在参数设置中显示; 两个 StringVar 由
-    # _refresh_strategy_setup_summary 维护, 供控制器逻辑读取, 不再常驻 UI)
+    # 内部代码池 key 保持可读旧预设，展示变量明确标出批量页来源。
+    app.v_st_pool_display = ctk.StringVar(value=strategy_pool_label(app.v_st_pool_mode.get()))
     app.v_st_pool_summary = ctk.StringVar(value="")
     app.v_st_history_summary = ctk.StringVar(value="")
 
@@ -282,14 +292,26 @@ def build(app, tab):
         font=(FONT_FAMILY, 12), width=76, height=24, corner_radius=6).pack(side="top", pady=1)
 
     def _refresh_scope_visibility(*_):
-        if app.v_st_pool_mode.get() == "自选代码":
+        mode = app.v_st_pool_mode.get()
+        display = strategy_pool_label(mode)
+        if app.v_st_pool_display.get() != display:
+            app.v_st_pool_display.set(display)
+        if mode == "自选代码":
             manual_box.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 8))
         else:
             manual_box.grid_forget()
+        batch_link = getattr(app, "_strategy_batch_scope_button", None)
+        if batch_link is not None:
+            if mode == "当前筛选结果":
+                batch_link.grid(row=0, column=2, sticky="e", padx=(8, 4))
+            else:
+                batch_link.grid_forget()
         app._refresh_strategy_setup_summary()
 
     for var in (app.v_st_pool_mode, app.v_st_history_mode, app.v_st_codes):
         var.trace_add("write", _refresh_scope_visibility)
+    for var in (app.v_st_start, app.v_st_end, app.v_st_freq, app.v_st_top_n):
+        var.trace_add("write", app._refresh_strategy_precheck_preview)
     _refresh_scope_visibility()
 
     # ── 参数设置 ───────────────────────────────────────────
@@ -315,24 +337,43 @@ def build(app, tab):
     adv_panel.grid_columnconfigure(0, weight=1, uniform="adv-panel")
     adv_panel.grid_columnconfigure(1, weight=1, uniform="adv-panel")
 
-    # 标的范围 (整行): 只有一个控件, 但和下面两张卡一样占满宽度 —— 选债限制从
-    # 2×2 涨到 3×4 之后, 左右分栏会让左半边空掉一大块。
-    _, c0 = _adv_card(adv_panel, 0, "标的范围", col=0, columnspan=2)
-    scope_grid = ctk.CTkFrame(c0, fg_color="transparent")
-    scope_grid.pack(fill="x")
-    scope_grid.grid_columnconfigure(0, weight=1)
-    _grid_cell(
-        scope_grid, "转债范围", app.v_st_pool_mode, 0, 0, "optmenu",
-        list(STRATEGY_POOL_MODES),
+    # 一行说明来源、名单和后续限制的关系，避免单个下拉占一整张空卡。
+    scope_card = ctk.CTkFrame(adv_panel, fg_color=BG_CARD, corner_radius=8, height=1)
+    scope_card.grid(row=0, column=0, columnspan=2, sticky="ew")
+    scope_grid = ctk.CTkFrame(scope_card, fg_color="transparent", height=1)
+    scope_grid.pack(fill="x", padx=8, pady=8)
+    scope_grid.grid_columnconfigure(1, weight=1)
+    app._strategy_pool_menu = _grid_cell(
+        scope_grid, "回测代码池", app.v_st_pool_display, 0, 0, "optmenu",
+        [strategy_pool_label(mode) for mode in STRATEGY_POOL_MODES],
         lambda: STRATEGY_POOL_DESCRIPTIONS.get(app.v_st_pool_mode.get(), ""),
-        command=lambda _v: app._refresh_strategy_setup_summary(),
-        control_width=160, label_width=64, cell_pady=2)
+        command=lambda label: app.v_st_pool_mode.set(strategy_pool_from_label(label)),
+        control_width=166, label_width=80, cell_pady=2)
+    scope_summary = ctk.CTkLabel(
+        scope_grid, textvariable=app.v_st_pool_summary, font=(FONT_FAMILY, 11),
+        text_color=TEXT_DIM, anchor="w", justify="left", width=1, height=22,
+        wraplength=420)
+    scope_summary.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+    app._strategy_scope_summary_label = scope_summary
+
+    def _wrap_scope_summary(_event=None):
+        # CTkLabel 的内部文本也会发 Configure；只读标签外框的实际宽度。
+        width = max(180, int(scope_summary._reverse_widget_scaling(scope_summary.winfo_width())))
+        if scope_summary.cget("wraplength") != width:
+            scope_summary.configure(wraplength=width)
+
+    scope_summary.bind("<Configure>", _wrap_scope_summary, add="+")
+    app._strategy_batch_scope_button = ctk.CTkButton(
+        scope_grid, text="去批量页调整", command=app._open_strategy_batch_scope,
+        width=112, height=26, fg_color="transparent", hover_color=BG_INPUT,
+        text_color=ACCENT, font=(FONT_FAMILY, 11))
+    _refresh_scope_visibility()
 
     # 选债限制 (整行, 3×4): 上一行是四个**区间**过滤 (缺值即拒), 下两行是八条
     # **主口径阈值** (缺值放行)。两种读法相反, 所以每格的 tooltip 都写明。
     sel_card, c1 = _adv_card(
         adv_panel, 1, "选债限制",
-        "决定哪些债进候选池; 留空 = 不设这道闸",
+        "在上方代码池内逐期筛选；留空 = 不设这道闸",
         col=0, columnspan=2)
     sel_card.grid_configure(pady=(8, 0))
     range_grid = ctk.CTkFrame(c1, fg_color="transparent")
@@ -447,8 +488,7 @@ def build(app, tab):
         tune_grid, "股息率%", app.v_st_q, 1, 3, "entry", None,
         "正股股息率 (连续口径)\n"
         "留空 = 按数据源逐只取; 填一个数就整段跳过那次取数\n"
-        "那是回测里最贵的一步 (逐只逐期联网, 且不进磁盘缓存), "
-        "取不到本来也是回落 0",
+        "结果记录历史取值、实时快照或固定假设；取不到时明确标记回退为 0",
         control_width=92, label_width=82)
 
     # 「HV扰动%」「利差扰动bp」「最低优势元」三格已删 —— 它们只配置稳健下修优势的
@@ -653,7 +693,11 @@ def build(app, tab):
     app.strategy_bt_data_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 8))
     app.strategy_bt_data_frame.grid_columnconfigure(0, weight=1)
 
-    app.strategy_bt_compare_frame = _scrollable_pane("对比")
+    compare_inner = _scrollable_pane("对比")
+    app._build_strategy_research_panel(compare_inner)
+    app.strategy_bt_compare_frame = ctk.CTkFrame(compare_inner, fg_color="transparent")
+    app.strategy_bt_compare_frame.grid(row=1, column=0, sticky="ew")
+    app.strategy_bt_compare_frame.grid_columnconfigure(0, weight=1)
 
     # 初始化策略模板与摘要。
     app._apply_strategy_template(app.v_st_template.get())
