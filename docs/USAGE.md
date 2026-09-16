@@ -18,7 +18,7 @@
 - [4. GUI 使用](#4-gui-使用)
   - [4.1 ⭐ 关注池主页](#41--关注池主页默认落地页)
   - [4.2 📦 批量页](#42--批量页)
-  - [4.3 策略页](#43-策略页)
+  - [4.3 策略页（2.0.0 未开放）](#43-策略页)
   - [4.4 定价页](#44-定价页)
   - [4.5 回测页](#45-回测页)
   - [4.6 敏感性页](#46-敏感性页)
@@ -153,7 +153,7 @@ dist/CBLens.app/Contents/MacOS/CBLens --diagnose
 Windows 无控制台启动时可用 `CBLens.exe --diagnose --check --output cblens-diagnostics.json` 将结果写入文件；加 `--probe-stdio` 可离线检查进度条和异常回调清理，不访问行情接口。
 GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打包时可能包含接口。未显式指定路径时，Windows 优先查找本机终端配套接口，macOS 保留包内接口优先；未找到时继续探测其他默认位置。非默认位置可通过「Wind 接口设置」指定。明确指定但失效的路径会报错，需重新选择或恢复自动查找。
 
-构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前包版本为 `2.0.0rc6`，对应 tag 为 `v2.0.0-rc.6`；创建 tag 与上传 Release 是单独的发布动作。
+构建要求干净的 checkout，`--ref` 必须与当前 HEAD 对应；产物记录精确 commit。发布时还需已有与包版本匹配的 tag，且 tag 与 HEAD 指向同一 commit。当前包版本为 `2.0.0`，对应 tag 为 `v2.0.0`；创建 tag 与上传 Release 是单独的发布动作。
 
 桌面包分平台发布：
 
@@ -161,7 +161,7 @@ GitHub Actions 自动构建环境不带 WindPy；在装有 Wind API 的本机打
 - macOS：在装有 Wind API 的本机准备候选包。目标 tag 已建立且 checkout 干净后运行：
 
 ```bash
-python scripts/release_macos_desktop.py --tag v2.0.0-rc.6 --skip-upload
+python scripts/release_macos_desktop.py --tag v2.0.0 --skip-upload
 ```
 
 这条命令只构建、诊断和打包，不联系 GitHub，因此只要求本地 tag 已存在。确认上传前，目标 GitHub Release 也必须已经建立（可由 Windows 发布工作流创建），再去掉 `--skip-upload`；脚本会核对远端 tag 与产物 commit 一致后上传 ZIP 与构建清单，不复用来源不明的旧 APP，也不覆盖已有同名资产。诊断在临时用户目录中检查首启种子和依赖，macOS 发布还要求 WindPy 可导入；仍需实际启动 GUI 验证使用流程。
@@ -231,7 +231,7 @@ python gui.py
 | 元素 | 功能 |
 | :--- | :--- |
 | **深色/浅色模式** | 切换 Catppuccin Latte/Mocha 主题 |
-| **Tab 切换** | ⭐ 关注 · 📦 批量 · 🎯 策略 · ⚡ 定价 · 📈 回测 · 🔥 敏感性（启动默认落在 **⭐ 关注**） |
+| **Tab 切换** | ⭐ 关注 · 📦 批量 · ⚡ 定价 · 📈 回测 · 🔥 敏感性（启动默认落在 **⭐ 关注**；🎯 策略未完工，2.0.0 不在标签栏中） |
 | **行情源** | 选择 Wind 或 akshare —— **全局唯一，各页共用**：关注池主页、批量定价、单债定价、策略回测走的都是这一个（各页不再各摆一个下拉）。默认值按本机接口文件是否可发现挑选；加载和连接结果可在「Wind 接口设置」中检测 |
 | **🌐 同步池** | 全市场基础信息、准入状态、公告事件同步入口 |
 | **代码输入** | 输入 `128009.SZ` 或六位代码，命中条款库时自动补全 |
@@ -398,6 +398,15 @@ python gui.py
 ---
 
 ### 4.3 策略页
+
+> [!IMPORTANT]
+> **这一页在 2.0.0 里看不到。** 策略页尚未完工，标签栏中不再列出，启动时也不构建；页面代码与命令行 `cb-strategy-backtest` 都原样保留。开发或自行试用时用环境变量打开：
+>
+> ```bash
+> CBLENS_ENABLE_STRATEGY_TAB=1 cb-gui
+> ```
+>
+> 打开之后页面功能与下文一致，但口径仍在调整，不要拿界面上的结果下结论。以下内容留作参考与开发说明。
 
 策略页围绕 CBLens 自有定价模型保留一类策略：
 

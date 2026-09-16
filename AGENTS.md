@@ -53,6 +53,7 @@ CBLens/
 │   │       #   home.py     ⭐ 关注池主页 (默认落地页; 只建控件, 逻辑在 batch_watchlist)
 │   │       #   batch.py    📦 批量页; batch_watchlist.py 关注池数据/渲染/动作
 │   │       #   batch_common.py 两页共用 helper (Treeview 样式/列宽/染色/表格区)
+│   │       #   strategy.py 🎯 策略页 —— 未完工, 2.0.0 起默认不建也不列 (见下)
 │   └── cli/                    # CLI 工具 (screen_pool, sync_*, valuation, strategy_backtest)
 ├── data/                       # 持久化数据 (cb_data.json, cb_events.json, ...)
 ├── tests/                      # pytest 测试 (380+)
@@ -277,6 +278,19 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
   仍只加载、不连接，供离线发布检查使用。修改路径或重新检测时必须清除旧结果；
   有效接口即使未登录仍可保存。关闭窗口取消检测，应用退出清理检测进程；返回值只含
   文字和状态，不携带异常或 Tk 对象。onefile 子进程的包内临时路径不能落到用户设置。
+- **🎯 策略页默认不进标签栏 (2026-09-15, v2.0.0)**。那一页还没做完, 而标签栏是产品
+  对外承诺的清单 —— 摆一个半成品上去, 用户分不出"这一页的数不能信"和"我不会用它"。
+  开关是 `constants.strategy_tab_enabled()` (`CBLENS_ENABLE_STRATEGY_TAB=1` 打开),
+  页面代码 (`tabs/strategy.py` + `controllers/strategy_*`) 与 CLI `cb-strategy-backtest`
+  **一个字节没动**。两条约定: ① **「建不建」与「列不列」是同一个判据** ——
+  `_build_tabview` 按 `_tab_frames.get(...)` 在不在判, 不许再读一次开关: 两处各读一次
+  的话答案可以不一致, 而那时的表现是 `KeyError` 而不是"没有这一页"。
+  ② `_tab_names` 的**字面量**留的是默认那份 (5 个), 开关打开时 `insert(2, ...)` 插回
+  「📦 批量」之后 —— `test_readme_gui_tab_count` 与 README 的「GUI 五大页面」都按那个
+  字面量算, 写成 6 个再条件删一个会让那条用例把假数判绿。
+  跨页入口不需要额外挡: `_on_strategy_batch_scope_changed` (批量页通知) 与
+  `_refresh_strategy_setup_summary` 全程 getattr 守卫, 而策略页的那几个 StringVar
+  本来就建在 `tabs/strategy.py` 里; 实测全套用例 0 处失败。
 - **关注池是独立主页, 但「⭐ 加入关注池」搬不走**。`tabs/home.py` 是默认落地页, 拥有
   关注池表 / 摘要条 / 事件横幅 / 「⚡ 今日刷新」/「🆕 扫新债」; 而「⭐ 加入关注池」必须
   留在批量页 —— 它读主表控件 `app._batch_main_tree` 的 selection, 且 iid 是

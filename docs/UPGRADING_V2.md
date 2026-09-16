@@ -1,6 +1,8 @@
 # 从 v1 升级到 CBLens 2.0
 
-适用于 `v1.0.0` 及其后的开发版。当前版本为 `2.0.0rc6`，对应 tag 为 `v2.0.0-rc.6`；从此前 RC 升级也应保留个人数据。这里的迁移步骤适用于候选版试用；发布亮点见 [版本说明](../CHANGELOG.md)。
+适用于 `v1.0.0` 及其后的开发版。当前版本为 `2.0.0`，对应 tag 为 `v2.0.0`；从此前 RC 升级也应保留个人数据。发布亮点见 [版本说明](../CHANGELOG.md)。
+
+GUI 的 🎯 策略页在 2.0.0 中未完工、不在标签栏里开放，旧策略快照与 `strategy_*` 数据目录**照旧保留不动**（见下文「旧快照和导出文件」）；命令行 `cb-strategy-backtest` 仍可用。
 
 ## 先备份实际数据
 
@@ -22,7 +24,7 @@
 
 ## 安装和包名
 
-Python 分发包名从 `convertible-bond-pricer` 改为 `cblens`，import 名仍是 `convertible_bond`。推荐为 v2 使用独立 checkout 和虚拟环境，保留 v1 环境用于核对与回退。候选版正式发布后，可检出对应 tag；不要把尚在变化的 `main` 当作固定的候选版。
+Python 分发包名从 `convertible-bond-pricer` 改为 `cblens`，import 名仍是 `convertible_bond`。推荐为 v2 使用独立 checkout 和虚拟环境，保留 v1 环境用于核对与回退。要固定在某一版上就检出对应 tag（`v2.0.0`）；不要把仍在变化的 `main` 当成发布版。
 
 在 v2 checkout 中安装：
 

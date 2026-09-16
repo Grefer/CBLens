@@ -703,6 +703,59 @@ def test_strategy_gui_exposes_simplified_workflow_and_no_legacy_rank_controls():
     assert "运行策略" not in source
 
 
+def test_strategy_tab_is_hidden_from_the_tab_bar_by_default(monkeypatch):
+    """策略页未完工 —— 2.0.0 起默认不进标签栏, 也不建页。
+
+    三件事分开钉, 因为它们各有各的静默失效形态:
+    ① **开关本身**: 不设环境变量 = 关; 设成 ``0``/``false``/``off``/空串也是关 ——
+       否则 ``CBLENS_ENABLE_STRATEGY_TAB=0`` 这种"我明确关掉它"的写法反而把它打开。
+    ② ``_tab_names`` 的**字面量**里不许再有策略页: README 的页面数与
+       ``test_readme_gui_tab_count`` 都按这个字面量算, 留在里面再删掉一个, 那条
+       用例会把一个假数判绿。
+    ③ ``strategy_tab.build`` 只许在条件分支里调。写成"再读一次开关"的话两处答案
+       可以不一致, 而那时的表现是 ``KeyError`` 而不是"没有这一页"。
+    """
+    import ast
+    import pathlib
+
+    from convertible_bond.gui.constants import strategy_tab_enabled
+
+    monkeypatch.delenv("CBLENS_ENABLE_STRATEGY_TAB", raising=False)
+    assert strategy_tab_enabled() is False
+    for off in ("", "   ", "0", "false", "No", "OFF"):
+        monkeypatch.setenv("CBLENS_ENABLE_STRATEGY_TAB", off)
+        assert strategy_tab_enabled() is False, off
+    for on in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("CBLENS_ENABLE_STRATEGY_TAB", on)
+        assert strategy_tab_enabled() is True, on
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    tree = ast.parse((root / "convertible_bond" / "gui" / "app.py").read_text(encoding="utf-8"))
+
+    tab_names = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "attr", None) == "_tab_names" for t in node.targets)):
+            tab_names = node.value
+    assert tab_names is not None, "app.py 里找不到 _tab_names"
+    assert "策略" not in ast.unparse(tab_names), "默认标签栏名单里不该再有策略页"
+
+    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert "strategy_tab_enabled()" in ast.unparse(funcs["_build_header"]), (
+        "策略页进不进标签栏必须由开关决定")
+
+    build = funcs["_build_tabview"]
+    def _is_strategy_build(call):
+        return isinstance(call, ast.Call) and ast.unparse(call.func) == "strategy_tab.build"
+
+    assert not [s for s in build.body
+                if isinstance(s, ast.Expr) and _is_strategy_build(s.value)], (
+        "策略页仍被无条件构建")
+    assert [n for n in ast.walk(build)
+            if isinstance(n, ast.If) and any(_is_strategy_build(c) for c in ast.walk(n))], (
+        "策略页的构建要留在条件分支里")
+
+
 def test_gui_default_form_reproduces_the_library_default_selection_config():
     """GUI 开箱表单构造出来的 config, 必须逐字段等于库默认 (+ 几条 GUI 明确的口径)。
 

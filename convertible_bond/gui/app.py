@@ -42,6 +42,7 @@ from .constants import (
     normalize_pde_rank_signal_label,
     normalize_pde_strategy_template,
     normalize_strategy_history_mode,
+    strategy_tab_enabled,
 )
 from .controllers import (
     BacktestMixin,
@@ -533,9 +534,14 @@ class CBPricerApp(
 
     def _build_header(self):
         # 投资者工作流: 先筛候选 → 钻单债 → 验模型 → 做压力测试
-        # tab 顺序: 多债视图 (批量 → 策略) → 单债钻取 (定价 → 回测 → 敏感性)
-        self._tab_names = [E("⭐ 关注"), E("📦 批量"), E("🎯 策略"), E("⚡ 定价"),
+        # tab 顺序: 多债视图 (批量) → 单债钻取 (定价 → 回测 → 敏感性)
+        self._tab_names = [E("⭐ 关注"), E("📦 批量"), E("⚡ 定价"),
                            E("📈 回测"), E("🔥 敏感性")]
+        # 🎯 策略页未完工, 2.0.0 起默认不进标签栏 (见 constants.strategy_tab_enabled)。
+        # 字面量里留的是**默认**那份名单 —— README 的页面数与 test_readme_gui_tab_count
+        # 都按它算; 开关打开时仍插回「📦 批量」之后, 多债视图连成一段。
+        if strategy_tab_enabled():
+            self._tab_names.insert(2, E("🎯 策略"))
 
         header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=60)
         header.grid(row=0, column=0, sticky="ew")
@@ -731,7 +737,12 @@ class CBPricerApp(
 
         pricing_tab.build(self, self._tab_frames[E("⚡ 定价")])
         backtest_tab.build(self, self._tab_frames[E("📈 回测")])
-        strategy_tab.build(self, self._tab_frames[E("🎯 策略")])
+        # 「建不建」与「列不列」必须是同一个判据 —— 这里按 frame 在不在判, 而不是
+        # 再读一次开关: 两处各读一次的话答案可以不一致, 而那时的表现是 KeyError,
+        # 不是"没有这一页"。
+        strategy_frame = self._tab_frames.get(E("🎯 策略"))
+        if strategy_frame is not None:
+            strategy_tab.build(self, strategy_frame)
         sensitivity_tab.build(self, self._tab_frames[E("🔥 敏感性")])
         # ⭐ 关注池主页必须排在 📦 批量页**之前**: 批量页的 _render_batch_views 与
         # 「⭐ 加入关注池」都要求 batch_watchlist_table_frame 已存在, 而

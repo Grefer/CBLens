@@ -2,6 +2,7 @@
 
 集中放在这里, 避免 controller mixin 反向 import app 造成循环.
 """
+import os
 import re
 
 # 显式 re-export: app.py / controllers.wind_sync 经本模块导入模型默认值
@@ -25,6 +26,22 @@ P_DOWN_AUTO_SOURCE_LABELS = frozenset({
 DEFAULT_DISTRESS_K_PCT = 5.0
 DEFAULT_CREDIT_SPREAD_PCT = 3.0
 EVENT_SYNC_STALE_HOURS = 24
+
+
+def strategy_tab_enabled() -> bool:
+    """🎯 策略页要不要出现在标签栏里 —— 2.0.0 起默认**不出现**.
+
+    那一页还没做完, 而标签栏是产品对外承诺的清单: 摆一个半成品上去, 用户分不出
+    "这一页的数不能信" 和 "我不会用它"。页面代码 (``tabs/strategy.py`` 与
+    ``controllers/strategy_*``) 与命令行 ``cb-strategy-backtest`` 一个字节没动,
+    开发时置 ``CBLENS_ENABLE_STRATEGY_TAB=1`` 即可打开。
+
+    判据取 "非空且不是那几个关掉的词" 而不是 ``in ("1", "true")``: 后者会让
+    ``=yes`` / ``=on`` 这类写法**静默**失效 —— 设了个值却没生效, 而页面上没有
+    任何线索说得出为什么。
+    """
+    value = os.environ.get("CBLENS_ENABLE_STRATEGY_TAB", "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
 
 
 # 新策略页只暴露模型错定价策略；旧批量视图常量保留给历史预设兼容。
