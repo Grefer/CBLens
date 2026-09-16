@@ -2058,7 +2058,7 @@ class TestTermsBundle:
         """损坏的 JSON 不应让 bundle 初始化爆炸."""
         from convertible_bond.cache import TermsBundle
         p = tmp_path / "broken.json"
-        p.write_text("{ this is not valid json")
+        p.write_text("{ this is not valid json", encoding="utf-8")
         bundle = TermsBundle(p)
         assert bundle.list_bonds() == []
         # 之后写入应能正常工作 (覆盖损坏文件)
@@ -2745,7 +2745,7 @@ def test_frozen_down_reset_floor_puts_a_kink_right_at_s0():
     cache = Path("data/batch_pricing_cache.json")
     if not cache.exists():
         pytest.skip("需要 batch_pricing_cache.json")
-    rows = {r["bond_code"]: r for r in json.loads(cache.read_text())["results"]}
+    rows = {r["bond_code"]: r for r in json.loads(cache.read_text(encoding="utf-8"))["results"]}
     bundle = TermsBundle(project_bundle_path())
     today = market_today()
 

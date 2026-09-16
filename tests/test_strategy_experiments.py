@@ -147,20 +147,20 @@ def test_provenance_hashes_actual_data_and_distinguishes_gui_from_economic_code(
     (package / "gui").mkdir(parents=True)
     engine = package / "pricer.py"
     gui = package / "gui" / "app.py"
-    engine.write_text("VALUE = 1\n")
-    gui.write_text("LABEL = 'first'\n")
+    engine.write_text("VALUE = 1\n", encoding="utf-8")
+    gui.write_text("LABEL = 'first'\n", encoding="utf-8")
     data = tmp_path / "terms.json"
-    data.write_text('{"price": 100}')
+    data.write_text('{"price": 100}', encoding="utf-8")
     paths = {"terms": data, "missing": tmp_path / "missing.json"}
     first = experiments.capture_provenance(paths, tmp_path)
     assert first["data"]["terms"]["status"] == "known"
     assert first["data"]["missing"]["status"] == "unknown"
     assert first["source"]["git_commit"] == "unknown"
-    gui.write_text("LABEL = 'second'\n")
+    gui.write_text("LABEL = 'second'\n", encoding="utf-8")
     second = experiments.capture_provenance(paths, tmp_path)
     assert second["source"]["sha256"] != first["source"]["sha256"]
     assert second["source"]["economic_sha256"] == first["source"]["economic_sha256"]
-    engine.write_text("VALUE = 2\n")
+    engine.write_text("VALUE = 2\n", encoding="utf-8")
     third = experiments.capture_provenance(paths, tmp_path)
     assert third["source"]["economic_sha256"] != first["source"]["economic_sha256"]
     missing = experiments.capture_provenance(source_root=tmp_path / "no-source")
@@ -226,17 +226,17 @@ def test_editing_frozen_date_or_recorded_payload_is_detected(frozen, clock):
     advance(clock)
     append(manifest, config)
     manifest_path = Path(manifest["path"])
-    original_manifest = manifest_path.read_text()
+    original_manifest = manifest_path.read_text(encoding="utf-8")
     data = json.loads(original_manifest)
     data["frozen_date"] = "2020-01-01"
-    manifest_path.write_text(json.dumps(data))
+    manifest_path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError, match="不能改写冻结日期"):
         experiments.load_experiment(manifest_path)
-    manifest_path.write_text(original_manifest)
+    manifest_path.write_text(original_manifest, encoding="utf-8")
     records_path = manifest_path.parent / "oos_records.json"
-    payload = json.loads(records_path.read_text())
+    payload = json.loads(records_path.read_text(encoding="utf-8"))
     payload["records"][0]["period"]["period_return"] = 0.9
-    records_path.write_text(json.dumps(payload))
+    records_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="历史内容已变化"):
         experiments.load_experiment(manifest_path)
 

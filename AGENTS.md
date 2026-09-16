@@ -1705,6 +1705,19 @@ UI 入口齐全), 并提醒用户人工启动 cb-gui 冒烟 — 自动测试覆�
 `.gitignore` 的 `*.spec` 而 `test_build_desktop` 读它, 本机有文件所以全绿, CI 报
 `FileNotFoundError`, 两次推送连红三天 (2026-09-04 ~ 09-07) 没人发现。
 
+**第三种是编码, 而它连 `check_like_ci.py` 都抓不到 (2026-09-15)**: `read_text()` /
+`write_text()` 不写 `encoding=` 时用的是**平台默认** —— macOS/Linux 是 UTF-8,
+Windows 是 cp1252/cp936。同一个写法在几十处都没事, 偏偏在读回一份**带中文**的 JSON
+时炸: v2.0.0 的发布构建就挂在这儿 (windows-latest / 3.11, `test_strategy_experiments`
+与 `test_strategy_research_gui` 各一条读自己刚写的快照, `'charmap' codec can't decode
+byte 0x90`), 而 ubuntu 两档全绿。**上面那棵"全新导出树"救不了这一类** —— 它跑在
+本机, 默认编码就是 UTF-8, 结构上看不见。守护换成静态扫描:
+`test_ci_parity.test_text_file_io_always_names_its_encoding` 扫 tests/ 与包内所有
+`read_text`/`write_text` 有没有写 encoding, 故意按默认编码走的 (`wind_runtime` 的
+`WindPy.pth`) 登记在 `_DEFAULT_ENCODING_BY_DESIGN`。**只扫文件 IO 不扫
+`subprocess.run(text=True)`**: 那头的编码是子进程定的, 单方面改成 utf-8 反而可能
+与真按本地编码输出的子进程对不上。
+
 推之前用**一棵全新导出的树**跑一遍 CI 的三步 —— `git archive` 出来的树里只有版本库
 里真有的东西, 凡是"本机有、库里没有"的一次全抓, 不需要维护任何名单:
 

@@ -242,7 +242,7 @@ w = object()
     native_file.write_bytes(b"test native handle")
     bundle_site = tmp_path / "bundle" / "site-packages"
     bundle_site.mkdir(parents=True)
-    (bundle_site / "WindPy.pth").write_text(str(bundle_site.parent))
+    (bundle_site / "WindPy.pth").write_text(str(bundle_site.parent), encoding="utf-8")
     sys.path.insert(0, str(bundle_site))
     _choose(monkeypatch, selected)
     monkeypatch.setattr(sys, "platform", "win32")
@@ -264,7 +264,7 @@ w = object()
     assert calls == [str(selected.parent)]
     assert next(iter(runtime._RUNTIMES.values()))[2] == handles
     assert closed == []
-    assert (bundle_site / "WindPy.pth").read_text() == str(bundle_site.parent)
+    assert (bundle_site / "WindPy.pth").read_text(encoding="utf-8") == str(bundle_site.parent)
     assert not (selected.parent / "WindPy.pth").exists()
 
 

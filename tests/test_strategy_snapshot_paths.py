@@ -17,7 +17,7 @@ def test_strategy_snapshots_save_and_load_in_runtime_data_dir(
     """桌面升级替换安装目录后，结果仍应从用户目录读回；环境变量同样覆盖快照。"""
     install = tmp_path / "install"
     install.mkdir()
-    (install / "pyproject.toml").write_text('[project]\nname = "cblens"\n')
+    (install / "pyproject.toml").write_text('[project]\nname = "cblens"\n', encoding="utf-8")
     monkeypatch.setattr(paths, "__file__", str(install / "convertible_bond" / "paths.py"))
     monkeypatch.setattr(
         strategy_snapshots, "__file__",

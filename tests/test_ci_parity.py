@@ -142,3 +142,42 @@ def test_every_repo_file_the_tests_read_is_actually_tracked_by_git():
             if exists and name not in tracked and name not in _RUNTIME_ONLY_INPUTS:
                 missing.append(f"{path.relative_to(ROOT)}: {name}")
     assert not missing, "测试读了没进版本库的文件 (CI 上会 FileNotFoundError): " + "; ".join(missing)
+
+
+#: 故意按**平台默认编码**读写的文件 —— 不是疏漏, 改了反而错。
+#: ``wind_runtime`` 写的是 Wind 自己也会用默认编码读的 ``WindPy.pth``, 读的那头
+#: 还显式带着 ``locale.getpreferredencoding`` 兜底 (见那两处注释)。
+_DEFAULT_ENCODING_BY_DESIGN = {
+    "convertible_bond/data_providers/wind_runtime.py",
+}
+
+
+def test_text_file_io_always_names_its_encoding():
+    """``read_text()`` / ``write_text()`` 不写 encoding = "本机 UTF-8, Windows cp1252"。
+
+    这是"本机全绿 CI 全红"的第三种形状 (前两种: 真建 Tk root、读 gitignored 文件),
+    也是最会骗人的一种 —— 它**只在内容含非 ASCII 时才炸**: 同一个写法在几十处都是好
+    的, 偏偏在读回一份带中文的 JSON 时抛 ``UnicodeDecodeError``。实测 v2.0.0 的发布
+    构建就是这么挂的 (windows-latest / 3.11 上两条用例读回自己刚写的快照,
+    ``'charmap' codec can't decode byte 0x90``), 而 ubuntu 两档与本机
+    ``check_like_ci.py`` 全绿 —— 后者跑在 macOS 上, 默认编码就是 UTF-8, 它**结构上
+    看不见这一类**。
+
+    只扫**文件 IO**, 不扫 ``subprocess.run(text=True)``: 那头的编码是子进程定的,
+    我们这边单方面改成 utf-8 反而可能与真按本地编码输出的子进程对不上。
+    """
+    offenders = []
+    for folder in ("tests", "convertible_bond", "scripts"):
+        for path in sorted((ROOT / folder).rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel in _DEFAULT_ENCODING_BY_DESIGN:
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in {"read_text", "write_text"}):
+                    continue
+                if not any(kw.arg == "encoding" for kw in node.keywords):
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, (
+        "这些读写没写 encoding, 在 Windows 上按本地编码解码 —— "
+        f"补 encoding=\"utf-8\": {offenders}")

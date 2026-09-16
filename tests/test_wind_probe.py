@@ -134,7 +134,7 @@ w = W()
     assert time.monotonic() - start < 8
     if sys.platform != "win32" and marker.exists():
         with pytest.raises(ProcessLookupError):
-            os.kill(int(marker.read_text()), 0)
+            os.kill(int(marker.read_text(encoding="utf-8")), 0)
 
 
 def test_cancel_event_stops_an_active_child(tmp_path):
@@ -350,7 +350,7 @@ def test_probe_rejects_missing_or_stale_or_malformed_child_report(monkeypatch, i
         if invalid == "missing":
             output.unlink()
         else:
-            report = json.loads(output.read_text())
+            report = json.loads(output.read_text(encoding="utf-8"))
             key, value = {"token": ("token", "old"), "schema": ("schema_version", 99),
                           "output": ("output", "/old/result.json"), "bool": ("ok", "true"),
                           "bundled": ("bundled", "false"), "selection": ("selection_path", "/other/path")}[invalid]

@@ -260,14 +260,14 @@ def test_upgrade_seeds_missing_patches_and_keeps_existing_user_data(monkeypatch,
     monkeypatch.setattr(sys, "_MEIPASS", str(bundled), raising=False)
     monkeypatch.setenv("CBLENS_DATA_DIR", str(user_data))
     paths.seed_data_files()
-    assert json.loads((user_data / "cb_terms_patches.json").read_text()) == patch_seed
+    assert json.loads((user_data / "cb_terms_patches.json").read_text(encoding="utf-8")) == patch_seed
     for filename, content in existing.items():
-        assert (user_data / filename).read_text() == content
+        assert (user_data / filename).read_text(encoding="utf-8") == content
     # 此后用户同步/修复过 patch，再开新版也不能用内置种子覆盖它。
     for local_patches in ('{"patches": [], "_meta": {"note": "user repaired"}}', '{}', '{broken'):
         (user_data / "cb_terms_patches.json").write_text(local_patches, encoding="utf-8")
         paths.seed_data_files()
-        assert (user_data / "cb_terms_patches.json").read_text() == local_patches
+        assert (user_data / "cb_terms_patches.json").read_text(encoding="utf-8") == local_patches
 
 
 # ── 桌面包的持久字体缓存 ────────────────────────────────────────

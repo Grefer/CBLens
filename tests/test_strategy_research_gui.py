@@ -99,7 +99,7 @@ def test_research_worker_persists_and_exposes_each_variants_actual_config(monkey
     assert settings["strategy_config"]["top_n"] == 18
     assert settings["strategy"]["top_n"] == 18
     assert settings["provenance"]["source"]["sha256"] == "run-start"
-    stored = json.loads((tmp_path / "neighborhood_latest.json").read_text())
+    stored = json.loads((tmp_path / "neighborhood_latest.json").read_text(encoding="utf-8"))
     assert stored["base_config"]["top_n"] == 15
     assert stored["results"]["持仓18"]["run_settings"]["strategy_config"]["top_n"] == 18
 
