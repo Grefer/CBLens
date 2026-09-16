@@ -56,7 +56,7 @@ CBLens/
 │   │       #   strategy.py 🎯 策略页 —— 未完工, 2.0.0 起默认不建也不列 (见下)
 │   └── cli/                    # CLI 工具 (screen_pool, sync_*, valuation, strategy_backtest)
 ├── data/                       # 持久化数据 (cb_data.json, cb_events.json, ...)
-├── tests/                      # pytest 测试 (380+)
+├── tests/                      # pytest 测试 (1700+)
 ├── CB.py                       # CLI 兼容入口
 ├── gui.py                      # GUI 兼容入口
 └── pyproject.toml              # 包定义 + ruff 配置 (E9+F, CI 阻塞)
@@ -1670,7 +1670,7 @@ from convertible_bond.cache import TermsBundle, CachedBondDataProvider, project_
 ## 测试与静态检查
 
 ```bash
-pytest                    # 全部测试 (380+, ~5s)
+pytest                    # 全部测试 (1700+, ~35s)
 pytest -x -q              # 快速失败
 pytest -k "down_reset"    # 按关键词
 ruff check convertible_bond tests CB.py gui.py scripts  # lint (E9+F, CI 阻塞)

@@ -6,7 +6,9 @@
 - `strategy_research_results/`：邻域对比和选债/仓位对照的完整报告，包括每组实际参数、持仓和统计校正。
 - `strategy_experiments/experiment_*/`：不可变 `manifest.json`、冻结时的 `training_result.json` 与只追加的 `oos_records.json`。保存完整配置、代码池、代码与数据指纹及逐期经济结果；普通快照清理不会删除这些档案。
 
-这些目录属于个人运行态、被 Git 忽略。冻结实验及研究报告应与关注池一同备份。重跑后旧期经济结果不一致会报冲突，不能拿新数据直接覆盖已记录的样本外历史。
+这些目录属于个人运行态、被 Git 忽略。冻结实验及研究报告应与关注池一同备份。
+
+`strategy_research_results/` 与 `strategy_experiments/` **只由 GUI 策略页写入**，而策略页在 2.0.0 中未开放（见 [版本说明](../CHANGELOG.md)），所以这一版不会新增这两类档案；已有档案原样保留，打开策略页（`CBLENS_ENABLE_STRATEGY_TAB=1`）后可继续读写。`strategy_backtest_cache/` 仍由命令行 `cb-strategy-backtest --cache-dir` 正常写入。重跑后旧期经济结果不一致会报冲突，不能拿新数据直接覆盖已记录的样本外历史。
 
 ## `cb_data.json`
 

@@ -315,7 +315,7 @@ CBLens/
 | 文档 | 说明 |
 | --- | --- |
 | 📘 [使用文档](docs/USAGE.md) | 安装、数据源、GUI 五大页面、CLI 命令、Python API、常见问题排障 |
-| 🆕 [版本说明](CHANGELOG.md) | 2.0 候选版亮点、兼容性变化与已知边界 |
+| 🆕 [版本说明](CHANGELOG.md) | 2.0 正式版亮点、兼容性变化与已知边界 |
 | ⬆️ [v1 → v2 升级指南](docs/UPGRADING_V2.md) | 数据备份、环境与脚本迁移、旧结果处理和回退 |
 | 🎨 [品牌说明](docs/BRAND.md) | 项目名称由来、图标含义、调色板与使用建议 |
 | 📦 [数据说明](data/README.md) | `cb_data.json`、`cb_events.json` 字段定义与刷新节奏 |

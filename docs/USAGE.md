@@ -8,7 +8,7 @@
 
 本文面向第一次运行和日常维护 CBLens 的使用者。更底层的数据字段说明见 [`data/README.md`](../data/README.md)，维护约定见 [`AGENTS.md`](../AGENTS.md)。
 
-从 v1 或期间的开发版升级，请先按 [v1 → v2 升级指南](UPGRADING_V2.md) 备份数据并迁移脚本；候选版变更见 [版本说明](../CHANGELOG.md)。
+从 v1 或期间的开发版升级，请先按 [v1 → v2 升级指南](UPGRADING_V2.md) 备份数据并迁移脚本；各版本变更见 [版本说明](../CHANGELOG.md)。
 
 ## 目录
 
