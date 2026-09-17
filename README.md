@@ -287,7 +287,7 @@ CBLens/
 ├── convertible_bond/           # 主包
 │   ├── pricer.py               # PDE 定价引擎
 │   ├── pricing_api.py          # provider 驱动的单只/批量定价 helper
-│   ├── data_providers/         # Wind / akshare / CSV 数据源 (base / wind / akshare / csv_provider / auto)
+│   ├── data_providers/         # Wind / akshare / CSV 数据源 (base / _helpers / wind / akshare / csv_provider / auto)
 │   ├── cache.py                # TermsBundle / TermsCache / CachedBondDataProvider
 │   ├── batch_pricing.py        # 公开交易筛选、相对偏差、风险标签、批量结果缓存
 │   ├── admission_status.py     # 停牌、强赎、摘牌、ST、成交额等状态刷新
